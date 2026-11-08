@@ -1,0 +1,56 @@
+[
+  {
+    "id": "GEMI-NBA-FINALS-27",
+    "title": "NBA Finals 2027 champion",
+    "category": "Sports",
+    "close_time_ms": 1813449600000,
+    "status": "open",
+    "contracts": [
+      { "id": "GEMI-NBA27-OKC", "label": "Oklahoma City", "prob_bps": 3100, "bid_bps": 3000, "ask_bps": 3200 },
+      { "id": "GEMI-NBA27-BOS", "label": "Boston", "prob_bps": 1650, "bid_bps": 1600, "ask_bps": 1700 },
+      { "id": "GEMI-NBA27-DEN", "label": "Denver", "prob_bps": 900, "bid_bps": 850, "ask_bps": 950 }
+    ]
+  },
+  {
+    "id": "GEMI-ETH-10K-27",
+    "title": "ETH above $10,000 on June 30, 2027",
+    "category": "Crypto",
+    "close_time_ms": 1814400000000,
+    "status": "open",
+    "contracts": [
+      { "id": "GEMI-ETH-10K-27-YES", "label": "Yes", "prob_bps": 1500, "bid_bps": 1400, "ask_bps": 1600 }
+    ]
+  },
+  {
+    "id": "GEMI-CPI-OCT26",
+    "title": "US CPI year over year above 3.0% for October 2026",
+    "category": "Economics",
+    "close_time_ms": 1794787200000,
+    "status": "closed",
+    "contracts": [
+      { "id": "GEMI-CPI-OCT26-YES", "label": "Yes", "prob_bps": 4500, "bid_bps": 4400, "ask_bps": 4600 }
+    ]
+  },
+  {
+    "id": "GEMI-SOL-500-OCT26",
+    "title": "SOL closes October 2026 above $500",
+    "category": "Crypto",
+    "close_time_ms": 1793491200000,
+    "status": "resolved",
+    "contracts": [
+      { "id": "GEMI-SOL-500-OCT26-YES", "label": "Yes", "prob_bps": 100 }
+    ],
+    "resolution": [{ "contract_id": "GEMI-SOL-500-OCT26-YES", "result": "no" }]
+  },
+  {
+    "id": "GEMI-MATCH-CANCELLED",
+    "title": "Exhibition match: Lions vs Tigers (cancelled)",
+    "category": "Sports",
+    "close_time_ms": 1793750400000,
+    "status": "resolved",
+    "contracts": [
+      { "id": "GEMI-MATCH-LIONS", "label": "Lions", "prob_bps": 5000 }
+    ],
+    "resolution": [{ "contract_id": "GEMI-MATCH-LIONS", "result": "void" }]
+  }
+]

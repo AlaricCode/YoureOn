@@ -1,0 +1,174 @@
+{
+  "name": "attempt_window_overlap",
+  "description": "Attempts at 10 and 30 with W = 50: attempt 1 ends at the next rising(valid_attempt) (30), so the success at 35 belongs to attempt 2 only. Leg 1 (1 attempt) False, leg 2 (2 attempts) True",
+  "covers": [
+    "primitive attempt_window_overlap"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "token",
+        "kind": "object",
+        "phrase": "token"
+      },
+      {
+        "name": "ball",
+        "kind": "object",
+        "phrase": "ball"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "valid_attempt": {
+          "op": "present",
+          "a": {
+            "e": "token"
+          }
+        },
+        "success": {
+          "op": "present",
+          "a": {
+            "e": "ball"
+          }
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": ">=",
+          "k": 1,
+          "attempts": 1
+        }
+      },
+      {
+        "id": 2,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "valid_attempt": {
+          "op": "present",
+          "a": {
+            "e": "token"
+          }
+        },
+        "success": {
+          "op": "present",
+          "a": {
+            "e": "ball"
+          }
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": ">=",
+          "k": 1,
+          "attempts": 2
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "or",
+        "args": [
+          {
+            "op": "leg",
+            "id": 1
+          },
+          {
+            "op": "leg",
+            "id": 2
+          }
+        ]
+      },
+      "else": 1
+    },
+    "stake_each": 1000000,
+    "time_limit_s": 60
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  token: object(\"token\")\n  ball: object(\"ball\")\nlegs:\n  - id: 1\n    actor_bound: false\n    valid_attempt: token present\n    success: ball present\n    rule: count(success) >= 1 within attempts 1\n    attempt_window_s: 5s\n  - id: 2\n    actor_bound: false\n    valid_attempt: token present\n    success: ball present\n    rule: count(success) >= 1 within attempts 2\n    attempt_window_s: 5s\noutcome: side(A) wins iff leg 1 or leg 2; else side(B)\nstake_each: 1000000\ntime_limit_s: 60\n",
+  "readback": [
+    "Counts if: token is visible",
+    "Wins an attempt if: ball is visible",
+    "Needs at least 1 of 1 attempts",
+    "Counts if: token is visible",
+    "Wins an attempt if: ball is visible",
+    "Needs at least 1 of 2 attempts",
+    "Alex win if leg 1 or leg 2; otherwise Maya win",
+    "$1.00 each",
+    "Time limit 1m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"object\",\"name\":\"token\",\"phrase\":\"token\"},{\"kind\":\"object\",\"name\":\"ball\",\"phrase\":\"ball\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"attempts\":1,\"cmp\":\">=\",\"k\":1,\"kind\":\"count\"},\"success\":{\"a\":{\"e\":\"ball\"},\"op\":\"present\"},\"valid_attempt\":{\"a\":{\"e\":\"token\"},\"op\":\"present\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":2,\"rule\":{\"attempts\":2,\"cmp\":\">=\",\"k\":1,\"kind\":\"count\"},\"success\":{\"a\":{\"e\":\"ball\"},\"op\":\"present\"},\"valid_attempt\":{\"a\":{\"e\":\"token\"},\"op\":\"present\"}}],\"outcome\":{\"condition\":{\"args\":[{\"id\":1,\"op\":\"leg\"},{\"id\":2,\"op\":\"leg\"}],\"op\":\"or\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1000000,\"time_limit_s\":60,\"version\":2}",
+  "json_hash": "b0c33b61e8934ff5fb62064632c0b996e9dcb5bebb8c33cb218b85697f7d2472",
+  "program_bin": "5652445002000a02b0c33b61e8934ff5fb62064632c0b996e9dcb5bebb8c33cb218b85697f7d24723c000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc40420f000000000040420f000000000002020200020002010201000100010000003200070024000000000000070024010000000000020201000100020000003200070024000000000000070024010000000000000105000250015002",
+  "program_hash": "9e8619033cd7966a8c8ce2c41b273b05fd17803567b9dde1bb2db04509dba2f8",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": []
+    },
+    "regions": []
+  },
+  "calibration_bin": "5643414c0100000073968acd2427f4f7c49bb124bced2773dbaa5a9c7c0d285b17a2e173d1b42c2d",
+  "calibration_hash": "36455794808f2a12a4a4fe544e4c8f81ca6b73d4461650bd439a702a6e5742c8",
+  "track_bin": "5654524b010a020102000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a00ffc80001ffc8000000000032000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000840384034c044c045a000000000000000000000000000000840384034c044c045a000000000000000000000000000000840384034c044c045a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000840384034c044c045a000000000000000000000000000000840384034c044c045a000000000000000000000000000000840384034c044c045a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000024132413ec13ec135a00000000000000000000000000000024132413ec13ec135a000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "ok",
+    "reason": 0,
+    "leg_results": [
+      0,
+      1
+    ],
+    "leg_causes": [
+      [],
+      []
+    ],
+    "preruling": 1,
+    "winner_mask": 1,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [
+        10
+      ],
+      [
+        10,
+        30,
+        35
+      ]
+    ],
+    "attempts": [
+      {
+        "leg": 0,
+        "frame": 10,
+        "success_frame": null
+      },
+      {
+        "leg": 1,
+        "frame": 10,
+        "success_frame": null
+      },
+      {
+        "leg": 1,
+        "frame": 30,
+        "success_frame": 35
+      }
+    ],
+    "cost": 400
+  }
+}

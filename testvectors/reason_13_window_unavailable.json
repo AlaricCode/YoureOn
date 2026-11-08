@@ -1,0 +1,129 @@
+{
+  "name": "reason_13_window_unavailable",
+  "description": "flags bit3 (window_unavailable) with S = 0 ⇒ needs_panel reason 13 (checked before bit1)",
+  "covers": [
+    "reason 13"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "walker",
+        "kind": "person",
+        "participant": 1
+      },
+      {
+        "name": "goal",
+        "kind": "region",
+        "shape": "zone"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": true,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "inside",
+          "a": {
+            "e": "walker"
+          },
+          "b": {
+            "e": "goal"
+          }
+        },
+        "rule": {
+          "kind": "exists"
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 1,
+      "condition": {
+        "op": "leg",
+        "id": 1
+      },
+      "else": 0
+    },
+    "stake_each": 1000000,
+    "time_limit_s": 60
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  walker: person(FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq)\n  goal: region(zone)\nlegs:\n  - id: 1\n    actor_bound: true\n    success: walker inside goal\n    rule: success\n    attempt_window_s: 5s\noutcome: side(B) wins iff leg 1; else side(A)\nstake_each: 1000000\ntime_limit_s: 60\n",
+  "readback": [
+    "Maya is inside the zone",
+    "Maya win if leg 1; otherwise Alex win",
+    "$1.00 each",
+    "Time limit 1m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"person\",\"name\":\"walker\",\"participant\":1},{\"kind\":\"region\",\"name\":\"goal\",\"shape\":\"zone\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":true,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"kind\":\"exists\"},\"success\":{\"a\":{\"e\":\"walker\"},\"b\":{\"e\":\"goal\"},\"op\":\"inside\"}}],\"outcome\":{\"condition\":{\"id\":1,\"op\":\"leg\"},\"else\":0,\"if_true\":1},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1000000,\"time_limit_s\":60,\"version\":2}",
+  "json_hash": "09d0945da5b8b427a554c44bbf7c0576c4f9ceb4a6af7bacb358744fe6d5badb",
+  "program_bin": "5652445002000a0209d0945da5b8b427a554c44bbf7c0576c4f9ceb4a6af7bacb358744fe6d5badb3c000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc40420f000000000040420f0000000000020200010400010101000000000000000032000000070011000100000000010002005001",
+  "program_hash": "7a064f66687931c79cd40d58f5ae0077ccce46ff2055d2c037aae408bbfcd7cc",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": []
+    },
+    "regions": [
+      {
+        "entity": "goal",
+        "shape": "zone",
+        "points": [
+          [
+            2000,
+            2000
+          ],
+          [
+            6000,
+            2000
+          ],
+          [
+            6000,
+            6000
+          ],
+          [
+            2000,
+            6000
+          ]
+        ]
+      }
+    ]
+  },
+  "calibration_bin": "5643414c0101000073968acd2427f4f7c49bb124bced2773dbaa5a9c7c0d285b17a2e173d1b42c2d01010400d007d0077017d00770177017d0077017",
+  "calibration_hash": "943c9a2de654b283288524b785c310eabbcd71f1b8b3fb62cc60b46dc653a1b6",
+  "track_bin": "5654524b010a010008000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a00010000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "needs_panel",
+    "reason": 13,
+    "leg_results": [
+      2
+    ],
+    "leg_causes": [
+      []
+    ],
+    "preruling": 3,
+    "winner_mask": 0,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      []
+    ],
+    "attempts": [],
+    "cost": 0
+  }
+}

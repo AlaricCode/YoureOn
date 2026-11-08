@@ -1,0 +1,545 @@
+{
+  "name": "readback_all_templates",
+  "description": "Every §2.8 expression template and the exists / never / count / count-with-attempts / holds / before rule templates, durations \"1.5s\" / \"1m 30s\" / \"2m\", in one 8-leg program over a short buffer (only ball and cup tracked frames present)",
+  "covers": [
+    "readback_templates"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "runner",
+        "kind": "person_any"
+      },
+      {
+        "name": "ball",
+        "kind": "object",
+        "phrase": "tennis ball"
+      },
+      {
+        "name": "cup",
+        "kind": "object",
+        "phrase": "red cup"
+      },
+      {
+        "name": "mark",
+        "kind": "region",
+        "shape": "line"
+      },
+      {
+        "name": "pad",
+        "kind": "region",
+        "shape": "zone"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "or",
+          "args": [
+            {
+              "op": "and",
+              "args": [
+                {
+                  "op": "overlaps",
+                  "a": {
+                    "e": "ball"
+                  },
+                  "b": {
+                    "e": "cup"
+                  }
+                },
+                {
+                  "op": "inside",
+                  "a": {
+                    "e": "ball"
+                  },
+                  "b": {
+                    "e": "cup",
+                    "sub": "interior"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "and",
+              "args": [
+                {
+                  "op": "above",
+                  "a": {
+                    "e": "ball"
+                  },
+                  "b": {
+                    "e": "cup"
+                  }
+                },
+                {
+                  "op": "below",
+                  "a": {
+                    "e": "ball"
+                  },
+                  "b": {
+                    "e": "pad"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "rule": {
+          "kind": "exists"
+        }
+      },
+      {
+        "id": 2,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "or",
+          "args": [
+            {
+              "op": "behind",
+              "a": {
+                "e": "runner"
+              },
+              "b": {
+                "e": "mark"
+              }
+            },
+            {
+              "op": "beyond",
+              "a": {
+                "e": "runner"
+              },
+              "b": {
+                "e": "mark"
+              }
+            }
+          ]
+        },
+        "rule": {
+          "kind": "never"
+        }
+      },
+      {
+        "id": 3,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "and",
+          "args": [
+            {
+              "op": "near",
+              "a": {
+                "e": "ball"
+              },
+              "b": {
+                "e": "cup"
+              },
+              "dist": 300
+            },
+            {
+              "op": "moving",
+              "a": {
+                "e": "ball"
+              }
+            }
+          ]
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": "<=",
+          "k": 2,
+          "attempts": 0
+        }
+      },
+      {
+        "id": 4,
+        "actor_bound": false,
+        "attempt_window_frames": 75,
+        "valid_attempt": {
+          "op": "standing",
+          "a": {
+            "e": "runner"
+          }
+        },
+        "success": {
+          "op": "then_within",
+          "frames": 20,
+          "first": {
+            "op": "enters",
+            "a": {
+              "e": "ball"
+            },
+            "b": {
+              "e": "pad"
+            }
+          },
+          "then": {
+            "op": "leaves",
+            "a": {
+              "e": "ball"
+            },
+            "b": {
+              "e": "pad"
+            }
+          }
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": ">",
+          "k": 1,
+          "attempts": 3
+        }
+      },
+      {
+        "id": 5,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "and",
+          "args": [
+            {
+              "op": "present",
+              "a": {
+                "e": "ball"
+              }
+            },
+            {
+              "op": "intact",
+              "a": {
+                "e": "cup"
+              }
+            }
+          ]
+        },
+        "rule": {
+          "kind": "holds",
+          "frames": 50
+        }
+      },
+      {
+        "id": 6,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "and",
+          "args": [
+            {
+              "op": "at_rest",
+              "a": {
+                "e": "ball"
+              },
+              "frames": 15
+            },
+            {
+              "op": "not",
+              "arg": {
+                "op": "speed",
+                "a": {
+                  "e": "ball"
+                },
+                "cmp": ">",
+                "value": 400
+              }
+            }
+          ]
+        },
+        "rule": {
+          "kind": "before",
+          "frames": 900
+        }
+      },
+      {
+        "id": 7,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "before",
+          "frames": 200,
+          "arg": {
+            "op": "for_duration",
+            "frames": 10,
+            "arg": {
+              "op": "direction",
+              "a": {
+                "e": "ball"
+              },
+              "dir": "up"
+            }
+          }
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": "!=",
+          "k": 0,
+          "attempts": 0
+        }
+      },
+      {
+        "id": 8,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "or",
+          "args": [
+            {
+              "op": "or",
+              "args": [
+                {
+                  "op": "disappears_into",
+                  "a": {
+                    "e": "ball"
+                  },
+                  "b": {
+                    "e": "cup",
+                    "sub": "opening"
+                  }
+                },
+                {
+                  "op": "touches",
+                  "a": {
+                    "e": "ball"
+                  },
+                  "b": {
+                    "e": "cup"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "or",
+              "args": [
+                {
+                  "op": "and",
+                  "args": [
+                    {
+                      "op": "crosses",
+                      "a": {
+                        "e": "ball"
+                      },
+                      "b": {
+                        "e": "mark"
+                      }
+                    },
+                    {
+                      "op": "released_by",
+                      "a": {
+                        "e": "ball"
+                      },
+                      "b": {
+                        "e": "runner"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "op": "rep_count",
+                  "a": {
+                    "e": "runner"
+                  },
+                  "cmp": "==",
+                  "value": 5
+                }
+              ]
+            }
+          ]
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": "<",
+          "k": 3,
+          "attempts": 0
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 1,
+      "condition": {
+        "op": "or",
+        "args": [
+          {
+            "op": "and",
+            "args": [
+              {
+                "op": "leg",
+                "id": 1
+              },
+              {
+                "op": "not",
+                "arg": {
+                  "op": "leg",
+                  "id": 2
+                }
+              }
+            ]
+          },
+          {
+            "op": "and",
+            "args": [
+              {
+                "op": "leg",
+                "id": 3
+              },
+              {
+                "op": "or",
+                "args": [
+                  {
+                    "op": "leg",
+                    "id": 4
+                  },
+                  {
+                    "op": "leg",
+                    "id": 5
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "else": 0
+    },
+    "stake_each": 1250000,
+    "time_limit_s": 120
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  runner: person(any)\n  ball: object(\"tennis ball\")\n  cup: object(\"red cup\")\n  mark: region(line)\n  pad: region(zone)\nlegs:\n  - id: 1\n    actor_bound: false\n    success: (ball overlaps cup and ball inside cup.interior) or (ball above cup and ball below pad)\n    rule: success\n    attempt_window_s: 5s\n  - id: 2\n    actor_bound: false\n    success: runner behind mark or runner beyond mark\n    rule: never(success)\n    attempt_window_s: 5s\n  - id: 3\n    actor_bound: false\n    success: ball near cup 300 and ball moving\n    rule: count(success) <= 2\n    attempt_window_s: 5s\n  - id: 4\n    actor_bound: false\n    valid_attempt: runner standing\n    success: ball enters pad then_within 2s ball leaves pad\n    rule: count(success) > 1 within attempts 3\n    attempt_window_s: 7.5s\n  - id: 5\n    actor_bound: false\n    success: ball present and cup intact\n    rule: holds(success) for 5s\n    attempt_window_s: 5s\n  - id: 6\n    actor_bound: false\n    success: ball at_rest 1.5s and (not ball speed > 400)\n    rule: success before 90s\n    attempt_window_s: 5s\n  - id: 7\n    actor_bound: false\n    success: (ball direction up for_duration 1s) before 20s\n    rule: count(success) != 0\n    attempt_window_s: 5s\n  - id: 8\n    actor_bound: false\n    success: (ball disappears_into cup.opening or ball touches cup) or ((ball crosses mark and ball released_by runner) or rep_count(runner) == 5)\n    rule: count(success) < 3\n    attempt_window_s: 5s\noutcome: side(B) wins iff (leg 1 and (not leg 2)) or (leg 3 and (leg 4 or leg 5)); else side(A)\nstake_each: 1250000\ntime_limit_s: 120\n",
+  "readback": [
+    "(tennis ball overlaps red cup and tennis ball is inside the inside of red cup) or (tennis ball is above red cup and tennis ball is below the zone)",
+    "Never: someone is behind the line or someone is past the line",
+    "tennis ball is near red cup and tennis ball is moving, at most 2 times",
+    "Counts if: someone is standing",
+    "Wins an attempt if: tennis ball enters the zone, then within 2s, tennis ball leaves the zone",
+    "Needs more than 1 of 3 attempts",
+    "tennis ball is visible and red cup stays standing for 5s straight",
+    "tennis ball stays still for 1.5s and not: tennis ball moves more than 400 within 1m 30s",
+    "tennis ball moves up for 1s before 20s, not exactly 0 times",
+    "tennis ball goes into the opening of red cup or tennis ball touches red cup or (tennis ball crosses the line and someone releases tennis ball) or someone does exactly 5 reps, fewer than 3 times",
+    "Maya win if (leg 1 and not leg 2) or (leg 3 and (leg 4 or leg 5)); otherwise Alex win",
+    "$1.25 each",
+    "Time limit 2m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"person_any\",\"name\":\"runner\"},{\"kind\":\"object\",\"name\":\"ball\",\"phrase\":\"tennis ball\"},{\"kind\":\"object\",\"name\":\"cup\",\"phrase\":\"red cup\"},{\"kind\":\"region\",\"name\":\"mark\",\"shape\":\"line\"},{\"kind\":\"region\",\"name\":\"pad\",\"shape\":\"zone\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"kind\":\"exists\"},\"success\":{\"args\":[{\"args\":[{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"cup\"},\"op\":\"overlaps\"},{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"cup\",\"sub\":\"interior\"},\"op\":\"inside\"}],\"op\":\"and\"},{\"args\":[{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"cup\"},\"op\":\"above\"},{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"pad\"},\"op\":\"below\"}],\"op\":\"and\"}],\"op\":\"or\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":2,\"rule\":{\"kind\":\"never\"},\"success\":{\"args\":[{\"a\":{\"e\":\"runner\"},\"b\":{\"e\":\"mark\"},\"op\":\"behind\"},{\"a\":{\"e\":\"runner\"},\"b\":{\"e\":\"mark\"},\"op\":\"beyond\"}],\"op\":\"or\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":3,\"rule\":{\"attempts\":0,\"cmp\":\"<=\",\"k\":2,\"kind\":\"count\"},\"success\":{\"args\":[{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"cup\"},\"dist\":300,\"op\":\"near\"},{\"a\":{\"e\":\"ball\"},\"op\":\"moving\"}],\"op\":\"and\"}},{\"actor_bound\":false,\"attempt_window_frames\":75,\"id\":4,\"rule\":{\"attempts\":3,\"cmp\":\">\",\"k\":1,\"kind\":\"count\"},\"success\":{\"first\":{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"pad\"},\"op\":\"enters\"},\"frames\":20,\"op\":\"then_within\",\"then\":{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"pad\"},\"op\":\"leaves\"}},\"valid_attempt\":{\"a\":{\"e\":\"runner\"},\"op\":\"standing\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":5,\"rule\":{\"frames\":50,\"kind\":\"holds\"},\"success\":{\"args\":[{\"a\":{\"e\":\"ball\"},\"op\":\"present\"},{\"a\":{\"e\":\"cup\"},\"op\":\"intact\"}],\"op\":\"and\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":6,\"rule\":{\"frames\":900,\"kind\":\"before\"},\"success\":{\"args\":[{\"a\":{\"e\":\"ball\"},\"frames\":15,\"op\":\"at_rest\"},{\"arg\":{\"a\":{\"e\":\"ball\"},\"cmp\":\">\",\"op\":\"speed\",\"value\":400},\"op\":\"not\"}],\"op\":\"and\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":7,\"rule\":{\"attempts\":0,\"cmp\":\"!=\",\"k\":0,\"kind\":\"count\"},\"success\":{\"arg\":{\"arg\":{\"a\":{\"e\":\"ball\"},\"dir\":\"up\",\"op\":\"direction\"},\"frames\":10,\"op\":\"for_duration\"},\"frames\":200,\"op\":\"before\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":8,\"rule\":{\"attempts\":0,\"cmp\":\"<\",\"k\":3,\"kind\":\"count\"},\"success\":{\"args\":[{\"args\":[{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"cup\",\"sub\":\"opening\"},\"op\":\"disappears_into\"},{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"cup\"},\"op\":\"touches\"}],\"op\":\"or\"},{\"args\":[{\"args\":[{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"mark\"},\"op\":\"crosses\"},{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"runner\"},\"op\":\"released_by\"}],\"op\":\"and\"},{\"a\":{\"e\":\"runner\"},\"cmp\":\"==\",\"op\":\"rep_count\",\"value\":5}],\"op\":\"or\"}],\"op\":\"or\"}}],\"outcome\":{\"condition\":{\"args\":[{\"args\":[{\"id\":1,\"op\":\"leg\"},{\"arg\":{\"id\":2,\"op\":\"leg\"},\"op\":\"not\"}],\"op\":\"and\"},{\"args\":[{\"id\":3,\"op\":\"leg\"},{\"args\":[{\"id\":4,\"op\":\"leg\"},{\"id\":5,\"op\":\"leg\"}],\"op\":\"or\"}],\"op\":\"and\"}],\"op\":\"or\"},\"else\":0,\"if_true\":1},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1250000,\"time_limit_s\":120,\"version\":2}",
+  "json_hash": "5f6023ac4313c053413a17f6cb789e4cf638d2f83a433bce5b7b4cff15ed8967",
+  "program_bin": "5652445002000a025f6023ac4313c053413a17f6cb789e4cf638d2f83a433bce5b7b4cff15ed896778000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfcd012130000000000d0121300000000000205010002000200030004000801000000000000000000320000001f000201100102000000001101220000000001120102000000001301040000000002000300000000000000320000000f0002150003000000001600030000000003000102020000000000320000000f00011401022c01000020010000000000040201010100030000004b000700400000000000001100041400300104000000003101040000000005000200000032000000320000000f0001240100000000002502000000000006000400000084030000320000001000012101000f000000032201019001000007000105000000000000320000000f0006c8000000050a00230100000000000800010303000000000032000000270002023201120000000033010200000000020134010300000000350100000000004100040500000001000f00020150010350020150030250045005",
+  "program_hash": "af169cd0d3d9ec2420d3e38d69051872b7bab5789fd9fa0812e2a19e5066916b",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": [
+        {
+          "entity": "cup",
+          "label": "Red Cup",
+          "bbox": [
+            6000,
+            6000,
+            7000,
+            7500
+          ]
+        }
+      ]
+    },
+    "regions": [
+      {
+        "entity": "mark",
+        "shape": "line",
+        "points": [
+          [
+            5000,
+            0
+          ],
+          [
+            5000,
+            10000
+          ]
+        ],
+        "behind_sign": -1
+      },
+      {
+        "entity": "pad",
+        "shape": "zone",
+        "points": [
+          [
+            1000,
+            8000
+          ],
+          [
+            4000,
+            8000
+          ],
+          [
+            4000,
+            9500
+          ],
+          [
+            1000,
+            9500
+          ]
+        ]
+      }
+    ]
+  },
+  "calibration_bin": "5643414c01020000deca80ee9017e1fb9b0f0320d7d1cb8eafc3d11a32ed9dd02d80976ebe4f3be0030002ff881300008813102704010400e803401fa00f401fa00f1c25e8031c25",
+  "calibration_hash": "a1abb270e42e21ec0e25b7d829898eb4a23564321213b58ab1c7083eb8fd71fa",
+  "track_bin": "5654524b010a030102000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a00ff000001ffc80002ffdc05000000000c00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a00000000000000000000000000000000192413c819ec135a00000070177017581b4c1d5a000000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "needs_panel",
+    "reason": 10,
+    "leg_results": [
+      0,
+      1,
+      1,
+      0,
+      2,
+      0,
+      0,
+      1
+    ],
+    "leg_causes": [
+      [],
+      [],
+      [],
+      [],
+      [
+        "COVERAGE"
+      ],
+      [],
+      [],
+      []
+    ],
+    "preruling": 3,
+    "winner_mask": 0,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      []
+    ],
+    "attempts": [],
+    "cost": 924
+  }
+}

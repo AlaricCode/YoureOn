@@ -1,0 +1,127 @@
+{
+  "name": "ex2_cup_tower_pass",
+  "description": "§15.2 compiled from its YAML; engine.simulate(…, \"pass\", seed 1) → crossCheck → seal → extractDecisiveWindows → evaluate",
+  "covers": [
+    "worked_example §15.2",
+    "mock_scenario pass",
+    "worked_example pass"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "tower",
+        "kind": "object",
+        "phrase": "cup tower"
+      },
+      {
+        "name": "fan",
+        "kind": "object",
+        "phrase": "fan"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "intact",
+          "a": {
+            "e": "tower"
+          }
+        },
+        "rule": {
+          "kind": "holds",
+          "frames": 100
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "leg",
+        "id": 1
+      },
+      "else": 1
+    },
+    "stake_each": 2000000,
+    "time_limit_s": 30
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  tower: object(\"cup tower\")\n  fan: object(\"fan\")\nlegs:\n  - id: 1\n    actor_bound: false\n    success: tower intact\n    rule: holds(success) for 10s\n    attempt_window_s: 5s\noutcome: side(A) wins iff leg 1; else side(B)\nstake_each: 2000000\ntime_limit_s: 30\n",
+  "readback": [
+    "cup tower stays standing for 10s straight",
+    "Alex win if leg 1; otherwise Maya win",
+    "$2.00 each",
+    "Time limit 30s"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"object\",\"name\":\"tower\",\"phrase\":\"cup tower\"},{\"kind\":\"object\",\"name\":\"fan\",\"phrase\":\"fan\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"frames\":100,\"kind\":\"holds\"},\"success\":{\"a\":{\"e\":\"tower\"},\"op\":\"intact\"}}],\"outcome\":{\"condition\":{\"id\":1,\"op\":\"leg\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":2000000,\"time_limit_s\":30,\"version\":2}",
+  "json_hash": "97417f2135765d66b979181782aaa5386449fd3e32f26081a19db77ebdf04a9e",
+  "program_bin": "5652445002000a0297417f2135765d66b979181782aaa5386449fd3e32f26081a19db77ebdf04a9e1e000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc80841e000000000080841e0000000000020202000200010100020000006400000032000000070025000000000000000102005001",
+  "program_hash": "0c15425c5337b6ff3fb334c22d63704cab6c73c9d67c286517a28f36eafe5f67",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": [
+        {
+          "entity": "tower",
+          "label": "Cup tower",
+          "bbox": [
+            4000,
+            3000,
+            5500,
+            9000
+          ]
+        },
+        {
+          "entity": "fan",
+          "label": "Fan",
+          "bbox": [
+            7000,
+            5000,
+            9000,
+            9000
+          ]
+        }
+      ]
+    },
+    "regions": []
+  },
+  "calibration_bin": "5643414c01000000f48dcd7625290e3afb5ea1f7a46671caa537145ec601ab23fa2ea70b317edd11",
+  "calibration_hash": "1dc876e3a13defd7c3095cdc1e37c3b34d5b78872cdf82c24ee2c927901d813d",
+  "track_bin": "5654524b010a010102000000be29628384db42fe3be90e9a213c128c7321a0c7e48c0fea74cb9fdbfafc7fd700ff70170000000069000000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000a00fb80b7c1528235a500000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "ok",
+    "reason": 0,
+    "leg_results": [
+      1
+    ],
+    "leg_causes": [
+      []
+    ],
+    "preruling": 1,
+    "winner_mask": 1,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      []
+    ],
+    "attempts": [],
+    "cost": 210
+  }
+}

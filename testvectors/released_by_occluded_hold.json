@@ -1,0 +1,145 @@
+{
+  "name": "released_by_occluded_hold",
+  "description": "released_by after a hold interrupted by one occluded frame (heldrun bridges absent gaps ≤ RELEASE_GAP: release at 3) vs. a single held frame (heldrun 1 < RELEASE_HOLD: no release)",
+  "covers": [
+    "primitive occluded_hold_before_release"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "thrower",
+        "kind": "person_any"
+      },
+      {
+        "name": "ball1",
+        "kind": "object",
+        "phrase": "ball1"
+      },
+      {
+        "name": "ball2",
+        "kind": "object",
+        "phrase": "ball2"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "released_by",
+          "a": {
+            "e": "ball1"
+          },
+          "b": {
+            "e": "thrower"
+          }
+        },
+        "rule": {
+          "kind": "exists"
+        }
+      },
+      {
+        "id": 2,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "released_by",
+          "a": {
+            "e": "ball2"
+          },
+          "b": {
+            "e": "thrower"
+          }
+        },
+        "rule": {
+          "kind": "exists"
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "leg",
+            "id": 1
+          },
+          {
+            "op": "not",
+            "arg": {
+              "op": "leg",
+              "id": 2
+            }
+          }
+        ]
+      },
+      "else": 1
+    },
+    "stake_each": 1000000,
+    "time_limit_s": 60
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  thrower: person(any)\n  ball1: object(\"ball1\")\n  ball2: object(\"ball2\")\nlegs:\n  - id: 1\n    actor_bound: false\n    success: ball1 released_by thrower\n    rule: success\n    attempt_window_s: 5s\n  - id: 2\n    actor_bound: false\n    success: ball2 released_by thrower\n    rule: success\n    attempt_window_s: 5s\noutcome: side(A) wins iff leg 1 and (not leg 2); else side(B)\nstake_each: 1000000\ntime_limit_s: 60\n",
+  "readback": [
+    "someone releases ball1",
+    "someone releases ball2",
+    "Alex win if leg 1 and not leg 2; otherwise Maya win",
+    "$1.00 each",
+    "Time limit 1m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"person_any\",\"name\":\"thrower\"},{\"kind\":\"object\",\"name\":\"ball1\",\"phrase\":\"ball1\"},{\"kind\":\"object\",\"name\":\"ball2\",\"phrase\":\"ball2\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"kind\":\"exists\"},\"success\":{\"a\":{\"e\":\"ball1\"},\"b\":{\"e\":\"thrower\"},\"op\":\"released_by\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":2,\"rule\":{\"kind\":\"exists\"},\"success\":{\"a\":{\"e\":\"ball2\"},\"b\":{\"e\":\"thrower\"},\"op\":\"released_by\"}}],\"outcome\":{\"condition\":{\"args\":[{\"id\":1,\"op\":\"leg\"},{\"arg\":{\"id\":2,\"op\":\"leg\"},\"op\":\"not\"}],\"op\":\"and\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1000000,\"time_limit_s\":60,\"version\":2}",
+  "json_hash": "feb35504dc4ca72c82efebc993d667850e08f186cdc48fa87c2a6d43c21e52ea",
+  "program_bin": "5652445002000a02feb35504dc4ca72c82efebc993d667850e08f186cdc48fa87c2a6d43c21e52ea3c000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc40420f000000000040420f00000000000203010002000200020100000000000000000032000000070035010000000000020000000000000000003200000007003502000000000000010600015001035002",
+  "program_hash": "22b6b4b80721a01a4db69771464506ae21f3f5e54c7baaf81404756f2772906b",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": []
+    },
+    "regions": []
+  },
+  "calibration_bin": "5643414c0100000073968acd2427f4f7c49bb124bced2773dbaa5a9c7c0d285b17a2e173d1b42c2d",
+  "calibration_hash": "36455794808f2a12a4a4fe544e4c8f81ca6b73d4461650bd439a702a6e5742c8",
+  "track_bin": "5654524b010a030102000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a00ff581b01ff640002ff64000000000006000000e803d007b80b28235a0000009e0756130208ba135a0000003e175613a217ba135a000000e803d007b80b28235a000000000000000000000000000000000000000000000000000000e803d007b80b28235a0000009e0756130208ba135a0000009e0756130208ba135a000000e803d007b80b28235a0000003e175613a217ba135a0000003e175613a217ba135a000000e803d007b80b28235a0000003e175613a217ba135a0000003e175613a217ba135a000000e803d007b80b28235a0000003e175613a217ba135a0000003e175613a217ba135a000000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "ok",
+    "reason": 0,
+    "leg_results": [
+      1,
+      0
+    ],
+    "leg_causes": [
+      [],
+      []
+    ],
+    "preruling": 1,
+    "winner_mask": 1,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [
+        3
+      ],
+      []
+    ],
+    "attempts": [],
+    "cost": 48
+  }
+}

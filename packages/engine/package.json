@@ -1,0 +1,43 @@
+{
+  "name": "@verdict/engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Verdict engine: rule language, binary encodings, evaluator, perception post-processing, evidence, identity, chain model (pure TypeScript, no I/O)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./constants": {
+      "types": "./src/constants.ts",
+      "default": "./src/constants.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "vectors": "tsx scripts/vectors.ts",
+    "gen:dart": "tsx scripts/gen-dart.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "bs58": "^6.0.0",
+    "poseidon-lite": "^0.3.0",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

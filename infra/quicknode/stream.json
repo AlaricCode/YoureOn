@@ -1,0 +1,29 @@
+{
+  "name": "verdict-devnet",
+  "network": "solana-devnet",
+  "dataset": "block",
+  "region": "usa_east",
+  "start_range": -1,
+  "end_range": -1,
+  "dataset_batch_size": 1,
+  "include_stream_metadata": "header",
+  "status": "active",
+  "elastic_batch_enabled": false,
+  "filter_function_file": "filter.js",
+  "filter_function": "<base64 of filter.js (see notes)>",
+  "destination": "webhook",
+  "destination_attributes": {
+    "url": "${API}/v1/webhooks/quicknode",
+    "compression": "none",
+    "headers": { "content-type": "application/json" },
+    "max_retry": 3,
+    "retry_interval_sec": 1,
+    "post_timeout_sec": 10,
+    "security_token": "${QUICKNODE_SECRET}"
+  },
+  "notes": [
+    "CONTRACTS §12.5. Create with the QuickNode Streams API (POST https://api.quicknode.com/streams/rest/v1/streams) after replacing ${API} and ${QUICKNODE_SECRET} and setting filter_function to base64(filter.js).",
+    "The webhook verifies x-qn-nonce / x-qn-timestamp / x-qn-signature = hex(HMAC_SHA256(QUICKNODE_SECRET, nonce || timestamp || raw_body)) with |now - timestamp| <= 300 s (packages/backend/src/chain/quicknode.ts).",
+    "VERDICT_PROGRAM_ID is a constant at the top of filter.js; change it together with VERDICT_PROGRAM_ID in .env."
+  ]
+}

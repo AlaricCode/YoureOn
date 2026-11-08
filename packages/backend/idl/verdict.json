@@ -1,0 +1,2552 @@
+{
+  "address": "dbqDmF6YtjPygXTvJD31CNADoLqiUG8pZgj1zpHaMye",
+  "metadata": {
+    "name": "verdict",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "VERDICT onchain program (CONTRACTS.md §9)"
+  },
+  "instructions": [
+    {
+      "name": "cancel",
+      "docs": [
+        "#4 Cancels a Proposed bet (creator); refunds funded stakes."
+      ],
+      "discriminator": [
+        232,
+        219,
+        223,
+        41,
+        219,
+        236,
+        220,
+        190
+      ],
+      "accounts": [
+        {
+          "name": "creator",
+          "signer": true,
+          "relations": [
+            "bet"
+          ]
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "track_buffer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  99,
+                  107,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "commit_evidence",
+      "docs": [
+        "#6 Oracle evidence commit (rolling root)."
+      ],
+      "discriminator": [
+        91,
+        113,
+        9,
+        164,
+        213,
+        12,
+        27,
+        29
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": [
+            "bet"
+          ]
+        },
+        {
+          "name": "bet",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "seq",
+          "type": "u32"
+        },
+        {
+          "name": "heads",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "HeadArg"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "consent",
+      "docs": [
+        "#10 Consents to the pre-ruling; settles on unanimity or after the window."
+      ],
+      "discriminator": [
+        8,
+        79,
+        94,
+        254,
+        228,
+        237,
+        206,
+        72
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "track_buffer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  99,
+                  107,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "winner_mask",
+          "type": "u8"
+        },
+        {
+          "name": "evidence_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_bet",
+      "docs": [
+        "#2 Creates a Bet and its USDC vault. Creator and oracle sign."
+      ],
+      "discriminator": [
+        197,
+        42,
+        153,
+        2,
+        59,
+        63,
+        143,
+        246
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "creator",
+          "signer": true
+        },
+        {
+          "name": "oracle",
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "creator"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "participants",
+          "type": {
+            "vec": "pubkey"
+          }
+        },
+        {
+          "name": "stakes",
+          "type": {
+            "vec": "u64"
+          }
+        },
+        {
+          "name": "side_b_mask",
+          "type": "u8"
+        },
+        {
+          "name": "stake_each",
+          "type": "u64"
+        },
+        {
+          "name": "time_limit_s",
+          "type": "u32"
+        },
+        {
+          "name": "flags",
+          "type": "u8"
+        },
+        {
+          "name": "program_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "acceptance_audio_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "judges",
+          "type": {
+            "array": [
+              "pubkey",
+              3
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "dispute",
+      "docs": [
+        "#11 Disputes the pre-ruling with a bond."
+      ],
+      "discriminator": [
+        216,
+        92,
+        128,
+        146,
+        202,
+        85,
+        135,
+        73
+      ],
+      "accounts": [
+        {
+          "name": "disputer",
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disputer_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "reason",
+          "type": "u8"
+        },
+        {
+          "name": "evidence_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "end",
+      "docs": [
+        "#7 Ends recording; sets the final evidence root."
+      ],
+      "discriminator": [
+        180,
+        160,
+        249,
+        217,
+        194,
+        121,
+        70,
+        16
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "seq",
+          "type": "u32"
+        },
+        {
+          "name": "heads",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "HeadArg"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "fund",
+      "docs": [
+        "#3 Escrows a participant's stake, binding calibration, program and terms."
+      ],
+      "discriminator": [
+        218,
+        188,
+        111,
+        221,
+        152,
+        113,
+        174,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "participant",
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "participant_token",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "calibration_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "program_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "terms_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "init_profile",
+      "docs": [
+        "#1 Creates or overwrites the caller's Profile (biometric commitments, display name)."
+      ],
+      "discriminator": [
+        210,
+        162,
+        212,
+        95,
+        95,
+        186,
+        89,
+        119
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "wallet",
+          "signer": true
+        },
+        {
+          "name": "profile",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  102,
+                  105,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "face_commit",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "voice_commit",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "display_name",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "post_tracks",
+      "docs": [
+        "#8 Writes a TrackBuffer chunk; validates everything on `finalize`."
+      ],
+      "discriminator": [
+        152,
+        144,
+        246,
+        6,
+        85,
+        201,
+        212,
+        131
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": [
+            "bet"
+          ]
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "track_buffer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  99,
+                  107,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "payload_len",
+          "type": "u32"
+        },
+        {
+          "name": "program_len",
+          "type": "u16"
+        },
+        {
+          "name": "calibration_len",
+          "type": "u16"
+        },
+        {
+          "name": "offset",
+          "type": "u32"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "name": "finalize",
+          "type": "bool"
+        },
+        {
+          "name": "perception_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "refund",
+      "docs": [
+        "#15 Permissionless timeout refund."
+      ],
+      "discriminator": [
+        2,
+        96,
+        183,
+        251,
+        63,
+        208,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "track_buffer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  99,
+                  107,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "run_rules",
+      "docs": [
+        "#9 Runs the onchain interpreter (oracle)."
+      ],
+      "discriminator": [
+        143,
+        182,
+        242,
+        130,
+        213,
+        37,
+        98,
+        233
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": [
+            "bet"
+          ]
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "track_buffer",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  99,
+                  107,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "settle_panel",
+      "docs": [
+        "#12 Settles a Disputed bet with a 2-of-3 judge quorum (Ed25519 precompile)."
+      ],
+      "discriminator": [
+        240,
+        139,
+        1,
+        26,
+        13,
+        188,
+        137,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "writable": true
+        },
+        {
+          "name": "track_buffer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  97,
+                  99,
+                  107,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "instructions",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "outcome",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "start",
+      "docs": [
+        "#5 Starts the bet: SlotHashes beacon + witness registration."
+      ],
+      "discriminator": [
+        62,
+        15,
+        117,
+        236,
+        47,
+        1,
+        89,
+        139
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "slot_hashes",
+          "address": "SysvarS1otHashes111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "beacon_slot",
+          "type": "u64"
+        },
+        {
+          "name": "witnesses",
+          "type": {
+            "vec": {
+              "defined": {
+                "name": "WitnessArg"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify_biometric_proof",
+      "docs": [
+        "#13 Verifies a Groth16 biometric proof and records an identity checkpoint."
+      ],
+      "discriminator": [
+        48,
+        8,
+        66,
+        78,
+        15,
+        110,
+        141,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": [
+            "bet"
+          ]
+        },
+        {
+          "name": "bet",
+          "writable": true
+        },
+        {
+          "name": "profile",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  102,
+                  105,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "profile.wallet",
+                "account": "Profile"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "participant",
+          "type": "u8"
+        },
+        {
+          "name": "modality",
+          "type": "u8"
+        },
+        {
+          "name": "frame",
+          "type": "u32"
+        },
+        {
+          "name": "tau_bps",
+          "type": "u16"
+        },
+        {
+          "name": "proof_a",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        },
+        {
+          "name": "proof_b",
+          "type": {
+            "array": [
+              "u8",
+              128
+            ]
+          }
+        },
+        {
+          "name": "proof_c",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify_sp1_run",
+      "docs": [
+        "#14 SP1 pre-ruling (feature `sp1`; otherwise `Sp1Disabled`)."
+      ],
+      "discriminator": [
+        106,
+        132,
+        0,
+        175,
+        135,
+        69,
+        144,
+        167
+      ],
+      "accounts": [
+        {
+          "name": "oracle",
+          "signer": true,
+          "relations": [
+            "bet"
+          ]
+        },
+        {
+          "name": "bet",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "public_values",
+          "type": "bytes"
+        },
+        {
+          "name": "proof",
+          "type": "bytes"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Bet",
+      "discriminator": [
+        147,
+        23,
+        35,
+        59,
+        15,
+        75,
+        155,
+        32
+      ]
+    },
+    {
+      "name": "Profile",
+      "discriminator": [
+        184,
+        101,
+        165,
+        188,
+        95,
+        63,
+        127,
+        188
+      ]
+    },
+    {
+      "name": "TrackBuffer",
+      "discriminator": [
+        119,
+        81,
+        89,
+        57,
+        104,
+        147,
+        58,
+        252
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "BetCancelled",
+      "discriminator": [
+        32,
+        179,
+        128,
+        184,
+        125,
+        193,
+        106,
+        104
+      ]
+    },
+    {
+      "name": "BetCreated",
+      "discriminator": [
+        32,
+        153,
+        105,
+        71,
+        188,
+        72,
+        107,
+        114
+      ]
+    },
+    {
+      "name": "BetEnded",
+      "discriminator": [
+        73,
+        96,
+        58,
+        97,
+        19,
+        181,
+        6,
+        113
+      ]
+    },
+    {
+      "name": "BetStarted",
+      "discriminator": [
+        103,
+        31,
+        85,
+        206,
+        6,
+        163,
+        157,
+        105
+      ]
+    },
+    {
+      "name": "BiometricVerified",
+      "discriminator": [
+        104,
+        99,
+        123,
+        177,
+        102,
+        117,
+        196,
+        131
+      ]
+    },
+    {
+      "name": "Consented",
+      "discriminator": [
+        221,
+        39,
+        224,
+        111,
+        252,
+        164,
+        167,
+        116
+      ]
+    },
+    {
+      "name": "Disputed",
+      "discriminator": [
+        186,
+        235,
+        91,
+        209,
+        148,
+        93,
+        152,
+        217
+      ]
+    },
+    {
+      "name": "EvidenceCommitted",
+      "discriminator": [
+        173,
+        187,
+        101,
+        39,
+        38,
+        229,
+        18,
+        150
+      ]
+    },
+    {
+      "name": "Funded",
+      "discriminator": [
+        67,
+        84,
+        56,
+        88,
+        192,
+        12,
+        201,
+        177
+      ]
+    },
+    {
+      "name": "PreRuled",
+      "discriminator": [
+        255,
+        77,
+        153,
+        139,
+        223,
+        247,
+        68,
+        24
+      ]
+    },
+    {
+      "name": "ProfileUpdated",
+      "discriminator": [
+        186,
+        248,
+        62,
+        98,
+        112,
+        98,
+        161,
+        252
+      ]
+    },
+    {
+      "name": "Refunded",
+      "discriminator": [
+        35,
+        103,
+        149,
+        246,
+        196,
+        123,
+        221,
+        99
+      ]
+    },
+    {
+      "name": "Settled",
+      "discriminator": [
+        232,
+        210,
+        40,
+        17,
+        142,
+        124,
+        145,
+        238
+      ]
+    },
+    {
+      "name": "TracksPosted",
+      "discriminator": [
+        12,
+        255,
+        192,
+        115,
+        12,
+        124,
+        122,
+        15
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidState",
+      "msg": "Bet is not in the required state"
+    },
+    {
+      "code": 6001,
+      "name": "NotParticipant",
+      "msg": "Signer is not a participant"
+    },
+    {
+      "code": 6002,
+      "name": "AlreadyFunded",
+      "msg": "Participant already funded"
+    },
+    {
+      "code": 6003,
+      "name": "BadParticipants",
+      "msg": "Invalid participant list"
+    },
+    {
+      "code": 6004,
+      "name": "BadStake",
+      "msg": "Invalid stake"
+    },
+    {
+      "code": 6005,
+      "name": "BadSides",
+      "msg": "Invalid side mask"
+    },
+    {
+      "code": 6006,
+      "name": "BadTimeLimit",
+      "msg": "Invalid time limit"
+    },
+    {
+      "code": 6007,
+      "name": "BadJudges",
+      "msg": "Invalid judges"
+    },
+    {
+      "code": 6008,
+      "name": "CalibrationMismatch",
+      "msg": "Calibration hash mismatch"
+    },
+    {
+      "code": 6009,
+      "name": "DeadlinePassed",
+      "msg": "Deadline passed"
+    },
+    {
+      "code": 6010,
+      "name": "DeadlineNotReached",
+      "msg": "Deadline not reached"
+    },
+    {
+      "code": 6011,
+      "name": "Unauthorized",
+      "msg": "Unauthorized signer"
+    },
+    {
+      "code": 6012,
+      "name": "BeaconSlotNotFound",
+      "msg": "Beacon slot not found in SlotHashes"
+    },
+    {
+      "code": 6013,
+      "name": "BeaconTooOld",
+      "msg": "Beacon too old"
+    },
+    {
+      "code": 6014,
+      "name": "TooManyWitnesses",
+      "msg": "Too many or invalid witnesses"
+    },
+    {
+      "code": 6015,
+      "name": "EvidenceSeq",
+      "msg": "Evidence sequence mismatch"
+    },
+    {
+      "code": 6016,
+      "name": "EvidenceHeads",
+      "msg": "Evidence heads do not match the witness list"
+    },
+    {
+      "code": 6017,
+      "name": "EvidenceRegress",
+      "msg": "Evidence head regressed"
+    },
+    {
+      "code": 6018,
+      "name": "BufferTooLarge",
+      "msg": "Track buffer too large"
+    },
+    {
+      "code": 6019,
+      "name": "BufferLayout",
+      "msg": "Track buffer layout mismatch"
+    },
+    {
+      "code": 6020,
+      "name": "BufferIncomplete",
+      "msg": "Track buffer incomplete"
+    },
+    {
+      "code": 6021,
+      "name": "ProgramHashMismatch",
+      "msg": "Program hash mismatch"
+    },
+    {
+      "code": 6022,
+      "name": "CalibrationHashMismatch",
+      "msg": "Calibration hash mismatch in track buffer"
+    },
+    {
+      "code": 6023,
+      "name": "MalformedProgram",
+      "msg": "Malformed program"
+    },
+    {
+      "code": 6024,
+      "name": "MalformedCalibration",
+      "msg": "Malformed calibration"
+    },
+    {
+      "code": 6025,
+      "name": "MalformedTracks",
+      "msg": "Malformed tracks"
+    },
+    {
+      "code": 6026,
+      "name": "ProgramBetMismatch",
+      "msg": "Program does not match the bet"
+    },
+    {
+      "code": 6027,
+      "name": "TracksNotFinalized",
+      "msg": "Tracks not finalized"
+    },
+    {
+      "code": 6028,
+      "name": "AlreadyConsented",
+      "msg": "Already consented"
+    },
+    {
+      "code": 6029,
+      "name": "ConsentMismatch",
+      "msg": "Consent arguments do not match the bet"
+    },
+    {
+      "code": 6030,
+      "name": "InsufficientQuorum",
+      "msg": "Insufficient judge quorum"
+    },
+    {
+      "code": 6031,
+      "name": "BadOutcome",
+      "msg": "Invalid outcome"
+    },
+    {
+      "code": 6032,
+      "name": "BadProof",
+      "msg": "Invalid proof"
+    },
+    {
+      "code": 6033,
+      "name": "TauTooLow",
+      "msg": "Threshold too low"
+    },
+    {
+      "code": 6034,
+      "name": "MissingCommitment",
+      "msg": "Missing biometric commitment"
+    },
+    {
+      "code": 6035,
+      "name": "TooManyCheckpoints",
+      "msg": "Too many identity checkpoints"
+    },
+    {
+      "code": 6036,
+      "name": "Sp1Disabled",
+      "msg": "SP1 verification is disabled"
+    },
+    {
+      "code": 6037,
+      "name": "BadTokenAccount",
+      "msg": "Invalid token account"
+    },
+    {
+      "code": 6038,
+      "name": "MathOverflow",
+      "msg": "Math overflow"
+    },
+    {
+      "code": 6039,
+      "name": "NotRefundable",
+      "msg": "Bet is not refundable"
+    },
+    {
+      "code": 6040,
+      "name": "BadReason",
+      "msg": "Invalid reason"
+    },
+    {
+      "code": 6041,
+      "name": "BadCommitment",
+      "msg": "Invalid commitment"
+    },
+    {
+      "code": 6042,
+      "name": "ProfileTooNew",
+      "msg": "Profile updated after the bet was created"
+    },
+    {
+      "code": 6043,
+      "name": "BadEd25519Instruction",
+      "msg": "Invalid Ed25519 instruction"
+    },
+    {
+      "code": 6044,
+      "name": "BadFlags",
+      "msg": "Invalid flags"
+    }
+  ],
+  "types": [
+    {
+      "name": "Bet",
+      "docs": [
+        "Bet (Borsh, space 8 + 1580). PDA `[\"bet\", creator, nonce LE]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          },
+          {
+            "name": "state",
+            "type": "u8"
+          },
+          {
+            "name": "flags",
+            "type": "u8"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "judges",
+            "type": {
+              "array": [
+                "pubkey",
+                3
+              ]
+            }
+          },
+          {
+            "name": "n_participants",
+            "type": "u8"
+          },
+          {
+            "name": "participants",
+            "type": {
+              "array": [
+                "pubkey",
+                8
+              ]
+            }
+          },
+          {
+            "name": "stakes",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          },
+          {
+            "name": "side_b_mask",
+            "type": "u8"
+          },
+          {
+            "name": "funded_mask",
+            "type": "u8"
+          },
+          {
+            "name": "stake_each",
+            "type": "u64"
+          },
+          {
+            "name": "time_limit_s",
+            "type": "u32"
+          },
+          {
+            "name": "program_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "calibration_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "acceptance_audio_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "fund_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "funded_at",
+            "type": "i64"
+          },
+          {
+            "name": "started_at",
+            "type": "i64"
+          },
+          {
+            "name": "beacon_slot",
+            "type": "u64"
+          },
+          {
+            "name": "beacon_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "n_witnesses",
+            "type": "u8"
+          },
+          {
+            "name": "witnesses",
+            "type": {
+              "array": [
+                "pubkey",
+                8
+              ]
+            }
+          },
+          {
+            "name": "witness_kinds",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "witness_heads",
+            "type": {
+              "array": [
+                "u32",
+                8
+              ]
+            }
+          },
+          {
+            "name": "witness_head_hashes",
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                8
+              ]
+            }
+          },
+          {
+            "name": "gap_mask",
+            "type": "u8"
+          },
+          {
+            "name": "evidence_seq",
+            "type": "u32"
+          },
+          {
+            "name": "evidence_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "last_commit_at",
+            "type": "i64"
+          },
+          {
+            "name": "ended_at",
+            "type": "i64"
+          },
+          {
+            "name": "perception_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tracks_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tracks_finalized",
+            "type": "u8"
+          },
+          {
+            "name": "preruling",
+            "type": "u8"
+          },
+          {
+            "name": "prerule_reason",
+            "type": "u8"
+          },
+          {
+            "name": "winner_mask",
+            "type": "u8"
+          },
+          {
+            "name": "leg_results",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "preruled_at",
+            "type": "i64"
+          },
+          {
+            "name": "consent_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "consent_mask",
+            "type": "u8"
+          },
+          {
+            "name": "disputer",
+            "type": "pubkey"
+          },
+          {
+            "name": "dispute_bond",
+            "type": "u64"
+          },
+          {
+            "name": "dispute_reason",
+            "type": "u8"
+          },
+          {
+            "name": "disputed_at",
+            "type": "i64"
+          },
+          {
+            "name": "n_bio",
+            "type": "u8"
+          },
+          {
+            "name": "bio",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "BioCheck"
+                  }
+                },
+                8
+              ]
+            }
+          },
+          {
+            "name": "settled_at",
+            "type": "i64"
+          },
+          {
+            "name": "settle_path",
+            "type": "u8"
+          },
+          {
+            "name": "final_winner_mask",
+            "type": "u8"
+          },
+          {
+            "name": "refund_reason",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "creator",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "participants",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "stakes",
+            "type": {
+              "vec": "u64"
+            }
+          },
+          {
+            "name": "side_b_mask",
+            "type": "u8"
+          },
+          {
+            "name": "flags",
+            "type": "u8"
+          },
+          {
+            "name": "program_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "time_limit_s",
+            "type": "u32"
+          },
+          {
+            "name": "fund_deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetEnded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "evidence_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "ended_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetStarted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "beacon_slot",
+            "type": "u64"
+          },
+          {
+            "name": "beacon_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "started_at",
+            "type": "i64"
+          },
+          {
+            "name": "n_witnesses",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BioCheck",
+      "docs": [
+        "Identity checkpoint verified onchain (§9.3): 6 bytes Borsh."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "participant",
+            "type": "u8"
+          },
+          {
+            "name": "modality",
+            "type": "u8"
+          },
+          {
+            "name": "frame",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BiometricVerified",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "participant_idx",
+            "type": "u8"
+          },
+          {
+            "name": "modality",
+            "type": "u8"
+          },
+          {
+            "name": "frame",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Consented",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "participant",
+            "type": "pubkey"
+          },
+          {
+            "name": "consent_mask",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Disputed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "disputer",
+            "type": "pubkey"
+          },
+          {
+            "name": "reason",
+            "type": "u8"
+          },
+          {
+            "name": "bond",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EvidenceCommitted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "seq",
+            "type": "u32"
+          },
+          {
+            "name": "root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "gap_mask",
+            "type": "u8"
+          },
+          {
+            "name": "is_final",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Funded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "participant",
+            "type": "pubkey"
+          },
+          {
+            "name": "participant_idx",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "funded_mask",
+            "type": "u8"
+          },
+          {
+            "name": "all_funded",
+            "type": "bool"
+          },
+          {
+            "name": "calibration_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "HeadArg",
+      "docs": [
+        "One witness head as passed to `commit_evidence` / `end` (§9.4): chunk index + chain hash."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "index",
+            "type": "u32"
+          },
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PreRuled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "preruling",
+            "type": "u8"
+          },
+          {
+            "name": "reason",
+            "type": "u8"
+          },
+          {
+            "name": "winner_mask",
+            "type": "u8"
+          },
+          {
+            "name": "leg_results",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "consent_deadline",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Profile",
+      "docs": [
+        "Profile (Borsh, space 8 + 179). PDA `[\"profile\", wallet]`."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "face_commit",
+            "docs": [
+              "Poseidon commitment, 32-byte big-endian (§8.4). Zero = none / deleted."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "voice_commit",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "display_name",
+            "docs": [
+              "UTF-8, zero padded."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "name_len",
+            "type": "u8"
+          },
+          {
+            "name": "flags",
+            "docs": [
+              "bit0 face, bit1 voice."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "type": "i64"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProfileUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "flags",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Refunded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "reason",
+            "type": "u8"
+          },
+          {
+            "name": "amounts",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Settled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "path",
+            "type": "u8"
+          },
+          {
+            "name": "winner_mask",
+            "type": "u8"
+          },
+          {
+            "name": "pot",
+            "type": "u64"
+          },
+          {
+            "name": "payouts",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TrackBuffer",
+      "docs": [
+        "TrackBuffer header (zero-copy, 48 bytes, Pod). Account space `8 + 48 + payload_len`;",
+        "the payload is `data[56 .. 56 + payload_len]` (§9.3, §5.6). The account is created manually",
+        "by the first `post_tracks` (PDA `[\"tracks\", bet]`)."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "payload_len",
+            "type": "u32"
+          },
+          {
+            "name": "program_len",
+            "type": "u16"
+          },
+          {
+            "name": "calibration_len",
+            "type": "u16"
+          },
+          {
+            "name": "written",
+            "type": "u32"
+          },
+          {
+            "name": "finalized",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                2
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TracksPosted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "perception_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "tracks_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "payload_len",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "WitnessArg",
+      "docs": [
+        "Witness registration for `start` (§9.4 #5)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "key",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ]
+}

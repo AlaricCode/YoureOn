@@ -1,0 +1,45 @@
+[
+  {
+    "id": "GEMI-FED-DEC26",
+    "title": "Fed cuts rates at the December 2026 meeting",
+    "category": "Economics",
+    "close_time_ms": 1797638400000,
+    "status": "open",
+    "contracts": [
+      { "id": "GEMI-FED-DEC26-YES", "label": "Yes", "prob_bps": 6200, "bid_bps": 6100, "ask_bps": 6300 }
+    ]
+  },
+  {
+    "id": "GEMI-BTC-150K-26",
+    "title": "Bitcoin above $150,000 on December 31, 2026",
+    "category": "Crypto",
+    "close_time_ms": 1798675200000,
+    "status": "open",
+    "contracts": [
+      { "id": "GEMI-BTC-150K-26-YES", "label": "Yes", "prob_bps": 2800, "bid_bps": 2700, "ask_bps": 2900 }
+    ]
+  },
+  {
+    "id": "GEMI-SUPERBOWL-61",
+    "title": "Super Bowl LXI winner",
+    "category": "Sports",
+    "close_time_ms": 1802563200000,
+    "status": "open",
+    "contracts": [
+      { "id": "GEMI-SB61-KC", "label": "Kansas City", "prob_bps": 1800, "bid_bps": 1700, "ask_bps": 1900 },
+      { "id": "GEMI-SB61-PHI", "label": "Philadelphia", "prob_bps": 1500, "bid_bps": 1400, "ask_bps": 1600 },
+      { "id": "GEMI-SB61-BUF", "label": "Buffalo", "prob_bps": 1200, "bid_bps": 1100, "ask_bps": 1300 }
+    ]
+  },
+  {
+    "id": "GEMI-ETH-ETF-NOV26",
+    "title": "ETH closes November 2026 above $5,000",
+    "category": "Crypto",
+    "close_time_ms": 1795996800000,
+    "status": "resolved",
+    "contracts": [
+      { "id": "GEMI-ETH-5K-NOV26-YES", "label": "Yes", "prob_bps": 9900 }
+    ],
+    "resolution": [{ "contract_id": "GEMI-ETH-5K-NOV26-YES", "result": "yes" }]
+  }
+]
