@@ -8,6 +8,9 @@ import { defaultProgramId, requireIdl } from '../src/chain/idl.js';
 import { MockChain } from '../src/chain/mock/index.js';
 import { quickNodeSignature } from '../src/chain/quicknode.js';
 import { startRpcWsSource, envelopesFromLogs, type LogsConnection } from '../src/chain/rpcWs.js';
+import { parseProgramLogs } from '../src/chain/devnet.js';
+import { ChainEventHandler, type ProcessedEventRecord } from '../src/chain/events.js';
+import { JsonStore } from '../src/persistence/store.js';
 import { DECODED_EVENT_FIELDS, eventSchemaError, streamEvents, unwrapStreamBody } from '../src/chain/streams.js';
 import { loadConfig } from '../src/config/load.js';
 import { createContext } from '../src/context.js';
@@ -194,7 +197,7 @@ describe('POST /webhooks/quicknode (§12.5)', () => {
 
   async function quicknodeApp() {
     const clock = new ManualClock(1_760_000_000_000);
-    const config = loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'quicknode', QUICKNODE_SECRET: SECRET }));
+    const config = loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'quicknode', QUICKNODE_SECRET: SECRET, PROVER: 'snarkjs' }));
     const idl = requireIdl();
     const chain = new MockChain({
       idl,
@@ -333,5 +336,25 @@ describe('rpc_ws source (logsSubscribe)', () => {
     expect(envelopesFromLogs({ signature: 'E', err: null, logs: lines([sample('BetCancelled')]) }, 9, pid)[0]!.block_time).toBeNull();
     await src.stop();
     expect(removed).toEqual([42]);
+  });
+
+  it('handles a backend-submitted tx once when both DevnetChain.submit and logsSubscribe deliver it', async () => {
+    // DevnetChain.submit feeds its fetched events (fetchEvents → parseProgramLogs) to the onEvents
+    // listeners, and with CHAIN_EVENTS_SOURCE=rpc_ws the same tx also arrives via logsSubscribe.
+    // ChainEventHandler dedups on eventKey(signature, index), so the overlap is harmless.
+    const pid = defaultProgramId();
+    const logs = [`Program ${pid} invoke [1]`, eventLogLine(sample('Funded')), eventLogLine(sample('PreRuled', 2)), `Program ${pid} success`];
+    const fromSubmit = parseProgramLogs(logs, pid).map((event, index) => ({ signature: 'SIG', slot: 11, block_time: 1_700_000_000, index, event }));
+    const fromLogs = envelopesFromLogs({ signature: 'SIG', err: null, logs }, 11, pid);
+    expect(fromLogs.map((e) => `${e.signature}:${e.index}:${e.event.name}`)).toEqual(fromSubmit.map((e) => `${e.signature}:${e.index}:${e.event.name}`));
+    const store = new JsonStore({ dataDir: null });
+    const handler = new ChainEventHandler({ processed: store.collection<ProcessedEventRecord>(COLLECTIONS.chainEvents), hub: null, nowMs: () => 0 });
+    const fired: string[] = [];
+    handler.on('*', (e) => {
+      fired.push(`${e.signature}:${e.index}:${e.name}`);
+    });
+    expect(await handler.handleEnvelopes(fromSubmit)).toBe(2);
+    expect(await handler.handleEnvelopes(fromLogs)).toBe(0);
+    expect(fired).toEqual(['SIG:0:Funded', 'SIG:1:PreRuled']);
   });
 });

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:verdict/api/api_client.dart';
@@ -15,6 +16,7 @@ import 'package:verdict/wallet/wallet.dart';
 import 'package:verdict/wallet/witness_keys.dart';
 
 import '../support/fake_server.dart';
+import '../support/fixtures.dart';
 import '../support/golden.dart';
 
 void main() {
@@ -95,7 +97,7 @@ void main() {
     });
 
     SignRequest req(String id, {int expires = 0}) =>
-        SignRequest(txId: id, messageB64: base64.encode([1, 2, 3]), expiresAtMs: expires, summary: r'Stake $5.00');
+        SignRequest(txId: id, messageB64: txMessageB64(), expiresAtMs: expires, summary: r'Stake $5.00');
 
     test('signs message bytes and submits', () async {
       server.on('POST /tx/t1/submit', (r) {
@@ -107,7 +109,55 @@ void main() {
       expect(res.signature, 'solsig');
       final k = await Ed25519Key.fromSeed(kSeed);
       final sig = base64.decode(FakeServer.body(server.called('POST /tx/t1/submit').single)['signature_b64'] as String);
-      expect(await ed25519Verify(message: [1, 2, 3], signature: sig, publicKey: k.publicKey), isTrue);
+      expect(await ed25519Verify(message: txMessage(), signature: sig, publicKey: k.publicKey), isTrue);
+    });
+
+    test('the prompt shows the summary; fresh forces a prompt inside the window', () async {
+      server.on('POST /tx/t1/submit', (_) => {'status': 'confirmed', 'signature': 's', 'error': null});
+      final auth = wallet.authenticator as AllowAuthenticator;
+      final signer = TxSigner(api: api, wallet: wallet);
+      await signer.run(() async => req('t1'));
+      await signer.run(() async => req('t1'));
+      expect(auth.prompts, 1, reason: 'consent-style tx reuse the window');
+      await signer.run(() async => req('t1'), fresh: true);
+      expect(auth.prompts, 2, reason: 'stake/pay always prompt');
+      expect(auth.reasons, [r'Stake $5.00', r'Stake $5.00']);
+    });
+
+    test('server bytes that are not a Solana message for this wallet are never signed', () async {
+      server.on('POST /tx/t1/submit', (_) => {'status': 'confirmed', 'signature': 's', 'error': null});
+      final auth = wallet.authenticator as AllowAuthenticator;
+      Future<void> refused(List<int> bytes) => expectLater(
+            TxSigner(api: api, wallet: wallet).run(() async =>
+                SignRequest(txId: 't1', messageB64: base64.encode(bytes), expiresAtMs: 0, summary: 'x')),
+            throwsA(isA<ApiException>().having((e) => e.code, 'code', 'TX_FAILED')),
+          );
+      final good = txMessage();
+      // A forged acceptance (domain-tagged message).
+      await refused(acceptSigMessage(programHash: fromHex('ab' * 32), wavBytes: utf8.encode('x')));
+      await refused(loginMessage('n'));
+      await refused(const []);
+      await refused([1, 2, 3]);
+      // Another signer.
+      await refused([...good.sublist(0, 4), ...List<int>.filled(32, 5), ...good.sublist(36)]);
+      // Truncated (no blockhash).
+      await refused(good.sublist(0, 4 + 64));
+      // Bad header: 0 signers, unsupported version.
+      await refused([0, ...good.sublist(1)]);
+      await refused([0x81, ...good]);
+      expect(auth.prompts, 0, reason: 'rejected before the prompt');
+      expect(server.called('POST /tx/t1/submit'), isEmpty);
+      // v0 prefix is fine.
+      expect(() => Wallet.checkTxMessage(Uint8List.fromList([0x80, ...good]), fromHex(kPubHex)), returnsNormally);
+    });
+
+    test('signing in does not open the unlock window', () async {
+      final auth = AllowAuthenticator();
+      final w = Wallet(store: MemoryKeyStore()..data[Wallet.seedKey] = toHex(kSeed), authenticator: auth);
+      await w.signLogin('n');
+      expect(w.unlocked, isFalse);
+      await w.signTxMessage(txMessageB64());
+      expect(auth.prompts, 2);
     });
 
     test('TX_EXPIRED re-requests once, automatically', () async {

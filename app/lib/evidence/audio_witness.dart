@@ -27,6 +27,9 @@ class AudioWitnessRecorder {
     autoGain: false,
     echoCancel: false,
     noiseSuppress: false,
+    // Record continuously: the start sound and beacon tones played by this
+    // same phone (audioplayers) must not pause the witness on focus loss.
+    audioInterruption: AudioInterruptionMode.none,
   );
 
   Future<bool> hasPermission() => _rec.hasPermission();

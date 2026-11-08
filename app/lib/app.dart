@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'nav/screen_table.dart';
 import 'screens/enroll_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/restoring_screen.dart';
 import 'screens/sign_in_screen.dart';
 import 'state/app_controller.dart';
 import 'state/app_scope.dart';
@@ -66,6 +67,8 @@ class _RootGateState extends State<RootGate> {
     final Widget page;
     if (!app.ready) {
       page = const ColoredBox(key: ValueKey('boot'), color: Palette.background, child: SizedBox.expand());
+    } else if (app.restoring) {
+      page = const RestoringScreen(key: ValueKey('restoring'));
     } else if (!app.signedIn) {
       page = const SignInScreen(key: ValueKey('signin'));
     } else if (!app.user!.enrolled) {

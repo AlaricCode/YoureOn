@@ -10,6 +10,9 @@ import { createHash } from 'node:crypto';
 import {
   BET_STATE,
   CHUNK_LATE_MS,
+  CHUNK_MS,
+  LIVE_GRACE_S,
+  TAIL_MS,
   chainGenesis,
   chunkHash,
   decodeBeacon,
@@ -118,6 +121,17 @@ export function recordingStartWallMs(w: WitnessRecord, liveStartMs: number | nul
   return liveStartMs ?? 0;
 }
 
+/** Shortest non-final chunk; with the session window this bounds the chunk count. */
+export const MIN_CHUNK_MS = 500;
+/** Device time a recording may start before t0 (start sound + beacon + slack). */
+export const PRE_T0_SLACK_MS = 60_000;
+
+/** Per-witness chunk bounds for a session of `timeLimitS` (§7.2 records, §12.6 grace). */
+export function chunkLimits(timeLimitS: number): { maxDurationMs: number; maxStartMs: number; maxIndex: number } {
+  const windowMs = timeLimitS * 1000 + TAIL_MS + LIVE_GRACE_S * 1000 + PRE_T0_SLACK_MS;
+  return { maxDurationMs: 2 * CHUNK_MS, maxStartMs: windowMs, maxIndex: Math.ceil(windowMs / MIN_CHUNK_MS) + 1 };
+}
+
 /**
  * POST /bets/:id/chunks: verifies and stores one hash record. Idempotent for
  * an identical re-post. Returns the record and whether the witness is now final.
@@ -145,6 +159,13 @@ export async function registerChunk(
 
   const bet = await chainBet(ctx, info.id);
   if (bet.state !== BET_STATE.Live) throw new ApiError('WRONG_STATE', 'bet is not live');
+  // Bounded evidence per witness (a witness cannot post an unbounded record stream).
+  const lim = chunkLimits(bet.time_limit_s);
+  if (post.duration_ms > lim.maxDurationMs || (!post.final && post.duration_ms < MIN_CHUNK_MS)) {
+    throw badRequest(`duration_ms must be ${MIN_CHUNK_MS}..${lim.maxDurationMs} (final chunks may be shorter)`);
+  }
+  if (post.index > lim.maxIndex) throw badRequest(`at most ${lim.maxIndex + 1} chunks per witness`);
+  if (post.start_ms > lim.maxStartMs) throw badRequest('start_ms is past the session window');
   const onchainIdx = bet.witnesses.slice(0, bet.n_witnesses).indexOf(post.witness_key);
   if (onchainIdx < 0) throw new ApiError('NOT_FOUND', 'witness not in the onchain list');
 

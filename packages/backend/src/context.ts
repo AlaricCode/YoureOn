@@ -3,6 +3,8 @@
  * once by `createContext` (wires config → store → chain → providers → hub →
  * event handler → tx service → keeper).
  */
+import type { PerceptionResultSink } from './providers/real/perception.js';
+import { perceptionResultSink } from './lifecycle/mediaUrls.js';
 import type { FastifyBaseLogger } from 'fastify';
 import { AuthService } from './auth/service.js';
 import { createChainClient } from './chain/index.js';
@@ -81,6 +83,10 @@ export function createContext(config: Config, opts: ContextOptions = {}): AppCon
   const blobs = new BlobStore(opts.inMemory ? null : config.dataDir);
   // Providers first: the spend guard must refuse startup before anything else happens.
   const providers = createProviders(config, { clock }, opts.providers);
+  if (config.sp1Prover !== 'off') {
+    // SP1 path not implemented (D-9, CONTRACTS-ERRATA [sp1-dropped]): treated as off.
+    log.warn({ sp1Prover: config.sp1Prover }, `SP1_PROVER=${config.sp1Prover} ignored: SP1 path not implemented (D-9); oversized runs go to the panel`);
+  }
   const chain =
     opts.chain ??
     createChainClient(config, {
@@ -89,6 +95,12 @@ export function createContext(config: Config, opts: ContextOptions = {}): AppCon
       ...(providers.prover.verifier ? { verifyGroth16: providers.prover.verifier } : {}),
       onListenerError: (e) => log.error({ err: e }, 'chain event listener failed'),
     });
+  // PERCEPTION_PROVIDER=nosana: one-shot workers upload to signed backend URLs.
+  if (config.perceptionProvider === 'nosana') {
+    (providers.perception as { attachResultSink?: (s: PerceptionResultSink) => void }).attachResultSink?.(
+      perceptionResultSink({ config, clock, blobs } as unknown as AppContext),
+    );
+  }
   const auth = new AuthService({ store, clock });
   const hub = new WsHub({ authenticate: (t) => auth.authenticate(t), clock, log });
   const events = new ChainEventHandler({

@@ -1,8 +1,13 @@
 /**
  * Mock provers. PROVER=mock returns an all-zero Groth16 proof (the mock chain
  * accepts it when no verifier is configured, §13); SP1_PROVER=off|mock.
+ *
+ * The SP1 path (D-9) is dropped for this build (CONTRACTS-ERRATA [sp1-dropped]):
+ * nothing routes to SP1, oversized runs go to the panel (reason 13), and every
+ * SP1 provider reports `enabled = false` and refuses to prove.
  */
 import type { EncodedGroth16Proof } from '@verdict/engine';
+import { NotImplementedError } from '../../errors.js';
 import type { ProverProvider, Sp1Provider } from '../types.js';
 
 export class MockProver implements ProverProvider {
@@ -22,10 +27,12 @@ export class OffSp1 implements Sp1Provider {
 
 export class MockSp1 implements Sp1Provider {
   readonly name = 'mock';
-  readonly enabled = true;
-  // TODO(chain agent): build public values per §9.4 #14 from the bet + engine evaluation.
-  async proveRun(input: { bet: string; payload: Uint8Array }): Promise<{ public_values: Uint8Array; proof: Uint8Array }> {
-    void input;
-    return { public_values: new Uint8Array(0), proof: new Uint8Array(0) };
+  /** SP1 path not implemented (D-9): treated as off. */
+  readonly enabled = false;
+  async proveRun(): Promise<never> {
+    throw new NotImplementedError(SP1_NOT_IMPLEMENTED);
   }
 }
+
+/** Message for every SP1 prover entry point (errata [sp1-dropped]). */
+export const SP1_NOT_IMPLEMENTED = 'SP1 path not implemented (D-9); oversized runs go to the panel';

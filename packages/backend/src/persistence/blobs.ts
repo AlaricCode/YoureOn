@@ -6,7 +6,7 @@
  * Path segments are validated so a request can never escape DATA_DIR.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { MAX_CHUNK_BODY_BYTES } from '@verdict/engine';
 import { ApiError } from '../errors.js';
@@ -82,6 +82,38 @@ export class BlobStore {
 
   getBlob(namespace: string, key: string): Uint8Array | null {
     return this.read(this.blobPath(namespace, key));
+  }
+
+  /** Deletes one misc blob (no-op when absent). */
+  deleteBlob(namespace: string, key: string): void {
+    const rel = this.blobPath(namespace, key);
+    if (this.mem) this.mem.delete(rel);
+    else rmSync(join(this.dataDir!, rel), { force: true });
+  }
+
+  /** Deletes every blob of `namespace` whose key matches; returns how many were removed. */
+  deleteBlobsMatching(namespace: string, pred: (key: string) => boolean): number {
+    checkSafe(namespace, 'namespace');
+    const prefix = join('blobs', namespace);
+    let n = 0;
+    if (this.mem) {
+      for (const k of [...this.mem.keys()]) {
+        if (!k.startsWith(prefix + '/') && !k.startsWith(prefix + '\\')) continue;
+        if (pred(k.slice(prefix.length + 1))) {
+          this.mem.delete(k);
+          n++;
+        }
+      }
+      return n;
+    }
+    const dir = join(this.dataDir!, prefix);
+    if (!existsSync(dir)) return 0;
+    for (const key of readdirSync(dir)) {
+      if (!SAFE_RE.test(key) || key.endsWith('.tmp') || !pred(key)) continue;
+      rmSync(join(dir, key), { force: true });
+      n++;
+    }
+    return n;
   }
 
   /** Absolute file path for streaming (null in memory mode). */

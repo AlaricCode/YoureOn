@@ -67,7 +67,7 @@ export function createProviders(cfg: Config, deps: ProviderDeps = {}, overrides:
         case 'http':
           return new HttpPerception(cfg, { baseUrl: cfg.perceptionUrl });
         case 'nosana':
-          return new NosanaPerception(cfg);
+          return new NosanaPerception(cfg, { image: cfg.nosanaPerceptionImage, markets: cfg.nosanaMarkets, apiUrl: cfg.nosanaApiUrl });
       }
     }),
     detector: lazy('detector', () => (cfg.detectorProvider === 'mock' ? new MockDetector() : new HttpDetector(cfg.detectorUrl))),

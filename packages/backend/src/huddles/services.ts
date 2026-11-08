@@ -26,13 +26,23 @@ export function identityHuddleServices(ctx: AppContext): IdentityHuddleServices 
   const huddles = new HuddleService(ctx.store, ctx.clock);
   const identity = new IdentityService(ctx, huddles);
   const drafts = new DraftService(ctx, huddles, identity);
-  huddles.onChange((h) => ctx.hub.publish(`huddle:${h.id}`, { type: 'huddle', huddle: huddles.view(h) }));
-  // WS snapshot on subscribe to huddle:<id> (members only): the huddle, then its drafts.
+  huddles.onChange((h) => {
+    ctx.hub.publish(`huddle:${h.id}`, { type: 'huddle', huddle: huddles.view(h) });
+    // Members confirmed since they subscribed now get the current draft (drafts are confirmed-only).
+    const latest = drafts.draftsOf(h.id)[0];
+    if (latest) {
+      const msg = { type: 'draft' as const, huddle_id: h.id, draft: drafts.view(latest) };
+      void ctx.hub.publishPerUser(`huddle:${h.id}`, (userId) => (h.members.some((m) => m.user_id === userId && m.confirmed) ? msg : null));
+    }
+  });
+  // WS snapshot on subscribe to huddle:<id> (members only): the huddle, then — for
+  // confirmed members only — its drafts.
   ctx.hub.setSnapshotProvider('huddle', (id, userId) => {
     const h = huddles.requireForMember(id, userId);
+    const confirmed = h.members.some((m) => m.user_id === userId && m.confirmed);
     return [
       { type: 'huddle', huddle: huddles.view(h) },
-      ...drafts.draftsOf(h.id).map((d) => ({ type: 'draft' as const, huddle_id: h.id, draft: drafts.view(d) })),
+      ...(confirmed ? drafts.draftsOf(h.id).map((d) => ({ type: 'draft' as const, huddle_id: h.id, draft: drafts.view(d) })) : []),
     ];
   });
   ctx.hooks.compileTool = (body) => drafts.compileTool(body);

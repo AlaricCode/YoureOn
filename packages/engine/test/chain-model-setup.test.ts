@@ -30,7 +30,11 @@ describe('chain model: init_profile', () => {
     w.ok('init_profile', { face_commit: rMinus1, voice_commit: ZERO_HASH, display_name: 'x'.repeat(32) }, [ALICE.pk], {
       wallet: ALICE.pk,
     });
-    w.err('BadReason', 'init_profile', { face_commit: face, voice_commit: ZERO_HASH, display_name: 'x'.repeat(33) }, [ALICE.pk], {
+    // init_profile.rs: an over-long name is BadCommitment, checked before the commitments.
+    w.err('BadCommitment', 'init_profile', { face_commit: face, voice_commit: ZERO_HASH, display_name: 'x'.repeat(33) }, [ALICE.pk], {
+      wallet: ALICE.pk,
+    });
+    w.err('BadCommitment', 'init_profile', { face_commit: r, voice_commit: ZERO_HASH, display_name: 'x'.repeat(33) }, [ALICE.pk], {
       wallet: ALICE.pk,
     });
     w.err('Unauthorized', 'init_profile', { face_commit: face, voice_commit: ZERO_HASH, display_name: '' }, [], {
@@ -95,6 +99,26 @@ describe('chain model: create_bet', () => {
     ['judge is oracle', 'BadJudges', () => ({ judges: [JUDGES[0].pk, ORACLE.pk, JUDGES[2].pk] })],
     ['zero program hash', 'ProgramHashMismatch', () => ({ program_hash: ZERO_HASH })],
   ];
+  // Multi-fault cases: the first failing check of Rust `validate_terms` wins
+  // (participants/oracle → flags → sides → stakes → time limit → judges → program hash).
+  cases.push(
+    ['bad flags + bad sides', 'BadFlags', () => ({ flags: 8, side_b_mask: 3 })],
+    ['oracle participant + stakes length', 'BadParticipants', () => ({
+      participants: [ALICE.pk, ORACLE.pk],
+      stakes: [1_000_000n],
+    })],
+    ['bad sides + stakes length', 'BadSides', () => ({ side_b_mask: 3, stakes: [1_000_000n] })],
+    ['creator not first + duplicate', 'BadParticipants', () => ({ participants: [BOB.pk, BOB.pk] })],
+    ['bad stake + bad time limit', 'BadStake', () => ({ stakes: [1_000_000n, 2_000_000n], time_limit_s: 0 })],
+    ['bad time limit + bad judges', 'BadTimeLimit', () => ({
+      time_limit_s: 0,
+      judges: [JUDGES[0].pk, JUDGES[0].pk, JUDGES[2].pk],
+    })],
+    ['bad judges + zero program hash', 'BadJudges', () => ({
+      judges: [JUDGES[0].pk, ORACLE.pk, JUDGES[2].pk],
+      program_hash: ZERO_HASH,
+    })],
+  );
   for (const [label, code, over] of cases) {
     it(`rejects ${label} with ${code}`, () => {
       const w = new World();
@@ -170,6 +194,26 @@ describe('chain model: fund', () => {
       participant: ALICE.pk,
       participant_token: ata(ALICE.pk),
     });
+  });
+
+  it('rules bets reject a zero calibration hash (first and later funders)', () => {
+    const w = new World().create();
+    const zero = { ...w.fundArgs(), calibration_hash: '00'.repeat(32) };
+    w.err('CalibrationMismatch', 'fund', zero, [BOB.pk], { participant: BOB.pk, participant_token: ata(BOB.pk) });
+    expect(w.bet.calibration_hash).toBe(ZERO_HASH);
+    expect(w.bet.funded_mask).toBe(0);
+    // Precedence: the consent binding is checked before the calibration.
+    w.err('ConsentMismatch', 'fund', { ...zero, program_hash: 'ff'.repeat(32) }, [BOB.pk], {
+      participant: BOB.pk,
+      participant_token: ata(BOB.pk),
+    });
+    w.fund(BOB);
+    expect(w.bet.calibration_hash).toBe(w.calibrationHash);
+    w.err('CalibrationMismatch', 'fund', { ...w.fundArgs(), calibration_hash: '00'.repeat(32) }, [ALICE.pk], {
+      participant: ALICE.pk,
+      participant_token: ata(ALICE.pk),
+    });
+    expect(w.bet.funded_mask).toBe(2);
   });
 
   it('ai_judged / market require a zero calibration hash', () => {

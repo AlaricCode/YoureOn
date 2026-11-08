@@ -29,7 +29,7 @@ describe.skipIf(!hasContract)('constants match docs/CONTRACTS.md', () => {
       expected.set(m[1]!, values[0]!);
       if (m[2]) expected.set(m[2], values[1]!);
     }
-    expect(expected.size).toBe(83);
+    expect(expected.size).toBe(84);
     const actual = new Map(Object.entries(GLOBAL_CONSTANTS));
     expect([...actual.keys()].sort()).toEqual([...expected.keys()].sort());
     for (const [name, value] of expected) {

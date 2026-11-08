@@ -41,6 +41,8 @@ class MicVoiceCapture implements VoiceCapture {
       encoder: AudioEncoder.pcm16bits,
       sampleRate: sampleRate,
       numChannels: 1,
+      // Question/read-back audio may play while dictating: don't pause.
+      audioInterruption: AudioInterruptionMode.none,
     ));
     _recording = true;
     _sub = stream.listen(_buf.add);

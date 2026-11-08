@@ -7,7 +7,16 @@
  * decoders' validation of operand kinds, limits and ranges.
  */
 import type { DecodedCond, DecodedExpr, DecodedProgram, DecodedRef, LeafCode, SubRegionCode } from '../types.js';
-import { COST_COMBINATOR, COST_DISAPPEARS_INTO, COST_EVENT_LEAF, COST_STATE_LEAF, LEAF_CODE } from '../constants.js';
+import {
+  COST_COMBINATOR,
+  COST_DISAPPEARS_INTO,
+  COST_EVENT_LEAF,
+  COST_POLY_EVENT_LEAF,
+  COST_POLY_STATE_LEAF,
+  COST_STATE_LEAF,
+  EVAL_COST_SETUP_FRAMES,
+  LEAF_CODE,
+} from '../constants.js';
 import { EvalInvariantError } from './math.js';
 
 export type LeafNode = Extract<DecodedExpr, { a: DecodedRef }>;
@@ -181,8 +190,19 @@ export function walkExpr(e: DecodedExpr, visit: (n: DecodedExpr) => void): void 
 /** Cost weight of one node (§3.13). */
 export function nodeWeight(n: DecodedExpr): number {
   if (!isLeaf(n)) return COST_COMBINATOR;
-  if (n.code === LEAF_CODE.disappears_into) return COST_DISAPPEARS_INTO;
-  return isEventLeaf(n.code) ? COST_EVENT_LEAF : COST_STATE_LEAF;
+  switch (n.code) {
+    case LEAF_CODE.disappears_into:
+      return COST_DISAPPEARS_INTO;
+    case LEAF_CODE.enters:
+    case LEAF_CODE.leaves:
+    case LEAF_CODE.touches:
+      return COST_POLY_EVENT_LEAF;
+    case LEAF_CODE.overlaps:
+    case LEAF_CODE.inside:
+      return COST_POLY_STATE_LEAF;
+    default:
+      return isEventLeaf(n.code) ? COST_EVENT_LEAF : COST_STATE_LEAF;
+  }
 }
 
 /** Σ node weights of one expression. */
@@ -207,12 +227,12 @@ export function programWeight(p: DecodedProgram): number {
 }
 
 /**
- * `evalCost(decodedProgram, nFrames)` (§3.13): `|F| × Σ_legs Σ_nodes w(node)`
- * over `valid_attempt` and `success`. Non-`rules` programs have no
- * expressions and cost 0.
+ * `evalCost(decodedProgram, nFrames)` (§3.13):
+ * `(|F| + EVAL_COST_SETUP_FRAMES) × Σ_legs Σ_nodes w(node)` over `valid_attempt`
+ * and `success`. Non-`rules` programs have no expressions and cost 0.
  */
 export function evalCost(p: DecodedProgram, nFrames: number): number {
-  return nFrames * programWeight(p);
+  return (nFrames + EVAL_COST_SETUP_FRAMES) * programWeight(p);
 }
 
 /** Entity indices referenced by an expression (`a` refs and Ref-valued `b`s), in first-seen order. */

@@ -78,6 +78,10 @@ export type SendResult =
       error: string;
       /** mapped §12.8 code */
       code: 'TX_FAILED' | 'TX_EXPIRED' | 'INSUFFICIENT_FUNDS';
+      /** raw RPC message (devnet), for logs only — never shown to clients */
+      raw?: string;
+      /** program logs of the failed simulation/transaction (devnet), when available */
+      logs?: string[];
     };
 
 export interface SlotHash {
@@ -122,4 +126,10 @@ export interface ChainClient {
   onEvents(listener: (events: ChainEventEnvelope[]) => void | Promise<void>): () => void;
 
   close(): Promise<void>;
+  /**
+   * Optional startup step, awaited before the server accepts requests (devnet:
+   * create the backend test mint when USDC_MINT is unset, so `mint` is
+   * readable by every route). The mock chain has none.
+   */
+  init?(): Promise<void>;
 }

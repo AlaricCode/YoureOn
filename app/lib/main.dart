@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'app.dart';
+import 'beacon/beacon_player.dart';
 import 'state/app_controller.dart';
 import 'state/config.dart';
 import 'ui/tokens.dart';
@@ -21,6 +24,8 @@ Future<void> main() async {
     keyStore: SecureKeyStore(),
     authenticator: LocalAuthenticator(),
   );
+  // playAndRecord/no-focus session before any playback (beacon, questions).
+  unawaited(configureAudioSession());
   runApp(VerdictApp(controller: controller));
   await controller.bootstrap();
 }

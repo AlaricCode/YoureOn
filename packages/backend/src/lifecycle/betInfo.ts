@@ -164,6 +164,46 @@ export function requireMember(ctx: AppContext, info: BetInfo, user: UserRecord):
   if (!isBetMember(ctx, info, user)) throw new ApiError('NOT_FOUND', `bet ${info.id} (not a member)`);
 }
 
+/**
+ * Whether `user` may view the bet's private material (booth, exhibits,
+ * receipt, terms): same rule as GET /bets/:id. Bets in the `bets` mirror (or
+ * known only through their draft) → participant or confirmed huddle member;
+ * World Mode bets → participants only.
+ */
+export function canViewBet(ctx: AppContext, info: BetInfo, user: UserRecord): boolean {
+  const worldOnly = !ctx.store.collection<Raw>(COLLECTIONS.bets).has(info.id) && ctx.store.collection<Raw>('world_bets').has(info.id);
+  if (worldOnly) return info.participants.some((p) => p.wallet === user.wallet);
+  return isBetMember(ctx, info, user);
+}
+
+/**
+ * NOT_FOUND unless `betId` is a pubkey of a bet `user` may view. Runs before
+ * any booth/exhibit/receipt lookup so a stranger cannot probe existence.
+ * Bets the backend has no record of (created by another client) fall back to
+ * the chain account: participants only.
+ */
+export async function requireBetViewer(ctx: AppContext, user: UserRecord, betId: string): Promise<void> {
+  if (!isPubkey(betId)) throw new ApiError('NOT_FOUND', `bet ${betId}`);
+  if (rawBetRecord(ctx, betId)) {
+    if (!canViewBet(ctx, loadBetInfo(ctx, betId), user)) throw new ApiError('NOT_FOUND', `bet ${betId}`);
+    return;
+  }
+  const bet = await ctx.chain.getBet(betId);
+  if (!bet || !bet.participants.slice(0, bet.n_participants).includes(user.wallet)) throw new ApiError('NOT_FOUND', `bet ${betId}`);
+}
+
+/** Non-throwing variant of requireBetViewer (WS per-viewer pushes). */
+export async function isBetViewer(ctx: AppContext, userId: string, betId: string): Promise<boolean> {
+  const user = userById(ctx, userId);
+  if (!user) return false;
+  try {
+    await requireBetViewer(ctx, user, betId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function ixEnv(ctx: AppContext): IxEnv {
   return { programId: ctx.chain.programId, mint: ctx.chain.mint, feePayer: ctx.chain.feePayer, oracle: ctx.chain.oracle };
 }

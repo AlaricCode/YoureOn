@@ -31,6 +31,7 @@
     "@verdict/engine": "*",
     "bs58": "^6.0.0",
     "fastify": "^5.12.8",
+    "snarkjs": "0.7.5",
     "ws": "^8.22.1"
   },
   "devDependencies": {

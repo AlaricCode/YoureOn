@@ -25,6 +25,9 @@ flutter run --dart-define=VERDICT_API=http://10.0.2.2:8787   # backend root, wit
 | `lib/screens/` | Sign in, Enroll, Home |
 
 ## Notes
+- Server-built absolute URLs under `/v1/` (`upload_url`, `audio_url`, `wav_url`, `sfx_url`, `yaml_url`) are rebased onto `VERDICT_API` (`ApiTransport.resolve`), so the backend's default `PUBLIC_URL` (`127.0.0.1`) does not break device or emulator runs. `PUBLIC_URL` only matters for other clients and server-side consumers.
+- Background: WS `notify` titles become local notifications while the app is backgrounded ([D-29], `flutter_local_notifications`); a reminder is scheduled ahead of a pending consent deadline; on resume the app re-fetches bets. Scene check, Huddle and Record keep the screen on (`wakelock_plus`) and release/reopen the camera on pause/resume. Keep witness phones in the foreground: leaving Record mid-recording finalizes this phone's witnesses.
+- Cleartext HTTP is allowed in debug/profile builds only (`src/debug`, `src/profile` manifests).
 - Google sign-in is the offline mock (`credential = "mock:<email>"`); a real Google SDK is not wired.
 - Camera witnesses record MP4 segments without an audio track; the phone's audio witness provides the beacon offset (§7.5).
 - `test/copy_rule_test.dart` enforces the copy rule on every route in `screen_table.dart`.

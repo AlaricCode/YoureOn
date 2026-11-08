@@ -9,6 +9,7 @@ import type { PerceptionVideo, Transcript } from '../providers/types.js';
 import type { WitnessRecord } from './records.js';
 import { witnessChunks, type LifecycleStores } from './stores.js';
 import { witnessList } from './live.js';
+import { signedChunkUrl } from './mediaUrls.js';
 
 /** Primary camera = the lowest-index camera witness (§6.0). */
 export function primaryCamera(s: LifecycleStores, betId: string): WitnessRecord | null {
@@ -18,8 +19,9 @@ export function primaryCamera(s: LifecycleStores, betId: string): WitnessRecord 
 /** Device-local → session ms offset of a witness (0 when unsynced). */
 export const offsetOf = (w: WitnessRecord): number => w.offset_ms ?? 0;
 
+/** Signed, expiring URL of a chunk body (perception workers have no bearer token). */
 export function chunkUrl(ctx: AppContext, betId: string, witness: string, index: number): string {
-  return `${ctx.config.publicUrl}/v1/bets/${betId}/chunks/${witness}/${index}`;
+  return signedChunkUrl(ctx, betId, witness, index);
 }
 
 /** The primary camera's uploaded chunks as §6.0 `video_urls` (contiguous prefix with bodies). */

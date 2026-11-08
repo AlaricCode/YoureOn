@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 
 import '../contracts/constants.dart';
 import 'chunk_uploader.dart';
@@ -46,28 +47,66 @@ class CameraWitnessRecorder {
     _timer?.cancel();
     final due = _segStart + chunkMs - _clock.elapsedMilliseconds;
     _timer = Timer(Duration(milliseconds: due < 0 ? 0 : due), () {
-      _rolling = _rolling.then((_) => _roll(isFinal: false));
+      _rolling = _rolling.catchError((Object _) {}).then((_) => _roll(isFinal: false));
     });
   }
 
+  /// The camera was lost (released by the OS, disposed): no more segments.
+  void _fail(Object e) {
+    debugPrint('camera witness: $e');
+    _running = false;
+    _timer?.cancel();
+  }
+
   /// Closes the current segment and (unless final) starts the next one.
+  ///
+  /// If the controller fails, the chain ends cleanly: the segment that
+  /// could be cut becomes the `final` chunk, or an empty `final` chunk
+  /// marks the end, so the backend records a gap instead of waiting for a
+  /// final that never comes.
   Future<void> _roll({required bool isFinal}) async {
     if (!_running) return;
     if (!isFinal && _stopping) return;
     final stopAt = _clock.elapsedMilliseconds;
-    final file = await controller.stopVideoRecording();
     final start = _segStart;
+    final XFile file;
+    try {
+      file = await controller.stopVideoRecording();
+    } catch (e) {
+      _fail(e);
+      await _submit(Uint8List(0), start, stopAt, isFinal: true);
+      return;
+    }
+    var last = isFinal;
     if (!isFinal) {
-      await controller.startVideoRecording();
-      _segStart = _clock.elapsedMilliseconds;
-      _arm();
+      try {
+        await controller.startVideoRecording();
+        _segStart = _clock.elapsedMilliseconds;
+        _arm();
+      } catch (e) {
+        _fail(e);
+        last = true;
+      }
     } else {
       _running = false;
     }
-    final bytes = await file.readAsBytes();
+    Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      bytes = Uint8List(0);
+    }
     unawaited(_deleteQuietly(file.path));
+    await _submit(bytes, start, stopAt, isFinal: last);
+  }
+
+  Future<void> _submit(Uint8List bytes, int start, int stopAt, {required bool isFinal}) async {
     final duration = stopAt - start;
-    await uploader.submit(bytes, startMs: start, durationMs: duration > 0 ? duration : 1, isFinal: isFinal);
+    try {
+      await uploader.submit(bytes, startMs: start, durationMs: duration > 0 ? duration : 1, isFinal: isFinal);
+    } on StateError {
+      // A final chunk was already submitted.
+    }
   }
 
   Future<void> _deleteQuietly(String path) async {
@@ -76,14 +115,18 @@ class CameraWitnessRecorder {
     } catch (_) {}
   }
 
-  /// Ends recording: the open segment becomes the `final` chunk.
+  /// Ends recording: the open segment becomes the `final` chunk. Always
+  /// drains the uploader, even when the camera failed.
   Future<void> stop() async {
-    if (!_running || _stopping) return;
+    if (_stopping) return;
     _stopping = true;
     _timer?.cancel();
-    await _rolling;
-    await _roll(isFinal: true);
-    _clock.stop();
-    await uploader.drain();
+    try {
+      await _rolling.catchError((Object _) {});
+      await _roll(isFinal: true);
+    } finally {
+      _clock.stop();
+      await uploader.drain();
+    }
   }
 }

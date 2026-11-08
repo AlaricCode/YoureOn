@@ -13,7 +13,9 @@ import { lifecycleService } from '../../src/lifecycle/service.js';
 import { lifecycleStores } from '../../src/lifecycle/stores.js';
 import { fromHex } from '../../src/util/bytes.js';
 import { decodeWav, encodeWav } from '../../src/util/wav.js';
-import { auth } from '../appHelpers.js';
+import { auth, login, type TestUser } from '../appHelpers.js';
+import { generateKeypair } from '../../src/crypto/keys.js';
+import { primaryCamera } from '../../src/lifecycle/footage.js';
 import {
   addWitness,
   api,
@@ -57,7 +59,8 @@ describe('witnesses + start + beacon (§7.1, §7.5, §12.4)', () => {
     const acct = (await w.ctx.chain.getBet(bet.id))!;
     expect(acct.state).toBe(BET_STATE.Live);
     expect(acct.n_witnesses).toBe(2);
-    expect(acct.witnesses.slice(0, 2)).toEqual([mic.key.publicKey, cam.key.publicKey]);
+    // The creator's (calibrated) camera is always index 0, whatever the registration order.
+    expect(acct.witnesses.slice(0, 2)).toEqual([cam.key.publicKey, mic.key.publicKey]);
 
     const start = pub.mock.calls.map((c) => c[1]).find((m) => m.type === 'start') as {
       beacon: { slot: number; hash_hex: string; symbols: number[] };
@@ -85,6 +88,89 @@ describe('witnesses + start + beacon (§7.1, §7.5, §12.4)', () => {
   });
 });
 
+describe('primary camera binding + witness slots', () => {
+  it("a counterparty cannot take the primary camera; the creator's camera is index 0", async () => {
+    w = await makeWorld();
+    const bet = await createBet(w, 'ex2_cup_tower_pass');
+    await calibrateAndFund(w, bet);
+    // Bob (counterparty) tries to register a camera before Alice's calibrated device.
+    const early = await api(w, w.bob, 'POST', `/v1/bets/${bet.id}/witnesses`, { witness_key: generateKeypair().publicKey, kind: 'camera' });
+    expect(early.json().error.code).toBe('NO_CAMERA');
+    const bobMic = await addWitness(w, bet, w.bob, 'audio');
+    // One witness per kind per user.
+    const second = await api(w, w.bob, 'POST', `/v1/bets/${bet.id}/witnesses`, { witness_key: generateKeypair().publicKey, kind: 'audio' });
+    expect(second.json().error.code).toBe('WRONG_STATE');
+    const cam = await addWitness(w, bet, w.alice, 'camera');
+    const bobCam = await addWitness(w, bet, w.bob, 'camera');
+    const labels = lifecycleStores(w.ctx).witnesses.get(bet.id)!.witnesses.map((x) => x.label);
+    expect(labels).toEqual(['mic1', 'cam1', 'cam2']);
+    expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/start`)).statusCode).toBe(200);
+    const acct = (await w.ctx.chain.getBet(bet.id))!;
+    expect(acct.witnesses.slice(0, 3)).toEqual([cam.key.publicKey, bobMic.key.publicKey, bobCam.key.publicKey]);
+    expect(primaryCamera(lifecycleStores(w.ctx), bet.id)?.witness_key).toBe(cam.key.publicKey);
+  });
+
+  it("bystanders cannot fill the witness slots reserved for the creator", async () => {
+    w = await makeWorld();
+    const extra: TestUser[] = [];
+    for (let i = 0; i < 8; i++) extra.push(await login(w.app, `bystander${i}@example.com`));
+    const bet = await createBet(w, 'ex2_cup_tower_pass', { huddleMembers: [w.alice, w.bob, ...extra] });
+    await calibrateAndFund(w, bet);
+    await addWitness(w, bet, w.bob, 'audio');
+    for (let i = 0; i < 5; i++) await addWitness(w, bet, extra[i]!, 'audio');
+    // 6 non-creator witnesses: the last 2 slots are the creator's.
+    const full = await api(w, extra[5]!, 'POST', `/v1/bets/${bet.id}/witnesses`, { witness_key: generateKeypair().publicKey, kind: 'audio' });
+    expect(full.json().error.code).toBe('HUDDLE_FULL');
+    const cam = await addWitness(w, bet, w.alice, 'camera');
+    await addWitness(w, bet, w.alice, 'audio');
+    expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/start`)).statusCode).toBe(200);
+    const acct = (await w.ctx.chain.getBet(bet.id))!;
+    expect(acct.n_witnesses).toBe(8);
+    expect(acct.witnesses[0]).toBe(cam.key.publicKey);
+  });
+});
+
+describe('start robustness (live record persisted before providers)', () => {
+  it('a failing SFX provider still starts the bet with the bundled sound', async () => {
+    w = await makeWorld();
+    const bet = await createBet(w, 'ex2_cup_tower_pass');
+    await calibrateAndFund(w, bet);
+    await addWitness(w, bet, w.alice, 'camera');
+    vi.spyOn(w.ctx.providers.sfx, 'startSound').mockRejectedValue(new Error('elevenlabs down'));
+    expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/start`)).statusCode).toBe(200);
+    const s = lifecycleStores(w.ctx);
+    expect(s.live.get(bet.id)?.beacon).not.toBeNull();
+    expect((await api(w, w.bob, 'GET', `/v1/bets/${bet.id}/start-sound`)).statusCode).toBe(200);
+  });
+
+  it('a Live bet without a live record is adopted again by POST /start and by the keeper', async () => {
+    w = await makeWorld();
+    const bet = await createBet(w, 'ex2_cup_tower_pass');
+    await calibrateAndFund(w, bet);
+    const cam = await addWitness(w, bet, w.alice, 'camera');
+    expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/start`)).statusCode).toBe(200);
+    const s = lifecycleStores(w.ctx);
+    const orig = s.live.get(bet.id)!;
+    const acct = (await w.ctx.chain.getBet(bet.id))!;
+
+    // Crash right after `start` confirmed: no live record.
+    s.live.delete(bet.id);
+    const pub = vi.spyOn(w.ctx.hub, 'publish');
+    expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/start`)).json()).toEqual({ ok: true });
+    const rec = s.live.get(bet.id)!;
+    expect(rec.beacon).toEqual(orig.beacon); // from the chain's beacon, not a fresh slot hash
+    expect(rec.beacon!.hash_hex).toBe(acct.beacon_hash);
+    expect(rec.play_on_user_id).toBe(w.alice.user.id);
+    expect(pub.mock.calls.some((c) => (c[1] as { type: string }).type === 'start')).toBe(true);
+
+    // Keeper path.
+    s.live.delete(bet.id);
+    await w.ctx.keeper.tick();
+    expect(s.live.get(bet.id)?.beacon?.hash_hex).toBe(acct.beacon_hash);
+    expect(s.witnesses.get(bet.id)!.witnesses[0]!.witness_key).toBe(cam.key.publicKey);
+  });
+});
+
 describe('chunks (§7.2, §12.3)', () => {
   async function started() {
     w = await makeWorld();
@@ -95,6 +181,20 @@ describe('chunks (§7.2, §12.3)', () => {
     expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/start`)).statusCode).toBe(200);
     return { bet, cam, mic };
   }
+
+  it('bounds each witness: chunk duration and session window', async () => {
+    const { bet, cam } = await started();
+    const tooLong = (await chunkRecord(w!, bet, cam, bytes('x'), 2 * 5000 + 1)).rec;
+    expect((await api(w!, w!.alice, 'POST', `/v1/bets/${bet.id}/chunks`, tooLong)).statusCode).toBe(400);
+    const tooShort = (await chunkRecord(w!, bet, cam, bytes('x'), 100)).rec;
+    expect((await api(w!, w!.alice, 'POST', `/v1/bets/${bet.id}/chunks`, tooShort)).statusCode).toBe(400);
+    const { chunkLimits } = await import('../../src/lifecycle/evidence.js');
+    const lim = chunkLimits(bet.program.time_limit_s);
+    expect(lim.maxIndex).toBeLessThan(2000);
+    // A short final chunk is fine.
+    await uploadChunk(w!, bet, cam, bytes('frame-0'));
+    await uploadChunk(w!, bet, cam, bytes('frame-1'), true, 120);
+  });
 
   it('verifies hash records against the chain, stores bodies, serves them back', async () => {
     const { bet, cam } = await started();

@@ -11,7 +11,7 @@ import { identityHuddleServices } from '../src/huddles/services.js';
 import type { CompileRequest, CompileResult, CompilerProvider } from '../src/providers/types.js';
 import { MockCompiler } from '../src/providers/mock/compiler.js';
 import { fromBase64, toBase64 } from '../src/util/bytes.js';
-import { auth, type TestApp, type TestUser } from './appHelpers.js';
+import { auth, login, type TestApp, type TestUser } from './appHelpers.js';
 import { b64, crew, fakeWav, get, makeAppWith, post, submitSign } from './identityHelpers.js';
 
 let t: TestApp | null = null;
@@ -224,6 +224,8 @@ describe('"I accept" (§4.2, §8.3, §12.3)', () => {
     expect(r.statusCode, r.body).toBe(200);
     expect(r.json()).toMatchObject({ accepted: true, participant_index: 1 });
     expect(r.json().cos_bps).toBeGreaterThanOrEqual(5000);
+    // Only the WAV's sha256 is kept; the voice recording itself is not stored.
+    expect(t.ctx.blobs.getBlob('acceptances', `${d.draft_id}_${bob.user.id}.wav`)).toBeNull();
     const view = (await get(t.app, alice, `/v1/drafts/${d.draft_id}`)).json();
     expect(view.frozen).toBe(true);
     expect(view.participants[1].accepted).toBe(true);
@@ -232,6 +234,19 @@ describe('"I accept" (§4.2, §8.3, §12.3)', () => {
     const re = await compile(alice, { huddle_id: huddleId, draft_id: d.draft_id, transcript: 'make it 5 tries' });
     expect(re.frozen).toBe(false);
     expect(re.participants[1].accepted).toBe(false);
+  });
+
+  it('drafts are hidden from unconfirmed joiners (HTTP and WS snapshot)', async () => {
+    t = await makeAppWith();
+    const { users, huddleId } = await crew(t, ['Alice', 'Bob']);
+    const [alice] = users as [TestUser, TestUser];
+    const d = await compile(alice, { huddle_id: huddleId, transcript: PAPER });
+    const code = identityHuddleServices(t.ctx).huddles.huddles.get(huddleId)!.code;
+    const stranger = await login(t.app, 'stranger@example.com');
+    expect((await post(t.app, stranger, '/v1/huddles/join', { code })).statusCode).toBe(200);
+    expect((await get(t.app, stranger, `/v1/drafts/${d.draft_id}`)).statusCode).toBe(404);
+    expect((await get(t.app, stranger, `/v1/drafts/${d.draft_id}/readback.mp3`)).statusCode).toBe(404);
+    expect((await get(t.app, alice, `/v1/drafts/${d.draft_id}`)).statusCode).toBe(200);
   });
 
   it('rejects the wrong voice, an unheard phrase, a bad signature and stale challenges', async () => {
@@ -305,6 +320,7 @@ describe('create_bet (§4.2, §9.4 #2)', () => {
     await expect(svc.createBet(rec(bob), d.draft_id)).rejects.toMatchObject({ code: 'WRONG_STATE' });
 
     const prepared = await svc.createBet(rec(alice), d.draft_id);
+    expect(svc.drafts.view(svc.drafts.drafts.get(d.draft_id)!).bet_id).toBeUndefined();
     const expectedAah = acceptanceAudioHash([sha256(dictation), sha256(concatBytes(sha256(wav), sig))]);
     expect(prepared.acceptance_audio_hash).toBe(bytesToHex(expectedAah));
     expect(prepared.sign.summary).toBe('Create bet $5.00 each');
@@ -322,6 +338,8 @@ describe('create_bet (§4.2, §9.4 #2)', () => {
 
     const stored = svc.drafts.drafts.get(d.draft_id)!;
     expect(stored.bet).toMatchObject({ address: prepared.bet, status: 'confirmed' });
+    // every huddle member (bystanders too) learns the bet id from the draft (errata App: following the creator)
+    expect(svc.drafts.view(stored).bet_id).toBe(prepared.bet);
     // the draft is now locked
     expect((await post(t.app, alice, '/v1/bets/compile', { huddle_id: huddleId, draft_id: d.draft_id, transcript: 'x' })).json().error.code).toBe('WRONG_STATE');
     await expect(svc.createBet(rec(alice), d.draft_id)).rejects.toMatchObject({ code: 'WRONG_STATE' });

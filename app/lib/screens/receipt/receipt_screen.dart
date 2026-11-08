@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+
 
 import '../../api/models/receipt.dart';
 import '../../nav/routes.dart';
@@ -43,10 +46,28 @@ class _ReceiptScreenState extends State<ReceiptScreen> with Guarded, WsWatch {
     if (m is WsBet && m.bet.id == widget.args.betId) _load();
   }
 
-  Future<void> _open(String url) async {
-    final uri = Uri.parse(url).hasScheme ? Uri.parse(url) : app.transport.resolve(url);
-    await app.openLink(uri);
+  /// API URLs (relative, or absolute under `/v1/`) need the bearer token:
+  /// fetch them in-app. Only other absolute URLs (explorer, tx links) go to
+  /// the external browser.
+  static bool _isApiUrl(String url) {
+    final u = Uri.parse(url);
+    return !u.hasScheme || u.path.startsWith('/v1/');
   }
+
+  Future<void> _open(String url) async {
+    if (_isApiUrl(url)) {
+      await _viewFile(url);
+      return;
+    }
+    await app.openLink(Uri.parse(url));
+  }
+
+  Future<void> _viewFile(String url) => guard('file', () async {
+        // A missing file surfaces as NOT_FOUND ("Not found") in the error line.
+        final text = utf8.decode(await app.transport.getBytes(url), allowMalformed: true);
+        if (!mounted) return;
+        await showAppSheet<void>(context, (_) => RulesFileSheet(text: text));
+      }, exclusive: false);
 
   void _detail(ReceiptRow row) =>
       showAppSheet<void>(context, (_) => ReceiptDetailSheet(row: row, onOpen: _open));

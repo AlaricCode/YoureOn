@@ -4,7 +4,7 @@ use crate::constants::*;
 use crate::error::DecodeError;
 use crate::expr::EK_PERSON;
 use crate::program::{Program, ProgramKind};
-use crate::reader::{le_u16, Reader};
+use crate::reader::Reader;
 
 pub const TRACK_MAGIC: [u8; 4] = *b"VTRK";
 pub const TRACK_VERSION: u8 = 1;
@@ -48,12 +48,19 @@ pub struct Record {
 }
 
 impl Record {
+    /// Parses the first 12 bytes of `b` (panics if shorter).
     pub fn parse(b: &[u8]) -> Record {
+        let b: &[u8; RECORD_LEN] = b[..RECORD_LEN].try_into().unwrap();
+        Record::from_bytes(b)
+    }
+    /// Parses one record (no bounds checks needed: fixed-size input).
+    #[inline(always)]
+    pub fn from_bytes(b: &[u8; RECORD_LEN]) -> Record {
         Record {
-            x0: le_u16(b, 0),
-            y0: le_u16(b, 2),
-            x1: le_u16(b, 4),
-            y1: le_u16(b, 6),
+            x0: u16::from_le_bytes([b[0], b[1]]),
+            y0: u16::from_le_bytes([b[2], b[3]]),
+            x1: u16::from_le_bytes([b[4], b[5]]),
+            y1: u16::from_le_bytes([b[6], b[7]]),
             conf: b[8],
             fill: b[9],
             id_conf: b[10],
@@ -83,14 +90,21 @@ pub struct Tracks<'a> {
 }
 
 impl<'a> Tracks<'a> {
+    #[inline(always)]
     pub fn segments(&self) -> &[Segment] {
         &self.segments[..self.n_segments as usize]
     }
     /// Record of track `t` at position `pos` in F.
-    #[inline]
+    #[inline(always)]
     pub fn record(&self, t: usize, pos: usize) -> Record {
+        Record::from_bytes(self.record_bytes(t, pos))
+    }
+    /// The 12 bytes of track `t`'s record at position `pos` (one bounds check).
+    #[inline(always)]
+    pub fn record_bytes(&self, t: usize, pos: usize) -> &'a [u8; RECORD_LEN] {
         let off = (pos * self.n_tracks as usize + t) * RECORD_LEN;
-        Record::parse(&self.records[off..off + RECORD_LEN])
+        let recs: &'a [u8] = self.records;
+        recs[off..off + RECORD_LEN].try_into().unwrap()
     }
 }
 
@@ -181,12 +195,20 @@ fn decode_inner<'a>(bin: &'a [u8], program: &Program<'_>, max_frames: usize) -> 
         return None;
     }
     let records = r.bytes(rec_len)?;
-    for (i, chunk) in records.chunks_exact(RECORD_LEN).enumerate() {
-        let t = i % n_tracks;
-        let is_person = program.entities[tracks[t].entity_idx as usize].kind == EK_PERSON;
-        let is_object = program.entities[tracks[t].entity_idx as usize].kind == crate::expr::EK_OBJECT;
-        if !record_ok(&Record::parse(chunk), is_person, is_object) {
-            return None;
+    // Per-track kind flags, then every record (frame-major, then track).
+    let mut kinds = [(false, false); MAX_ENTITIES];
+    for (t, k) in kinds.iter_mut().enumerate().take(n_tracks) {
+        let kind = program.entities[tracks[t].entity_idx as usize].kind;
+        *k = (kind == EK_PERSON, kind == crate::expr::EK_OBJECT);
+    }
+    if n_tracks > 0 {
+        for frame in records.chunks_exact(RECORD_LEN * n_tracks) {
+            for (chunk, &(is_person, is_object)) in frame.chunks_exact(RECORD_LEN).zip(kinds.iter()) {
+                let rec: &[u8; RECORD_LEN] = chunk.try_into().unwrap();
+                if !record_ok(&Record::from_bytes(rec), is_person, is_object) {
+                    return None;
+                }
+            }
         }
     }
     Some(Tracks {
@@ -202,6 +224,7 @@ fn decode_inner<'a>(bin: &'a [u8], program: &Program<'_>, max_frames: usize) -> 
     })
 }
 
+#[inline(always)]
 fn record_ok(rec: &Record, is_person: bool, is_object: bool) -> bool {
     if rec.conf > 100 || rec.fill > 100 || rec.id_conf > 100 {
         return false;

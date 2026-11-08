@@ -67,12 +67,13 @@ fn paper_ball_encoding_matches_contract() {
     assert_eq!(opening(CAN), 0x12);
     let p = paper_ball_program().encode();
     let prog = verdict_rules::decode_program(&p).unwrap();
-    assert_eq!(prog.weight_per_frame(), 25);
+    assert_eq!(prog.weight_per_frame(), 27);
     assert_eq!(prog.n_tracked(), 3);
     assert!(prog.any_actor_bound());
-    // 655 frames fit MAX_EVAL_COST, 656 don't.
-    const _: () = assert!(655 * 25 <= verdict_rules::constants::MAX_EVAL_COST);
-    const _: () = assert!(656 * 25 > verdict_rules::constants::MAX_EVAL_COST);
+    // 299 frames fit MAX_EVAL_COST, 300 don't: cost = (|F| + EVAL_COST_SETUP_FRAMES) × 27.
+    use verdict_rules::constants::{EVAL_COST_SETUP_FRAMES as S, MAX_EVAL_COST};
+    const _: () = assert!((299 + S) * 27 <= MAX_EVAL_COST);
+    const _: () = assert!((300 + S) * 27 > MAX_EVAL_COST);
 }
 
 #[test]
@@ -84,7 +85,7 @@ fn paper_ball_success() {
     assert_eq!(d.out.preruling, PRERULING_WINNER);
     assert_eq!(d.out.winner_mask, 2);
     assert_eq!(cps_of(&d), vec![(1, 41)]);
-    assert_eq!(d.cost, 60 * 25);
+    assert_eq!(d.cost, (60 + 4) * 27);
 }
 
 #[test]
@@ -227,7 +228,7 @@ fn pushups_pass() {
     assert_eq!(legs_of(&d), vec![1]);
     assert_eq!(d.out.winner_mask, 1);
     assert_eq!(cps_of(&d), vec![(0, 195)]);
-    assert_eq!(d.cost, 800);
+    assert_eq!(d.cost, (400 + 4) * 2);
 }
 
 #[test]

@@ -13,7 +13,7 @@ import { evaluate, evaluateProgram, evaluateSession, evalCost } from '../src/eva
 import { decodeProgram, encodeCalibration, encodeProgram, encodeTrackBin, isEngineError } from '../src/encode/index.js';
 import { marketHash } from '../src/hash/index.js';
 import type { Program, SessionTracks, TrackBufferData } from '../src/types.js';
-import { MAX_EVAL_COST } from '../src/constants.js';
+import { EVAL_COST_SETUP_FRAMES, MAX_EVAL_COST } from '../src/constants.js';
 
 const VERIFIED_41 = [{ participant: 1, frame: 3 }];
 
@@ -36,7 +36,7 @@ describe('evaluate: paper-ball shot (§15.1)', () => {
       checkpoints: [{ participant: 1, frame: 3 }],
       n_checkpoints: 1,
     });
-    expect(r.cost).toBe(40 * 25);
+    expect(r.cost).toBe((40 + EVAL_COST_SETUP_FRAMES) * 27);
   });
 
   it('missing biometric verification ⇒ Unknown (IDENTITY) ⇒ panel', () => {
@@ -107,26 +107,26 @@ describe('evaluate: paper-ball shot (§15.1)', () => {
     const multi = paperBallBuffer(cols, [[0, 30], [100, 50]]);
     const r = evaluateProgram(p, c, multi, [{ participant: 1, frame: 123 }]);
     expect(r).toMatchObject({ leg_results: [1], winner_mask: 2, checkpoints: [{ participant: 1, frame: 123 }] });
-    expect(r.cost).toBe(80 * 25);
+    expect(r.cost).toBe((80 + EVAL_COST_SETUP_FRAMES) * 27);
   });
 
   it('cost cap: cost > MAX_EVAL_COST ⇒ reason 13; maxCost option overrides', () => {
-    const n = Math.floor(MAX_EVAL_COST / 25) + 1; // 656 frames
+    const n = Math.floor(MAX_EVAL_COST / 27) - EVAL_COST_SETUP_FRAMES + 1; // 300 frames
     const cols = paperBallScene(n, [{ t: 0, make: true }]);
     const pb = encodeProgram(p);
     const cb = encodeCalibration(c, p);
     const tb = encodeTrackBin(paperBallBuffer(cols));
     const r = evaluate(pb, cb, tb, VERIFIED_41);
-    expect(r).toMatchObject({ status: 'needs_panel', reason: 13, leg_results: [2], leg_causes: [[]], cost: n * 25 });
+    expect(r).toMatchObject({ status: 'needs_panel', reason: 13, leg_results: [2], leg_causes: [[]], cost: (n + EVAL_COST_SETUP_FRAMES) * 27 });
     expect(evaluate(pb, cb, tb, VERIFIED_41, { maxCost: Infinity }).leg_results).toEqual([1]);
     // exactly at the cap is allowed
-    const at = paperBallScene(655, [{ t: 0, make: true }]);
-    expect(evaluate(pb, cb, encodeTrackBin(paperBallBuffer(at)), VERIFIED_41).cost).toBe(16375);
+    const at = paperBallScene(299, [{ t: 0, make: true }]);
+    expect(evaluate(pb, cb, encodeTrackBin(paperBallBuffer(at)), VERIFIED_41).cost).toBe(8181);
     expect(evaluate(pb, cb, encodeTrackBin(paperBallBuffer(at)), VERIFIED_41).status).toBe('ok');
   });
 
-  it('evalCost = |F| × Σ weights', () => {
-    expect(evalCost(decodeProgram(encodeProgram(p)), 10)).toBe(250);
+  it('evalCost = (|F| + EVAL_COST_SETUP_FRAMES) × Σ weights', () => {
+    expect(evalCost(decodeProgram(encodeProgram(p)), 10)).toBe(14 * 27);
   });
 
   it('decode errors propagate as EngineError', () => {
@@ -171,7 +171,7 @@ describe('evaluate: paper-ball shot (§15.1)', () => {
       tracks: [0, 1, 2].map((i) => ({ entity: String(i), entity_idx: i, participant_idx: i === 0 ? 1 : null, ref_h: 0, frames: cols[i]! })),
     };
     const r = evaluateSession(p, c, session, [{ participant: 1, frame: 1403 }]);
-    expect(r).toMatchObject({ status: 'ok', leg_results: [1], cost: n * 25 });
+    expect(r).toMatchObject({ status: 'ok', leg_results: [1], cost: (n + EVAL_COST_SETUP_FRAMES) * 27 });
   });
 });
 

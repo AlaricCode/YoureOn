@@ -143,7 +143,7 @@ class _PayScreenState extends State<PayScreen> with Guarded, WsWatch {
   Future<void> _send() => guard('send', () async {
         final to = _match!.user!;
         final units = _units!;
-        await app.tx.run(() => app.api.pay(toUserId: to.id, amountUnits: units));
+        await app.tx.run(() => app.api.pay(toUserId: to.id, amountUnits: units), fresh: true);
         if (mounted) setState(() => _sent = true);
         try {
           await app.refreshHome();

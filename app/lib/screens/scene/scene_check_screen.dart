@@ -15,6 +15,7 @@ import '../../capture/image_utils.dart';
 import '../../capture/pose.dart';
 import '../../capture/scene_camera.dart';
 import '../../nav/routes.dart';
+import '../../platform/screen_awake.dart';
 import '../../scene/conditions.dart';
 import '../../scene/placement.dart';
 import '../../state/guarded.dart';
@@ -40,7 +41,7 @@ class SceneCheckScreen extends StatefulWidget {
   State<SceneCheckScreen> createState() => _SceneCheckScreenState();
 }
 
-class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWatch {
+class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWatch, WidgetsBindingObserver {
   BetView? _bet;
   SceneCamera? _cam;
   PoseSource? _pose;
@@ -56,6 +57,8 @@ class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWat
   int _frameCount = 0;
   List<Uint8List>? _practiceBuf;
   Completer<void>? _practiceFull;
+  ScreenAwake? _awake;
+  bool _reopenCamera = false;
 
   String get _betId => widget.args.betId;
   bool get _isOwner => _bet != null && _bet!.creatorUserId == app.userId;
@@ -66,7 +69,9 @@ class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWat
   void initState() {
     super.initState();
     _bet = widget.args.bet;
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _awake = app.screenAwake..hold();
       watchWs([Topics.bet(_betId)], _onWs);
       _load();
     });
@@ -74,12 +79,53 @@ class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWat
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _awake?.release();
     _latchTimer?.cancel();
-    _frameSub?.cancel();
-    _cam?.close();
-    _pose?.stop();
+    unawaited(_releaseCamera());
     if (_ownerLocked) SystemChrome.setPreferredOrientations(const []);
     super.dispose();
+  }
+
+  /// Stops the frame stream and pose, and closes the camera. Awaited
+  /// before Record opens the same camera.
+  Future<void> _releaseCamera() async {
+    final sub = _frameSub;
+    _frameSub = null;
+    _pose?.stop();
+    _pose = null;
+    final cam = _cam;
+    _cam = null;
+    // Cancelling stops delivery at once; the camera's own close() stops
+    // the image stream.
+    unawaited(sub?.cancel());
+    try {
+      await cam?.close();
+    } catch (_) {}
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted || _leaving) return;
+    switch (state) {
+      case AppLifecycleState.inactive:
+        break; // transient (permission dialog, shade)
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        // The OS releases the camera in the background; close it cleanly
+        // and reinitialize on resume (camera plugin guidance).
+        if (_cam != null) {
+          _reopenCamera = true;
+          setState(() {});
+          unawaited(_releaseCamera());
+        }
+      case AppLifecycleState.resumed:
+        if (_reopenCamera && _isOwner && _needsScene && _bet?.state == BetState.proposed) {
+          _reopenCamera = false;
+          guard('camera', _openCamera, exclusive: false);
+        }
+    }
   }
 
   /// Portrait is locked while this phone is the camera.
@@ -129,7 +175,9 @@ class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWat
     }
     if (route == null) return;
     _leaving = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Record opens the same back camera: hand it over closed.
+      await _releaseCamera();
       if (mounted) Navigator.of(context).pushReplacementNamed(route!, arguments: BetArgs(bet.id, bet: bet));
     });
   }
@@ -145,9 +193,11 @@ class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWat
     }
     final meta = cam.meta;
     if (meta == null) throw ApiException('NO_CAMERA');
-    final cal = _cal = CalibrationDraft(camera: meta);
+    // Reopened after a pause: keep the placement work done so far.
+    final reopened = _cal != null;
+    final cal = _cal ??= CalibrationDraft(camera: meta);
     final saved = _saved;
-    if (saved != null) {
+    if (saved != null && !reopened) {
       for (final e in saved.entityRefs) {
         cal.correct(e.entity, e.label, e.bbox, cropSha256: e.cropSha256);
       }
@@ -320,7 +370,7 @@ class _SceneCheckScreenState extends State<SceneCheckScreen> with Guarded, WsWat
           if (!_complete) throw ApiException('CALIBRATION_INCOMPLETE');
           await _save();
         }
-        await app.tx.run(() => app.api.fund(_betId));
+        await app.tx.run(() => app.api.fund(_betId), fresh: true);
         _setBet(await app.api.bet(_betId));
       });
 

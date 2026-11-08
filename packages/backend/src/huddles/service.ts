@@ -38,6 +38,10 @@ export interface HuddleView {
 }
 
 export const HUDDLE_CODE_TTL_MS = RECENT_HUDDLE_S * 1000;
+/** Unconfirmed joiners a huddle holds at once (a leaked/guessed code cannot fill MAX_HUDDLE). */
+export const MAX_PENDING_JOINS = 4;
+/** An unconfirmed joiner older than this is dropped when a new joiner needs the slot. */
+export const PENDING_JOIN_TTL_MS = 10 * 60_000;
 
 export class HuddleService {
   readonly huddles: Collection<HuddleRecord>;
@@ -90,12 +94,21 @@ export class HuddleService {
     const h = matches.sort((a, b) => b.created_at_ms - a.created_at_ms)[0];
     if (!h) throw new ApiError('CODE_INVALID');
     if (h.members.some((m) => m.user_id === userId)) return h;
-    if (h.members.length >= MAX_HUDDLE) throw new ApiError('HUDDLE_FULL');
+    // Pending quota: stale unconfirmed joiners make room; fresh ones are capped.
+    const fresh = (m: HuddleMemberRecord) => m.confirmed || now - m.joined_at_ms < PENDING_JOIN_TTL_MS;
+    const live = h.members.filter(fresh);
+    const pending = live.filter((m) => !m.confirmed).length;
+    if (live.length >= MAX_HUDDLE || pending >= MAX_PENDING_JOINS) throw new ApiError('HUDDLE_FULL');
     const next = this.huddles.update(h.id, (x) => {
+      x.members = x.members.filter(fresh);
       x.members.push({ user_id: userId, joined_at_ms: now, confirmed: false, confirmed_at_ms: null, confirmed_cos_bps: null });
       x.updated_at_ms = now;
     });
     return this.changed(next);
+  }
+
+  isConfirmed(huddleId: string, userId: string): boolean {
+    return !!this.huddles.get(huddleId)?.members.some((m) => m.user_id === userId && m.confirmed);
   }
 
   /** The huddle, visible only to its members (others get NOT_FOUND). */

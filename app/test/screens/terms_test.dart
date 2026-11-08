@@ -130,6 +130,56 @@ void main() {
     c.dispose();
   });
 
+  testWidgets('counterparty follows the creator from the huddle draft update alone (no WsBet)', (tester) async {
+    final s = baseServer(asBen: true)
+      ..on('GET /huddles/h1', (_) => huddleJson())
+      ..on('GET /drafts/d1', (_) => readyDraftJson(benAccepted: true, updatedAt: 5))
+      ..on('GET /bets/b1', (_) => creatorBetJson());
+    final c = await openScreen(tester, s, Routes.terms, const TermsArgs(huddleId: 'h1', draftId: 'd1'));
+    expect(find.widgetWithText(QuietButton, 'Accepted'), findsOneWidget);
+    // POST /bets confirmed: the backend republishes the draft on huddle:h1 with bet_id.
+    c.injectWs(WsDraft('h1', DraftView.fromJson(readyDraftJson(benAccepted: true, updatedAt: 9, betId: 'b1'))));
+    await tester.pumpAndSettle();
+    expect(s.called('GET /bets/b1'), isNotEmpty);
+    expect(find.byType(SceneCheckScreen), findsOneWidget);
+    expect(c.bets.map((b) => b.id), contains('b1'));
+    c.dispose();
+  });
+
+  testWidgets('bystander follows too, and a late open with bet_id goes straight on', (tester) async {
+    final huddle = {
+      ...huddleJson(),
+      'members': [
+        ...(huddleJson()['members'] as List),
+        {'user': userJson(id: 'u3', name: 'Cy', wallet: '11111111111111111111111111111111'), 'joined_at_ms': 3, 'confirmed': true},
+      ],
+    };
+    final s = FakeServer()
+      ..on('GET /me', (_) => userJson(id: 'u3', name: 'Cy', wallet: '11111111111111111111111111111111'))
+      ..on('GET /balance', (_) => {'usdc_units': 0})
+      ..on('GET /bets', (_) => {'bets': []})
+      ..on('GET /huddles/h1', (_) => huddle)
+      // Opened after the bet was confirmed: the draft already names it.
+      ..on('GET /drafts/d1', (_) => readyDraftJson(benAccepted: true, updatedAt: 9, betId: 'b1'))
+      ..on('GET /bets/b1', (_) => {...creatorBetJson(), 'my_index': null, 'my_role': 'bystander'});
+    final c = await openScreen(tester, s, Routes.terms, const TermsArgs(huddleId: 'h1', draftId: 'd1'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SceneCheckScreen), findsOneWidget);
+    c.dispose();
+  });
+
+  testWidgets('a draft whose bet_id names another program is not followed', (tester) async {
+    final s = baseServer(asBen: true)
+      ..on('GET /huddles/h1', (_) => huddleJson())
+      ..on('GET /drafts/d1', (_) => readyDraftJson(benAccepted: true, updatedAt: 5))
+      ..on('GET /bets/b9', (_) => {...creatorBetJson(id: 'b9'), 'program_hash': 'cd' * 32});
+    final c = await openScreen(tester, s, Routes.terms, const TermsArgs(huddleId: 'h1', draftId: 'd1'));
+    c.injectWs(WsDraft('h1', DraftView.fromJson(readyDraftJson(benAccepted: true, updatedAt: 9, betId: 'b9'))));
+    await tester.pumpAndSettle();
+    expect(find.byType(TermsScreen), findsOneWidget);
+    c.dispose();
+  });
+
   testWidgets('a rejected voice shows the fixed message and a new phrase', (tester) async {
     var n = 0;
     final s = baseServer(asBen: true)

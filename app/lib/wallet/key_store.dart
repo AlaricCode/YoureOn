@@ -45,7 +45,9 @@ class MemoryKeyStore implements KeyStore {
 /// The device passkey / biometric prompt that unlocks the wallet ([D-10],
 /// [D-41]). Returns true when the user passed the prompt.
 abstract class Authenticator {
-  Future<bool> unlock();
+  /// Shows the device prompt. [reason] is shown in it (e.g. the
+  /// transaction summary "Stake $5.00").
+  Future<bool> unlock({String? reason});
 }
 
 class LocalAuthenticator implements Authenticator {
@@ -53,14 +55,14 @@ class LocalAuthenticator implements Authenticator {
   final LocalAuthentication _auth;
 
   @override
-  Future<bool> unlock() async {
+  Future<bool> unlock({String? reason}) async {
     final supported = await _auth.isDeviceSupported();
     // A device with no lock screen at all cannot gate the key; the key is
     // still protected by secure storage. Simulators fall in this case.
     if (!supported) return true;
     try {
       return await _auth.authenticate(
-        localizedReason: 'Confirm',
+        localizedReason: reason ?? 'Confirm',
         options: const AuthenticationOptions(biometricOnly: false, stickyAuth: true),
       );
     } on Exception {
@@ -73,10 +75,12 @@ class LocalAuthenticator implements Authenticator {
 class AllowAuthenticator implements Authenticator {
   int prompts = 0;
   bool answer = true;
+  final List<String?> reasons = [];
 
   @override
-  Future<bool> unlock() async {
+  Future<bool> unlock({String? reason}) async {
     prompts++;
+    reasons.add(reason);
     return answer;
   }
 }

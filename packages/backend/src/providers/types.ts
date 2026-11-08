@@ -186,6 +186,12 @@ export interface PerceptionRequest {
   prompts: { entity: string; phrase: string }[];
   need_pose: boolean;
   need_reid: boolean;
+  /**
+   * §6.0 extension (CONTRACTS-ERRATA backend-audit-faces): the worker adds a
+   * `face` embedding to person lines every FACE_SAMPLE_STRIDE-th frame.
+   * True iff any leg is actor-bound. Optional for older callers.
+   */
+  need_faces?: boolean;
   /** mock: seed for engine.simulate */
   seed: number;
 }
@@ -199,6 +205,8 @@ export interface PerceptionHostResult {
   raw: RawDetection[] | null;
   /** mock hosts: already-quantized tracks from engine.simulate */
   session: SessionTracks | null;
+  /** decoded source frame size reported by the worker (§6.0 extension), when known */
+  frame?: { width_px: number; height_px: number };
 }
 
 export interface PerceptionProvider {
@@ -286,6 +294,8 @@ export interface ProverProvider {
   proveBiometric(input: Record<string, unknown>): Promise<{ proof: EncodedGroth16Proof; publicSignals: string[] }>;
   /** Optional verifier used by the mock chain (snarkjs mode). */
   verifier?: (publicInputs: Uint8Array[], proof: EncodedGroth16Proof) => boolean;
+  /** Releases prover resources (snarkjs worker threads); called on shutdown. */
+  close?(): Promise<void>;
 }
 
 export interface Sp1Provider {

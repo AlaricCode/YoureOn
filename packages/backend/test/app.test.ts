@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FAUCET_UNITS, ZERO_HASH_HEX } from '@verdict/engine';
 import { loginMessage } from '../src/auth/service.js';
 import { initProfileIx } from '../src/chain/ixs.js';
@@ -7,6 +7,8 @@ import { generateKeypair } from '../src/crypto/keys.js';
 import { STUBS } from '../src/routes/index.js';
 import { fromBase64, toBase64 } from '../src/util/bytes.js';
 import { auth, login, makeApp, type TestApp } from './appHelpers.js';
+import { AUTH_BODY_LIMIT } from '../src/app.js';
+import { QUICKNODE_BODY_LIMIT, TOOL_BODY_LIMIT } from '../src/routes/webhooks.js';
 
 let t: TestApp | null = null;
 afterEach(async () => {
@@ -235,7 +237,14 @@ describe('webhooks', () => {
   const secret = 'qn-secret';
 
   it('QuickNode: HMAC verified, stale/invalid rejected, idempotent on (signature, index)', async () => {
-    t = await makeApp({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'quicknode', QUICKNODE_SECRET: secret });
+    t = await makeApp({
+      SOLANA_MODE: 'devnet',
+      CHAIN_EVENTS_SOURCE: 'quicknode',
+      QUICKNODE_SECRET: secret,
+      PROVER: 'snarkjs',
+      // a fixed mint: no startup mint creation (network) in tests
+      USDC_MINT: 'So11111111111111111111111111111111111111112',
+    });
     const seen: string[] = [];
     t.ctx.events.on('PreRuled', (e) => {
       seen.push(`${e.signature}:${e.index}`);
@@ -272,6 +281,38 @@ describe('webhooks', () => {
     expect((await send(now)).statusCode).toBe(204);
     expect((await send(now)).statusCode).toBe(204);
     expect(seen).toEqual(['sig1:0']);
+
+    // JSON is parsed only after the HMAC verified: a bad signature over invalid JSON is 401, not 400.
+    const junk = await t.app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/quicknode',
+      headers: { 'content-type': 'application/json', 'x-qn-nonce': 'n', 'x-qn-timestamp': String(now), 'x-qn-signature': 'ab'.repeat(32) },
+      payload: '{not json',
+    });
+    expect(junk.statusCode).toBe(401);
+    // Missing headers are refused before the body is read; oversized bodies hit the per-route limit.
+    const parse = vi.spyOn(JSON, 'parse');
+    const big = '[' + '0,'.repeat(QUICKNODE_BODY_LIMIT / 2) + '0]';
+    const noHdr = await t.app.inject({ method: 'POST', url: '/v1/webhooks/quicknode', headers: { 'content-type': 'application/json' }, payload: big });
+    expect(noHdr.statusCode).toBe(401);
+    const tooBig = await t.app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/quicknode',
+      headers: { 'content-type': 'application/json', 'x-qn-nonce': 'n', 'x-qn-timestamp': String(now), 'x-qn-signature': 'ab'.repeat(32) },
+      payload: big,
+    });
+    expect(tooBig.statusCode).toBe(413);
+    expect(parse.mock.calls.some((c) => typeof c[0] === 'string' && c[0].length > 1_000_000)).toBe(false);
+    parse.mockRestore();
+  });
+
+  it('unauthenticated routes have small body limits', async () => {
+    t = await makeApp();
+    const huge = { email: 'a'.repeat(AUTH_BODY_LIMIT + 10) };
+    expect((await t.app.inject({ method: 'POST', url: '/v1/auth/email/start', payload: huge })).statusCode).toBe(413);
+    const tool = { huddle_id: 'h', transcript: 'x'.repeat(TOOL_BODY_LIMIT + 10) };
+    const r = await t.app.inject({ method: 'POST', url: '/v1/webhooks/elevenlabs/tool', headers: { 'x-verdict-tool-secret': 'tool-secret' }, payload: tool });
+    expect(r.statusCode).toBe(413);
   });
 
   it('QuickNode webhook is disabled unless CHAIN_EVENTS_SOURCE=quicknode', async () => {

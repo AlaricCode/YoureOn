@@ -6,6 +6,7 @@ import 'package:verdict/crypto/ed25519.dart';
 import 'package:verdict/crypto/messages.dart';
 import 'package:verdict/screens/enroll_screen.dart';
 import 'package:verdict/screens/home_screen.dart';
+import 'package:verdict/screens/restoring_screen.dart';
 import 'package:verdict/screens/sign_in_screen.dart';
 
 import '../support/copy_rule.dart';
@@ -35,7 +36,7 @@ void main() {
       ..on('POST /enroll/complete', (_) => {
             'face_commit': '01' * 32,
             'voice_commit': '02' * 32,
-            'sign': {'tx_id': 'tx1', 'message_b64': base64.encode([7, 7, 7]), 'expires_at_ms': 0, 'summary': 'Profile'},
+            'sign': {'tx_id': 'tx1', 'message_b64': txMessageB64(salt: 7), 'expires_at_ms': 0, 'summary': 'Profile'},
           })
       ..on('POST /tx/tx1/submit', (_) {
         enrolled = true;
@@ -43,7 +44,7 @@ void main() {
       })
       ..on('DELETE /enroll', (_) => {
             'deleted': true,
-            'sign': {'tx_id': 'tx2', 'message_b64': base64.encode([8]), 'expires_at_ms': 0, 'summary': 'Delete'},
+            'sign': {'tx_id': 'tx2', 'message_b64': txMessageB64(salt: 8), 'expires_at_ms': 0, 'summary': 'Delete'},
           })
       ..on('POST /tx/tx2/submit', (_) {
         enrolled = false;
@@ -172,8 +173,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Delete biometrics'), findsOneWidget);
     expectCopyRule(tester, screen: 'Enroll (enrolled)');
+    // One tap only arms the button; it disarms after 3 s.
+    await tester.tap(find.text('Delete biometrics'));
+    await tester.pump();
+    expect(find.text('Confirm delete'), findsOneWidget);
+    expectCopyRule(tester, screen: 'Enroll (armed)');
+    await tester.pump(const Duration(seconds: 4));
+    expect(find.text('Delete biometrics'), findsOneWidget);
+    expect(server.called('DELETE /enroll'), isEmpty);
+    // A second tap within the window deletes.
+    await tester.tap(find.text('Delete biometrics'));
+    await tester.pump();
     await tester.runAsync(() async {
-      await tester.tap(find.text('Delete biometrics'));
+      await tester.tap(find.text('Confirm delete'));
       await Future<void>.delayed(const Duration(milliseconds: 200));
     });
     await tester.pumpAndSettle();
@@ -190,6 +202,44 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Face not matched'), findsOneWidget);
 
+    c.dispose();
+  });
+
+  testWidgets('offline at launch keeps the stored session: Offline screen, then Home', (tester) async {
+    enrolled = true;
+    var online = false;
+    server.on('GET /me', (_) => online ? userJson() : FakeServer.error('INTERNAL', 503));
+    final sockets = <Uri>[];
+    final c = testController(server, token: 'tok', onSocket: sockets.add);
+    await pumpApp(tester, c);
+    expect(find.byType(SignInScreen), findsNothing);
+    expect(find.byType(RestoringScreen), findsOneWidget);
+    expect(c.restoring, isTrue);
+    expectCopyRule(tester, screen: 'Offline');
+    expect(sockets, isEmpty);
+
+    online = true;
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Retry'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(c.restoring, isFalse);
+    expect(sockets, isNotEmpty);
+    c.dispose();
+  });
+
+  testWidgets('offline at launch: "Sign in instead" drops the token', (tester) async {
+    server.on('GET /me', (_) => FakeServer.error('INTERNAL', 503));
+    final c = testController(server, token: 'tok');
+    await pumpApp(tester, c);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Sign in instead'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pumpAndSettle();
+    expect(find.byType(SignInScreen), findsOneWidget);
     c.dispose();
   });
 

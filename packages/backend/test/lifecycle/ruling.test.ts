@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BET_STATE, CONSENT_WINDOW_S, FUND_WINDOW_S, marketHash, PERCEPTION_TIMEOUT_S, type Program } from '@verdict/engine';
 import { lifecycleService } from '../../src/lifecycle/service.js';
-import { lifecycleStores } from '../../src/lifecycle/stores.js';
+import { lifecycleStores, witnessChunks } from '../../src/lifecycle/stores.js';
 import { marketEntries } from '../../src/lifecycle/seal.js';
 import { lifecycleView } from '../../src/lifecycle/view.js';
 import { betSources } from '../../src/integration/sources.js';
@@ -58,6 +58,13 @@ describe('perception → post_tracks → run_rules (§6, §9.4, §12.6 step 4)',
     expect(acct.state).toBe(BET_STATE.Settled);
     expect(acct.settle_path).toBe(1);
     expect(await w.ctx.chain.getUsdcBalance(w.alice.wallet.publicKey)).toBe(aliceBefore + 4_000_000n);
+    // §12.5 close-out: chunk bodies deleted, chunk records archived out of the hot collection
+    // (the receipt still reads them).
+    const s = lifecycleStores(w.ctx);
+    const cam = s.witnesses.get(bet.id)!.witnesses[0]!.witness_key;
+    expect(w.ctx.blobs.getChunk(bet.id, cam, 0)).toBeNull();
+    expect(s.chunks.filter((c) => c.bet === bet.id)).toEqual([]);
+    expect(witnessChunks(s, bet.id, cam).map((c) => c.index)).toEqual([0, 1]);
     // Nothing left to respond to.
     expect((await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/consent`)).json().error.code).toBe('WRONG_STATE');
   });

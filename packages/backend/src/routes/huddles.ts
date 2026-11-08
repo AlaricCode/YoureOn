@@ -16,6 +16,7 @@ import { userView } from '../persistence/records.js';
 import type { AudioBlob } from '../providers/types.js';
 import { requestHints } from './identity.js';
 import { badRequest, bodyObject, currentUser, optString, param, reqString, type RouteModule } from './util.js';
+import { FailureCounter, RateLimiter } from '../util/rateLimit.js';
 
 function sendAudio(reply: FastifyReply, a: AudioBlob): FastifyReply {
   return reply.header('content-type', a.mime).header('cache-control', 'private, max-age=300').send(Buffer.from(a.bytes));
@@ -55,6 +56,13 @@ function parseOverrides(b: Record<string, unknown>): DraftOverrides {
   return o;
 }
 
+/** POST /huddles/join attempts per minute per user. */
+export const JOIN_RATE = 10;
+/** … and per IP (friends on one Wi-Fi share an address). */
+export const JOIN_RATE_IP = 30;
+/** Wrong codes per user per hour before RATE_LIMITED. */
+export const JOIN_FAILURES = 20;
+
 export const huddleRoutes: RouteModule = (app, ctx) => {
   const s = () => identityHuddleServices(ctx);
   // Eager wiring: WS snapshots and the Agent compile tool work before the first request.
@@ -68,10 +76,21 @@ export const huddleRoutes: RouteModule = (app, ctx) => {
     return { huddle_id: h.id, code: h.code };
   });
 
+  // Code enumeration guard: ≤ JOIN_RATE attempts/min per user and per IP, and
+  // ≤ JOIN_FAILURES wrong codes/hour per user (10^6 codes cannot be swept).
+  const joinByUser = new RateLimiter(ctx.clock, JOIN_RATE, 60_000);
+  const joinByIp = new RateLimiter(ctx.clock, JOIN_RATE_IP, 60_000);
+  const joinFailures = new FailureCounter(ctx.clock, JOIN_FAILURES, 3_600_000);
   app.post('/v1/huddles/join', async (req) => {
     const user = currentUser(ctx, req);
+    if (joinFailures.blocked(user.id) || !joinByUser.hit(user.id) || !joinByIp.hit(req.ip)) throw new ApiError('RATE_LIMITED');
     const { huddles } = s();
-    return huddles.view(huddles.join(user.id, bodyObject(req)['code']));
+    try {
+      return huddles.view(huddles.join(user.id, bodyObject(req)['code']));
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'CODE_INVALID') joinFailures.fail(user.id);
+      throw e;
+    }
   });
 
   app.get('/v1/huddles/:id', async (req) => {

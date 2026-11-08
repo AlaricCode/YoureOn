@@ -45,6 +45,7 @@ export interface TxServiceOptions {
 export class TxService {
   readonly txs: Collection<TxRecord>;
   private readonly hooks = new Map<string, ConfirmHook[]>();
+  private readonly inflight = new Map<string, Promise<SubmitResponse>>();
 
   constructor(private readonly opts: TxServiceOptions) {
     this.txs = opts.store.collection<TxRecord>(COLLECTIONS.txs);
@@ -98,6 +99,11 @@ export class TxService {
     };
   }
 
+  /**
+   * Concurrent submits of the same tx (app retry, double tap) share one send:
+   * the request checks run per caller (a bad signature cannot join or poison
+   * another caller's send), then one chain.submit + one hook run per tx.
+   */
   async submit(txId: string, userId: string, body: unknown): Promise<SubmitResponse> {
     const rec = this.txs.get(txId);
     if (!rec || rec.user_id !== userId) throw new ApiError('NOT_FOUND', `tx ${txId}`);
@@ -114,7 +120,19 @@ export class TxService {
     const message = fromBase64(rec.message_b64);
     if (!verifyEd25519(sig, message, rec.signer)) throw new ApiError('TX_FAILED', 'bad user signature');
 
+    const running = this.inflight.get(txId);
+    if (running) return running;
+    const p = this.send(rec, message, sig).finally(() => this.inflight.delete(txId));
+    this.inflight.set(txId, p);
+    return p;
+  }
+
+  private async send(rec: TxRecord, message: Uint8Array, sig: Uint8Array): Promise<SubmitResponse> {
+    const txId = rec.tx_id;
     const result = await this.opts.chain.submit(message, [{ pubkey: rec.signer, signature: sig }]);
+    // Never overwrite a settled record (e.g. another backend instance confirmed it meanwhile).
+    const now = this.txs.get(txId);
+    if (now && now.status === 'confirmed') return responseOf(now);
     if (result.status === 'failed' && result.code === 'TX_EXPIRED') throw new ApiError('TX_EXPIRED', result.error);
 
     const updated: TxRecord = {
@@ -129,6 +147,7 @@ export class TxService {
     };
     this.txs.set(txId, updated);
     if (result.status === 'confirmed') {
+      // Hooks run once, on the single pending → confirmed transition.
       for (const h of this.hooks.get(rec.kind) ?? []) {
         try {
           await h(updated, result);

@@ -53,7 +53,9 @@ import type { BetInfo } from './betInfo.js';
 import { audioTranscripts, offsetOf, phoneDetections, primaryVideos, recordedSessionMs } from './footage.js';
 import {
   candidateTemplates,
+  faceObservations,
   mockFaceObservations,
+  reidLinks,
   planProofs,
   timelineFromSession,
   voiceObservations,
@@ -61,7 +63,7 @@ import {
 } from './identity.js';
 import type { PerceptionHostInfo, ProofPlan } from './records.js';
 import { exprAt } from './scene.js';
-import type { LifecycleStores } from './stores.js';
+import { witnessChunks, type LifecycleStores } from './stores.js';
 
 export interface SealedPayload {
   payload: Uint8Array;
@@ -121,13 +123,40 @@ function hostInfo(h: PerceptionHostResult): PerceptionHostInfo {
   return { provider: h.host.provider, job_id: h.host.job_id, url: h.host.url, network: h.network, model_hash: h.model_hash };
 }
 
+/** Frame size from the primary camera's chunk metadata (first chunk that reports both). */
+function primaryChunkDims(s: LifecycleStores, betId: string, witness: string): { width_px: number; height_px: number } | null {
+  const c = witnessChunks(s, betId, witness).find((x) => (x.width_px ?? 0) > 0 && (x.height_px ?? 0) > 0);
+  return c ? { width_px: c.width_px!, height_px: c.height_px! } : null;
+}
+
+/**
+ * Source frame size for §6.2 quantization: the job's decoded frame size,
+ * else the primary camera's chunk metadata, else the calibration camera,
+ * else 1920×1080.
+ */
+export function frameSize(
+  h: PerceptionHostResult,
+  chunkDims: { width_px: number; height_px: number } | null,
+  c: Calibration | null,
+): { width_px: number; height_px: number } {
+  if (h.frame && h.frame.width_px > 0 && h.frame.height_px > 0) return h.frame;
+  if (chunkDims) return chunkDims;
+  return { width_px: c?.scene.camera.width_px ?? 1920, height_px: c?.scene.camera.height_px ?? 1080 };
+}
+
 /** Session for one host: mock hosts are already quantized; real hosts are quantized here (§6.2). */
-function hostSession(h: PerceptionHostResult, p: Program, c: Calibration | null, nFrames: number): SessionTracks {
+function hostSession(
+  h: PerceptionHostResult,
+  p: Program,
+  c: Calibration | null,
+  nFrames: number,
+  dims: { width_px: number; height_px: number },
+): SessionTracks {
   if (h.session) return h.session;
   if (!h.raw) throw new Error(`perception host ${h.host.job_id} returned neither raw detections nor a session`);
   return quantizeSession(h.raw, {
-    width_px: c?.scene.camera.width_px ?? 1920,
-    height_px: c?.scene.camera.height_px ?? 1080,
+    width_px: dims.width_px,
+    height_px: dims.height_px,
     n_frames: nFrames,
     model_hash: h.model_hash,
     flags: h.flags,
@@ -152,30 +181,44 @@ async function sealRules(ctx: AppContext, s: LifecycleStores, info: BetInfo, c: 
     prompts: p.entities.filter((e) => e.kind !== 'region').map((e) => ({ entity: e.name, phrase: e.kind === 'object' ? e.phrase : 'person' })),
     need_pose: needPose,
     need_reid: anyActorBound(p),
+    need_faces: anyActorBound(p),
     seed: perceptionSeed(info.id),
   });
-  let a = hostSession(pair.a, p, c, nFrames);
-  let b = hostSession(pair.b, p, c, nFrames);
+  const chunkDims = camera ? primaryChunkDims(s, info.id, camera.witness_key) : null;
+  const dimsA = frameSize(pair.a, chunkDims, c);
+  const dimsB = frameSize(pair.b, chunkDims, c);
+  let a = hostSession(pair.a, p, c, nFrames, dimsA);
+  let b = hostSession(pair.b, p, c, nFrames, dimsB);
 
   const transcripts = await audioTranscripts(ctx, s, info.id);
   const templates = anyActorBound(p) ? candidateTemplates(ctx, info) : null;
   let timeline: FusedTimeline | null = null;
   let voice: ObservationSet = { observations: [], observed: new Map() };
+  let faceObs: ObservationSet = { observations: [], observed: new Map() };
   if (templates) {
     const P = p.participants.length;
     const M = Math.max(P, info.candidates.length);
     voice = await voiceObservations(ctx, info, transcripts, templates, a.n_frames);
-    const bind = (h: PerceptionHostResult, sess: SessionTracks): { sess: SessionTracks; tl: FusedTimeline } => {
-      if (!h.raw) return { sess, tl: timelineFromSession(p, sess, M) };
-      const meta = { width_px: c?.scene.camera.width_px ?? 1920, height_px: c?.scene.camera.height_px ?? 1080, n_frames: sess.n_frames, model_hash: h.model_hash, flags: h.flags, program: p, calibration: c };
+    // Per host: track ids are per job, so face observations and re-ID links are too.
+    const bind = (
+      h: PerceptionHostResult,
+      sess: SessionTracks,
+      dims: { width_px: number; height_px: number },
+    ): { sess: SessionTracks; tl: FusedTimeline; faces: ObservationSet } => {
+      const none: ObservationSet = { observations: [], observed: new Map() };
+      if (!h.raw) return { sess, tl: timelineFromSession(p, sess, M), faces: none };
+      const meta = { ...dims, n_frames: sess.n_frames, model_hash: h.model_hash, flags: h.flags, program: p, calibration: c };
       const persons = quantizePersonTracks(h.raw, meta);
-      const tl = fuseTimeline(persons, voice.observations, [], M, P, sess.n_frames);
-      return { sess: bindPersons(sess, persons, tl, p), tl };
+      const faces = faceObservations(h.raw, templates, sess.n_frames);
+      // §8.5 step 3 order: faces before voices.
+      const tl = fuseTimeline(persons, [...faces.observations, ...voice.observations], reidLinks(h.raw, persons, sess.n_frames), M, P, sess.n_frames);
+      return { sess: bindPersons(sess, persons, tl, p), tl, faces };
     };
-    const ba = bind(pair.a, a);
+    const ba = bind(pair.a, a, dimsA);
     a = ba.sess;
     timeline = ba.tl;
-    b = bind(pair.b, b).sess;
+    faceObs = ba.faces;
+    b = bind(pair.b, b, dimsB).sess;
   }
 
   const phones = phoneDetections(ctx, s, info.id);
@@ -186,7 +229,8 @@ async function sealRules(ctx: AppContext, s: LifecycleStores, info: BetInfo, c: 
   let proofs: ProofPlan[] = [];
   let provable: Checkpoint[] = [];
   if (templates && timeline && full.checkpoints.length > 0) {
-    const faces = pair.a.raw ? { observations: [], observed: new Map() } : await mockFaceObservations(ctx, info, sealed, full.checkpoints, templates);
+    // Real hosts: host A's face observations (the timeline is host A's); mock hosts: synthesized near checkpoints.
+    const faces = pair.a.raw ? faceObs : await mockFaceObservations(ctx, info, sealed, full.checkpoints, templates);
     const obs: ObservationSet = {
       observations: [...faces.observations, ...voice.observations],
       observed: new Map([...faces.observed, ...voice.observed]),

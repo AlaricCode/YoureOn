@@ -3,6 +3,8 @@
  *   GET /bets/:id/receipt    {rows: ReceiptRow[]}
  *   GET /bets/:id/terms.yaml the bet's YAML (Terms row `yaml_url`; canonical
  *                            engine.toYaml when the mirror has no surface YAML)
+ * Both are visible only to bet viewers (requireBetViewer), else NOT_FOUND;
+ * receiptRows() itself is ungated for internal callers.
  * Also registers the per-bet chain event log the rows link to.
  */
 import { decodeBuffer } from '../booth/exhibits.js';
@@ -11,9 +13,9 @@ import { ApiError } from '../errors.js';
 import { betSources, nameOfWallet, userByWallet } from '../integration/sources.js';
 import { EventLog } from '../receipt/eventLog.js';
 import { buildReceipt, type ReceiptRow } from '../receipt/rows.js';
-import { isPubkey } from '../util/bytes.js';
+import { requireBetViewer } from '../lifecycle/betInfo.js';
 import { toYaml } from '@verdict/engine';
-import { param, type RouteModule } from './util.js';
+import { currentUser, param, type RouteModule } from './util.js';
 
 const logs = new WeakMap<AppContext, EventLog>();
 
@@ -64,13 +66,13 @@ export const receiptRoutes: RouteModule = (app, ctx) => {
 
   app.get('/v1/bets/:id/receipt', async (req) => {
     const id = param(req, 'id');
-    if (!isPubkey(id)) throw new ApiError('NOT_FOUND');
+    await requireBetViewer(ctx, currentUser(ctx, req), id);
     return { rows: await receiptRows(ctx, id) };
   });
 
   app.get('/v1/bets/:id/terms.yaml', async (req, reply) => {
     const id = param(req, 'id');
-    if (!isPubkey(id)) throw new ApiError('NOT_FOUND');
+    await requireBetViewer(ctx, currentUser(ctx, req), id);
     const bet = await ctx.chain.getBet(id);
     if (!bet) throw new ApiError('NOT_FOUND');
     const a = await betSources(ctx).artifacts(id, bet);

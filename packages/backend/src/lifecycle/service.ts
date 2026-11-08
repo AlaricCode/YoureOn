@@ -19,14 +19,14 @@ import { betSources, setBetSources } from '../integration/sources.js';
 import { chainBet, isBetMember, knownBetIds, loadBetInfo, requireMember, type BetInfo } from './betInfo.js';
 import { allWitnessesFinal, trySyncAudioWitness } from './evidence.js';
 import { KeyedLock } from './locks.js';
-import { startMarket } from './live.js';
+import { recoverLive, startMarket, witnessList } from './live.js';
 import { commitEvidenceIfDue, END_FINAL_WAIT_MS, refundIfDue, sendEnd, silenceConsent } from './oracle.js';
 import { PerceptionOrchestrator } from './perception.js';
 import type { LiveRecord } from './records.js';
 import { SceneStream } from './sceneStream.js';
 import { marketEntries } from './seal.js';
 import { chunkMetas, perceptionMeta, witnessMetas } from './sources.js';
-import { lifecycleStores, type LifecycleStores } from './stores.js';
+import { archiveBetChunks, lifecycleStores, type LifecycleStores } from './stores.js';
 
 const TERMINAL = new Set<number>([BET_STATE.Settled, BET_STATE.Refunded]);
 
@@ -65,6 +65,8 @@ export class LifecycleService {
     ctx.events.on('BetEnded', (ev) => this.onEnded(ev));
     ctx.events.on('TracksPosted', (ev) => this.onEnded(ev));
     ctx.events.on('PreRuled', (ev) => this.onPreRuled(ev));
+    ctx.events.on('Settled', (ev) => this.closeOut(String(ev.data['bet'])));
+    ctx.events.on('Refunded', (ev) => this.closeOut(String(ev.data['bet'])));
     ctx.keeper.register({ name: 'bet-lifecycle', run: (now) => this.keeperPass(now) });
     // Exact answers for the booth / receipt read seam (integration/sources.ts).
     // Falls back to the previous resolvers for bets this service has no records of.
@@ -128,6 +130,24 @@ export class LifecycleService {
 
   private onPreRuled(ev: ChainEventJson): void {
     if (Number(ev.data['preruling']) === 1) this.notifyParticipants(String(ev.data['bet']), 'Ruled');
+  }
+
+  /**
+   * §12.5 close-out (Settled / Refunded): raw witness footage/audio and the
+   * scene crops are deleted. A Disputed bet only settles through the booth's
+   * settle_panel, so its exhibits (kept, with the sealed perception blob, for
+   * the receipt) are already cut. Chunk hash records (receipt evidence row)
+   * move to the per-bet archive, out of the hot `chunks` collection.
+   */
+  private closeOut(bet: string): void {
+    if (!isPubkey(bet)) return;
+    try {
+      this.ctx.blobs.deleteBetChunks(bet);
+      this.ctx.blobs.deleteBlobsMatching('crops', (k) => k.startsWith(`${bet}-`));
+      archiveBetChunks(this.s, bet, this.ctx.clock.nowMs());
+    } catch (e) {
+      this.ctx.log.warn({ err: e, bet }, 'close-out cleanup failed');
+    }
   }
 
   // ---- end flow ---------------------------------------------------------------------
@@ -216,6 +236,17 @@ export class LifecycleService {
     }
   }
 
+  /**
+   * A Live bet our oracle started with exactly our registered witness list
+   * but without a persisted live record (crash right after `start`
+   * confirmed): adopt it so end, evidence commits and perception still run.
+   */
+  private ownsUnrecordedStart(id: string, bet: BetAccount): boolean {
+    if (bet.beacon_slot === 0n || bet.oracle !== this.ctx.chain.oracle || bet.n_witnesses === 0) return false;
+    const keys = new Set(witnessList(this.s, id).witnesses.map((w) => w.witness_key));
+    return bet.witnesses.slice(0, bet.n_witnesses).every((k) => keys.has(k));
+  }
+
   private async keeperBet(id: string, nowMs: number): Promise<void> {
     const bet = await this.ctx.chain.getBet(id);
     if (!bet || TERMINAL.has(bet.state)) return;
@@ -229,7 +260,11 @@ export class LifecycleService {
     const refundable = refundCondition(bet, nowS) !== null;
     const market = info.program.kind === 'market';
     /** started by this service (persisted), so Live/Perceiving steps are ours */
-    const managed = this.s.live.has(id);
+    let managed = this.s.live.has(id);
+    if (!managed && bet.state === BET_STATE.Live && !market && this.ownsUnrecordedStart(id, bet)) {
+      await recoverLive(this.ctx, this.s, id, bet);
+      managed = true;
+    }
     let acted = false;
     switch (bet.state) {
       case BET_STATE.Funded:

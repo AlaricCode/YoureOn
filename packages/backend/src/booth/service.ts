@@ -36,6 +36,7 @@ import { settlePanelIx, type IxEnv } from '../chain/ixs.js';
 import { createAtaIdempotentIx, ed25519Ix } from '../chain/programs.js';
 import { betSources, type BetArtifacts } from '../integration/sources.js';
 import { COLLECTIONS } from '../persistence/records.js';
+import { isBetViewer } from '../lifecycle/betInfo.js';
 import type { Collection } from '../persistence/store.js';
 import type { AdvocateBrief, BoothCase, JudgeProvider } from '../providers/types.js';
 import { ExhibitBuilder, betWitnesses, WITNESS_KIND_CODE } from './exhibits.js';
@@ -168,9 +169,15 @@ export class BoothService {
     return p;
   }
 
+  /** Booth pushes reach bet viewers only (same rule as GET /bets/:id/booth). */
+  private publishBooth(rec: StoredBooth): void {
+    const msg = { type: 'booth' as const, bet_id: rec.bet, booth: publicBooth(rec) };
+    void this.ctx.hub.publishPerUser(`bet:${rec.bet}`, async (userId) => ((await isBetViewer(this.ctx, userId, rec.bet)) ? msg : null));
+  }
+
   private save(bet: string, patch: Partial<StoredBooth>, publish = false): StoredBooth {
     const rec = this.records.update(bet, (r) => ({ ...r, ...patch, updated_at_ms: this.ctx.clock.nowMs() }));
-    if (publish) this.ctx.hub.publish(`bet:${bet}`, { type: 'booth', bet_id: bet, booth: publicBooth(rec) });
+    if (publish) this.publishBooth(rec);
     return rec;
   }
 
@@ -196,7 +203,7 @@ export class BoothService {
         last_error: null,
       };
       this.records.set(betId, rec);
-      this.ctx.hub.publish(`bet:${betId}`, { type: 'booth', bet_id: betId, booth: publicBooth(rec) });
+      this.publishBooth(rec);
     }
 
     const src = betSources(this.ctx);

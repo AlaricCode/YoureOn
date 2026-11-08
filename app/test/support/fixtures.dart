@@ -1,5 +1,19 @@
 // JSON fixtures shaped exactly like CONTRACTS.md §12.2.
 
+import 'dart:convert';
+
+import 'golden.dart';
+
+/// A minimal legacy Solana message the golden wallet must sign: header
+/// (1 signer, 0, 1), 2 account keys (the wallet, a program), a blockhash
+/// and [salt] as the instruction count byte (varies the bytes).
+List<int> txMessage({int salt = 0}) {
+  final pub = [for (var i = 0; i < 64; i += 2) int.parse(kPubHex.substring(i, i + 2), radix: 16)];
+  return [1, 0, 1, 2, ...pub, ...List<int>.filled(32, 7), ...List<int>.filled(32, 9), salt & 0x7f];
+}
+
+String txMessageB64({int salt = 0}) => base64.encode(txMessage(salt: salt));
+
 Map<String, dynamic> userJson({
   String id = 'u1',
   String name = 'Ana',
@@ -174,7 +188,7 @@ Map<String, dynamic> huddleJson({String id = 'h1', String creator = 'u1', bool b
 
 Map<String, dynamic> signJson(String txId, {String summary = r'Stake $5.00'}) => {
       'tx_id': txId,
-      'message_b64': 'AQID',
+      'message_b64': txMessageB64(),
       'expires_at_ms': 0,
       'summary': summary,
     };
@@ -182,7 +196,7 @@ Map<String, dynamic> signJson(String txId, {String summary = r'Stake $5.00'}) =>
 Map<String, dynamic> confirmedJson() => {'status': 'confirmed', 'signature': 'sig', 'error': null};
 
 /// A ready draft: program + read-back + hash, Ben (u2) is the counterparty.
-Map<String, dynamic> readyDraftJson({bool benAccepted = false, int updatedAt = 2}) => {
+Map<String, dynamic> readyDraftJson({bool benAccepted = false, int updatedAt = 2, String? betId}) => {
       ...draftJson(),
       'status': 'ready',
       'questions': [
@@ -197,6 +211,7 @@ Map<String, dynamic> readyDraftJson({bool benAccepted = false, int updatedAt = 2
         {'user_id': 'u2', 'display_name': 'Ben', 'side': 1, 'accepted': benAccepted, 'is_creator': false},
       ],
       'frozen': benAccepted,
+      if (betId != null) 'bet_id': betId,
       'updated_at_ms': updatedAt,
     };
 
@@ -254,7 +269,7 @@ List<Map<String, dynamic>> receiptRowsJson() => [
         'label': 'Terms',
         'status': 'ok',
         'url': null,
-        'detail': {'key': 'terms', 'program_hash': 'ab' * 32, 'readback': ['Ben wins if leg 1'], 'yaml_url': '/bets/b1/yaml'},
+        'detail': {'key': 'terms', 'program_hash': 'ab' * 32, 'readback': ['Ben wins if leg 1'], 'yaml_url': 'http://127.0.0.1:8787/v1/bets/b1/terms.yaml'},
       },
       {
         'key': 'evidence',

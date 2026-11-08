@@ -16,12 +16,13 @@ npm test  -w packages/backend     # vitest, offline, all mocks, no ALLOW_SPEND
 | `src/persistence/` | `JsonStore` collections under `DATA_DIR/db`, `BlobStore` (`chunks/<bet>/<witness>/<index>`, `exhibits/<bet>/<eid>`), record types |
 | `src/auth/` | login nonce + wallet signature (§12.1), users bound to one wallet, bearer sessions |
 | `src/tx/` | sign payloads + `POST /tx/:id/submit` (§12.1); `ctx.txs.request(...)`, `ctx.txs.onConfirmed(kind, hook)` |
-| `src/chain/` | `ChainClient` interface, IDL-driven message builder, typed instruction builders (`ixs.ts`), mock chain (engine `chainModel`), devnet skeleton, §12.5 event handler + QuickNode HMAC |
+| `src/chain/` | `ChainClient` interface, IDL-driven message builder, typed instruction builders (`ixs.ts`), mock chain (engine `chainModel`), devnet client, §12.5 event handler (idempotent on `(signature, index)`), QuickNode HMAC + stream intake, `rpc_ws` source (`rpcWs.ts`), notifications |
 | `src/ws/` | §12.4 hub: topics, snapshots (`setSnapshotProvider`), `scene.frame`/`recording` handlers, ping/idle |
 | `src/providers/` | interfaces for every §13 provider, deterministic mocks, paid providers (spend-guarded), registry |
 | `src/keeper/` | §12.6 scheduler (`ctx.keeper.register(task)`) |
-| `src/routes/` | route modules; `auth`, `tx`, `wallet`, `webhooks`, world reads are implemented; `identity`, `huddles`, `bets`, `booth`, `world` (rest) are **stubs with TODOs** for the service agents |
+| `src/routes/` | route modules, registered in `routes/index.ts` (`ROUTE_MODULES`), all implemented: `auth`, `tx`, `wallet`, `webhooks` (QuickNode + ElevenLabs tool), `chainEvents` (starts the configured §12.5 event source), `identity`, `huddles`, `bets`, `lifecycle` (bet lifecycle + keeper), `booth`, `replayBooth`, `receipt`, `world`. Each module delegates to its service directory (`src/identity/`, `src/huddles/`, `src/bets/`, `src/lifecycle/`, `src/booth/`, `src/receipt/`, `src/world/`, …) |
 
-Service agents: replace the `stub(...)` calls in your route module, register chain triggers with
-`ctx.events.on(name, fn)`, keeper tasks with `ctx.keeper.register`, and WS snapshots with
-`ctx.hub.setSnapshotProvider`. Tests build an in-memory app with `test/appHelpers.ts` (`makeApp`, `login`).
+Extending the backend: register chain triggers with `ctx.events.on(name, fn)`, keeper tasks with
+`ctx.keeper.register`, and WS snapshots with `ctx.hub.setSnapshotProvider`. Tests build an in-memory app with
+`test/appHelpers.ts` (`makeApp`, `login`). See the root `README.md` for the architecture, the QuickNode Stream config and
+the commands that must pass.

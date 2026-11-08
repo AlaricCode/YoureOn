@@ -52,7 +52,7 @@ impl<const W: usize> RawLeg<W> {
 
 /// Iterates set positions `< limit` in ascending order.
 fn ones<const W: usize>(s: &Signal<W>, limit: usize) -> impl Iterator<Item = usize> + '_ {
-    (0..W).flat_map(move |wi| {
+    (0..W.min(limit.div_ceil(64))).flat_map(move |wi| {
         let mut w = s.0[wi];
         core::iter::from_fn(move || {
             if w == 0 {
@@ -72,10 +72,9 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
         let limit = self.prog.limit_frames();
         let mut n = 0usize;
         for s in self.segs() {
-            for i in 0..s.n_frames as u64 {
-                if (s.frame_start as u64 + i) < limit {
-                    n += 1;
-                }
+            let start = s.frame_start as u64;
+            if start < limit {
+                n += (limit - start).min(s.n_frames as u64) as usize;
             }
         }
         n
@@ -163,13 +162,17 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
                 out.covered = self.covers_prefix(d);
                 // First frame f < D in F with !S[f].
                 let mut fail = None;
-                for pos in 0..n_r {
-                    if self.frame_of(pos) >= d {
-                        break;
-                    }
-                    if !s_sig.get(pos) {
-                        fail = Some(pos);
-                        break;
+                'segs: for s in self.segs() {
+                    let p0 = s.pos_start as usize;
+                    for i in 0..s.n_frames as usize {
+                        let pos = p0 + i;
+                        if pos >= n_r || s.frame_start + i as u32 >= d {
+                            break 'segs;
+                        }
+                        if !s_sig.get(pos) {
+                            fail = Some(pos);
+                            break 'segs;
+                        }
                     }
                 }
                 if let Some(f) = fail {

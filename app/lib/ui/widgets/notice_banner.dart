@@ -8,7 +8,11 @@ import '../tokens.dart';
 import 'text.dart';
 
 /// Shows WS `notify` titles (≤ 3 words) as a quiet top banner for 3 s
-/// ([D-29]: WS + on-device notices only).
+/// while the app is in the foreground. [D-29] delivers notices over the WS
+/// plus on-device local notifications (no push service): when the app is
+/// backgrounded, [AppController] posts the same titles as local
+/// notifications instead, schedules a reminder before a pending consent
+/// deadline, and on resume re-fetches bets and replays missed changes here.
 class NoticeBanner extends StatefulWidget {
   const NoticeBanner({super.key, required this.child});
   final Widget child;

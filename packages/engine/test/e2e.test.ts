@@ -134,9 +134,10 @@ describe('§15 worked examples: YAML → AST → encodings → hashes', () => {
     expect(dp.legs[0]!.succ[3]).toBe(0x12); // can.opening ref byte
     expect(dp.tracked_entities).toEqual([0, 1, 2]);
     expect(dp.legs[0]!.flags).toBe(0b11);
-    expect(E.evalCost(dp, 1)).toBe(25);
-    expect(E.evalCost(dp, 655)).toBeLessThanOrEqual(E.MAX_EVAL_COST);
-    expect(E.evalCost(dp, 656)).toBeGreaterThan(E.MAX_EVAL_COST);
+    expect(E.evalCost(dp, 1) - E.evalCost(dp, 0)).toBe(27);
+    expect(E.evalCost(dp, 1)).toBe((1 + E.EVAL_COST_SETUP_FRAMES) * 27);
+    expect(E.evalCost(dp, 299)).toBeLessThanOrEqual(E.MAX_EVAL_COST);
+    expect(E.evalCost(dp, 300)).toBeGreaterThan(E.MAX_EVAL_COST);
     // hashes (§4.2)
     expect(E.jsonHash(p)).toBe(hex(E.sha256(new TextEncoder().encode(E.canonicalJson(p)))));
     expect(dp.json_hash).toBe(E.jsonHash(p));
@@ -177,11 +178,11 @@ describe('§15 worked examples: YAML → AST → encodings → hashes', () => {
     expect(E.encodeCalibration(CUP_TOWER_CALIBRATION, r.program)[5]).toBe(0); // R = 0
   });
 
-  it('§15.3 compiles to the contract AST; cost 600 × 2', () => {
+  it('§15.3 compiles to the contract AST; cost (600 + 4) × 2', () => {
     const p = compile(PUSH_UPS_YAML);
     expect(p).toEqual(AST_15_3);
     const dp = E.decodeProgram(E.encodeProgram(p));
-    expect(E.evalCost(dp, 600)).toBe(1200);
+    expect(E.evalCost(dp, 600)).toBe(1208);
     expect(dp.legs[0]!.flags).toBe(0b01);
   });
 

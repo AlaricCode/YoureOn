@@ -3,7 +3,10 @@
  *
  * Each collection is one file `DATA_DIR/db/<name>.json` holding
  * `{ "<id>": <record>, ... }`, kept in memory and rewritten atomically
- * (write temp + rename) after every mutation. Records must be plain JSON
+ * (write temp + rename). Writes are coalesced: a mutation marks the
+ * collection dirty and it is written at most once per FLUSH_DELAY_MS (and on
+ * `JsonStore.flush()`, app close and process exit), so a burst of mutations
+ * (chunk records, processed events) costs one serialization, not one each. Records must be plain JSON
  * (no bigint, no Uint8Array: store u64 as decimal strings, bytes as base64/hex).
  * Reads return deep copies, so callers must write back through set/update.
  */
@@ -12,9 +15,16 @@ import { join } from 'node:path';
 import { ApiError } from '../errors.js';
 
 const NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
+/** Max delay between a mutation and its file write. */
+export const FLUSH_DELAY_MS = 100;
+
+/** Stores with files, flushed synchronously on process exit. */
+const LIVE_STORES = new Set<JsonStore>();
+let exitHook = false;
 
 export class Collection<T> {
   private readonly map = new Map<string, T>();
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly name: string,
@@ -92,7 +102,18 @@ export class Collection<T> {
     return out;
   }
 
+  /** Schedules the coalesced write. */
   private flush(): void {
+    if (!this.file || this.timer) return;
+    this.timer = setTimeout(() => this.flushNow(), FLUSH_DELAY_MS);
+    this.timer.unref?.();
+  }
+
+  /** Writes the collection now if it has unwritten mutations. */
+  flushNow(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = null;
     if (!this.file) return;
     const tmp = `${this.file}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.map)), { mode: 0o600 });
@@ -131,7 +152,27 @@ export class JsonStore {
 
   constructor(readonly opts: StoreOptions) {
     this.dbDir = opts.dataDir ? join(opts.dataDir, 'db') : null;
-    if (this.dbDir) mkdirSync(this.dbDir, { recursive: true, mode: 0o700 });
+    if (this.dbDir) {
+      mkdirSync(this.dbDir, { recursive: true, mode: 0o700 });
+      LIVE_STORES.add(this);
+      if (!exitHook) {
+        exitHook = true;
+        process.once('exit', () => {
+          for (const s of LIVE_STORES) s.flush();
+        });
+      }
+    }
+  }
+
+  /** Writes every collection with pending mutations (call on shutdown). */
+  flush(): void {
+    for (const c of this.collections.values()) c.flushNow();
+  }
+
+  /** Flushes and stops tracking this store (app close). */
+  close(): void {
+    this.flush();
+    LIVE_STORES.delete(this);
   }
 
   collection<T>(name: string): Collection<T> {

@@ -2,13 +2,15 @@
  * Replay booth routes (§10, §12.3) — owned by booth-world-events:
  *   GET /bets/:id/booth          booth record (§10.5); 404 until the booth starts
  *   GET /bets/:id/exhibits/:eid  raw exhibit bytes (Content-Type sniffed from the kind)
+ * Both are visible only to bet viewers (participants / confirmed huddle
+ * members; World bets: participants), else NOT_FOUND (requireBetViewer).
  * Also wires the booth service: `Disputed` trigger + keeper sweep (§12.6 step 6).
  */
 import type { AppContext } from '../context.js';
 import { ApiError } from '../errors.js';
 import { BoothService, publicBooth, type BoothServiceOptions } from '../booth/service.js';
-import { isPubkey } from '../util/bytes.js';
-import { param, type RouteModule } from './util.js';
+import { requireBetViewer } from '../lifecycle/betInfo.js';
+import { currentUser, param, type RouteModule } from './util.js';
 
 const services = new WeakMap<AppContext, BoothService>();
 
@@ -45,7 +47,7 @@ export const replayBoothRoutes: RouteModule = (app, ctx) => {
 
   app.get('/v1/bets/:id/booth', async (req) => {
     const id = param(req, 'id');
-    if (!isPubkey(id)) throw new ApiError('NOT_FOUND');
+    await requireBetViewer(ctx, currentUser(ctx, req), id);
     const rec = booth.get(id);
     if (!rec) throw new ApiError('NOT_FOUND', 'no booth for this bet');
     return publicBooth(rec);
@@ -54,7 +56,7 @@ export const replayBoothRoutes: RouteModule = (app, ctx) => {
   app.get('/v1/bets/:id/exhibits/:eid', async (req, reply) => {
     const id = param(req, 'id');
     const eid = param(req, 'eid');
-    if (!isPubkey(id)) throw new ApiError('NOT_FOUND');
+    await requireBetViewer(ctx, currentUser(ctx, req), id);
     const rec = booth.get(id);
     const ex = rec?.exhibits.find((e) => e.id === eid);
     if (!ex) throw new ApiError('NOT_FOUND');

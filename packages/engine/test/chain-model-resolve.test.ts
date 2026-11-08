@@ -124,6 +124,21 @@ describe('chain model: dispute', () => {
     const w2 = new World().toPreRuled(1);
     w2.now = w2.bet.consent_deadline + 1n;
     w2.err('DeadlinePassed', 'dispute', disputeArgs(w2), [BOB.pk], acc);
+    // dispute.rs order: DeadlinePassed precedes BadReason / ConsentMismatch / NotParticipant.
+    w2.err('DeadlinePassed', 'dispute', disputeArgs(w2, 0), [BOB.pk], acc);
+    w2.err('DeadlinePassed', 'dispute', { reason: 0, evidence_root: '00'.repeat(32) }, [BOB.pk], acc);
+    w2.err('DeadlinePassed', 'dispute', disputeArgs(w2, 0), [STRANGER.pk], {
+      disputer: STRANGER.pk,
+      disputer_token: ata(STRANGER.pk),
+    });
+    // Before the deadline: BadReason precedes ConsentMismatch and NotParticipant.
+    const w3 = new World().toPreRuled(1);
+    w3.err('BadReason', 'dispute', { reason: 0, evidence_root: '00'.repeat(32) }, [BOB.pk], acc);
+    w3.err('BadReason', 'dispute', disputeArgs(w3, 0), [STRANGER.pk], { disputer: STRANGER.pk, disputer_token: ata(STRANGER.pk) });
+    w3.err('ConsentMismatch', 'dispute', { reason: 1, evidence_root: '00'.repeat(32) }, [STRANGER.pk], {
+      disputer: STRANGER.pk,
+      disputer_token: ata(STRANGER.pk),
+    });
   });
 });
 
@@ -212,6 +227,25 @@ describe('chain model: settle_panel', () => {
     const w = new World().toPreRuled(1);
     signPanel(w, 1, [JUDGES[0], JUDGES[1]]);
     w.err('InvalidState', 'settle_panel', { outcome: 1 }, []);
+  });
+
+  it('DeadlinePassed after disputed_at + PANEL_TIMEOUT_S; refund (6) applies instead', () => {
+    const w = disputed(1);
+    signPanel(w, 1, [JUDGES[0], JUDGES[1]]);
+    w.now = w.bet.disputed_at + BigInt(PANEL_TIMEOUT_S) + 1n;
+    w.err('DeadlinePassed', 'settle_panel', { outcome: 1 }, []);
+    w.err('BadOutcome', 'settle_panel', { outcome: 3 as never }, []); // BadOutcome is checked first
+    const r = w.ok('refund', {}, []);
+    expect(r.bet).toMatchObject({ state: 7, refund_reason: 6 });
+  });
+
+  it('settles at exactly disputed_at + PANEL_TIMEOUT_S (inclusive)', () => {
+    const w = disputed(1);
+    signPanel(w, 2, [JUDGES[0], JUDGES[1]]);
+    w.now = w.bet.disputed_at + BigInt(PANEL_TIMEOUT_S);
+    w.err('NotRefundable', 'refund', {}, []);
+    const r = w.ok('settle_panel', { outcome: 2 }, []);
+    expect(r.bet).toMatchObject({ state: 6, settle_path: 3, final_winner_mask: 2 });
   });
 });
 

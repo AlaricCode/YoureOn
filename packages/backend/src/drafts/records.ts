@@ -85,6 +85,8 @@ export interface DraftView {
   yaml?: string;
   readback?: string[];
   program_hash?: string;
+  /** Bet PDA, once `create_bet` confirmed (errata App: counterparties following the creator). */
+  bet_id?: string;
   labels: Record<string, string>;
   participants: { user_id: string; display_name: string; side: 0 | 1; accepted: boolean; is_creator: boolean }[];
   errors?: CompileError[];

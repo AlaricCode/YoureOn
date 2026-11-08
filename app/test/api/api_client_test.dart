@@ -144,6 +144,25 @@ void main() {
     expect(server.called('PUT /bets/b/chunks/W/3').length, 3);
   });
 
+  test('server-built /v1 URLs are rebased onto the configured API origin', () {
+    final emu = ApiTransport(baseUrl: 'http://10.0.2.2:8787');
+    expect(emu.resolve('http://127.0.0.1:8787/v1/bets/x/chunks/w/0').toString(), 'http://10.0.2.2:8787/v1/bets/x/chunks/w/0');
+    expect(emu.resolve('https://public.example/v1/bets/x/start-sound?v=2').toString(), 'http://10.0.2.2:8787/v1/bets/x/start-sound?v=2');
+    expect(emu.resolve('/v1/drafts/d/readback.mp3').toString(), 'http://10.0.2.2:8787/v1/drafts/d/readback.mp3');
+    // Non-API absolute URLs (explorers, CDNs) are kept.
+    expect(emu.resolve('https://explorer.solana.com/tx/abc').toString(), 'https://explorer.solana.com/tx/abc');
+    emu.close();
+  });
+
+  test('chunk body upload to a PUBLIC_URL loopback goes to the API origin with auth', () async {
+    server.on('PUT /bets/b/chunks/W/4', (_) => {'stored': true});
+    t.token = 'tok';
+    await api.putChunkBody('b', 'W', 4, Uint8List.fromList([1]), uploadUrl: 'http://127.0.0.1:8787/v1/bets/b/chunks/W/4');
+    final req = server.called('PUT /bets/b/chunks/W/4').single;
+    expect(req.url.origin, 'http://api.test');
+    expect(req.headers['authorization'], 'Bearer tok');
+  });
+
   test('dispute validates reason and returns bond', () async {
     server.on('POST /bets/b/dispute', (_) => {
           'sign': {'tx_id': 't', 'message_b64': 'AA==', 'expires_at_ms': 0, 'summary': r'Bond $1.00'},

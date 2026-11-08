@@ -354,7 +354,9 @@ pub fn evaluate_decoded<const W: usize>(
         return panel(n_legs, REASON_CROSS_CHECK_FAILED, 0);
     }
     let n = trk.n_frames as usize;
-    let cost = n as u64 * program.weight_per_frame();
+    // §3.13: `(|F| + EVAL_COST_SETUP_FRAMES) × Σw` — the setup term charges each node's
+    // per-evaluation work (decode, signal set-up, region preparation) as extra frames.
+    let cost = (n as u64 + EVAL_COST_SETUP_FRAMES) * program.weight_per_frame();
     if max_cost.is_some_and(|m| cost > m) || n > Signal::<W>::CAPACITY {
         return panel(n_legs, REASON_WINDOW_UNAVAILABLE, cost);
     }

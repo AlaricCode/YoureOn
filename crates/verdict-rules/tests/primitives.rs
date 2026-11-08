@@ -447,11 +447,11 @@ fn cost_cap_exceeded() {
     // weight: and(1) + present(2) + present(2) = 5 per frame.
     let succ = and(present(0), present(0));
     let p = ProgramB::rules(vec![OBJ], vec![LegB::exists(1, succ)], 3600).encode();
-    // 1000 frames × 5 = 5000: under the default cap; with max_cost 4999 it's over.
+    // (1000 + 4 setup) frames × 5 = 5020: under the default cap; with max_cost 5019 it's over.
     let t = TracksB::build(OK_FLAGS, vec![(0, 0xFF, 0)], vec![(0, 1000)], |_, _| at(5000, 5000, 10)).encode();
-    let ok = verdict_rules::evaluate_detailed::<W>(&p, &calibration(&[]), &t, &[], Some(5000)).unwrap();
-    assert_eq!((ok.out.preruling, ok.cost), (1, 5000));
-    let over = verdict_rules::evaluate_detailed::<W>(&p, &calibration(&[]), &t, &[], Some(4999)).unwrap();
+    let ok = verdict_rules::evaluate_detailed::<W>(&p, &calibration(&[]), &t, &[], Some(5020)).unwrap();
+    assert_eq!((ok.out.preruling, ok.cost), (1, 5020));
+    let over = verdict_rules::evaluate_detailed::<W>(&p, &calibration(&[]), &t, &[], Some(5019)).unwrap();
     assert_eq!((over.out.preruling, over.out.reason), (3, 13));
     assert_eq!(legs_of(&over), vec![2]);
     assert_eq!(causes_of(&over), vec![None]);
@@ -462,7 +462,7 @@ fn cost_cap_exceeded() {
 
 #[test]
 fn cost_cap_with_default_max() {
-    // Paper-ball weight 25 → 656 frames exceed MAX_EVAL_COST (16400 > 16384).
+    // Paper-ball weight 27 → 300 frames exceed MAX_EVAL_COST ((300 + 4) × 27 = 8208 > 8192).
     let va = and(leaf(OP_RELEASED_BY, 1, 0, 0), leaf(OP_BEHIND, 0, 3, 0));
     let succ = or(leaf(OP_DISAPPEARS_INTO, 1, opening(2), 0), and(leaf(OP_INSIDE, 1, 2, 0), leaf(OP_AT_REST, 1, 0, 10)));
     let p = ProgramB::rules(
@@ -472,7 +472,7 @@ fn cost_cap_with_default_max() {
     )
     .encode();
     let c = calibration(&[RegionB::Line { entity: 3, a: (3000, 6000), b: (3000, 10000), behind_sign: 1 }]);
-    for (n, panel) in [(655u16, false), (656u16, true)] {
+    for (n, panel) in [(299u16, false), (300u16, true)] {
         let t = TracksB::build(OK_FLAGS, vec![(0, 1, 0), (1, 0xFF, 0), (2, 0xFF, 0)], vec![(0, n)], |t, _| match t {
             0 => person_at(1000, 9000),
             _ => at(5000, 5000, 10),
@@ -480,7 +480,7 @@ fn cost_cap_with_default_max() {
         .encode();
         let d = run(&p, &c, &t, &[]).unwrap();
         assert_eq!(d.out.reason == 13, panel, "n={n}");
-        assert_eq!(d.cost, n as u64 * 25);
+        assert_eq!(d.cost, (n as u64 + 4) * 27);
     }
 }
 

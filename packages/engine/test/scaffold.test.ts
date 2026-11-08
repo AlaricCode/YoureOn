@@ -103,7 +103,7 @@ describe('engine scaffold', () => {
   it('exposes CONSTANTS through the public entry point', () => {
     expect(engine.CONSTANTS).toBe(CONSTANTS);
     expect(engine.CONSTANTS.FPS).toBe(10);
-    expect(Object.keys(CONSTANTS)).toHaveLength(83);
+    expect(Object.keys(CONSTANTS)).toHaveLength(84);
   });
 
   it('keeps §0.5 invariants', () => {

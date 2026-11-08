@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:verdict/api/models/bet.dart';
 import 'package:verdict/nav/routes.dart';
@@ -82,6 +85,133 @@ void main() {
     await settle(tester);
     expect(devices.runners['b1']!.started, isNotNull);
     expect(devices.signal.runs, ['u2']);
+    c.dispose();
+  });
+
+  testWidgets('Record: leaving mid-recording keeps the camera until the witnesses finalize', (tester) async {
+    final devices = Devices()..endGate = Completer<void>();
+    final s = baseServer()..on('GET /bets/b1', (_) => creatorBetJson(state: 'funded', funded: true));
+    final c = await openScreen(tester, s, Routes.record, const BetArgs('b1'), devices: devices);
+    expect(devices.awake.on, isTrue, reason: 'witness phones keep the screen on');
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    final runner = devices.runners['b1']!;
+    expect(runner.recording, isTrue);
+
+    // Back while Live.
+    tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+    await settle(tester);
+    expect(find.byType(RecordScreen), findsNothing);
+    expect(devices.awake.on, isFalse);
+    expect(devices.scene.isOpen, isTrue, reason: 'the final MP4 segment is cut from this controller');
+    expect(runner.ended, isFalse);
+
+    devices.endGate!.complete();
+    await settle(tester);
+    expect(runner.ended, isTrue);
+    expect(runner.cameraOpenAtEnd, isTrue);
+    expect(devices.scene.isOpen, isFalse);
+    c.dispose();
+  });
+
+  testWidgets('Record: opened after the start, a registered phone begins from the replayed start', (tester) async {
+    final devices = Devices();
+    final t0 = DateTime.now().millisecondsSinceEpoch - 5000;
+    final s = baseServer()..on('GET /bets/b1', (_) => {...creatorBetJson(state: 'live', funded: true), 't0_ms': t0});
+    final c = await openScreen(tester, s, Routes.record, const BetArgs('b1'), devices: devices);
+    final runner = devices.runners['b1']!;
+    // Re-registering the same keys is idempotent; the camera reopens.
+    expect(runner.registered, [true]);
+    expect(devices.scene.isOpen, isTrue);
+    // The bet:<id> snapshot replays `start` while Live.
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    expect(runner.begins, hasLength(1));
+    expect(devices.signal.runs, isEmpty, reason: 'a late phone never plays the start signal');
+    // A second replay (reconnect) is ignored.
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    expect(runner.begins, hasLength(1));
+    expect(find.text('Not a witness'), findsNothing);
+    c.dispose();
+  });
+
+  testWidgets('Record: a start that arrives before _load finishes is handled once it does', (tester) async {
+    final devices = Devices();
+    final s = baseServer(asBen: true)..on('GET /bets/b1', (_) => {...betJson(id: 'b1', state: 'funded'), 'preruling': null});
+    final c = testController(s, token: 't', devices: devices);
+    await pumpApp(tester, c);
+    tester.state<NavigatorState>(find.byType(Navigator).first).pushNamed(Routes.record, arguments: const BetArgs('b1'));
+    await tester.pump();
+    await tester.pump();
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    final runner = devices.runners['b1']!;
+    expect(runner.registered, [false]);
+    expect(runner.begins, hasLength(1));
+    c.dispose();
+  });
+
+  testWidgets('Record: not registered before the start → "Not a witness", no recording', (tester) async {
+    final devices = Devices()..registerError = 'WRONG_STATE';
+    final s = baseServer(asBen: true)..on('GET /bets/b1', (_) => {...betJson(id: 'b1', state: 'funded'), 'preruling': null});
+    final c = await openScreen(tester, s, Routes.record, const BetArgs('b1'), devices: devices);
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    final runner = devices.runners['b1']!;
+    expect(runner.begins, isEmpty);
+    expect(find.text('Not a witness'), findsOneWidget);
+    expectCopyRule(tester, screen: 'Record (not a witness)');
+    c.dispose();
+  });
+
+  testWidgets('Record: a phone with no witness opening a Live bet shows "Not a witness"', (tester) async {
+    final devices = Devices();
+    final t0 = DateTime.now().millisecondsSinceEpoch - 5000;
+    final s = baseServer(asBen: true)..on('GET /bets/b1', (_) => {...betJson(id: 'b1', state: 'live'), 'preruling': null, 't0_ms': t0});
+    final c = await openScreen(tester, s, Routes.record, const BetArgs('b1'), devices: devices);
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    expect(devices.runners['b1']?.begins ?? const [], isEmpty);
+    expect(find.text('Not a witness'), findsOneWidget);
+    c.dispose();
+  });
+
+  testWidgets('Record: going to the background mid-recording finalizes the witnesses', (tester) async {
+    final devices = Devices();
+    final s = baseServer()..on('GET /bets/b1', (_) => creatorBetJson(state: 'funded', funded: true));
+    final c = await openScreen(tester, s, Routes.record, const BetArgs('b1'), devices: devices);
+    c.injectWs(_start('b1', 'u1'));
+    await settle(tester);
+    final runner = devices.runners['b1']!;
+    expect(runner.recording, isTrue);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await settle(tester);
+    expect(runner.ended, isTrue);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await settle(tester);
+    c.dispose();
+  });
+
+  testWidgets('Record: paused before the start releases the camera and reopens it on resume', (tester) async {
+    final devices = Devices();
+    final s = baseServer()..on('GET /bets/b1', (_) => creatorBetJson(state: 'funded', funded: true));
+    final c = await openScreen(tester, s, Routes.record, const BetArgs('b1'), devices: devices);
+    expect(devices.scene.isOpen, isTrue);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await settle(tester);
+    expect(devices.scene.isOpen, isFalse);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await settle(tester);
+    expect(devices.scene.isOpen, isTrue);
     c.dispose();
   });
 

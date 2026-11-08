@@ -16,3 +16,10 @@ codegen-units = 1
 opt-level = 3
 incremental = false
 codegen-units = 1
+
+# The rule interpreter's arithmetic is bounded by construction (u16 coordinates, ≤ 2·10^8
+# products, frame indices ≤ 36000 + MAX_EVAL_FRAMES; see CONTRACTS-ERRATA.md §3.13 note), and
+# checked u64/i64 multiplication lowers to `__multi3` calls on SBF (~10× the CU of a plain
+# mul). Debug/test builds keep overflow checks, so the native test suite still traps any overflow.
+[profile.release.package.verdict-rules]
+overflow-checks = false

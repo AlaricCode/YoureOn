@@ -255,7 +255,7 @@ function tooManyCheckpoints(): VectorJson {
 }
 
 /** Weight-32 success: or(dis, not(and(dis, and(present, present)))) = 1+12+1+1+12+1+2+2. */
-function costVector(nFrames: 512 | 513): VectorJson {
+function costVector(nFrames: 252 | 253): VectorJson {
   const dis: Expr = { op: 'disappears_into', a: ref('ball'), b: ref('bin') };
   const success: Expr = {
     op: 'or',
@@ -268,12 +268,12 @@ function costVector(nFrames: 512 | 513): VectorJson {
     ],
   };
   const p = prog({ entities: [obj('ball'), zone('bin')], legs: [{ success, rule: { kind: 'exists' } }], time_limit_s: 60 });
-  const exceeded = nFrames === 513;
+  const exceeded = nFrames === 253;
   return makeVector({
     name: exceeded ? 'cost_exceeded' : 'cost_at_cap',
     description: exceeded
-      ? 'cost = 513 frames × 32 = 16416 > MAX_EVAL_COST ⇒ needs_panel reason 13 before any leg is evaluated'
-      : 'cost = 512 frames × 32 = 16384 = MAX_EVAL_COST (not exceeded) ⇒ evaluated normally',
+      ? 'cost = (253 frames + 4 setup) × 32 = 8224 > MAX_EVAL_COST ⇒ needs_panel reason 13 before any leg is evaluated'
+      : 'cost = (252 frames + 4 setup) × 32 = 8192 = MAX_EVAL_COST (not exceeded) ⇒ evaluated normally',
     covers: exceeded ? ['max_eval_cost_exceeded', 'reason 13'] : ['max_eval_cost_boundary'],
     program: p,
     calibration: calib([{ entity: 'bin', shape: 'zone', points: SQUARE }]),
@@ -347,5 +347,5 @@ function marketVectors(): VectorJson[] {
 }
 
 export function causeVectors(): VectorJson[] {
-  return [...holdsVectors(), ...actorVectors(), tooManyCheckpoints(), costVector(512), costVector(513), ...marketVectors()];
+  return [...holdsVectors(), ...actorVectors(), tooManyCheckpoints(), costVector(252), costVector(253), ...marketVectors()];
 }

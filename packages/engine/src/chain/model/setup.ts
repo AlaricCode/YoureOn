@@ -32,7 +32,8 @@ function validCommitment(hex: string): boolean {
 /** #1 init_profile: creates or overwrites the wallet's Profile. */
 export function initProfile(_bet: BetAccount, env: Env, a: InstructionArgsMap['init_profile']): void {
   const wallet = env.signer('wallet');
-  check(utf8(a.display_name).length <= PROFILE_NAME_BYTES, 'BadReason');
+  // Matches init_profile.rs: an over-long name is `BadCommitment`, checked before the commitments.
+  check(utf8(a.display_name).length <= PROFILE_NAME_BYTES, 'BadCommitment');
   check(validCommitment(a.face_commit) && validCommitment(a.voice_commit), 'BadCommitment');
   const prev = env.ctx.profile;
   const existing = prev && prev.wallet === wallet ? prev : null;
@@ -62,16 +63,13 @@ export function createBet(bet: BetAccount, env: Env, a: InstructionArgsMap['crea
   const oracle = env.signer('oracle');
   const P = a.participants.length;
 
-  // participants
+  // Order follows Rust `validate_terms` (create_bet.rs).
+  // participants: count, creator first, nonzero + distinct, oracle not a participant
   check(P >= MIN_PARTICIPANTS && P <= MAX_PARTICIPANTS, 'BadParticipants');
+  check(a.participants[0] === creator, 'BadParticipants');
   check(a.participants.every(isValidPubkey) && a.participants.every((k) => k !== ZERO_KEY), 'BadParticipants');
   check(new Set(a.participants).size === P, 'BadParticipants');
-  check(a.participants[0] === creator, 'BadParticipants');
-  check(a.stakes.length === P, 'BadStake');
-
-  // sides
-  const m = a.side_b_mask;
-  check(Number.isInteger(m) && (m & 1) === 0 && m !== 0 && m >> P === 0, 'BadSides');
+  check(!a.participants.includes(oracle), 'BadParticipants');
 
   // flags (§9.2)
   const f = a.flags;
@@ -81,7 +79,12 @@ export function createBet(bet: BetAccount, env: Env, a: InstructionArgsMap['crea
   check(!(ai && market), 'BadFlags');
   check(!((ai || market) && (f & 0x01) !== 0), 'BadFlags');
 
-  // stakes
+  // sides
+  const m = a.side_b_mask;
+  check(Number.isInteger(m) && (m & 1) === 0 && m !== 0 && m >> P === 0, 'BadSides');
+
+  // stakes: length, then values
+  check(a.stakes.length === P, 'BadStake');
   if (market) {
     check(a.stake_each === 0n, 'BadStake');
     check(a.stakes.every((s) => s >= MIN_STAKE && s <= MAX_STAKE), 'BadStake');
@@ -94,13 +97,12 @@ export function createBet(bet: BetAccount, env: Env, a: InstructionArgsMap['crea
   const maxT = market ? MARKET_TIME_LIMIT_MAX_S : TIME_LIMIT_MAX_S;
   check(Number.isInteger(a.time_limit_s) && a.time_limit_s >= 1 && a.time_limit_s <= maxT, 'BadTimeLimit');
 
-  // judges and oracle
+  // judges
   const j = a.judges;
   check(j.length === 3 && new Set(j).size === 3, 'BadJudges');
   check(j.every((k) => isValidPubkey(k) && k !== ZERO_KEY), 'BadJudges');
   check(j.every((k) => !a.participants.includes(k)), 'BadJudges');
   check(j.every((k) => k !== oracle), 'BadJudges');
-  check(!a.participants.includes(oracle), 'BadParticipants');
 
   check(a.program_hash.toLowerCase() !== ZERO_HASH, 'ProgramHashMismatch');
 
@@ -159,10 +161,11 @@ export function fund(bet: BetAccount, env: Env, a: InstructionArgsMap['fund']): 
   const cal = a.calibration_hash.toLowerCase();
   if ((bet.flags & 0x06) !== 0) {
     check(cal === ZERO_HASH, 'CalibrationMismatch');
-  } else if (bet.calibration_hash === ZERO_HASH) {
-    bet.calibration_hash = cal;
   } else {
-    check(cal === bet.calibration_hash, 'CalibrationMismatch');
+    // Rules bets always carry a calibration (fund.rs; errata [anchor] 3).
+    check(cal !== ZERO_HASH, 'CalibrationMismatch');
+    if (bet.calibration_hash === ZERO_HASH) bet.calibration_hash = cal;
+    else check(cal === bet.calibration_hash, 'CalibrationMismatch');
   }
   const src = env.account('participant_token');
   env.checkTokenOwner(src, signer);

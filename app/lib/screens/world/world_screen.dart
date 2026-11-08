@@ -41,6 +41,7 @@ class _WorldScreenState extends State<WorldScreen> with Guarded, WsWatch {
   WorldEvent? _event;
   WorldQuote? _quote;
   List<Counterparty> _people = const [];
+  bool _peopleLoaded = false;
   String? _counterparty;
   Timer? _searchDebounce;
   Timer? _quoteDebounce;
@@ -112,6 +113,7 @@ class _WorldScreenState extends State<WorldScreen> with Guarded, WsWatch {
         }
         if (mounted) {
           setState(() {
+            _peopleLoaded = true;
             _people = out.values.toList();
             if (_people.length == 1) _counterparty = _people.first.userId;
           });
@@ -162,18 +164,35 @@ class _WorldScreenState extends State<WorldScreen> with Guarded, WsWatch {
 
   Future<void> _propose() => guard('propose', () async {
         final q = _quote!;
+        final cp = _counterparty!;
+        var refreshed = false;
         try {
-          final first = await app.api.worldBet(quoteId: q.quoteId, counterpartyUserId: _counterparty!);
+          var latest = await app.api.worldBet(quoteId: q.quoteId, counterpartyUserId: cp);
           await app.tx.run(
-            () async => (await app.api.worldBet(quoteId: q.quoteId, counterpartyUserId: _counterparty!)).sign,
-            first: first.sign,
+            () async {
+              // Quotes are single-use with a 30 s TTL (errata bwe-7): a
+              // TX_EXPIRED re-request needs a fresh quote, at the price the
+              // user was shown, or it stops.
+              final q2 = await app.api.worldQuote(q.legs, q.proposerUnits + q.counterpartyUnits);
+              if (q2.pBps != q.pBps || q2.proposerUnits != q.proposerUnits || q2.counterpartyUnits != q.counterpartyUnits) {
+                // Show the new price; the user taps Propose again.
+                refreshed = true;
+                if (mounted) setState(() => _quote = q2);
+                throw ApiException('QUOTE_EXPIRED');
+              }
+              latest = await app.api.worldBet(quoteId: q2.quoteId, counterpartyUserId: cp);
+              return latest.sign;
+            },
+            first: latest.sign,
+            fresh: true,
           );
-          app.upsertBet(first.bet);
+          final bet = latest.bet;
+          app.upsertBet(bet);
           if (mounted) {
-            Navigator.of(context).pushReplacementNamed(Routes.ruling, arguments: BetArgs(first.bet.id, bet: first.bet));
+            Navigator.of(context).pushReplacementNamed(Routes.ruling, arguments: BetArgs(bet.id, bet: bet));
           }
         } on ApiException catch (e) {
-          if (e.code == 'QUOTE_EXPIRED') _requote();
+          if (e.code == 'QUOTE_EXPIRED' && !refreshed) _requote();
           rethrow;
         }
       });
@@ -288,6 +307,16 @@ class _WorldScreenState extends State<WorldScreen> with Guarded, WsWatch {
       KeyValueRow(key: const ValueKey('stake-split'), label: 'Stake split', value: split),
       const Hairline(),
       const SizedBox(height: Space.x2),
+      if (_peopleLoaded && _people.isEmpty)
+        // Counterparties come from huddles: no peers means no way to Propose.
+        ListRow(
+          key: const ValueKey('no-counterparty'),
+          label: 'No counterparty',
+          trailing: AppChip(
+            label: 'Huddle',
+            onTap: () => Navigator.of(context).pushReplacementNamed(Routes.huddle, arguments: const HuddleArgs()),
+          ),
+        ),
       Wrap(spacing: Space.x1, runSpacing: Space.x1, children: [
         for (final p in _people)
           AppChip(

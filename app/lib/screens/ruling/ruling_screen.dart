@@ -122,13 +122,13 @@ class _RulingScreenState extends State<RulingScreen> with Guarded, WsWatch {
     if (reason == null || !mounted) return;
     await guard('dispute', () async {
       final first = await app.api.dispute(_betId, reason);
-      await app.tx.run(() async => (await app.api.dispute(_betId, reason)).sign, first: first.sign);
+      await app.tx.run(() async => (await app.api.dispute(_betId, reason)).sign, first: first.sign, fresh: true);
       _setBet(await app.api.bet(_betId));
     });
   }
 
   Future<void> _stake() => guard('stake', () async {
-        await app.tx.run(() => app.api.fund(_betId));
+        await app.tx.run(() => app.api.fund(_betId), fresh: true);
         _setBet(await app.api.bet(_betId));
       });
 

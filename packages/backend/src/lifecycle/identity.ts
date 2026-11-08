@@ -4,11 +4,12 @@
  * checkpoints can be proven, with which observed embedding).
  *
  * - Real hosts (RawDetection): anonymous person tracks (`quantizePersonTracks`)
- *   + voice observations from the audio witnesses (STT diarized segments,
- *   ECAPA-class `embedVoice` on each segment) → `fuseTimeline` → `bindPersons`.
- *   Face observations need face crops from the footage, which the perception
- *   job does not return yet (TODO: services/perception face crops), so real
- *   runs currently rely on voice.
+ *   + face observations from the job's per-person-line `face` embeddings
+ *   (services/perception fills them every FACE_SAMPLE_STRIDE-th frame when
+ *   `need_faces`, CONTRACTS-ERRATA backend-audit-faces) + voice observations
+ *   from the audio witnesses (STT diarized segments, ECAPA-class
+ *   `embedVoice`) + re-ID links from the optional `reid` vectors →
+ *   `fuseTimeline` → `bindPersons`. A silent actor is identified by face.
  * - Mock hosts (`engine.simulate`): the sessions are already bound (person
  *   tracks carry `id_conf`); the timeline is read back from the session and
  *   face observations are synthesized with the identity provider near each
@@ -30,6 +31,11 @@ import {
   type FusedTimeline,
   type IdObservation,
   type Modality,
+  type PersonTrack,
+  type RawDetection,
+  type ReidLink,
+  REID_LOOKBACK_FRAMES,
+  REID_SIM_MIN_BPS,
   type Program,
   type SegmentedIdObservation,
   type SessionTracks,
@@ -235,4 +241,105 @@ export async function voiceObservations(
     }
   }
   return out;
+}
+
+/** §6.1 extension (CONTRACTS-ERRATA backend-audit-faces): face embedding on a `person` line. */
+export interface RawFace {
+  /** 128 floats, L2-normalized (same model as services/embedder /embed/face) */
+  emb: number[];
+  /** detector confidence 0..1 */
+  conf: number;
+}
+export type RawDetectionWithFace = RawDetection & { face?: RawFace };
+
+const FRAME_MS = 100;
+
+/** Smallest-t_ms line per (frame, track_id) of anonymous `person` lines, like §6.2 dedup. */
+function personLinesByFrame(raw: readonly RawDetectionWithFace[], nFrames: number): Map<string, RawDetectionWithFace> {
+  const best = new Map<string, RawDetectionWithFace>();
+  for (const d of raw) {
+    if (d.entity !== 'person' || typeof d.t_ms !== 'number' || !Number.isFinite(d.t_ms) || d.t_ms < 0) continue;
+    const f = Math.floor(d.t_ms / FRAME_MS);
+    if (f >= nFrames) continue;
+    const k = `${f}#${d.track_id}`;
+    const cur = best.get(k);
+    if (!cur || d.t_ms < cur.t_ms) best.set(k, d);
+  }
+  return best;
+}
+
+/**
+ * Face observations of a real host (§8.5 step 3): every deduplicated person
+ * line carrying a `face` embedding on a FACE_SAMPLE_STRIDE frame becomes
+ * `{frame, modality:'face', track_id, scores}`; its quantized embedding is
+ * kept for the prover (§8.6 preference 1). Sorted by (frame, track_id).
+ */
+export function faceObservations(raw: readonly RawDetectionWithFace[], templates: CandidateTemplates, nFrames: number): ObservationSet {
+  const out: ObservationSet = { observations: [], observed: new Map() };
+  if (!templates.face.some((t) => t !== null)) return out;
+  const rows: { frame: number; track_id: number; q: Int8Array }[] = [];
+  for (const [k, d] of personLinesByFrame(raw, nFrames)) {
+    const frame = Number(k.split('#')[0]);
+    if (frame % FACE_SAMPLE_STRIDE !== 0 || !d.face || !Array.isArray(d.face.emb) || d.face.emb.length === 0) continue;
+    let q: Int8Array;
+    try {
+      q = quantizeEmbedding(Float64Array.from(d.face.emb));
+    } catch {
+      continue;
+    }
+    rows.push({ frame, track_id: d.track_id, q });
+  }
+  rows.sort((a, b) => a.frame - b.frame || a.track_id - b.track_id);
+  for (const r of rows) {
+    const o: IdObservation = { frame: r.frame, modality: 'face', track_id: r.track_id, scores: scoreRow(templates.face, r.q) };
+    out.observations.push(o as SegmentedIdObservation);
+    out.observed.set(obsKey(o), r.q);
+  }
+  return out;
+}
+
+function cosBps(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i]! * b[i]!;
+    na += a[i]! * a[i]!;
+    nb += b[i]! * b[i]!;
+  }
+  return na > 0 && nb > 0 ? Math.round((dot / Math.sqrt(na * nb)) * 10000) : 0;
+}
+
+/**
+ * §8.5 step 1 re-ID links from the optional `reid` appearance vectors: a
+ * track that starts within REID_LOOKBACK_FRAMES after another person track
+ * ended inherits from it when the end/start vectors are ≥ REID_SIM_MIN_BPS.
+ */
+export function reidLinks(raw: readonly RawDetectionWithFace[], persons: PersonTrack[], nFrames: number): ReidLink[] {
+  const lines = personLinesByFrame(raw, nFrames);
+  const span = new Map<number, { first: number; last: number; firstVec: number[] | null; lastVec: number[] | null }>();
+  for (const [k, d] of lines) {
+    const f = Number(k.split('#')[0]);
+    const vec = Array.isArray(d.reid) && d.reid.length > 0 ? d.reid : null;
+    const s = span.get(d.track_id);
+    if (!s) {
+      span.set(d.track_id, { first: f, last: f, firstVec: vec, lastVec: vec });
+      continue;
+    }
+    if (f < s.first) [s.first, s.firstVec] = [f, vec ?? s.firstVec];
+    if (f > s.last) [s.last, s.lastVec] = [f, vec ?? s.lastVec];
+  }
+  const ids = new Set(persons.map((p) => p.track_id));
+  const links: ReidLink[] = [];
+  for (const [to, t] of span) {
+    if (!ids.has(to) || !t.firstVec) continue;
+    for (const [from, s] of span) {
+      if (from === to || !ids.has(from) || !s.lastVec) continue;
+      if (s.last >= t.first || s.last < t.first - REID_LOOKBACK_FRAMES) continue;
+      const sim = cosBps(s.lastVec, t.firstVec);
+      if (sim >= REID_SIM_MIN_BPS) links.push({ from_track: from, to_track: to, sim_bps: sim });
+    }
+  }
+  return links.sort((a, b) => a.to_track - b.to_track || a.from_track - b.from_track);
 }

@@ -75,6 +75,10 @@ export interface Config {
   solanaWsUrl: string;
   geminiBaseUrl: string;
   perceptionUrl: string;
+  /** Nosana: API base (default NOSANA_DEFAULT_API_URL), services/perception image by digest, 1–2 markets */
+  nosanaApiUrl: string;
+  nosanaPerceptionImage: string;
+  nosanaMarkets: string[];
   embedderUrl: string;
   detectorUrl: string;
 
@@ -214,6 +218,12 @@ export function loadConfig(env: Env, opts: LoadOptions = {}): Config {
     solanaWsUrl: s('SOLANA_WS_URL'),
     geminiBaseUrl: s('GEMINI_BASE_URL').replace(/\/+$/, ''),
     perceptionUrl: s('PERCEPTION_URL').replace(/\/+$/, ''),
+    nosanaApiUrl: s('NOSANA_API_URL').replace(/\/+$/, ''),
+    nosanaPerceptionImage: s('NOSANA_PERCEPTION_IMAGE'),
+    nosanaMarkets: s('NOSANA_MARKETS')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
     embedderUrl: s('EMBEDDER_URL').replace(/\/+$/, ''),
     detectorUrl: s('DETECTOR_URL').replace(/\/+$/, ''),
     quicknodeSecret: str(env, 'QUICKNODE_SECRET'),
@@ -238,6 +248,17 @@ export function loadConfig(env: Env, opts: LoadOptions = {}): Config {
   }
   if (cfg.solanaMode === 'mock' && cfg.chainEventsSource !== 'mock') {
     problems.push(`SOLANA_MODE=mock requires CHAIN_EVENTS_SOURCE=mock (got ${cfg.chainEventsSource})`);
+  }
+  if (cfg.solanaMode !== 'mock' && cfg.prover !== 'snarkjs') {
+    problems.push(
+      `SOLANA_MODE=${cfg.solanaMode} requires PROVER=snarkjs (the deployed program rejects mock Groth16 proofs; every actor-bound bet would go to the panel)`,
+    );
+  }
+  if (cfg.perceptionProvider === 'nosana') {
+    if (!/@sha256:[0-9a-f]{64}$/.test(cfg.nosanaPerceptionImage)) problems.push('PERCEPTION_PROVIDER=nosana requires NOSANA_PERCEPTION_IMAGE pinned by digest (…@sha256:<64 hex>)');
+    if (cfg.nosanaMarkets.length < 1 || cfg.nosanaMarkets.length > 2 || !cfg.nosanaMarkets.every(isPubkey)) {
+      problems.push('PERCEPTION_PROVIDER=nosana requires NOSANA_MARKETS = 1 or 2 comma-separated market addresses');
+    }
   }
   if (cfg.perceptionProvider === 'http' && !cfg.perceptionUrl) {
     problems.push('PERCEPTION_PROVIDER=http requires PERCEPTION_URL');

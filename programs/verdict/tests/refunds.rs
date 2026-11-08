@@ -80,6 +80,34 @@ fn perception_timeout_closes_track_buffer() {
     assert!(!f.env.exists(&f.tracks()));
 }
 
+/// Sets the clock to `bet.ended_at + PERCEPTION_TIMEOUT_S + delta`.
+fn at_perception_deadline(f: &mut Flow, delta: i64) {
+    let target = f.bet().ended_at + PERCEPTION_TIMEOUT_S + delta;
+    let now = f.env.now();
+    f.env.advance(target - now);
+}
+
+#[test]
+fn run_rules_after_perception_timeout_is_rejected() {
+    let mut f = Flow::rules(2, true);
+    f.to_tracks_posted();
+    at_perception_deadline(&mut f, 1);
+    assert_err(f.try_run_rules(), VerdictError::DeadlinePassed);
+    assert_eq!(f.bet().state, STATE_PERCEIVING);
+    ok(f.try_refund());
+    assert_refunded(&f, REFUND_PERCEPTION_TIMEOUT, &[INITIAL_BALANCE, INITIAL_BALANCE]);
+}
+
+#[test]
+fn run_rules_at_exact_perception_deadline_is_allowed() {
+    let mut f = Flow::rules(2, true);
+    f.to_tracks_posted();
+    at_perception_deadline(&mut f, 0);
+    assert_err(f.try_refund(), VerdictError::NotRefundable);
+    ok(f.try_run_rules());
+    assert_eq!(f.bet().state, STATE_PRERULED);
+}
+
 #[test]
 fn panel_timeout_returns_bond() {
     let mut f = Flow::rules(2, true);
@@ -90,6 +118,40 @@ fn panel_timeout_returns_bond() {
     f.env.advance(1);
     ok(f.try_refund());
     assert_refunded(&f, REFUND_PANEL_TIMEOUT, &[INITIAL_BALANCE, INITIAL_BALANCE]);
+}
+
+/// Sets the clock to `bet.disputed_at + PANEL_TIMEOUT_S + delta`.
+fn at_panel_deadline(f: &mut Flow, delta: i64) {
+    let target = f.bet().disputed_at + PANEL_TIMEOUT_S + delta;
+    let now = f.env.now();
+    f.env.advance(target - now);
+}
+
+#[test]
+fn settle_panel_after_panel_timeout_is_rejected() {
+    let mut f = Flow::rules(2, true);
+    f.to_preruled();
+    ok(f.try_dispute(0, 2));
+    at_panel_deadline(&mut f, 1);
+    assert_err(f.try_settle_panel(2, 0, 1), VerdictError::DeadlinePassed);
+    // BadOutcome is checked before the deadline.
+    assert_err(f.try_settle_panel(3, 0, 1), VerdictError::BadOutcome);
+    assert_eq!(f.bet().state, STATE_DISPUTED);
+    ok(f.try_refund());
+    assert_refunded(&f, REFUND_PANEL_TIMEOUT, &[INITIAL_BALANCE, INITIAL_BALANCE]);
+}
+
+#[test]
+fn settle_panel_at_exact_panel_deadline_is_allowed() {
+    let mut f = Flow::rules(2, true);
+    f.to_preruled();
+    ok(f.try_dispute(0, 2));
+    at_panel_deadline(&mut f, 0);
+    assert_err(f.try_refund(), VerdictError::NotRefundable);
+    ok(f.try_settle_panel(2, 0, 1));
+    let b = f.bet();
+    assert_eq!(b.state, STATE_SETTLED);
+    assert_eq!(b.settle_path, PATH_PANEL);
 }
 
 #[test]

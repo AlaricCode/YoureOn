@@ -81,12 +81,16 @@ export class DraftService {
     return out;
   }
 
-  /** The draft, visible to members of its huddle. */
+  /**
+   * The draft, visible to confirmed members of its huddle only: an
+   * unconfirmed joiner (anyone who learned the 6-digit code) sees no terms,
+   * readback or question audio until the creator's face scan confirms them.
+   */
   requireDraft(id: string, userId: string): { d: DraftRecord; h: HuddleRecord } {
     const d = this.drafts.get(id);
     if (!d) throw new ApiError('NOT_FOUND', `draft ${id}`);
     const h = this.huddles.huddles.get(d.huddle_id);
-    if (!h || !h.members.some((m) => m.user_id === userId)) throw new ApiError('NOT_FOUND', `draft ${id}`);
+    if (!h || !h.members.some((m) => m.user_id === userId && m.confirmed)) throw new ApiError('NOT_FOUND', `draft ${id}`);
     return { d, h };
   }
 
@@ -126,6 +130,7 @@ export class DraftService {
       ...(d.yaml ? { yaml: d.yaml } : {}),
       ...(d.readback ? { readback: d.readback } : {}),
       ...(d.program_hash ? { program_hash: d.program_hash } : {}),
+      ...(d.bet?.status === 'confirmed' ? { bet_id: d.bet.address } : {}),
       labels: d.labels,
       participants,
       ...(d.errors.length ? { errors: d.errors } : {}),
@@ -136,8 +141,10 @@ export class DraftService {
     };
   }
 
+  /** WS `draft` to the huddle's confirmed members only. */
   publish(d: DraftRecord): void {
-    this.ctx.hub.publish(`huddle:${d.huddle_id}`, { type: 'draft', huddle_id: d.huddle_id, draft: this.view(d) });
+    const msg = { type: 'draft' as const, huddle_id: d.huddle_id, draft: this.view(d) };
+    void this.ctx.hub.publishPerUser(`huddle:${d.huddle_id}`, (userId) => (this.huddles.isConfirmed(d.huddle_id, userId) ? msg : null));
   }
 
   /** Drafts of a huddle, newest first (WS snapshots). */
@@ -375,7 +382,8 @@ export class DraftService {
 
     const now = this.ctx.clock.nowMs();
     const wavSha = createHash('sha256').update(body.audio).digest('hex');
-    this.ctx.blobs.putBlob('acceptances', `${d.id}_${user.id}.wav`, body.audio);
+    // Only the WAV's sha256 enters the acceptance leaf; the recording itself is not kept
+    // (biometric data minimization, spec §1 #5).
     const next = this.drafts.update(d.id, (x) => {
       x.acceptances[user.id] = {
         user_id: user.id,

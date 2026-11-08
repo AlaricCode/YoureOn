@@ -119,6 +119,43 @@ describe('scene check (§5.2, §12.3, §12.10)', () => {
   });
 });
 
+describe('calibration vs fund race', () => {
+  it('PUT is refused while a fund tx is pending; a late scene change is rolled back to the onchain hash', async () => {
+    w = await makeWorld();
+    const bet = await createBet(w, 'ex1_paper_ball_pass');
+    const url = `/v1/bets/${bet.id}/calibration`;
+    const h1 = (await api(w, w.alice, 'PUT', url, bet.calibration)).json().calibration_hash as string;
+    const cal2 = { ...bet.calibration!, regions: bet.calibration!.regions.map((r) => ({ ...r, points: r.points.map(([x, y]) => [Math.min(10000, x + 7), y]) })) };
+    const fa = await api(w, w.alice, 'POST', `/v1/bets/${bet.id}/fund`);
+    expect(fa.statusCode).toBe(200);
+    // fundSign → PUT a new calibration: locked while A's fund tx can still land.
+    expect((await api(w, w.alice, 'PUT', url, cal2)).json().error.code).toBe('CALIBRATION_LOCKED');
+    // Crops are locked the same way.
+    const crop = await w.app.inject({
+      method: 'PUT',
+      url: `/v1/bets/${bet.id}/scene/crops/ball`,
+      headers: { authorization: `Bearer ${w.alice.token}`, 'content-type': 'image/jpeg' },
+      payload: Buffer.from([0xff, 0xd8, 9, 9, 0xff, 0xd9]),
+    });
+    expect(crop.json().error.code).toBe('CALIBRATION_LOCKED');
+    expect((await signAndSubmit(w, w.alice, fa.json().sign)).status).toBe('confirmed');
+    expect((await w.ctx.chain.getBet(bet.id))!.calibration_hash).toBe(h1);
+
+    // Defence in depth: even if the scene was replaced (H2) after the first fund
+    // landed, fundSign and the CAMERA_MISMATCH/perception paths use history[H1].
+    const { lifecycleStores } = await import('../../src/lifecycle/stores.js');
+    const s = lifecycleStores(w.ctx);
+    const h2 = calibrationHash(cal2 as typeof bet.calibration & object, bet.program);
+    expect(h2).not.toBe(h1);
+    s.scenes.update(bet.id, (r) => ({ ...r, calibration: cal2 as never, calibration_hash: h2, history: { ...r.history, [h2]: cal2 as never } }));
+    const fb = await api(w, w.bob, 'POST', `/v1/bets/${bet.id}/fund`);
+    expect(fb.statusCode).toBe(200);
+    expect((await signAndSubmit(w, w.bob, fb.json().sign)).status).toBe('confirmed');
+    expect(s.scenes.get(bet.id)!.calibration_hash).toBe(h1);
+    expect((await w.ctx.chain.getBet(bet.id))!.state).toBe(BET_STATE.Funded);
+  });
+});
+
 describe('fund (§9.4 #3, §12.3)', () => {
   it('refuses before calibration, then funds both with sponsored gas → Funded', async () => {
     w = await makeWorld();

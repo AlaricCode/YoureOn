@@ -82,21 +82,38 @@ pub fn ref_sub(r: u8) -> u8 {
     (r >> 4) & 0x03
 }
 
+#[inline(always)]
 pub fn is_leaf(op: u8) -> bool {
     matches!(op, 0x10..=0x16 | 0x20..=0x25 | 0x30..=0x35 | 0x40 | 0x41)
 }
 
+#[inline(always)]
 pub fn is_event_leaf(op: u8) -> bool {
     matches!(op, 0x30..=0x35)
 }
 
+/// Cost weights `w(node)` (§3.13): combinators.
+pub const COST_COMBINATOR: u64 = 1;
+/// State leaves other than `overlaps` / `inside`.
+pub const COST_STATE_LEAF: u64 = 2;
+/// `overlaps`, `inside`: may run an even-odd polygon test (zone `b`) per frame.
+pub const COST_POLY_STATE_LEAF: u64 = 4;
+/// Event leaves other than the ones below.
+pub const COST_EVENT_LEAF: u64 = 4;
+/// `enters`, `leaves`, `touches`: a polygon-capable spatial pass plus the lastSeen pass.
+pub const COST_POLY_EVENT_LEAF: u64 = 6;
+pub const COST_DISAPPEARS_INTO: u64 = 12;
+
 /// Cost weight `w(node)` (§3.13).
+#[inline(always)]
 pub fn node_weight(op: u8) -> u64 {
     match op {
-        OP_DISAPPEARS_INTO => 12,
-        o if is_event_leaf(o) => 4,
-        o if is_leaf(o) => 2,
-        _ => 1,
+        OP_DISAPPEARS_INTO => COST_DISAPPEARS_INTO,
+        OP_ENTERS | OP_LEAVES | OP_TOUCHES => COST_POLY_EVENT_LEAF,
+        OP_OVERLAPS | OP_INSIDE => COST_POLY_STATE_LEAF,
+        o if is_event_leaf(o) => COST_EVENT_LEAF,
+        o if is_leaf(o) => COST_STATE_LEAF,
+        _ => COST_COMBINATOR,
     }
 }
 
@@ -191,6 +208,7 @@ fn leg_node(code: &[u8], pos: &mut usize, kinds: &[u8], level: usize, st: &mut E
     }
 }
 
+#[inline(always)]
 fn read_u16(code: &[u8], pos: &mut usize) -> Option<u16> {
     if code.len() < *pos + 2 {
         return None;
@@ -201,6 +219,7 @@ fn read_u16(code: &[u8], pos: &mut usize) -> Option<u16> {
 }
 
 /// Validates a ref byte; returns (entity index, sub, kind).
+#[inline(always)]
 fn check_ref(r: u8, kinds: &[u8]) -> Option<(usize, u8, u8)> {
     if r & 0xC0 != 0 {
         return None;

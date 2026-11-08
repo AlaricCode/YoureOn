@@ -20,12 +20,12 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
             OP_AND => {
                 let l = self.eval_node(code, pos);
                 let r = self.eval_node(code, pos);
-                l.and(&r)
+                l.and_words(&r, self.n.div_ceil(64))
             }
             OP_OR => {
                 let l = self.eval_node(code, pos);
                 let r = self.eval_node(code, pos);
-                l.or(&r)
+                l.or_words(&r, self.n.div_ceil(64))
             }
             OP_NOT => self.eval_node(code, pos).not(self.n),
             OP_THEN_WITHIN => {
@@ -98,15 +98,15 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
 
     /// `before(D, X)[g] = X[g] ∧ g < D` (absolute frame).
     pub(crate) fn before(&self, d: u32, x: &Signal<W>) -> Signal<W> {
-        let mut out = Signal::zero();
+        // Frames < d form a prefix of each segment.
+        let mut mask = Signal::zero();
         for s in self.segs() {
-            for i in 0..s.n_frames as usize {
-                let pos = s.pos_start as usize + i;
-                if x.get(pos) && s.frame_start + (i as u32) < d {
-                    out.set(pos);
-                }
+            if s.frame_start < d {
+                let len = ((d - s.frame_start) as usize).min(s.n_frames as usize);
+                let p0 = s.pos_start as usize;
+                mask.set_range(p0, p0 + len);
             }
         }
-        out
+        mask.and_words(x, self.n.div_ceil(64))
     }
 }

@@ -28,8 +28,10 @@ const int MAX_SEGMENTS = 16;
 const int MAX_BUFFER_PAYLOAD = 10000;
 /// total buffer frames Σ n_frames
 const int MAX_EVAL_FRAMES = 1024;
-/// evaluation cost cap (§3.13)
-const int MAX_EVAL_COST = 16384;
+/// evaluation cost cap (§3.13; was 16384, see D-47)
+const int MAX_EVAL_COST = 8192;
+/// frames charged per unit of weight for per-node set-up: cost = (|F| + EVAL_COST_SETUP_FRAMES) × Σw (§3.13)
+const int EVAL_COST_SETUP_FRAMES = 4;
 /// max data bytes per post_tracks instruction
 const int POST_TRACKS_CHUNK = 700;
 const int MAX_WITNESSES = 8;

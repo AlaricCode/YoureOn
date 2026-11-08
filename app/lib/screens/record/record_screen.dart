@@ -13,6 +13,7 @@ import '../../capture/scene_camera.dart';
 import '../../core/format.dart';
 import '../../evidence/witness_runner.dart';
 import '../../nav/routes.dart';
+import '../../platform/screen_awake.dart';
 import '../../state/guarded.dart';
 import '../../state/ws_watch.dart';
 import '../../ui/tokens.dart';
@@ -30,6 +31,13 @@ import '../../ws/ws_messages.dart';
 /// every witness starts recording and the camera phone plays the start
 /// sound and beacon tones. After End (or the limit) recording continues
 /// `TAIL_MS`, then the final chunks are sealed and uploaded.
+///
+/// `start` is replayed in the `bet:<id>` snapshot while Live, so a phone
+/// that opens Record (or reconnects) after the start still begins its
+/// already-registered witnesses, without playing the start signal; such a
+/// phone never hears the beacon, so its footage stays unsynced unless
+/// another witness on the same device heard it. A phone whose registration
+/// did not complete before the start shows "Not a witness".
 class RecordScreen extends StatefulWidget {
   const RecordScreen({super.key, required this.args});
   final BetArgs args;
@@ -38,7 +46,7 @@ class RecordScreen extends StatefulWidget {
   State<RecordScreen> createState() => _RecordScreenState();
 }
 
-class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
+class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch, WidgetsBindingObserver {
   BetView? _bet;
   SceneCamera? _cam;
   PoseSource? _pose;
@@ -46,11 +54,23 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
   WitnessRunner? _runner;
   StartSignal? _signal;
   Future<void>? _registering;
+  bool _registered = false;
+  bool _notWitness = false;
+  bool _loaded = false;
+  bool _joinedLate = false;
+  bool _startSeen = false;
+  WsStart? _pendingStart;
+  Future<void>? _endFuture;
+  bool _reopenCamera = false;
+  ScreenAwake? _awake;
   DateTime? _t0;
   Timer? _tick;
   bool _ending = false;
   bool _leaving = false;
   bool _cameraLocked = false;
+
+  /// A `start` received this long after the bet's t0 is a replay.
+  static const int _lateSlackMs = 2000;
 
   String get _betId => widget.args.betId;
   bool get _isCamera => _bet != null && _bet!.creatorUserId == app.userId;
@@ -59,7 +79,10 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
   void initState() {
     super.initState();
     _bet = widget.args.bet;
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Witness phones lie on the table: keep the screen (camera, mic) on.
+      _awake = app.screenAwake..hold();
       watchWs([Topics.bet(_betId)], _onWs);
       _load();
     });
@@ -67,28 +90,123 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _awake?.release();
     _tick?.cancel();
     _poseSub?.cancel();
     _pose?.stop();
-    final runner = _runner;
-    // Leaving mid-recording still seals and uploads what was recorded.
-    if (runner != null && runner.recording && !_ending) unawaited(runner.end());
     unawaited(_signal?.dispose());
-    unawaited(_cam?.close());
+    // Leaving mid-recording still seals and uploads what was recorded: the
+    // camera stays open until the witnesses have finalized (the final MP4
+    // segment is cut from the controller), then closes.
+    final cam = _cam;
+    _cam = null;
+    unawaited(_endRunner().catchError((Object e) {
+      debugPrint('witness end on dispose: $e');
+    }).whenComplete(() async {
+      try {
+        await cam?.close();
+      } catch (_) {}
+    }));
     if (_cameraLocked) SystemChrome.setPreferredOrientations(const []);
     super.dispose();
   }
 
-  Future<void> _load() => guard('load', () async {
-        final bet = await app.api.bet(_betId);
-        _setBet(bet);
-        if (bet.state == BetState.funded) {
-          if (_isCamera) await _openCamera();
-          await _register();
-        } else if (bet.state == BetState.live && bet.t0Ms != null && _t0 == null) {
-          _startClock(DateTime.fromMillisecondsSinceEpoch(bet.t0Ms!));
+  /// Ends this phone's witnesses once; every caller shares the same future.
+  Future<void> _endRunner() {
+    final pending = _endFuture;
+    if (pending != null) return pending;
+    final runner = _runner;
+    if (runner == null || !runner.recording) return Future<void>.value();
+    return _endFuture = runner.end();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+    final recording = _runner?.recording ?? false;
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        if (recording && !_ending) {
+          // The OS takes the camera and silences the mic in the background:
+          // finalize cleanly instead of leaving a broken chain.
+          unawaited(_stopLocal());
+        } else if (!recording) {
+          _releaseCamera();
         }
-      });
+      case AppLifecycleState.inactive:
+        break; // transient (permission dialog, shade)
+      case AppLifecycleState.resumed:
+        if (_reopenCamera && !recording && _bet?.state == BetState.funded) {
+          _reopenCamera = false;
+          guard('camera', _openCamera, exclusive: false);
+        }
+    }
+  }
+
+  void _releaseCamera() {
+    final cam = _cam;
+    if (cam == null || _endFuture != null) return;
+    _reopenCamera = true;
+    _poseSub?.cancel();
+    _poseSub = null;
+    _pose?.stop();
+    _pose = null;
+    _cam = null;
+    setState(() {});
+    unawaited(cam.close().catchError((Object _) {}));
+  }
+
+  Future<void> _load() async {
+    await guard('load', () async {
+      final bet = await app.api.bet(_betId);
+      _setBet(bet);
+      if (bet.state == BetState.funded) {
+        // A camera failure still registers the audio witness, then shows.
+        ApiException? camError;
+        if (_isCamera) {
+          try {
+            await _openCamera();
+          } on ApiException catch (e) {
+            camError = e;
+          }
+        }
+        await _register();
+        if (camError != null) throw camError;
+      } else if (bet.state == BetState.live) {
+        if (bet.t0Ms != null && _t0 == null) _startClock(DateTime.fromMillisecondsSinceEpoch(bet.t0Ms!));
+        await _rejoin(bet);
+      }
+    });
+    _loaded = true;
+    final pending = _pendingStart;
+    _pendingStart = null;
+    if (pending != null && mounted) await _onStart(pending);
+  }
+
+  /// Opened (or reopened) after the start: resume only witnesses this
+  /// user registered before the list froze (re-registering the same key is
+  /// idempotent; a new key is refused).
+  Future<void> _rejoin(BetView bet) async {
+    final me = app.userId;
+    final mine = bet.witnesses.where((w) => w.userId != null && w.userId == me).toList();
+    if (mine.isEmpty) {
+      if (mounted) setState(() => _notWitness = true);
+      return;
+    }
+    _joinedLate = true;
+    var camera = _isCamera && mine.any((w) => w.kind == 'camera');
+    if (camera) {
+      try {
+        await _openCamera();
+      } on ApiException {
+        camera = false;
+      }
+    }
+    await _register(camera: camera && _cam != null);
+  }
 
   void _setBet(BetView bet) {
     if (!mounted) return;
@@ -107,7 +225,13 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
     try {
       await cam.open();
     } catch (_) {
-      throw ApiException('NO_CAMERA');
+      // The previous screen's camera may still be closing: retry once.
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      try {
+        await cam.open();
+      } catch (_) {
+        throw ApiException('NO_CAMERA');
+      }
     }
     final pose = _pose = app.newPoseSource()..start();
     _poseSub = pose.poses.listen((_) {
@@ -116,15 +240,31 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
     if (mounted) setState(() {});
   }
 
-  Future<void> _register() {
+  /// Registers this phone's witnesses. Only a successful reply counts:
+  /// re-registering the same key is idempotent (200), while `WRONG_STATE`
+  /// ("witness list fixed at start", one witness per kind) or a full list
+  /// means this phone is not a witness.
+  Future<void> _register({bool? camera}) {
     return _registering ??= () async {
       final runner = _runner ??= app.newWitnessRunner(_betId);
       try {
-        await runner.register(camera: _isCamera && _cam != null);
-      } on ApiException catch (e) {
-        if (e.code != 'WRONG_STATE') rethrow; // already registered
+        await runner.register(camera: camera ?? (_isCamera && _cam != null));
+        _registered = true;
+      } on ApiException {
+        if (mounted) setState(() => _notWitness = true);
+        rethrow;
       }
     }();
+  }
+
+  /// Whether registration completed (waits for one in flight).
+  Future<bool> _awaitRegistration() async {
+    final r = _registering;
+    if (r == null) return false;
+    try {
+      await r;
+    } catch (_) {}
+    return _registered;
   }
 
   void _onWs(WsMessage m) {
@@ -139,16 +279,40 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
   }
 
   /// WS `start`: every witness starts recording; the camera phone plays the
-  /// start signal; t0 comes from the local playback schedule.
+  /// start signal; t0 comes from the local playback schedule. Idempotent: a
+  /// replayed `start` (snapshot after a reconnect or a late open) begins
+  /// registered witnesses without playing the signal again.
   Future<void> _onStart(WsStart start) async {
+    if (_startSeen || _ending) return;
+    if (!_loaded) {
+      _pendingStart = start; // _load decides once registration state is known
+      return;
+    }
+    _startSeen = true;
     final received = DateTime.now();
     final runner = _runner ??= app.newWitnessRunner(_betId);
-    await guard('start-recording', () async {
-      await _registering;
-      final cam = _cam;
-      await runner.begin(start, controller: cam?.controller, cameraMeta: cam?.meta);
-      if (mounted) setState(() {});
-    }, exclusive: false);
+    // This app already recorded this bet (an earlier Record screen): its
+    // chains are sealed; never restart them from index 0.
+    if (runner.recording || app.witnessedBets.contains(_betId)) return;
+    final t0Ms = _bet?.t0Ms;
+    // A replay: opened after the start, or (reconnect) the bet is already
+    // Live with its t0 well in the past. A fresh start's t0 is still ahead.
+    final late = _joinedLate ||
+        (_bet?.state == BetState.live && t0Ms != null && received.millisecondsSinceEpoch > t0Ms + _lateSlackMs);
+    if (await _awaitRegistration()) {
+      await guard('start-recording', () async {
+        final cam = _cam;
+        await runner.begin(start, controller: cam?.controller, cameraMeta: cam?.meta);
+        app.witnessedBets.add(_betId);
+        if (mounted) setState(() {});
+      }, exclusive: false);
+    } else if (mounted) {
+      setState(() => _notWitness = true);
+    }
+    if (late) {
+      if (t0Ms != null && _t0 == null) _startClock(DateTime.fromMillisecondsSinceEpoch(t0Ms));
+      return;
+    }
     final signal = _signal ??= app.newStartSignal();
     try {
       final t0 = await signal.run(start, myUserId: app.userId ?? '', receivedAt: received);
@@ -196,7 +360,7 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
         } on ApiException catch (e) {
           if (e.code != 'WRONG_STATE') rethrow; // already ended elsewhere
         }
-        await _runner?.end();
+        await _endRunner();
         _finish();
       });
 
@@ -205,9 +369,7 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
   Future<void> _stopLocal() async {
     _ending = true;
     _tick?.cancel();
-    await guard('end', () async {
-      await _runner?.end();
-    }, exclusive: false);
+    await guard('end', _endRunner, exclusive: false);
     if (mounted) setState(() {});
   }
 
@@ -216,9 +378,11 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
     _leaving = true;
     Future<void> go() async {
       final runner = _runner;
-      if (runner != null && runner.recording && !_ending) {
+      if (runner != null && runner.recording) {
         _ending = true;
-        await runner.end();
+        try {
+          await _endRunner();
+        } catch (_) {}
       }
       if (!mounted) return;
       final bet = _bet;
@@ -268,6 +432,10 @@ class _RecordScreenState extends State<RecordScreen> with Guarded, WsWatch {
           const Hairline(),
           KeyValueRow(label: 'Witnesses', value: '${bet?.witnesses.length ?? 0}'),
           const Hairline(),
+          if (_notWitness && !(_runner?.recording ?? false)) ...[
+            const ListRow(key: ValueKey('not-witness'), label: 'Not a witness'),
+            const Hairline(),
+          ],
         ],
       ),
     );

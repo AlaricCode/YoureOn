@@ -36,6 +36,35 @@ abstract class StartSignal {
   Future<void> dispose();
 }
 
+/// The global audio session for playback while a witness records on the
+/// same phone: iOS `playAndRecord` (speaker, mixing) so playback never
+/// deactivates the recorder's session; Android without audio focus so the
+/// recorder isn't paused. Must be in place before the beacon plays, since
+/// the camera phone's own audio witness provides its beacon offset.
+AudioContext recordingAudioContext() => AudioContext(
+      android: const AudioContextAndroid(
+        audioFocus: AndroidAudioFocus.none,
+        usageType: AndroidUsageType.media,
+        contentType: AndroidContentType.sonification,
+      ),
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.playAndRecord,
+        options: const {AVAudioSessionOptions.defaultToSpeaker, AVAudioSessionOptions.mixWithOthers},
+      ),
+    );
+
+Future<void>? _audioSession;
+
+/// Applies [recordingAudioContext] once (app start; again before playback
+/// if that failed).
+Future<void> configureAudioSession() => _audioSession ??= () async {
+      try {
+        await AudioPlayer.global.setAudioContext(recordingAudioContext());
+      } catch (_) {
+        _audioSession = null; // plugin unavailable (tests); retried next time
+      }
+    }();
+
 /// Plays the start sound and the beacon tones on the camera phone, and
 /// estimates t0 on every phone.
 class BeaconPlayer implements StartSignal {
@@ -84,6 +113,7 @@ class BeaconPlayer implements StartSignal {
       await sfxFile.writeAsBytes(sfx, flush: true);
     }
 
+    await configureAudioSession();
     await _player.setReleaseMode(ReleaseMode.stop);
     await _until(schedule.sfxAt);
     if (sfxFile != null) {

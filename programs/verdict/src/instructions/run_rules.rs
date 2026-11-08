@@ -80,6 +80,8 @@ pub fn handle_run_rules(ctx: Context<RunRules>) -> Result<()> {
         let bet = &ctx.accounts.bet;
         require!(bet.state == STATE_PERCEIVING, VerdictError::InvalidState);
         require!(bet.tracks_finalized == TRACKS_FINALIZED, VerdictError::TracksNotFinalized);
+        // After the perception timeout only `refund` applies (§9.4 #9, D-36).
+        require!(now <= bet.ended_at.saturating_add(PERCEPTION_TIMEOUT_S), VerdictError::DeadlinePassed);
     }
     let (program_len, calibration_len, payload_len) = {
         let h = ctx.accounts.track_buffer.load()?;

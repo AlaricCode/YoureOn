@@ -40,7 +40,15 @@ pub fn program_so() -> PathBuf {
     }
     // `--features mock-zk` tests need a program built with that feature:
     //   cargo build-sbf --manifest-path programs/verdict/Cargo.toml --features mock-zk --sbf-out-dir target/deploy-mock-zk
-    let dir = if cfg!(feature = "mock-zk") { "../../target/deploy-mock-zk/verdict.so" } else { "../../target/deploy/verdict.so" };
+    // `--features sp1,mock-zk` tests (tests/sp1.rs) need a program built with both:
+    //   cargo build-sbf --manifest-path programs/verdict/Cargo.toml --features sp1,mock-zk --sbf-out-dir target/deploy-sp1
+    let dir = if cfg!(all(feature = "sp1", feature = "mock-zk")) {
+        "../../target/deploy-sp1/verdict.so"
+    } else if cfg!(feature = "mock-zk") {
+        "../../target/deploy-mock-zk/verdict.so"
+    } else {
+        "../../target/deploy/verdict.so"
+    };
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dir)
 }
 

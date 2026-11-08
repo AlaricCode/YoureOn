@@ -53,8 +53,9 @@ export function disputeBond(bet: Pick<BetAccount, 'n_participants' | 'stakes'>):
 export function dispute(bet: BetAccount, env: Env, a: InstructionArgsMap['dispute']): void {
   const signer = env.signer('disputer');
   check(bet.state === BET_STATE.PreRuled, 'InvalidState');
-  check(Number.isInteger(a.reason) && a.reason >= 1 && a.reason <= 4, 'BadReason');
+  // Order matches dispute.rs: state, deadline, reason, evidence_root, participant, consented.
   check(env.now <= bet.consent_deadline, 'DeadlinePassed');
+  check(Number.isInteger(a.reason) && a.reason >= 1 && a.reason <= 4, 'BadReason');
   check(a.evidence_root.toLowerCase() === bet.evidence_root, 'ConsentMismatch');
   const i = participantIndex(bet, signer);
   check(i >= 0, 'NotParticipant');
@@ -81,6 +82,8 @@ export function sideMask(bet: Pick<BetAccount, 'n_participants' | 'side_b_mask'>
 export function settlePanel(bet: BetAccount, env: Env, a: InstructionArgsMap['settle_panel']): void {
   check(bet.state === BET_STATE.Disputed, 'InvalidState');
   check(Number.isInteger(a.outcome) && a.outcome >= 0 && a.outcome <= 2, 'BadOutcome');
+  // After the panel timeout only `refund` (reason 6) applies; matches settle_panel.rs.
+  check(env.now <= bet.disputed_at + BigInt(PANEL_TIMEOUT_S), 'DeadlinePassed');
   const programId = env.ctx.program_id;
   check(!!programId, 'BadEd25519Instruction');
   const M = panelMessage(programId, env.betKey, a.outcome, bet.evidence_root, bet.program_hash);

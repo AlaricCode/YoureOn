@@ -14,11 +14,22 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
             OP_OVERLAPS | OP_INSIDE | OP_ABOVE | OP_BELOW | OP_NEAR | OP_BEHIND | OP_BEYOND => {
                 self.spatial(op, ae, b, p).0
             }
-            OP_MOVING => self.velocity_pred(ae, |v| v.speed >= MOVE_MIN_UPS),
-            OP_SPEED => self.velocity_pred(ae, |v| cmp_holds(b, v.speed, p as i64)),
-            OP_DIRECTION => self.velocity_pred(ae, |v| v.speed >= MOVE_MIN_UPS && direction_ok(b, v.dx, v.dy)),
+            OP_MOVING => self.velocity_pred(ae, |v| v.d2 >= MOVE_D2),
+            OP_SPEED => {
+                // speed cmp p, as a range of |Δ|² (speed is monotone in |Δ|²).
+                let (lo, hi) = (speed_d2_min(p as i64), speed_d2_min(p as i64 + 1));
+                match b {
+                    CMP_GE => self.velocity_pred(ae, |v| v.d2 >= lo),
+                    CMP_GT => self.velocity_pred(ae, |v| v.d2 >= hi),
+                    CMP_LE => self.velocity_pred(ae, |v| v.d2 < hi),
+                    CMP_LT => self.velocity_pred(ae, |v| v.d2 < lo),
+                    CMP_EQ => self.velocity_pred(ae, |v| lo <= v.d2 && v.d2 < hi),
+                    _ => self.velocity_pred(ae, |v| !(lo <= v.d2 && v.d2 < hi)),
+                }
+            }
+            OP_DIRECTION => self.velocity_pred(ae, |v| v.d2 >= MOVE_D2 && direction_ok(b, v.dx, v.dy)),
             OP_AT_REST => {
-                let still = self.velocity_pred(ae, |v| v.speed <= STILL_MAX_UPS);
+                let still = self.velocity_pred(ae, |v| v.d2 < STILL_D2_EXCL);
                 self.for_duration(p as u32, &still)
             }
             OP_PRESENT => self.present_sig(ae),
@@ -53,7 +64,17 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
     pub(crate) fn spatial(&self, op: u8, ae: usize, b: u8, p: i32) -> (Signal<W>, Signal<W>) {
         let mut out = Signal::zero();
         let mut def = Signal::zero();
-        let mut bt = BTracker::new(b);
+        let mut bt = BTracker::new(self, b);
+        if let Some(g) = bt.fixed() {
+            // Line / zone: defined everywhere, one geometry for all frames.
+            def.set_range(0, self.n);
+            for pos in 0..self.n {
+                if let Some(a) = self.bx(ae, pos) {
+                    out.put(pos, self.spatial_at(op, ae, a, &g, p));
+                }
+            }
+            return (out, def);
+        }
         for s in self.segs() {
             for i in 0..s.n_frames as usize {
                 let pos = s.pos_start as usize + i;
@@ -67,13 +88,15 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
         (out, def)
     }
 
+    #[inline(always)]
     fn spatial_at(&self, op: u8, ae: usize, a: Rect, g: &BGeom<'_>, p: i32) -> bool {
         let ca = geometry::center(a);
         match op {
             OP_OVERLAPS => match *g {
                 BGeom::Box(r) | BGeom::Sub(r, _) => geometry::inter(a, r).is_some(),
                 BGeom::Zone(z) => {
-                    geometry::pt_in_poly(ca, z.points()) || geometry::pt_in_poly(self.anchor(ae, a), z.points())
+                    let an = self.anchor(ae, a);
+                    z.contains(ca) || (an != ca && z.contains(an))
                 }
                 _ => false,
             },
@@ -90,7 +113,7 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
                     2 * ia >= aa
                 }
                 BGeom::Sub(r, _) => geometry::pt_in_rect(ca, r),
-                BGeom::Zone(z) => geometry::pt_in_poly(self.anchor(ae, a), z.points()),
+                BGeom::Zone(z) => z.contains(self.anchor(ae, a)),
                 _ => false,
             },
             OP_ABOVE | OP_BELOW => match g.bbox() {
@@ -122,19 +145,26 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
     }
 
     /// Velocity predicate: true where `vel` is defined and `pred` holds (§3.3).
+    /// `vel(a, g)` needs `a` present at g and g − VEL_K in the same segment; the centers of
+    /// the last VEL_K frames are kept in a ring so each record is read once.
+    #[inline(always)]
     fn velocity_pred(&self, ae: usize, pred: impl Fn(&Vel) -> bool) -> Signal<W> {
-        let k = VEL_K as usize;
+        const K: usize = VEL_K as usize;
         let mut out = Signal::zero();
         for s in self.segs() {
-            for i in k..s.n_frames as usize {
-                let pos = s.pos_start as usize + i;
-                if let (Some(b1), Some(b0)) = (self.bx(ae, pos), self.bx(ae, pos - k)) {
-                    let (c1, c0) = (geometry::center(b1), geometry::center(b0));
+            let p0 = s.pos_start as usize;
+            let mut ring: [Option<geometry::Pt>; K] = [None; K];
+            for i in 0..s.n_frames as usize {
+                let pos = p0 + i;
+                let c1 = self.bx(ae, pos).map(geometry::center);
+                let slot = i % K;
+                // ring[slot] holds the center at i − K (None for i < K or if absent).
+                if let (Some(c1), Some(c0)) = (c1, ring[slot]) {
                     let dx = c1.0 - c0.0;
                     let dy = c1.1 - c0.1;
-                    let speed = geometry::isqrt((dx * dx + dy * dy) as u64) as i64 * FPS as i64 / VEL_K as i64;
-                    out.put(pos, pred(&Vel { dx, dy, speed }));
+                    out.put(pos, pred(&Vel { dx, dy, d2: (dx * dx + dy * dy) as u64 }));
                 }
+                ring[slot] = c1;
             }
         }
         out
@@ -277,7 +307,7 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
         // entry[f] = (1) ∧ (2); stay[g] = !present(a,g) ∨ center(a,g) inside the container at g.
         let mut entry = Signal::<W>::zero();
         let mut stay = Signal::<W>::zero();
-        let mut bt = BTracker::new(b);
+        let mut bt = BTracker::new(self, b);
         for s in self.segs() {
             for i in 0..s.n_frames as usize {
                 let pos = s.pos_start as usize + i;
@@ -286,7 +316,7 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
                 let (e_ok, s_ok) = match (a, g) {
                     (None, _) => (false, true),
                     (Some(a), BGeom::Zone(z)) => {
-                        let inz = geometry::pt_in_poly(geometry::center(a), z.points());
+                        let inz = z.contains(geometry::center(a));
                         (inz, inz)
                     }
                     (Some(a), BGeom::Sub(rect, cont)) => {
@@ -329,9 +359,27 @@ impl<'p, 'a, const W: usize> Ctx<'p, 'a, W> {
 struct Vel {
     dx: i64,
     dy: i64,
-    speed: i64,
+    /// dx² + dy².
+    d2: u64,
 }
 
+/// Smallest `d2 = dx² + dy²` with `speed = isqrt(d2) · FPS / VEL_K ≥ p` (§3.3), for `p ≥ 0`:
+/// `⌊r·FPS/VEL_K⌋ ≥ p ⇔ r ≥ ⌈p·VEL_K/FPS⌉` and `isqrt(d2) ≥ r ⇔ d2 ≥ r²`. Lets every velocity
+/// predicate compare `d2` against a threshold instead of taking a square root per frame.
+const fn speed_d2_min(p: i64) -> u64 {
+    if p <= 0 {
+        return 0;
+    }
+    let r = (p as u64 * VEL_K as u64).div_ceil(FPS as u64);
+    r * r
+}
+
+/// `speed ≥ MOVE_MIN_UPS`.
+const MOVE_D2: u64 = speed_d2_min(MOVE_MIN_UPS);
+/// `speed ≤ STILL_MAX_UPS` ⇔ `d2 < STILL_D2_EXCL`.
+const STILL_D2_EXCL: u64 = speed_d2_min(STILL_MAX_UPS + 1);
+
+#[inline(always)]
 fn direction_ok(dir: u8, dx: i64, dy: i64) -> bool {
     match dir {
         0 => dy < 0 && 2 * dy.abs() >= dx.abs(),

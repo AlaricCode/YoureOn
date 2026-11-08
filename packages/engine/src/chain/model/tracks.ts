@@ -117,7 +117,9 @@ export function postTracks(bet: BetAccount, env: Env, a: InstructionArgsMap['pos
   check(toHex(sha256(parts.program)) === bet.program_hash, 'ProgramHashMismatch');
   if (parts.calibration.length === 0) check(bet.calibration_hash === ZERO_HASH, 'CalibrationHashMismatch');
   else check(toHex(sha256(parts.calibration)) === bet.calibration_hash, 'CalibrationHashMismatch');
-  if (parts.tracks === null) check(env.opts.sp1, 'BufferLayout');
+
+  // Order matches post_tracks.rs validate_payload: program, calibration, program↔bet,
+  // SP1-only layout, then tracks.
 
   const hooks = env.opts.hooks;
   let dp: DecodedProgram;
@@ -133,6 +135,8 @@ export function postTracks(bet: BetAccount, env: Env, a: InstructionArgsMap['pos
     if (e instanceof ChainError) throw e;
     fail(malformedCode(e, 'MalformedCalibration'));
   }
+  check(programMatchesBet(dp, bet), 'ProgramBetMismatch');
+  if (parts.tracks === null) check(env.opts.sp1, 'BufferLayout');
   if (parts.tracks !== null) {
     try {
       if (dp.kind === 2) hooks.decodeMarketBin(parts.tracks);
@@ -141,7 +145,6 @@ export function postTracks(bet: BetAccount, env: Env, a: InstructionArgsMap['pos
       fail(malformedCode(e, 'MalformedTracks'));
     }
   }
-  check(programMatchesBet(dp, bet), 'ProgramBetMismatch');
 
   const pr = a.perception_root.toLowerCase();
   fromHex(pr, 32);
@@ -262,11 +265,12 @@ export function verifyBiometricProof(
 ): void {
   oracleSigner(bet, env);
   check(bet.state === BET_STATE.Perceiving, 'InvalidState');
+  // Order and codes match verify_biometric_proof.rs.
   check(Number.isInteger(a.participant) && a.participant < bet.n_participants, 'NotParticipant');
-  check(a.modality === 0 || a.modality === 1, 'BadProof');
   const profile = env.ctx.profile;
   check(!!profile && profile.wallet === bet.participants[a.participant], 'NotParticipant');
   check(profile.updated_at <= bet.created_at, 'ProfileTooNew');
+  check(a.modality === 0 || a.modality === 1, 'BadReason');
   const commitHex = (a.modality === 0 ? profile.face_commit : profile.voice_commit).toLowerCase();
   const commitment = fromHex(commitHex, 32);
   check(!isZero(commitment), 'MissingCommitment');

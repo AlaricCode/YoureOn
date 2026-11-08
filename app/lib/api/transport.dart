@@ -34,10 +34,19 @@ class ApiTransport {
   }
 
   /// Resolves an absolute or API-relative URL (e.g. `audio_url`, `upload_url`).
+  ///
+  /// Absolute URLs under `/v1/` are rebased onto [baseUrl]: the backend
+  /// builds them from its `PUBLIC_URL` (default `http://127.0.0.1:<port>`),
+  /// which a phone or emulator can't reach, and the bearer token must only
+  /// go to the configured API origin. Other absolute URLs (CDNs, explorers)
+  /// are kept.
   Uri resolve(String url) {
     final u = Uri.parse(url);
-    if (u.hasScheme) return u;
     final root = Uri.parse(baseUrl);
+    if (u.hasScheme) {
+      if (!u.path.startsWith('/v1/')) return u;
+      return root.replace(path: u.path, query: u.hasQuery ? u.query : null, fragment: null);
+    }
     if (url.startsWith('/v1/')) return root.resolve(url);
     if (url.startsWith('/')) return root.resolve('/v1$url');
     return root.resolve('/v1/$url');

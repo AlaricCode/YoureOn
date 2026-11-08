@@ -36,8 +36,10 @@ export const MAX_SEGMENTS = 16;
 export const MAX_BUFFER_PAYLOAD = 10000;
 /** Total buffer frames Σ n_frames. */
 export const MAX_EVAL_FRAMES = 1024;
-/** Evaluation cost cap (§3.13). */
-export const MAX_EVAL_COST = 16384;
+/** Evaluation cost cap (§3.13; 8192 since the §16 compute-budget revision). */
+export const MAX_EVAL_COST = 8192;
+/** Per-node set-up charged as extra frames: cost = (|F| + this) × Σw (§3.13). */
+export const EVAL_COST_SETUP_FRAMES = 4;
 /** Max `data` bytes per `post_tracks` instruction. */
 export const POST_TRACKS_CHUNK = 700;
 export const MAX_WITNESSES = 8;
@@ -175,6 +177,7 @@ export const GLOBAL_CONSTANTS = {
   MAX_BUFFER_PAYLOAD,
   MAX_EVAL_FRAMES,
   MAX_EVAL_COST,
+  EVAL_COST_SETUP_FRAMES,
   POST_TRACKS_CHUNK,
   MAX_WITNESSES,
   MAX_CHECKPOINTS,
@@ -508,8 +511,14 @@ export const LEG_CAUSES = ['MOTION', 'COVERAGE', 'OCCLUSION', 'CONF', 'IDENTITY'
 
 /** Cost weights per node (§3.13). */
 export const COST_COMBINATOR = 1;
+/** State leaves other than `overlaps` / `inside`. */
 export const COST_STATE_LEAF = 2;
+/** `overlaps`, `inside` (may run a point-in-polygon test per frame). */
+export const COST_POLY_STATE_LEAF = 4;
+/** Event leaves other than `enters` / `leaves` / `touches` / `disappears_into`. */
 export const COST_EVENT_LEAF = 4;
+/** `enters`, `leaves`, `touches` (polygon-capable spatial pass + lastSeen pass). */
+export const COST_POLY_EVENT_LEAF = 6;
 export const COST_DISAPPEARS_INTO = 12;
 
 /** `rising(X)` at absolute frame 0 has no predecessor. */

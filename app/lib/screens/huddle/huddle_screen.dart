@@ -7,6 +7,7 @@ import '../../api/api_error.dart';
 import '../../api/models/huddle.dart';
 import '../../capture/face_capture.dart';
 import '../../nav/routes.dart';
+import '../../platform/screen_awake.dart';
 import '../../state/guarded.dart';
 import '../../state/ws_watch.dart';
 import '../../ui/tokens.dart';
@@ -28,23 +29,54 @@ class HuddleScreen extends StatefulWidget {
   State<HuddleScreen> createState() => _HuddleScreenState();
 }
 
-class _HuddleScreenState extends State<HuddleScreen> with Guarded, WsWatch {
+class _HuddleScreenState extends State<HuddleScreen> with Guarded, WsWatch, WidgetsBindingObserver {
   HuddleView? _huddle;
   FaceCapture? _cam;
   bool _leaving = false;
+
+  /// The camera is handed over while Terms (and the bet flow) is on top.
+  bool _away = false;
+  ScreenAwake? _awake;
 
   bool get _isCreator => _huddle != null && _huddle!.creatorUserId == app.userId;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _awake = app.screenAwake..hold();
+      _load();
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _awake?.release();
     _cam?.close();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted || _away) return;
+    if (state == AppLifecycleState.resumed) {
+      if (_isCreator && _cam == null) guard('camera', _openCamera, exclusive: false);
+    } else if (state != AppLifecycleState.inactive) {
+      // Paused/hidden: the OS takes the camera; reopen on resume. (Inactive
+      // is transient, e.g. the permission dialog.)
+      _closeCamera();
+    }
+  }
+
+  Future<void> _closeCamera() async {
+    final cam = _cam;
+    _cam = null;
+    if (mounted) setState(() {});
+    try {
+      await cam?.close();
+    } catch (_) {}
   }
 
   Future<void> _load() => guard('load', () async {
@@ -125,10 +157,18 @@ class _HuddleScreenState extends State<HuddleScreen> with Guarded, WsWatch {
         if (mounted) setState(() => _huddle = h);
       });
 
-  void _continue() {
+  /// Terms → Scene check → Record use the same back camera: close this
+  /// one (and its detector) while they are on top, and reopen on Back.
+  Future<void> _continue() async {
     final h = _huddle;
-    if (h == null) return;
-    Navigator.of(context).pushNamed(Routes.terms, arguments: TermsArgs(huddleId: h.id));
+    if (h == null || _away) return;
+    setState(() => _away = true);
+    await _closeCamera();
+    if (!mounted) return;
+    await Navigator.of(context).pushNamed(Routes.terms, arguments: TermsArgs(huddleId: h.id));
+    if (!mounted) return;
+    setState(() => _away = false);
+    if (_isCreator) await guard('camera', _openCamera, exclusive: false);
   }
 
   void _world() {
@@ -149,7 +189,7 @@ class _HuddleScreenState extends State<HuddleScreen> with Guarded, WsWatch {
           if (h == null || _isCreator)
             PrimaryButton(
               label: 'Continue',
-              onPressed: h != null && confirmed >= 2 && !busy ? _continue : null,
+              onPressed: h != null && confirmed >= 2 && !busy && !_away ? _continue : null,
             )
           else
             const QuietButton(label: 'Waiting', onPressed: null),

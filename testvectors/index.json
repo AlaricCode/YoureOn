@@ -224,11 +224,11 @@
     },
     {
       "name": "cost_at_cap",
-      "description": "cost = 512 frames × 32 = 16384 = MAX_EVAL_COST (not exceeded) ⇒ evaluated normally"
+      "description": "cost = (252 frames + 4 setup) × 32 = 8192 = MAX_EVAL_COST (not exceeded) ⇒ evaluated normally"
     },
     {
       "name": "cost_exceeded",
-      "description": "cost = 513 frames × 32 = 16416 > MAX_EVAL_COST ⇒ needs_panel reason 13 before any leg is evaluated"
+      "description": "cost = (253 frames + 4 setup) × 32 = 8224 > MAX_EVAL_COST ⇒ needs_panel reason 13 before any leg is evaluated"
     },
     {
       "name": "market_single_yes",

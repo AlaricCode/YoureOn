@@ -55,6 +55,11 @@ fn create_bet_checks() {
     let (c, o) = (f.users[0].insecure_clone(), f.env.oracle.insecure_clone());
     assert_err(f.env.send(&[ixn], &[&c, &o]), VerdictError::ProgramHashMismatch);
 
+    // Multi-fault ordering (validate_terms): participants/oracle, flags, sides, stakes.
+    create_err(&mut f, &Spec { flags: 0b1000, side_b_mask: 0b001, ..s3.clone() }, keys.clone(), judges, VerdictError::BadFlags);
+    create_err(&mut f, &Spec { stakes: vec![STAKE; 2], ..s3.clone() }, vec![keys[0], keys[1], oracle], judges, VerdictError::BadParticipants);
+    create_err(&mut f, &Spec { stakes: vec![STAKE; 2], side_b_mask: 0b001, ..s3.clone() }, keys.clone(), judges, VerdictError::BadSides);
+
     // The oracle must co-sign.
     let mut ixn = f.create_ix(&s3, keys.clone(), judges);
     ixn.accounts[2].is_signer = false;
@@ -258,6 +263,17 @@ fn post_tracks_program_must_match_bet() {
     f.end_by_oracle();
     let payload = f.spec.payload();
     assert_err(f.try_post_payload(&payload, f.spec.program_bin.len(), f.spec.calibration_bin.len()), VerdictError::ProgramBetMismatch);
+    // Multi-fault: ProgramBetMismatch + malformed tracks ⇒ the program/bet check runs first.
+    let mut bad_tracks = f.spec.tracks_bin.clone();
+    bad_tracks[0] = b'X';
+    let spec = Spec { nonce: 6, tracks_bin: bad_tracks, ..f.spec.clone() };
+    let mut m = Flow::with(Env::new(), default_users(2), spec);
+    m.create();
+    m.fund_all();
+    ok(m.try_start());
+    m.end_by_oracle();
+    let payload = m.spec.payload();
+    assert_err(m.try_post_payload(&payload, m.spec.program_bin.len(), m.spec.calibration_bin.len()), VerdictError::ProgramBetMismatch);
 
     // Actor-bound flag mismatch: bet flags bit0 set, program has no actor-bound leg.
     let users = default_users(2);
@@ -321,5 +337,17 @@ fn consent_mismatch_and_non_participant() {
     let ixn = f.consent_ix(&u.pubkey(), b.winner_mask, [0; 32]);
     assert_err(f.env.send(&[ixn], &[&u]), VerdictError::ConsentMismatch);
     let stranger = kp(99);
-    assert_err(f.try_consent(&stranger), VerdictError::NotParticipant);
+    assert_err(f.try_consent(&stranger), VerdictError::DeadlineNotReached);
+}
+
+#[test]
+fn dispute_deadline_precedes_reason() {
+    let mut f = Flow::rules(2, true);
+    f.to_preruled();
+    // Before the deadline a bad reason is BadReason …
+    assert_err(f.try_dispute(1, 0), VerdictError::BadReason);
+    // … after it, DeadlinePassed wins over BadReason.
+    f.env.advance(CONSENT_WINDOW_S + 1);
+    assert_err(f.try_dispute(1, 0), VerdictError::DeadlinePassed);
+    assert_err(f.try_dispute(1, 1), VerdictError::DeadlinePassed);
 }

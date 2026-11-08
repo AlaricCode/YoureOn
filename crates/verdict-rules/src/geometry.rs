@@ -1,4 +1,9 @@
 //! Geometry helpers (§3.3). All arithmetic is i64 on values ≤ 10^4, products ≤ 2·10^8.
+//!
+//! Every rect/point coordinate is in `[0, COORD_MAX]` (decoder-validated records and regions,
+//! sub-regions clamped at 0), so halving uses `>> 1` and the percentage/tenth divisions go
+//! through `udiv` of non-negative values: both equal the contract's floor division here and
+//! avoid the signed-division sequences on SBF.
 
 pub type Rect = (i64, i64, i64, i64);
 pub type Pt = (i64, i64);
@@ -41,15 +46,24 @@ pub fn pt_in_rect(p: Pt, r: Rect) -> bool {
     r.0 <= p.0 && p.0 <= r.2 && r.1 <= p.1 && p.1 <= r.3
 }
 
-#[inline]
+#[inline(always)]
 pub fn center(b: Rect) -> Pt {
-    ((b.0 + b.2) / 2, (b.1 + b.3) / 2)
+    debug_assert!(b.0 >= 0 && b.1 >= 0 && b.2 >= 0 && b.3 >= 0);
+    ((b.0 + b.2) >> 1, (b.1 + b.3) >> 1)
 }
 
 /// Bottom-center (feet) anchor for persons.
-#[inline]
+#[inline(always)]
 pub fn feet(b: Rect) -> Pt {
-    ((b.0 + b.2) / 2, b.3)
+    debug_assert!(b.0 >= 0 && b.2 >= 0);
+    ((b.0 + b.2) >> 1, b.3)
+}
+
+/// `v / d` for `v ≥ 0`, `d > 0` (floor), as an unsigned division.
+#[inline(always)]
+fn udiv(v: i64, d: u64) -> i64 {
+    debug_assert!(v >= 0);
+    (v as u64 / d) as i64
 }
 
 /// `side(L, P)` ∈ {-1, 0, 1}.
@@ -59,14 +73,90 @@ pub fn side(a: Pt, b: Pt, p: Pt) -> i64 {
     v.signum()
 }
 
+/// One polygon edge, pre-normalized for [`Poly::contains`].
+#[derive(Clone, Copy, Default)]
+struct Edge {
+    xi: i64,
+    yi: i64,
+    /// `(vj − vi)` multiplied by `sign(vj.y − vi.y)`, so `dy ≥ 0`.
+    dx: i64,
+    dy: i64,
+    ylo: i64,
+    yhi: i64,
+}
+
+/// Maximum polygon size (`MAX_ZONE_POINTS`).
+const POLY_MAX: usize = 8;
+
+/// A zone polygon prepared once per leaf for the per-frame even-odd test: identical results
+/// to [`pt_in_poly`] (§3.3) with a bbox reject and no per-frame sign/branch on the edge slope.
+#[derive(Clone, Copy)]
+pub struct Poly {
+    n: usize,
+    edges: [Edge; POLY_MAX],
+    /// `polyBBox`.
+    pub bb: Rect,
+}
+
+impl Poly {
+    /// `v.len()` must be in `1..=8` (decoder-validated zones have 3..=8 points).
+    pub fn new<T: Copy + Into<i64>>(v: &[(T, T)]) -> Poly {
+        let n = v.len().min(POLY_MAX);
+        let at = |k: usize| -> Pt { (v[k].0.into(), v[k].1.into()) };
+        let mut edges = [Edge::default(); POLY_MAX];
+        let mut bb = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        let mut prev = if n > 0 { at(n - 1) } else { (0, 0) };
+        for (i, ed) in edges.iter_mut().enumerate().take(n) {
+            let (vi, vj) = (at(i), prev);
+            prev = vi;
+            let (mut dx, mut dy) = (vj.0 - vi.0, vj.1 - vi.1);
+            if dy < 0 {
+                dx = -dx;
+                dy = -dy;
+            }
+            *ed = Edge { xi: vi.0, yi: vi.1, dx, dy, ylo: vi.1.min(vj.1), yhi: vi.1.max(vj.1) };
+            bb = (bb.0.min(vi.0), bb.1.min(vi.1), bb.2.max(vi.0), bb.3.max(vi.1));
+        }
+        Poly { n, edges, bb }
+    }
+
+    /// `pt_in_poly(p, v)`. An edge `(vj, vi)` is crossed iff exactly one end is above `p.y`,
+    /// i.e. `min(yi, yj) ≤ p.y < max(yi, yj)` (so `dy > 0`); it flips iff
+    /// `(p.x − xi)·dy' < (p.y − yi)·dx'` with both deltas multiplied by `sign(dy)`, the same
+    /// inequality as `pt_in_poly`'s two-sided comparison. Bbox reject: a point left of, right
+    /// of, below (y ≥ max y) or above (y < min y) the bbox crosses an even number of edges to
+    /// its right (or none), so `pt_in_poly` is false there too.
+    #[inline(always)]
+    pub fn contains(&self, p: Pt) -> bool {
+        let bb = self.bb;
+        if p.0 < bb.0 || p.0 > bb.2 || p.1 < bb.1 || p.1 >= bb.3 {
+            return false;
+        }
+        let mut inside = false;
+        for e in &self.edges[..self.n] {
+            if e.ylo <= p.1 && p.1 < e.yhi && (p.0 - e.xi) * e.dy < (p.1 - e.yi) * e.dx {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+}
+
 /// Even-odd point in polygon, exact (§3.3).
+#[inline(always)]
 pub fn pt_in_poly<T: Copy + Into<i64>>(p: Pt, v: &[(T, T)]) -> bool {
     let n = v.len();
+    if n == 0 {
+        return false;
+    }
     let mut inside = false;
     let at = |k: usize| -> Pt { (v[k].0.into(), v[k].1.into()) };
+    // Edge (v[j], v[i]) with j = i − 1 (mod n).
+    let mut prev = at(n - 1);
     for i in 0..n {
-        let j = (i + n - 1) % n;
-        let (vi, vj) = (at(i), at(j));
+        let vi = at(i);
+        let vj = prev;
+        prev = vi;
         if (vi.1 > p.1) != (vj.1 > p.1) {
             let lhs = (p.0 - vi.0) * (vj.1 - vi.1);
             let rhs = (p.1 - vi.1) * (vj.0 - vi.0);
@@ -80,25 +170,30 @@ pub fn pt_in_poly<T: Copy + Into<i64>>(p: Pt, v: &[(T, T)]) -> bool {
 }
 
 /// `expand(B, pct)`, clamped to [0, 10000].
+#[inline(always)]
 pub fn expand(b: Rect, pct: i64) -> Rect {
-    let ex = (b.2 - b.0) * pct / 100;
-    let ey = (b.3 - b.1) * pct / 100;
+    let ex = udiv((b.2 - b.0) * pct, 100);
+    let ey = udiv((b.3 - b.1) * pct, 100);
     let c = |v: i64| v.clamp(0, 10000);
     (c(b.0 - ex), c(b.1 - ey), c(b.2 + ex), c(b.3 + ey))
 }
 
 /// `.opening` band (§2.3).
+#[inline(always)]
 pub fn opening(b: Rect) -> Rect {
     let w = b.2 - b.0;
     let h = b.3 - b.1;
-    (b.0 + w / 10, (b.1 - h / 10).max(0), b.2 - w / 10, b.1 + h / 5)
+    let (w10, h10) = (udiv(w, 10), udiv(h, 10));
+    (b.0 + w10, (b.1 - h10).max(0), b.2 - w10, b.1 + udiv(h, 5))
 }
 
 /// `.interior` rect (§2.3).
+#[inline(always)]
 pub fn interior(b: Rect) -> Rect {
     let w = b.2 - b.0;
     let h = b.3 - b.1;
-    (b.0 + w / 10, b.1 + h / 10, b.2 - w / 10, b.3 - h / 10)
+    let (w10, h10) = (udiv(w, 10), udiv(h, 10));
+    (b.0 + w10, b.1 + h10, b.2 - w10, b.3 - h10)
 }
 
 #[cfg(test)]
@@ -127,6 +222,34 @@ mod tests {
         assert!(!pt_in_poly((10, 5), &sq));
         assert!(pt_in_poly((0, 0), &sq));
         assert!(!pt_in_poly((10, 10), &sq));
+    }
+
+    #[test]
+    fn poly_matches_pt_in_poly() {
+        let polys: [&[(u16, u16)]; 4] = [
+            &[(0, 0), (10, 0), (10, 10), (0, 10)],
+            &[(1000, 3000), (2500, 7000), (3500, 3000), (4500, 7000), (5500, 3000), (6500, 7000), (7500, 3000), (9000, 7000)],
+            &[(5, 0), (10, 5), (5, 10), (0, 5)],
+            &[(0, 0), (20, 0), (20, 20), (10, 5), (0, 20), (3, 7), (8, 9), (1, 1)],
+        ];
+        for v in polys {
+            let poly = Poly::new(v);
+            let (mx, my) = v.iter().fold((0i64, 0i64), |a, &(x, y)| (a.0.max(x as i64), a.1.max(y as i64)));
+            let step = (mx.max(my) / 60).max(1);
+            let mut y = -step;
+            while y <= my + step {
+                let mut x = -step;
+                while x <= mx + step {
+                    assert_eq!(poly.contains((x, y)), pt_in_poly((x, y), v), "{v:?} at ({x}, {y})");
+                    x += step;
+                }
+                y += step;
+            }
+            for &(x, y) in v {
+                let p = (x as i64, y as i64);
+                assert_eq!(poly.contains(p), pt_in_poly(p, v));
+            }
+        }
     }
 
     #[test]

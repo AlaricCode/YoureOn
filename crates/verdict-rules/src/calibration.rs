@@ -21,10 +21,12 @@ pub struct Region {
 }
 
 impl Region {
+    #[inline(always)]
     pub fn points(&self) -> &[(u16, u16)] {
         &self.points[..self.n_points as usize]
     }
     /// Point i as i64 coordinates.
+    #[inline(always)]
     pub fn pt(&self, i: usize) -> (i64, i64) {
         (self.points[i].0 as i64, self.points[i].1 as i64)
     }

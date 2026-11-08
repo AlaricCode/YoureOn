@@ -5,6 +5,7 @@ import 'package:camera/camera.dart' show CameraController;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:verdict/api/models/calibration.dart';
+import 'package:verdict/api/api_error.dart';
 import 'package:verdict/app.dart';
 import 'package:verdict/beacon/beacon_player.dart';
 import 'package:verdict/capture/face_capture.dart';
@@ -15,6 +16,8 @@ import 'package:verdict/evidence/chunk_uploader.dart';
 import 'package:verdict/evidence/wav.dart';
 import 'package:verdict/evidence/witness_runner.dart';
 import 'package:verdict/media/audio_out.dart';
+import 'package:verdict/platform/local_notices.dart';
+import 'package:verdict/platform/screen_awake.dart';
 import 'package:verdict/state/app_controller.dart';
 import 'package:verdict/state/config.dart';
 import 'package:verdict/wallet/key_store.dart';
@@ -79,6 +82,12 @@ class FakeSceneCamera implements SceneCamera {
   StreamController<SceneFrame>? _frames;
   int stills = 0;
 
+  /// 'open' / 'close' in call order (camera handoffs between screens).
+  final List<String> log = [];
+
+  /// Opening while already open (two screens holding the camera) throws.
+  bool strict = false;
+
   @override
   CameraMeta? meta;
 
@@ -90,6 +99,8 @@ class FakeSceneCamera implements SceneCamera {
 
   @override
   Future<void> open() async {
+    if (strict && _open) throw StateError('camera in use');
+    log.add('open');
     _open = true;
     meta = const CameraMeta(widthPx: 720, heightPx: 1280, orientation: 'portrait');
   }
@@ -113,8 +124,11 @@ class FakeSceneCamera implements SceneCamera {
 
   @override
   Future<void> close() async {
+    if (_open) log.add('close');
     _open = false;
-    await _frames?.close();
+    // Not awaited: a cancelled controller's done future completes in the
+    // root zone, outside the widget test's fake async.
+    unawaited(_frames?.close());
   }
 }
 
@@ -122,24 +136,41 @@ class FakeWitnessRunner implements WitnessRunner {
   FakeWitnessRunner(this.betId);
   final String betId;
   final List<bool> registered = [];
+  final List<WsStart> begins = [];
   WsStart? started;
   bool ended = false;
   bool _recording = false;
 
+  /// When set, `register` fails with this code.
+  String? registerError;
+
+  /// When set, `end` waits for it (a witness still finalizing).
+  Completer<void>? endGate;
+
+  /// Whether the scene camera was still open when `end` completed.
+  bool? cameraOpenAtEnd;
+  FakeSceneCamera? camera;
+
   @override
   Future<List<String>> register({required bool camera}) async {
     registered.add(camera);
+    final e = registerError;
+    if (e != null) throw ApiException(e);
     return [if (camera) 'Camera 1', 'Mic 1'];
   }
 
   @override
   Future<void> begin(WsStart start, {CameraController? controller, CameraMeta? cameraMeta}) async {
+    begins.add(start);
     started = start;
     _recording = true;
   }
 
   @override
   Future<void> end() async {
+    final gate = endGate;
+    if (gate != null) await gate.future;
+    cameraOpenAtEnd = camera?.isOpen;
     ended = true;
     _recording = false;
   }
@@ -167,9 +198,37 @@ class FakeStartSignal implements StartSignal {
   Future<void> dispose() async {}
 }
 
+/// Records local notifications instead of posting them.
+class FakeLocalNotices implements LocalNotices {
+  final List<String> shown = [];
+  final Map<int, (String, DateTime)> scheduled = {};
+  final List<int> cancelled = [];
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<void> show(String title) async => shown.add(title);
+
+  @override
+  Future<void> schedule(int id, String title, DateTime at) async => scheduled[id] = (title, at);
+
+  @override
+  Future<void> cancel(int id) async {
+    cancelled.add(id);
+    scheduled.remove(id);
+  }
+}
+
 /// Device fakes shared by a test.
 class Devices {
   final scene = FakeSceneCamera();
+  final notices = FakeLocalNotices();
+  final awake = CountingScreenAwake();
+
+  /// Applied to every new [FakeWitnessRunner].
+  String? registerError;
+  Completer<void>? endGate;
   final pose = FixedPoseSource(const CameraPose(pitchCdeg: 0, rollCdeg: 0));
   final runners = <String, FakeWitnessRunner>{};
   final signal = FakeStartSignal();
@@ -185,6 +244,7 @@ AppController testController(
   FakeFaceCapture? face,
   FakeVoiceCapture? voice,
   Devices? devices,
+  void Function(Uri uri)? onSocket,
 }) {
   final d = devices ?? Devices();
   final store = MemoryKeyStore()..data[Wallet.seedKey] = toHexSeed();
@@ -194,18 +254,26 @@ AppController testController(
     keyStore: store,
     authenticator: AllowAuthenticator(),
     httpClient: server.client,
-    wsConnect: (u) => FakeChannel(u)..neverReady = true,
+    wsConnect: (u) {
+      onSocket?.call(u);
+      return FakeChannel(u)..neverReady = true;
+    },
     faceCapture: () => face ?? FakeFaceCapture(),
     voiceCapture: () => voice ?? FakeVoiceCapture(),
     sceneCamera: () => d.scene,
     poseSource: () => d.pose,
-    witnessRunner: (betId) => d.runners[betId] = FakeWitnessRunner(betId),
+    witnessRunner: (betId) => d.runners[betId] = FakeWitnessRunner(betId)
+      ..camera = d.scene
+      ..registerError = d.registerError
+      ..endGate = d.endGate,
     startSignal: () => d.signal,
     audioOut: d.audio,
     linkOpener: (u) async {
       d.links.add(u);
       return true;
     },
+    localNotices: d.notices,
+    screenAwake: d.awake,
   );
 }
 

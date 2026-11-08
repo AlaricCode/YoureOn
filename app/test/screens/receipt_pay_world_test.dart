@@ -1,6 +1,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:verdict/nav/routes.dart';
+import 'package:verdict/screens/huddle/huddle_screen.dart';
 import 'package:verdict/screens/ruling/ruling_screen.dart';
 import 'package:verdict/ui/widgets/controls.dart';
 
@@ -15,7 +17,9 @@ Map<String, dynamic> _ben() => userJson(id: 'u2', name: 'Ben', wallet: 'jX5drmcK
 void main() {
   testWidgets('Receipt: six link rows, detail sheets, external links', (tester) async {
     final devices = Devices();
-    final s = baseServer()..on('GET /bets/b1/receipt', (_) => {'rows': receiptRowsJson()});
+    final s = baseServer()
+      ..on('GET /bets/b1/receipt', (_) => {'rows': receiptRowsJson()})
+      ..on('GET /bets/b1/terms.yaml', (_) => http.Response('version: 2\nkind: rules\n', 200));
     final c = await openScreen(tester, s, Routes.receipt, const BetArgs('b1'), devices: devices);
     for (final l in ['Verified', 'Terms', 'Evidence', 'Compute', 'Proof', 'Settlement']) {
       expect(find.text(l), findsOneWidget);
@@ -44,9 +48,21 @@ void main() {
 
     await tester.tap(find.text('Terms'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Rules file'));
+    // The rules file needs the session: fetched in-app (API origin, bearer
+    // token), never handed to the external browser.
+    final linksBefore = devices.links.length;
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Rules file'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
     await tester.pumpAndSettle();
-    expect(devices.links.last.toString(), 'http://api.test/v1/bets/b1/yaml');
+    expect(devices.links.length, linksBefore);
+    final get = s.called('GET /bets/b1/terms.yaml').single;
+    expect(get.url.origin, 'http://api.test');
+    expect(get.headers['authorization'], 'Bearer t');
+    expect(find.byKey(const ValueKey('rules-file')), findsOneWidget);
+    expect(find.textContaining('kind: rules'), findsOneWidget);
+    expectCopyRule(tester, screen: 'Rules file');
     c.dispose();
   });
 
@@ -154,6 +170,87 @@ void main() {
     expect(FakeServer.body(s.called('POST /world/bets').first), {'quote_id': 'q1', 'counterparty_user_id': 'u2'});
     expect(s.called('POST /tx/tx-world/submit'), hasLength(1));
     expect(find.byType(RulingScreen), findsOneWidget);
+    c.dispose();
+  });
+
+  Future<FakeServer> worldTo(WidgetTester tester, FakeServer s) async {
+    await tester.tap(find.text('Fed cuts rates in December'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-c1-yes')));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('world-total')), '10');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    return s;
+  }
+
+  FakeServer worldServer({required Map<String, dynamic> Function(int n) quote}) {
+    var quotes = 0;
+    var bets = 0;
+    return baseServer()
+      ..on('GET /world/events', (_) => {
+            'events': [worldEventJson()],
+          })
+      ..on('GET /world/events/e1', (_) => worldEventJson())
+      ..on('GET /huddles/h1', (_) => huddleJson())
+      ..on('POST /world/quote', (_) => quote(++quotes))
+      ..on('POST /world/bets', (_) {
+        bets++;
+        final id = 'wb$bets';
+        return {
+          'bet': {...betJson(id: id, state: 'proposed', myIndex: 0), 'kind': 'market', 'preruling': null},
+          'sign': signJson('tx-world$bets'),
+        };
+      })
+      ..on('POST /tx/tx-world1/submit', (_) => FakeServer.error('TX_EXPIRED', 409))
+      ..on('POST /tx/tx-world2/submit', (_) => confirmedJson())
+      ..on('GET /bets/wb2', (_) => {...betJson(id: 'wb2', state: 'proposed', myIndex: 0), 'kind': 'market', 'preruling': null});
+  }
+
+  testWidgets('World: a TX_EXPIRED retry re-quotes (quotes are single-use) and opens the new bet', (tester) async {
+    final s = worldServer(quote: (n) => {...quoteJson(), 'quote_id': 'q$n'});
+    final c = await openScreen(tester, s, Routes.world, const WorldArgs(huddleId: 'h1'));
+    await worldTo(tester, s);
+    final quotesBefore = s.called('POST /world/quote').length;
+    await tapAsync(tester, find.text('Propose'));
+    final bets = s.called('POST /world/bets').map(FakeServer.body).toList();
+    expect(bets.map((b) => b['quote_id']), ['q$quotesBefore', 'q${quotesBefore + 1}']);
+    expect(bets.map((b) => b['counterparty_user_id']), ['u2', 'u2']);
+    expect(s.called('POST /tx/tx-world2/submit'), hasLength(1));
+    expect(find.byType(RulingScreen), findsOneWidget);
+    expect(c.bets.map((b) => b.id), contains('wb2'));
+    c.dispose();
+  });
+
+  testWidgets('World: a retry at a different price stops with "Price changed"', (tester) async {
+    final s = worldServer(quote: (n) => n <= 1 ? {...quoteJson(), 'quote_id': 'q$n'} : {...quoteJson(), 'quote_id': 'q$n', 'p_bps': 6000, 'proposer_units': 6000000, 'counterparty_units': 4000000});
+    final c = await openScreen(tester, s, Routes.world, const WorldArgs(huddleId: 'h1'));
+    await worldTo(tester, s);
+    await tapAsync(tester, find.text('Propose'));
+    expect(s.called('POST /world/bets'), hasLength(1), reason: 'never signs an unseen price');
+    expect(s.called('POST /tx/tx-world2/submit'), isEmpty);
+    expect(find.text('Price changed'), findsOneWidget);
+    c.dispose();
+  });
+
+  testWidgets('World: no counterparty → a Huddle way forward', (tester) async {
+    final s = baseServer()
+      ..on('GET /world/events', (_) => {
+            'events': [worldEventJson()],
+          })
+      ..on('GET /world/events/e1', (_) => worldEventJson())
+      ..on('POST /world/quote', (_) => quoteJson())
+      ..on('POST /huddles', (_) => {'huddle_id': 'h1', 'code': '482913'})
+      ..on('GET /huddles/h1', (_) => huddleJson());
+    final c = await openScreen(tester, s, Routes.world, const WorldArgs());
+    await worldTo(tester, s);
+    await tester.scrollUntilVisible(find.byKey(const ValueKey('no-counterparty')), 200, scrollable: find.byType(Scrollable).first);
+    expect(find.text('No counterparty'), findsOneWidget);
+    expect(tester.widget<PrimaryButton>(find.widgetWithText(PrimaryButton, 'Propose')).onPressed, isNull);
+    expectCopyRule(tester, screen: 'World (no counterparty)');
+    await tester.tap(find.text('Huddle'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HuddleScreen), findsOneWidget);
     c.dispose();
   });
 }

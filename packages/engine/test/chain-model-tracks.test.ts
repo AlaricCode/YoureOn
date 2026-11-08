@@ -3,7 +3,7 @@ import { PERCEPTION_TIMEOUT_S } from '../src/constants.js';
 import { BorshWriter, fromHex, sha256, toHex, utf8, ZERO_HASH } from '../src/chain/bytes.js';
 import { bioHashOf } from '../src/chain/hashes.js';
 import { publicInputs } from '../src/chain/model/tracks.js';
-import type { InstructionArgsMap, ProfileAccount } from '../src/types.js';
+import type { InstructionArgsMap, ModalityCode, ProfileAccount } from '../src/types.js';
 import { ALICE, BET, BOB, fakeDecodedProgram, fakeProgramBin, okResult, ORACLE, panelResult, World } from './chain-helpers.js';
 
 function perceiving(w = new World()): World {
@@ -119,6 +119,27 @@ describe('chain model: post_tracks', () => {
       perceiving(w);
       w.err('ProgramBetMismatch', 'post_tracks', postArgs(w), [ORACLE.pk]);
     }
+  });
+
+  it('multi-fault precedence matches post_tracks.rs validate_payload', () => {
+    // ProgramBetMismatch + malformed tracks ⇒ ProgramBetMismatch (program↔bet checked before tracks).
+    const w = new World();
+    w.programBin = fakeProgramBin(fakeDecodedProgram({ time_limit_s: 61 }));
+    w.trackBin = utf8('XXXX');
+    perceiving(w);
+    w.err('ProgramBetMismatch', 'post_tracks', postArgs(w), [ORACLE.pk]);
+    // ProgramBetMismatch + SP1-only layout without sp1 ⇒ ProgramBetMismatch.
+    const w2 = new World();
+    w2.programBin = fakeProgramBin(fakeDecodedProgram({ time_limit_s: 61 }));
+    w2.trackBin = new Uint8Array();
+    perceiving(w2);
+    w2.err('ProgramBetMismatch', 'post_tracks', postArgs(w2), [ORACLE.pk]);
+    // Malformed program + empty tracks ⇒ MalformedProgram.
+    const w3 = new World();
+    w3.programBin = utf8('garbage-program');
+    w3.trackBin = new Uint8Array();
+    perceiving(w3);
+    w3.err('MalformedProgram', 'post_tracks', postArgs(w3), [ORACLE.pk]);
   });
 
   it('kind mismatch: calibration present for a non-rules program, or wrong kind', () => {
@@ -246,6 +267,13 @@ describe('chain model: verify_biometric_proof', () => {
     w.err('NotParticipant', 'verify_biometric_proof', bioArgs({ participant: 2 }), [ORACLE.pk]);
     w.profile = profileFor(BOB.pk, w.bet.created_at);
     w.err('MissingCommitment', 'verify_biometric_proof', bioArgs({ modality: 1, tau_bps: 5000 }), [ORACLE.pk]);
+    // Unknown modality ⇒ BadReason (verify_biometric_proof.rs), after the profile checks.
+    w.err('BadReason', 'verify_biometric_proof', bioArgs({ modality: 2 as ModalityCode }), [ORACLE.pk]);
+    w.profile = profileFor(ALICE.pk, w.bet.created_at);
+    w.err('NotParticipant', 'verify_biometric_proof', bioArgs({ modality: 2 as ModalityCode }), [ORACLE.pk]);
+    w.profile = profileFor(BOB.pk, w.bet.created_at + 1n);
+    w.err('ProfileTooNew', 'verify_biometric_proof', bioArgs({ modality: 2 as ModalityCode }), [ORACLE.pk]);
+    w.profile = profileFor(BOB.pk, w.bet.created_at);
     w.err('TauTooLow', 'verify_biometric_proof', bioArgs({ tau_bps: 5499 }), [ORACLE.pk]);
 
     let seen: Uint8Array[] = [];
@@ -321,6 +349,16 @@ describe('chain model: verify_sp1_run', () => {
       ORACLE.pk,
     ]);
     expect(r.bet).toMatchObject({ state: 5, dispute_reason: 13 });
+  });
+
+  it('perception window: DeadlinePassed after ended_at + PERCEPTION_TIMEOUT_S (before the length check)', () => {
+    const w = new World({}, { sp1: true });
+    w.trackBin = new Uint8Array();
+    perceiving(w).postTracks();
+    w.now = w.bet.ended_at + BigInt(PERCEPTION_TIMEOUT_S) + 1n;
+    w.err('DeadlinePassed', 'verify_sp1_run', { public_values: new Uint8Array(3), proof: new Uint8Array() }, [ORACLE.pk]);
+    w.now -= 1n;
+    w.ok('verify_sp1_run', { public_values: sp1Values(w), proof: new Uint8Array() }, [ORACLE.pk]);
   });
 
   it('rejects when the verifier fails', () => {

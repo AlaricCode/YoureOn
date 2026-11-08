@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -34,8 +36,14 @@ class _EnrollScreenState extends State<EnrollScreen> {
   bool _recording = false;
   String? _error;
 
+  /// "Delete biometrics" needs a second tap within [_armWindow].
+  bool _armed = false;
+  Timer? _disarm;
+  static const Duration _armWindow = Duration(seconds: 3);
+
   @override
   void dispose() {
+    _disarm?.cancel();
     _camera?.close();
     _mic?.dispose();
     super.dispose();
@@ -141,6 +149,20 @@ class _EnrollScreenState extends State<EnrollScreen> {
         if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
       });
 
+  void _onDeleteTap() {
+    if (!_armed) {
+      setState(() => _armed = true);
+      _disarm?.cancel();
+      _disarm = Timer(_armWindow, () {
+        if (mounted) setState(() => _armed = false);
+      });
+      return;
+    }
+    _disarm?.cancel();
+    setState(() => _armed = false);
+    _delete();
+  }
+
   Future<void> _delete() => _guard(() async {
         final sign = await _app.api.enrollDelete();
         await _app.tx.run(_app.api.enrollDelete, first: sign);
@@ -173,7 +195,12 @@ class _EnrollScreenState extends State<EnrollScreen> {
         const Hairline(),
         const Spacer(),
         ErrorLine(_error),
-        QuietButton(label: 'Delete biometrics', busy: _busy, onPressed: _delete),
+        QuietButton(
+          key: const ValueKey('delete-biometrics'),
+          label: _armed ? 'Confirm delete' : 'Delete biometrics',
+          busy: _busy,
+          onPressed: _busy ? null : _onDeleteTap,
+        ),
         const SizedBox(height: Space.x2),
         QuietButton(label: 'Sign out', onPressed: _busy ? null : () => _app.signOut()),
         const SizedBox(height: Space.x2),

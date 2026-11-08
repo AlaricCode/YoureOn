@@ -17,10 +17,11 @@ describe('GET /bets/:id/receipt (§12.11)', () => {
     t = await makeApp();
     const a = await login(t.app, 'alex@example.com');
     const b = await login(t.app, 'maya@example.com');
-    const { bet } = await disputedAiJudgedBet(t.ctx, a.wallet, b.wallet, [
+    const { bet, witnessKeys } = await disputedAiJudgedBet(t.ctx, a.wallet, b.wallet, [
       { kind: 0, label: 'cam1', format: 'mjpeg', chunks: 2, user_id: a.user.id },
       { kind: 1, label: 'mic1', format: 'wav', chunks: 3, user_id: b.user.id },
     ]);
+    expect(t.ctx.blobs.getChunk(bet, witnessKeys[0]!.publicKey, 0)).not.toBeNull();
     // Before the panel: settlement pending.
     let rows = (await t.app.inject({ method: 'GET', url: `/v1/bets/${bet}/receipt`, headers: auth(a) })).json().rows;
     expect(rows.map((r: { label: string }) => r.label)).toEqual(['Verified', 'Terms', 'Evidence', 'Compute', 'Proof', 'Settlement']);
@@ -62,6 +63,10 @@ describe('GET /bets/:id/receipt (§12.11)', () => {
         ],
       },
     });
+
+    // §12.5 close-out: raw chunk bodies are deleted once Settled (exhibits stay).
+    expect(t.ctx.blobs.getChunk(bet, witnessKeys[0]!.publicKey, 0)).toBeNull();
+    expect(t.ctx.blobs.getChunk(bet, witnessKeys[1]!.publicKey, 0)).toBeNull();
 
     const yaml = await t.app.inject({ method: 'GET', url: `/v1/bets/${bet}/terms.yaml`, headers: auth(a) });
     expect(yaml.statusCode).toBe(200);

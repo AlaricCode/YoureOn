@@ -73,8 +73,10 @@ describe('config (§13)', () => {
 
   it('enforces mode combinations', () => {
     expect(() => loadConfig(testEnv({ CHAIN_EVENTS_SOURCE: 'quicknode' }))).toThrow(/QUICKNODE_SECRET|SOLANA_MODE=mock/);
-    expect(() => loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'quicknode' }))).toThrow(/QUICKNODE_SECRET/);
-    expect(loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'rpc_ws' })).solanaMode).toBe('devnet');
+    expect(() => loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'quicknode', PROVER: 'snarkjs' }))).toThrow(/QUICKNODE_SECRET/);
+    expect(loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'rpc_ws', PROVER: 'snarkjs' })).solanaMode).toBe('devnet');
+    // Mock Groth16 proofs are all-zero: the deployed program rejects them (every actor-bound bet → panel).
+    expect(() => loadConfig(testEnv({ SOLANA_MODE: 'devnet', CHAIN_EVENTS_SOURCE: 'rpc_ws' }))).toThrow(/requires PROVER=snarkjs/);
   });
 });
 
@@ -94,7 +96,11 @@ describe('spend guard', () => {
 
   it.each(paid)('%s=%s refuses to start without ALLOW_SPEND=1', (k, v) => {
     const extra: Record<string, string> = { [k]: v };
-    if (v === 'nosana') extra['NOSANA_API_KEY'] = 'x';
+    if (v === 'nosana') {
+      extra['NOSANA_API_KEY'] = 'x';
+      extra['NOSANA_PERCEPTION_IMAGE'] = `ghcr.io/verdict/perception@sha256:${'ab'.repeat(32)}`;
+      extra['NOSANA_MARKETS'] = '7AtiXMSH6R1jjBxrcYjehCkkSF7zvYWte63gwEDBcGHq';
+    }
     const c = loadConfig(testEnv(extra));
     expect(spendingModes(c).length).toBeGreaterThan(0);
     expect(() => enforceSpendGuard(c)).toThrow(SpendDisabledError);

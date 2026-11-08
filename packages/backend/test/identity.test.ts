@@ -3,6 +3,8 @@ import { commitmentFromBytes, poseidonCommit, hexToBytes, RECENT_HUDDLE_S } from
 import { decryptAesGcm } from '../src/crypto/aes.js';
 import { commitTemplate } from '../src/identity/biometrics.js';
 import { identityHuddleServices } from '../src/huddles/services.js';
+import { MAX_PENDING_JOINS, PENDING_JOIN_TTL_MS } from '../src/huddles/service.js';
+import { JOIN_RATE } from '../src/routes/huddles.js';
 import { fromBase64 } from '../src/util/bytes.js';
 import { auth, login, type TestApp } from './appHelpers.js';
 import { b64, crew, enroll, fakeJpeg, fakeWav, get, makeAppWith, post, submitSign } from './identityHelpers.js';
@@ -129,7 +131,12 @@ describe('enrollment (§8, §12.3)', () => {
     t = await makeAppWith();
     const u = await login(t.app, 'alice@example.com');
     await enroll(t.app, u, 'Alice');
+    // Voice recordings stored by older builds (acceptance WAVs) are deleted too; others' stay.
+    t.ctx.blobs.putBlob('acceptances', `draft1_${u.user.id}.wav`, new Uint8Array([1, 2, 3]));
+    t.ctx.blobs.putBlob('acceptances', 'draft1_someone-else.wav', new Uint8Array([4]));
     const r = await t.app.inject({ method: 'DELETE', url: '/v1/enroll', headers: auth(u) });
+    expect(t.ctx.blobs.getBlob('acceptances', `draft1_${u.user.id}.wav`)).toBeNull();
+    expect(t.ctx.blobs.getBlob('acceptances', 'draft1_someone-else.wav')).not.toBeNull();
     expect(r.statusCode).toBe(200);
     const body = r.json();
     expect(body.deleted).toBe(true);
@@ -180,14 +187,53 @@ describe('huddles (§12.3, D-22, D-31)', () => {
     const wrong = h.code === '000000' ? '000001' : '000000';
     expect((await post(t.app, owner, '/v1/huddles/join', { code: wrong })).json().error.code).toBe('CODE_INVALID');
     expect((await post(t.app, owner, '/v1/huddles/join', { code: 'abc' })).json().error.code).toBe('CODE_INVALID');
+    const { huddles } = identityHuddleServices(t.ctx);
     for (let i = 0; i < 9; i++) {
       const u = await login(t.app, `m${i}@example.com`);
       expect((await post(t.app, u, '/v1/huddles/join', { code: h.code })).statusCode).toBe(200);
+      huddles.confirm(h.huddle_id, [{ user_id: u.user.id, cos_bps: 9000 }]);
     }
     const late = await login(t.app, 'late@example.com');
     expect((await post(t.app, late, '/v1/huddles/join', { code: h.code })).json().error.code).toBe('HUDDLE_FULL');
     t.clock.advance(RECENT_HUDDLE_S * 1000 + 1);
     expect((await post(t.app, late, '/v1/huddles/join', { code: h.code })).json().error.code).toBe('CODE_INVALID');
+  });
+
+  it('caps unconfirmed joiners, expires stale ones, and rate-limits code guessing', async () => {
+    t = await makeAppWith();
+    const owner = await login(t.app, 'owner@example.com');
+    const h = (await post(t.app, owner, '/v1/huddles', {})).json();
+    // Sybil joiners hold at most MAX_PENDING_JOINS slots: the huddle never fills with them.
+    const sybils = [];
+    for (let i = 0; i < MAX_PENDING_JOINS; i++) {
+      const u = await login(t.app, `sybil${i}@example.com`);
+      sybils.push(u);
+      expect((await post(t.app, u, '/v1/huddles/join', { code: h.code })).statusCode).toBe(200);
+    }
+    const friend = await login(t.app, 'friend@example.com');
+    expect((await post(t.app, friend, '/v1/huddles/join', { code: h.code })).json().error.code).toBe('HUDDLE_FULL');
+    // Unconfirmed joiners see the huddle but not its drafts.
+    const sybil = sybils[0]!;
+    expect((await get(t.app, sybil, `/v1/huddles/${h.huddle_id}`)).statusCode).toBe(200);
+    // Stale pending joiners make room.
+    t.clock.advance(PENDING_JOIN_TTL_MS);
+    const ok = (await post(t.app, friend, '/v1/huddles/join', { code: h.code })).json();
+    expect(ok.members.map((m: { user: { id: string } }) => m.user.id)).toEqual([owner.user.id, friend.user.id]);
+
+    // Enumeration: wrong codes are rate-limited per user (per minute, then per hour).
+    const guesser = await login(t.app, 'guesser@example.com');
+    const wrong = (i: number) => String((Number(h.code) + 1 + i) % 1_000_000).padStart(6, '0');
+    const codes: string[] = [];
+    for (let i = 0; i < JOIN_RATE + 1; i++) codes.push((await post(t.app, guesser, '/v1/huddles/join', { code: wrong(i) })).json().error.code);
+    expect(codes.slice(0, JOIN_RATE).every((c) => c === 'CODE_INVALID')).toBe(true);
+    expect(codes[JOIN_RATE]).toBe('RATE_LIMITED');
+    for (let m = 0; m < 3; m++) {
+      t.clock.advance(60_000);
+      for (let i = 0; i < JOIN_RATE; i++) await post(t.app, guesser, '/v1/huddles/join', { code: wrong(100 + m * 10 + i) });
+    }
+    t.clock.advance(60_000);
+    // ≥ JOIN_FAILURES wrong codes this hour: even the right code is refused now.
+    expect((await post(t.app, guesser, '/v1/huddles/join', { code: h.code })).json().error.code).toBe('RATE_LIMITED');
   });
 
   it('removes members (creator removes others, members leave)', async () => {

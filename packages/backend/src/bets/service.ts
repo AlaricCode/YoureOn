@@ -12,12 +12,15 @@ import { ApiError } from '../errors.js';
 import { identityHuddleServices } from '../huddles/services.js';
 import { betSources, setBetSources, WORLD_BETS_COLLECTION } from '../integration/sources.js';
 import { loadBetInfo, requireMember, type BetInfo } from '../lifecycle/betInfo.js';
+import { startMessage } from '../lifecycle/live.js';
+import { lifecycleStores } from '../lifecycle/stores.js';
 import { liveAcceptances } from '../drafts/records.js';
 import { COLLECTIONS, type UserRecord } from '../persistence/records.js';
 import type { AudioBlob } from '../providers/types.js';
 import { worldService } from '../routes/world.js';
 import type { SignPayload } from '../tx/service.js';
 import { isPubkey } from '../util/bytes.js';
+import type { ServerMessage } from '../ws/messages.js';
 import { leaderboard } from './leaderboard.js';
 import { parsePracticeFrames, runPractice } from './practice.js';
 import { betMirror, type BetMirrorRecord } from './records.js';
@@ -86,7 +89,15 @@ export class BetsService {
       // Bets not (yet) known to the backend: subscribe without a snapshot (chain events are public).
       if (!this.mirror.has(id) && !this.isWorldBet(id)) return [];
       const user = ctx.auth.requireUser(userId);
-      return [{ type: 'bet' as const, bet: await this.get(user, id) }];
+      const view = await this.get(user, id);
+      const out: ServerMessage[] = [{ type: 'bet', bet: view }];
+      // While Live, replay `start` so a phone that (re)subscribes late still begins recording.
+      if (view.state === 'live') {
+        const live = lifecycleStores(ctx).live.get(id);
+        const start = live ? startMessage(ctx, id, live) : null;
+        if (start) out.push(start);
+      }
+      return out;
     });
   }
 

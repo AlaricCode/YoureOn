@@ -32,11 +32,15 @@ pub struct SettlePanel<'info> {
 }
 
 pub fn handle_settle_panel<'info>(ctx: Context<'_, '_, 'info, 'info, SettlePanel<'info>>, outcome: u8) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
     let bet_key = ctx.accounts.bet.key();
     {
         let bet = &ctx.accounts.bet;
         require!(bet.state == STATE_DISPUTED, VerdictError::InvalidState);
         require!(outcome <= OUTCOME_SIDE_1, VerdictError::BadOutcome);
+        // After the panel timeout only `refund` (reason 6) applies (§9.9; errata chainmodel).
+        // Exactly complementary to refund's `now > disputed_at + PANEL_TIMEOUT_S`.
+        require!(now <= bet.disputed_at.saturating_add(PANEL_TIMEOUT_S), VerdictError::DeadlinePassed);
         let msg = panel_message(&crate::ID, &bet_key, outcome, &bet.evidence_root, &bet.program_hash);
         verify_panel_quorum(&ctx.accounts.instructions.to_account_info(), &msg, &bet.judges)?;
     }

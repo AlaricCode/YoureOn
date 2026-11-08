@@ -11,6 +11,7 @@ import '../support/copy_rule.dart';
 import '../support/fake_server.dart';
 import '../support/fixtures.dart';
 import '../support/screen_harness.dart';
+import '../support/test_app.dart';
 
 void main() {
   testWidgets('creator: create, scan to confirm, continue to Terms', (tester) async {
@@ -31,8 +32,12 @@ void main() {
           ],
         };
       });
-    final c = await openScreen(tester, s, Routes.huddle, const HuddleArgs());
+    final face = FakeFaceCapture();
+    final devices = Devices();
+    final c = await openScreen(tester, s, Routes.huddle, const HuddleArgs(), face: face, devices: devices);
     expect(find.byType(HuddleScreen), findsOneWidget);
+    expect(face.isOpen, isTrue);
+    expect(devices.awake.on, isTrue, reason: 'the screen stays on while the huddle camera is up');
     expect(find.text('482913'), findsOneWidget);
     expect(find.text('Ana'), findsOneWidget);
     expect(find.text('Ben'), findsOneWidget);
@@ -54,6 +59,14 @@ void main() {
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
     expect(find.byType(TermsScreen), findsOneWidget);
+    // The back camera is handed over to Terms → Scene check → Record.
+    expect(face.isOpen, isFalse);
+
+    // Back from Terms reopens it.
+    tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+    await tester.pumpAndSettle();
+    expect(find.byType(HuddleScreen), findsOneWidget);
+    expect(face.isOpen, isTrue);
     c.dispose();
   });
 

@@ -194,6 +194,9 @@ export class IdentityService {
   /** Erases all biometrics and returns the zero-commitment `init_profile` sign payload. */
   async deleteEnrollment(user: UserRecord): Promise<{ deleted: true; sign: SignPayload }> {
     const erased = this.vault.erase(user.id);
+    // Delete means delete (§1 #5): also any stored voice recordings of the user
+    // (acceptance WAVs written by older builds: acceptances/<draft>_<user>.wav).
+    this.ctx.blobs.deleteBlobsMatching('acceptances', (k) => k.endsWith(`_${user.id}.wav`));
     const sign = await this.profileTx(erased, ZERO_COMMIT_HEX, ZERO_COMMIT_HEX, 'Delete biometrics');
     return { deleted: true, sign };
   }

@@ -201,7 +201,7 @@ fn creator_wins_when_ball_never_appears() {
     assert_eq!(b.leg_results[0], 0);
     // Silence = consent: anyone (the oracle) settles after the deadline.
     let o = f.env.oracle.insecure_clone();
-    assert_err(f.try_consent(&o), VerdictError::NotParticipant);
+    assert_err(f.try_consent(&o), VerdictError::DeadlineNotReached);
     f.env.advance(CONSENT_WINDOW_S + 1);
     ok(f.try_consent(&o));
     let b = f.bet();

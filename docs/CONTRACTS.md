@@ -6,7 +6,7 @@ This document is the **single source of truth** shared by the four implementatio
 |---|---|---|
 | Engine | `packages/engine`, `testvectors/` | TypeScript (pure, no I/O) |
 | Backend | `packages/backend`, `services/` (optional sidecars, not built by default), `infra/` | TypeScript (Node ≥ 20); Python sidecars |
-| Chain + ZK | `programs/verdict`, `crates/verdict-rules`, `circuits/`, `sp1/` | Rust (Anchor 0.32.1), circom 2.1.x |
+| Chain + ZK | `programs/verdict`, `crates/verdict-rules`, `circuits/`, `sp1/` (not built: errata [sp1-dropped]) | Rust (Anchor 0.32.1), circom 2.1.x |
 | App | `app/` | Flutter (stable ≥ 3.24, Dart ≥ 3.5) |
 
 It refines `verdict-spec.md` (product spec, v0.2). `courtside-spec.md` is a byte-identical copy of `verdict-spec.md` (v0.2); both are covered by this document.
@@ -84,7 +84,8 @@ All teams MUST use these values (engine: `packages/engine/src/constants.ts`; Rus
 | `MAX_SEGMENTS` | 16 | decisive windows per TrackBuffer |
 | `MAX_BUFFER_PAYLOAD` | 10000 | bytes in TrackBuffer payload; MUST satisfy `8 + 48 + MAX_BUFFER_PAYLOAD ≤ 10240`, so never raise above 10184 |
 | `MAX_EVAL_FRAMES` | 1024 | total buffer frames `Σ n_frames` |
-| `MAX_EVAL_COST` | 16384 | evaluation cost cap (§3.13) |
+| `MAX_EVAL_COST` | 8192 | evaluation cost cap (§3.13; was 16384, see D-47) |
+| `EVAL_COST_SETUP_FRAMES` | 4 | frames charged per unit of weight for per-node set-up: `cost = (\|F\| + EVAL_COST_SETUP_FRAMES) × Σw` (§3.13) |
 | `POST_TRACKS_CHUNK` | 700 | max `data` bytes per `post_tracks` instruction |
 | `MAX_WITNESSES` | 8 | |
 | `MAX_CHECKPOINTS` | 8 | identity checkpoints per bet |
@@ -716,8 +717,8 @@ Rust returns `EvalOutput { preruling: u8, reason: u8, winner_mask: u8, leg_resul
 - `crates/verdict-rules` is `#![no_std]`, has no Anchor dependency and **no `alloc`**. The Anchor program and the SP1 guest depend on it. It is generic over `const W: usize` signal words: onchain `W = 16` (`MAX_EVAL_FRAMES = 1024`). The SP1 guest uses a larger `W` and `maxCost = ∞`.
 - A signal is `[u64; W]`, a bitset indexed by position in F. The interpreter evaluates expressions recursively and returns signals by value, so peak stack ≈ depth × 3 × 128 B. It reads records directly from the TrackBuffer account data. There is no copying and no heap. Do not use `request_heap_frame`.
 - `then_within`, `for_duration`, `at_rest`, `rep_count`, `count`, `lastSeen`, `heldrun` and the stale-region lookups MUST be O(|F|): use running last-true / last-present frames and run-length counters, never an O(|F|·D) rescan.
-- **Cost**: `cost = |F| × Σ_legs Σ_nodes w(node)` over `valid_attempt` and `success`. `w` = 1 for combinators (`and or not then_within for_duration before`), 2 for state leaves, 4 for event leaves, and 12 for `disappears_into`. If `cost > MAX_EVAL_COST`, the result is `needs_panel`, reason 13 (§3.1 step 4). TS and Rust compute it identically before evaluating legs.
-- Every `run_rules` transaction carries `SetComputeUnitLimit(1_400_000)`. The Chain team benchmarks the worst case allowed by `MAX_EVAL_COST` in LiteSVM, and lowers `MAX_EVAL_COST` (in this document first) if it exceeds 1.2M CU.
+- **Cost**: `cost = (|F| + EVAL_COST_SETUP_FRAMES) × Σ_legs Σ_nodes w(node)` over `valid_attempt` and `success`. `w` = 1 for combinators (`and or not then_within for_duration before`); 2 for state leaves, except 4 for `overlaps` and `inside`; 4 for event leaves, except 6 for `enters`, `leaves` and `touches` and 12 for `disappears_into`. (`overlaps`, `inside`, `enters`, `leaves`, `touches` and `disappears_into` can run an even-odd polygon test per frame.) The `EVAL_COST_SETUP_FRAMES` term charges each node's per-evaluation work that doesn't scale with |F| (decode, signal set-up, zone preparation). If `cost > MAX_EVAL_COST`, the result is `needs_panel`, reason 13 (§3.1 step 4). TS and Rust compute it identically before evaluating legs. (D-47)
+- Every `run_rules` transaction carries `SetComputeUnitLimit(1_400_000)`. The Chain team benchmarks the worst case allowed by `MAX_EVAL_COST` in LiteSVM, and lowers `MAX_EVAL_COST` (in this document first) if it exceeds 1.2M CU. Current bound (`programs/verdict/tests/node_costs.rs`, release build): `CU(run_rules) ≤ 40,000 + 60 × records + 120 × cost` for every accepted buffer, i.e. ≤ 1.08M CU at `cost = MAX_EVAL_COST` with a full payload. The `worst_case_*` benchmarks in `programs/verdict/tests/compute.rs` run at the cap.
 
 ---
 
@@ -942,13 +943,16 @@ POST {PERCEPTION_URL}/jobs
   { bet, job_nonce, fps: 10, offset_ms,
     video_urls: [{ index, url, sha256, start_ms, duration_ms, body_format: "mp4" | "mjpeg" }],
     prompts: [{ entity, phrase }], entity_refs: [...calibration.scene.entity_refs],
-    need_pose: boolean, need_reid: boolean }
+    need_pose: boolean, need_reid: boolean,
+    need_faces?: boolean /* errata backend-audit-faces: true iff any leg is actor-bound */ }
   → { job_id }
 GET {PERCEPTION_URL}/jobs/:id
   → { status: "queued" | "running" | "done" | "failed", model_hash, flags,
-      detections_url /* JSON Lines of RawDetection */, host: { provider, job_id, url, market } }
+      detections_url /* JSON Lines of RawDetection */, host: { provider, job_id, url, market },
+      frame?: { width_px, height_px } /* decoded source size, errata backend-audit-faces */ }
 ```
 The backend runs two jobs (hosts A and B) per bet. Host A = the job that reports `done` first.
+`video_urls[].url` are signed, expiring, tokenless URLs (`GET {API}/v1/media/chunks/:bet/:witness/:index?exp&sig`, errata backend-audit-media). Nosana jobs run the same image in one-shot mode and POST `{model_hash, flags, frame?, detections_jsonl}` to a signed `POST {API}/v1/media/perception/:bet/:job_nonce?exp&sig` (errata backend-audit-nosana).
 
 ### 6.1 Raw per-frame records (perception job output, JSON Lines)
 ```ts
@@ -961,6 +965,9 @@ interface RawDetection {            // one line per (frame, track)
   confidence: number;               // 0..1 float
   pose?: { standing: boolean; elbow_deg?: number };   // MediaPipe, person tracks only
   reid?: number[];                  // appearance embedding (person tracks), optional
+  face?: { emb: number[]; conf: number };   // `entity: "person"` lines only, when need_faces: 128 floats,
+                                            // L2-normalized (services/embedder model), on frames with
+                                            // floor(t_ms/100) % 3 == 0 where a face is found (errata backend-audit-faces)
 }
 ```
 
@@ -1296,16 +1303,16 @@ pub struct TrackBufferHeader { bet: Pubkey, payload_len: u32, program_len: u16, 
 |---|---|---|---|---|
 | 1 | `init_profile` | `face_commit [u8;32], voice_commit [u8;32], display_name String (≤32 bytes)` | payer, wallet `s`, profile `w` (init_if_needed), system_program | Creates or overwrites; sets `updated_at = now`. Zero commitments = deleted. A non-zero commitment ≥ the BN254 scalar modulus `r` ⇒ `BadCommitment`. Emits `ProfileUpdated` |
 | 2 | `create_bet` | `nonce u64, participants Vec<Pubkey>, stakes Vec<u64>, side_b_mask u8, stake_each u64, time_limit_s u32, flags u8, program_hash [u8;32], acceptance_audio_hash [u8;32], judges [Pubkey;3]` | payer, creator `s`, oracle `s`, bet `w` (init), vault `w` (init), mint, token_program, system_program | **Oracle co-signs** (backend endorses the judges) **[D-37]**. Checks: 2 ≤ P ≤ 8; participants distinct; `participants[0] == creator`; `side_b_mask` bit0 = 0, nonzero, only bits < P; rules/ai_judged: all `stakes[i] == stake_each ≥ 10_000`; market: `stake_each = 0`, each stake ≥ 10_000; time limit per kind; flags per §9.2; judges distinct, not participants, ≠ oracle; oracle not a participant; `program_hash ≠ 0`. Sets `fund_deadline = now + FUND_WINDOW_S`, `created_at = now`, state Proposed. Emits `BetCreated` |
-| 3 | `fund` | `calibration_hash [u8;32], program_hash [u8;32], terms_hash [u8;32]` | participant `s`, bet `w`, vault `w`, participant_token `w`, token_program | Requires Proposed and `now <= fund_deadline`; signer is an unfunded participant. `program_hash` must equal the Bet's, and `terms_hash` must equal §4.2 recomputed from the Bet (`ConsentMismatch`). Rules: if `bet.calibration_hash == 0`, set it; else it must be equal (`CalibrationMismatch`). ai_judged/market: must be zero. Transfers `stakes[i]`. When all are funded → Funded, `funded_at = now`. Emits `Funded` |
+| 3 | `fund` | `calibration_hash [u8;32], program_hash [u8;32], terms_hash [u8;32]` | participant `s`, bet `w`, vault `w`, participant_token `w`, token_program | Requires Proposed and `now <= fund_deadline`; signer is an unfunded participant. `program_hash` must equal the Bet's, and `terms_hash` must equal §4.2 recomputed from the Bet (`ConsentMismatch`). Rules: the supplied `calibration_hash` must be nonzero; if `bet.calibration_hash == 0`, set it; else it must be equal (`CalibrationMismatch` for a zero or unequal value). ai_judged/market: must be zero. Transfers `stakes[i]`. When all are funded → Funded, `funded_at = now`. Emits `Funded` |
 | 4 | `cancel` | — | creator `s`, bet `w`, vault `w`, oracle `w`, track_buffer `w`, token_program, + payout accounts | Proposed only. Refunds funded stakes → Refunded (reason 7). Emits `BetCancelled`, `Refunded` |
 | 5 | `start` | `beacon_slot u64, witnesses Vec<WitnessArg {key Pubkey, kind u8}>` | authority `s` (creator or oracle), bet `w`, slot_hashes | Requires Funded and `now <= funded_at + START_WINDOW_S`; ≤ 8 distinct witnesses, kind ≤ 2. Beacon per §7.5 (market: `beacon_slot = 0` and no witnesses). Stores kinds, sets heads to none and head hashes to `G_w`, computes the initial root. → Live, `started_at = now`. Emits `BetStarted` |
 | 6 | `commit_evidence` | `seq u32, heads Vec<HeadArg {index u32, hash [u8;32]}>` | oracle `s`, bet `w` | Requires Live and `seq == evidence_seq + 1`; exactly `n_witnesses` heads in witness order; §7.4 checks. Stores heads and hashes. Emits `EvidenceCommitted {is_final: false}` |
 | 7 | `end` | `seq u32, heads Vec<HeadArg>` | authority `s`, bet `w` | Requires Live. Oracle: any time, with heads (`seq` rules as in #6), or `[]`. A participant: any time, `heads = []`. Anyone else: once `now >= started_at + time_limit_s`, `heads = []`. Market: oracle only, heads empty. Sets the final root → Perceiving, `ended_at = now`. Emits `EvidenceCommitted {is_final: true}`, `BetEnded` |
 | 8 | `post_tracks` | `payload_len u32, program_len u16, calibration_len u16, offset u32, data Vec<u8>, finalize bool, perception_root [u8;32]` | payer, oracle `s`, bet `w`, track_buffer `w`, system_program | Requires Perceiving and not finalized; `payload_len ≤ MAX_BUFFER_PAYLOAD`; `len(data) ≤ POST_TRACKS_CHUNK`. The first call creates the PDA (§9.3); later calls must repeat identical lengths. Writes must be sequential (`offset == written`). On `finalize`: `written == payload_len`; `sha256(program) == program_hash`; `sha256(calibration) == calibration_hash` (empty ⇔ zero hash); decode-validate all parts (§5); program participants/stakes/side_b_mask/time_limit/kind/actor-bound flag must equal the Bet's (`ProgramBetMismatch`); set `tracks_hash`, `perception_root` (read only when `finalize`; may be zero otherwise) and `tracks_finalized = 1`. If `payload_len == program_len + calibration_len` (no tracks part): allowed only with feature `sp1` (else `BufferLayout`); sets `tracks_finalized = 2`, `tracks_hash = 0`. Emits `TracksPosted` |
-| 9 | `run_rules` | — | oracle `s`, bet `w`, track_buffer | Requires Perceiving and `tracks_finalized == 1` (`TracksNotFinalized` otherwise). The oracle must sign; after `ended_at + PERCEPTION_TIMEOUT_S`, `refund` is used instead **[D-36]**. Evaluates §3 with `verified = bet.bio`. WINNER → PreRuled, `consent_deadline = now + CONSENT_WINDOW_S`. NEEDS_PANEL → Disputed with `dispute_reason = reason`, bond 0, default disputer. Emits `PreRuled` (and `Disputed` if it needs the panel) |
+| 9 | `run_rules` | — | oracle `s`, bet `w`, track_buffer | Requires Perceiving and `tracks_finalized == 1` (`TracksNotFinalized` otherwise). The oracle must sign; after `ended_at + PERCEPTION_TIMEOUT_S`, `refund` is used instead **[D-36]** (`run_rules` then fails with `DeadlinePassed`; at exactly `ended_at + PERCEPTION_TIMEOUT_S` it still runs). Evaluates §3 with `verified = bet.bio`. WINNER → PreRuled, `consent_deadline = now + CONSENT_WINDOW_S`. NEEDS_PANEL → Disputed with `dispute_reason = reason`, bond 0, default disputer. Emits `PreRuled` (and `Disputed` if it needs the panel) |
 | 10 | `consent` | `winner_mask u8, evidence_root [u8;32]` | authority `s`, bet `w`, vault `w`, oracle `w`, track_buffer `w`, token_program, + payout accounts | Requires PreRuled; args must equal the Bet's (`ConsentMismatch`). A participant signer before the deadline sets their consent bit (`AlreadyConsented` if already set). Settles when all bits are set, or when any signer (including the oracle) calls after `now > consent_deadline` (silence = consent). Settlement: path CONSENT (RULE if the pre-ruling came from `verify_sp1_run`); pays per §9.8; closes TrackBuffer and vault (rent → oracle). Emits `Consented` (if a bit was set), then `Settled` |
 | 11 | `dispute` | `reason u8 (1..4), evidence_root [u8;32]` | disputer `s`, bet `w`, vault `w`, disputer_token `w`, token_program | Requires PreRuled and `now <= consent_deadline`; the signer is a participant who has not consented. `bond = max(min_i stakes[i] / DISPUTE_BOND_DIV, DISPUTE_BOND_MIN)` is transferred to the vault. → Disputed. Emits `Disputed` |
-| 12 | `settle_panel` | `outcome u8 (0 no contest, 1 side 0 wins, 2 side 1 wins)` | bet `w`, vault `w`, oracle `w`, track_buffer `w`, token_program, instructions sysvar, + payout accounts | Requires Disputed and a quorum per §9.7. Outcome 0 → refund all, bond back → Refunded (reason 2). Otherwise `winner_mask` = side mask; the bond is **upheld** iff `preruling == 1 && winner_mask == bet.winner_mask` (bond joins the pot), else it is returned to the disputer. → Settled, path PANEL. Emits `Settled` (or `Refunded`) |
+| 12 | `settle_panel` | `outcome u8 (0 no contest, 1 side 0 wins, 2 side 1 wins)` | bet `w`, vault `w`, oracle `w`, track_buffer `w`, token_program, instructions sysvar, + payout accounts | Requires Disputed, `now ≤ disputed_at + PANEL_TIMEOUT_S` (else `DeadlinePassed`; `refund` reason 6 applies after it) and a quorum per §9.7. Outcome 0 → refund all, bond back → Refunded (reason 2). Otherwise `winner_mask` = side mask; the bond is **upheld** iff `preruling == 1 && winner_mask == bet.winner_mask` (bond joins the pot), else it is returned to the disputer. → Settled, path PANEL. Emits `Settled` (or `Refunded`) |
 | 13 | `verify_biometric_proof` | `participant u8, modality u8, frame u32, tau_bps u16, proof_a [u8;64], proof_b [u8;128], proof_c [u8;64]` | oracle `s`, bet `w`, profile | Requires Perceiving (tracks need not be posted). Checks: `profile.wallet == participants[participant]`; `profile.updated_at <= bet.created_at` (`ProfileTooNew`); the commitment for the modality is nonzero; `tau_bps >= TAU_*_BPS`. Builds public inputs per §8.6 with the final `bet.evidence_root`, then runs Groth16 verify. Appends a `BioCheck` (dedupe on participant+frame; `TooManyCheckpoints` past 8). The oracle proves only the checkpoints the engine computed from the posted buffer. Emits `BiometricVerified`. The tx requests 300K CU |
 | 14 | `verify_sp1_run` | `public_values Vec<u8>, proof Vec<u8>` | oracle `s`, bet `w` | Cargo feature `sp1` (off by default ⇒ `Sp1Disabled`). Requires `tracks_finalized == 2`. Public values: `program_hash[32] ‖ calibration_hash[32] ‖ perception_root[32] ‖ evidence_root[32] ‖ bio_hash[32] ‖ preruling u8 ‖ reason u8 ‖ winner_mask u8 ‖ leg_results[8]`; all hashes must match the Bet; then it behaves like `run_rules` **[D-9]** |
 | 15 | `refund` | — | bet `w`, vault `w`, oracle `w`, track_buffer `w`, token_program, + payout accounts | Permissionless when one of these holds: Proposed & `now > fund_deadline` (1); Funded & `now > funded_at + START_WINDOW_S` (3); Live & `now > started_at + time_limit_s + LIVE_GRACE_S` (4); Perceiving & `now > ended_at + PERCEPTION_TIMEOUT_S` (5); Disputed & `now > disputed_at + PANEL_TIMEOUT_S` (6); PreRuled & `now > consent_deadline + PANEL_TIMEOUT_S` (8, stuck escape). Returns each funded stake and any bond. → Refunded, `refund_reason` set. Emits `Refunded` |
@@ -1519,6 +1526,7 @@ interface DraftView {
   kind: "rules" | "ai_judged" | "market"; title: string | null;          // compiler title, ≤ 40 chars, 1–5 words; not hashed
   questions: Question[];                                                  // "region" questions never block "ready"
   program?: Program; yaml?: string; readback?: string[]; program_hash?: string;
+  bet_id?: Pubkey;                                                        // Bet PDA, set once create_bet confirmed (errata App: following the creator)
   labels: Record<string, string>;                                         // entity → 1–3 word Title-case label (persons = display name)
   participants: { user_id: string; display_name: string; side: 0 | 1; accepted: boolean; is_creator: boolean }[];
   errors?: CompileError[]; warnings?: CompileError[];
@@ -1594,9 +1602,9 @@ interface BetView {
 | `GET /bets/:id/ruling` | — | `{outcome_text, preruling, readback, legs: [{id, result, decisive_frames}], amount_units: number \| null, can_respond: boolean, bond_units}` (§12.10) |
 | `POST /bets/:id/consent` | — | `{sign}` |
 | `POST /bets/:id/dispute` | `{reason: 1..4}` | `{sign, bond_units}` |
-| `GET /bets/:id/booth` | — | booth record (§10.5) |
-| `GET /bets/:id/exhibits/:eid` | — | raw exhibit bytes |
-| `GET /bets/:id/receipt` | — | `{rows: ReceiptRow[]}` (§12.11) |
+| `GET /bets/:id/booth` | — | booth record (§10.5); bet viewers only, else `NOT_FOUND` (errata backend-audit-viewer) |
+| `GET /bets/:id/exhibits/:eid` | — | raw exhibit bytes; bet viewers only |
+| `GET /bets/:id/receipt` | — | `{rows: ReceiptRow[]}` (§12.11); bet viewers only |
 | `GET /bets/:id/announce.mp3` | — | TTS of the verdict |
 | `GET /pay/challenge` | — | `{challenge_id, face_prompt}` |
 | `POST /pay/scan` | `{challenge_id, faces_b64: string[2] (crop at neutral, crop after prompt)}` | `{matches: [{user, cos_bps, matched}], liveness: boolean}` |
@@ -1614,7 +1622,7 @@ interface BetView {
 
 ### 12.4 WebSocket `GET {API}/v1/ws?token=…`
 Client → server:
-- `{"type":"subscribe","topics":["user","bet:<id>","huddle:<id>","world:<event_id>"]}` and `{"type":"unsubscribe",...}`. On subscribe, the server immediately sends a snapshot (`bet` / `huddle` / `draft`).
+- `{"type":"subscribe","topics":["user","bet:<id>","huddle:<id>","world:<event_id>"]}` and `{"type":"unsubscribe",...}`. On subscribe, the server immediately sends a snapshot (`bet` / `huddle` / `draft`). While a bet is Live, the `bet:<id>` snapshot also replays its `start` message (clients treat `start` idempotently).
 - `{"type":"scene.frame","bet_id","jpeg_b64","t_ms"}`: 10 fps, JPEG ≤ 640 px long side. The backend keeps a rolling 50-frame buffer and evaluates `leafSignals` with the last PUT calibration.
 - `{"type":"recording","bet_id","witness_key"}`.
 - `{"type":"ping"}` every 20 s. The server closes the socket after 60 s of silence. On reconnect, the client re-subscribes and treats the snapshots as truth.
@@ -1626,7 +1634,7 @@ Server → client:
 - `{"type":"start","bet_id","beacon":{"slot","hash_hex","symbols":[42]},"wav_url","sfx_url","play_on_user_id","play_delay_ms":1500}`.
 - `{"type":"booth","bet_id","booth":BoothRecord}`, `{"type":"world.price",...}`, `{"type":"notify","title":"≤ 3 words","bet_id"}`, `{"type":"pong"}`.
 
-Notifications are WS `notify` plus on-device local notifications only (no FCM/APNs) **[D-29]**.
+Notifications are WS `notify` plus on-device local notifications only (no FCM/APNs) **[D-29]**. The app shows `notify` titles as an in-app banner in the foreground and as local notifications while backgrounded, schedules a local reminder before a pending consent deadline, and re-fetches bets on resume (the OS may suspend the socket in the background).
 
 ### 12.5 Chain events: QuickNode Streams webhook (`CHAIN_EVENTS_SOURCE=quicknode`)
 - Stream config: `infra/quicknode/stream.json` (network Solana devnet, dataset `block`, filter `infra/quicknode/filter.js`, destination `{API}/v1/webhooks/quicknode`). The filter keeps transactions that mention `VERDICT_PROGRAM_ID`, decodes `Program data:` lines into events (§9.5) and returns:
@@ -1765,7 +1773,7 @@ Every external dependency sits behind an interface with a deterministic mock, se
 | `IDENTITY_PROVIDER` | `mock` \| `http` | Embedding = deterministic unit vector from `sha256(user_id ‖ modality)` (seeded PRNG), perturbed by ≤ 5% noise derived from the input bytes. In mock huddle scans, each face crop resolves to the next not-yet-confirmed joined member |
 | `GEMINI_PROVIDER` | `mock` \| `live` | Fixtures in `packages/backend/fixtures/gemini/*.json` (live = public REST/WS, free) |
 | `PROVER` | `mock` \| `snarkjs` | snarkjs = real Groth16 in-process (free, offline, needs `circuits/build`) |
-| `SP1_PROVER` | `off` \| `mock` \| `network` | `network` costs money |
+| `SP1_PROVER` | `off` \| `mock` \| `network` | `network` costs money. Not implemented in this build: any value is treated as `off` with a startup warning (errata [sp1-dropped]) |
 | `ALLOW_SPEND` | unset \| `1` | Spend guard |
 | `DATA_DIR` | `./.data` | §12.7 |
 | `USDC_MINT` | unset (devnet: create a test mint) | |
@@ -1910,7 +1918,7 @@ time_limit_s: 180
 Notes:
 - `line` resolves to shape `line` (used by `behind`). Participants default to creator + the shooter's member. Entity indices: shooter 0, ball 1, can 2, line 3 → the track table has 3 tracks (0, 1, 2).
 - Encoded valid_attempt (15 bytes) = `01 35 01 00 00 00 00 00 15 00 03 00 00 00 00` = and(released_by(a=ball 1, b=shooter 0, p=0), behind(a=shooter 0, b=line 3, p=0)). The `can.opening` ref byte is `0x12`.
-- Cost per frame = valid_attempt (1 + 4 + 2) + success (1 + 12 + 1 + 2 + 2) = 25, so up to 655 buffer frames fit `MAX_EVAL_COST`.
+- Weight Σw = valid_attempt (1 + 4 + 2) + success (1 + 12 + 1 + 4 + 2) = 27, so `cost = (|F| + 4) × 27` and up to 299 buffer frames fit `MAX_EVAL_COST`.
 - Static checkpoint bound = `min(1, 3) × 1 = 1`.
 - Example calibration:
 ```json
@@ -2001,7 +2009,7 @@ time_limit_s: 90
 ```
 Notes:
 - Participants: creator + persons = [creator] only (< 2), and the huddle has exactly 2 → both.
-- `rep_count` needs full coverage from frame 0 to the decisive frame (≤ 600 frames · 1 track · 12 B = 7,200 B, within the 10 KB cap; cost 600 × 2 = 1,200).
+- `rep_count` needs full coverage from frame 0 to the decisive frame (≤ 600 frames · 1 track · 12 B = 7,200 B, within the 10 KB cap; cost (600 + 4) × 2 = 1,208).
 - `success` is true at f only while `me` is present and has ≥ 20 reps. Checkpoint: `(0, first such frame)`. If he fails, the leg is raw False and there is no checkpoint.
 - Pass: `winner_mask = 1`.
 
@@ -2032,7 +2040,7 @@ Every deviation from the spec is listed with the spec section it overrides.
 | D-6 | Evidence continuity is cryptographic (hash chains). Onchain monotonic head checks set advisory `gap_mask` bits and do not change the outcome. | §5.4 "the onchain program checks chunk indices" (deviation) |
 | D-7 | The beacon "blockhash" is the SlotHashes bank hash for a recent slot; the audio carries slot + 8-byte hash prefix + CRC in 2.1 s of 16-FSK. | §3.6.2 |
 | D-8 | The ElevenLabs Sound Effects start sound is the audible cue; the data tones are synthesized locally and played right after it. t0 = end of the tones. | §3.6.2, §5.11 (deviation: the sound itself doesn't encode the hash) |
-| D-9 | The SP1 path is specified but compiled out by default (`sp1` feature, `SP1_PROVER=off`); onchain decisive-window execution is the shipping path (spec fallback (a)). | §5.8.2 |
+| D-9 | The SP1 path is specified but compiled out by default (`sp1` feature, `SP1_PROVER=off`); onchain decisive-window execution is the shipping path (spec fallback (a)). This build ships no SP1 guest/host and never routes to SP1; oversized runs always go to the panel (errata [sp1-dropped]). | §5.8.2 |
 | D-10 | Embedded wallet = device-generated ed25519 key in secure storage behind the platform passkey/biometric prompt; sign-in providers are mocked offline. | §3.1.1, §6.1 |
 | D-11 | `program_hash = sha256(program_bin)`; program_bin embeds the canonical-JSON `json_hash`. | §3.3.6 |
 | D-12 | Calibration is committed by funding: the first `fund` sets `calibration_hash`, and every later funder must pass the same value. | §3.4.5 |
@@ -2070,12 +2078,13 @@ Every deviation from the spec is listed with the spec section it overrides.
 | D-44 | Object binding is sticky with hand-off and rebind delay (multi-object scenes). | §5.2 |
 | D-45 | Scene-check/practice persons bind to the largest person track (no identity). | §3.4.4 |
 | D-46 | The spec's 2–5 fps face verification becomes face sampling every 3rd frame at 10 fps (≈3.3 fps). | §5.3 |
+| D-47 | Onchain compute budget (§3.13): `MAX_EVAL_COST` 16384 → 8192; `cost = (\|F\| + EVAL_COST_SETUP_FRAMES) × Σw` with `EVAL_COST_SETUP_FRAMES = 4`; `overlaps`/`inside` weigh 4 and `enters`/`leaves`/`touches` 6 (polygon tests). With the interpreter optimizations (overflow checks off for `verdict-rules` only, squared-speed thresholds, prepared polygons, word-level signal ops), every buffer accepted under the cap runs `run_rules` in ≤ 1.08M CU (bound) — the old cap needed 3–11M CU. Programs above the cap still go to the panel (reason 13) or SP1. | §5.7 "thousands of compute units", D-42 |
 
 ---
 
 ## 17. Repository, toolchain and deliverables
 
-- **Layout**: npm workspaces (`packages/engine`, `packages/backend`) at the repo root; `crates/verdict-rules`, `programs/verdict` and `sp1/` (feature-gated) in one Cargo workspace; `circuits/`; `app/`; `services/perception`, `services/embedder` (Python, optional, not built by default); `infra/quicknode/{stream.json,filter.js}`; `testvectors/`; `scripts/`.
+- **Layout**: npm workspaces (`packages/engine`, `packages/backend`) at the repo root; `crates/verdict-rules`, `programs/verdict` and `sp1/` (feature-gated; not built in this build, errata [sp1-dropped]) in one Cargo workspace; `circuits/`; `app/`; `services/perception`, `services/embedder` (Python, optional, not built by default); `infra/quicknode/{stream.json,filter.js}`; `testvectors/`; `scripts/`.
 - **Toolchain**: Node ≥ 20; Rust stable + Anchor 0.32.1 + the Agave 2.x CLI pinned in `Anchor.toml`; circom 2.1.x + snarkjs; Flutter stable ≥ 3.24.
 - **Commands that MUST pass** (offline, no keys, no money):
   - `npm test` (engine + backend, including the vector generator check `npm run vectors -- --check`);

@@ -3,16 +3,9 @@
  * mock-clock tick). For each non-terminal bet it sends the first applicable
  * action; all actions are idempotent and a "wrong state" reply counts as done.
  *
- * This module is the scheduler only. TODO(bets/keeper agent): register a task
- * that walks the bets mirror and applies, in order:
- *   1. Market, Funded → start (oracle)
- *   2. Live, rules/ai_judged, now ≥ t0 + time_limit_s·1000 + TAIL_MS → POST /end flow
- *   3. Live, market, all events resolved → end
- *   4. Perceiving → perception → post_tracks chunks → verify_biometric_proof ×k → run_rules (resume)
- *   5. PreRuled, now > consent_deadline + 5 s → consent with authority = oracle
- *   6. Disputed, no booth running → start the booth; when ruled → settle_panel
- *   7. Any §9.4 #15 refund condition → refund
- *   8. Before any payout tx, create missing participant ATAs (idempotent, payer-funded)
+ * This module is the scheduler only. The tasks are registered elsewhere:
+ * lifecycle/service.ts ('bet-lifecycle': start/end/perception/consent/refund),
+ * booth/service.ts ('booth') and world/service.ts ('world').
  */
 import { KEEPER_INTERVAL_S } from '@verdict/engine';
 import type { Clock } from '../util/clock.js';

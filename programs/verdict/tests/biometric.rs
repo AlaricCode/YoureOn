@@ -140,6 +140,9 @@ fn proof_precondition_failures() {
     // Bad modality.
     let p = Proof { modality: 2, ..load_fixture().unwrap().proof };
     assert_err(try_verify(&mut f, &w0, &p), VerdictError::BadReason);
+    // Multi-fault: bad modality + profile of another participant ⇒ profile check first.
+    let p = Proof { modality: 2, ..load_fixture().unwrap().proof };
+    assert_err(try_verify(&mut f, &w1, &p), VerdictError::NotParticipant);
     // Non-oracle signer.
     let mut ixn = verify_ix(&f, &w0, &fx.proof);
     let stranger = kp(99);

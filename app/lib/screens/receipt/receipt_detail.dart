@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../api/models/receipt.dart';
 import '../../core/format.dart';
+import '../../ui/tokens.dart';
+import '../../ui/widgets/controls.dart';
 import '../../ui/widgets/sheet.dart';
+import '../../ui/widgets/text.dart';
 
 /// One key/value row of a Receipt detail sheet. [url] rows open in an
-/// external browser (§12.11).
+/// external browser (§12.11), except authenticated API URLs (the Terms
+/// "Rules file"), which are fetched with the session and shown in-app.
 class DetailRow {
   const DetailRow(this.label, this.value, {this.url, this.labelIsData = false});
   final String label;
@@ -117,6 +122,39 @@ class ReceiptDetailSheet extends StatelessWidget {
             onTap: r.url == null ? null : () => onOpen(r.url!),
           ),
       ]),
+    );
+  }
+}
+
+/// The bet's `terms.yaml`, fetched in-app (the route needs the bearer
+/// token, so it never goes to the external browser).
+class RulesFileSheet extends StatelessWidget {
+  const RulesFileSheet({super.key, required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: AppChip(label: 'Copy', onTap: () => Clipboard.setData(ClipboardData(text: text))),
+        ),
+        const SizedBox(height: Space.x2),
+        Flexible(
+          child: SingleChildScrollView(
+            key: const ValueKey('rules-file'),
+            child: DataText(
+              text,
+              style: Typo.small.copyWith(fontFamily: 'monospace', fontFamilyFallback: const ['Courier']),
+              maxLines: null,
+              overflow: TextOverflow.visible,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

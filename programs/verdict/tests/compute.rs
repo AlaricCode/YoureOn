@@ -1,4 +1,5 @@
 //! Compute benchmarks for `run_rules` near `MAX_EVAL_COST` (§3.13: must stay ≤ 1.2M CU).
+//! The general bound (every accepted buffer) is checked per node kind in `node_costs.rs`.
 mod common;
 
 use common::flow::*;
@@ -34,7 +35,7 @@ fn bench(name: &str, spec: Spec, verified: &[(u8, u32)]) -> (u64, Bet) {
         let tracks = verdict_rules::decode_tracks(&spec.tracks_bin, &program).expect("tracks");
         (tracks.n_frames as u64, program.weight_per_frame())
     };
-    let cost = n_frames * weight;
+    let cost = (n_frames + EVAL_COST_SETUP_FRAMES) * weight;
     assert!(spec.payload().len() <= MAX_BUFFER_PAYLOAD, "{name}: payload {}", spec.payload().len());
     let mut f = Flow::with(Env::new(), users, spec);
     f.to_tracks_posted();
@@ -56,11 +57,17 @@ fn wobble(f: u32) -> Rec {
     at(x, y, 150)
 }
 
-/// The worst case allowed by MAX_EVAL_COST (|F|·Σw ≈ 16000) currently exceeds the
-/// 1.4M CU transaction limit (see docs/CONTRACTS-ERRATA.md, [anchor] §3.13). Kept as an
-/// ignored benchmark: `cargo test -p verdict --test compute -- --ignored --nocapture`.
+/// Asserts the buffer is at the cap: `cost ≤ MAX_EVAL_COST` and one more frame would exceed it.
+fn assert_at_cap(spec: &Spec) {
+    let program = verdict_rules::decode_program(&spec.program_bin).expect("program");
+    let tracks = verdict_rules::decode_tracks(&spec.tracks_bin, &program).expect("tracks");
+    let w = program.weight_per_frame();
+    let cost = (tracks.n_frames as u64 + EVAL_COST_SETUP_FRAMES) * w;
+    assert!(cost <= MAX_EVAL_COST && cost + w > MAX_EVAL_COST, "cost {cost} not at the cap");
+}
+
+/// Velocity/state-heavy success at the cap: (405 + 4) × 20 = 8180.
 #[test]
-#[ignore]
 fn worst_case_state_heavy_at_cost_cap() {
     let keys: Vec<Pubkey> = default_users(2).iter().map(|u| u.pubkey()).collect();
     let a = 0u8;
@@ -68,9 +75,10 @@ fn worst_case_state_heavy_at_cost_cap() {
         and(and(leaf(OP_MOVING, a, 0, 0), leaf(OP_AT_REST, a, 0, 5)), and(leaf(OP_SPEED, a, 0, 100), leaf(OP_DIRECTION, a, 1, 0))),
         and(and(present(a), leaf(OP_INTACT, a, 0, 0)), leaf(OP_MOVING, a, 0, 0)),
     );
-    let n = 790u16;
+    let n = 405u16;
     let tracks = tracks_bin(FLAGS_OK, &[(0, 0xFF, 1000)], &[(0, n)], |_, f| wobble(f));
     let spec = rules_spec(21, 0, &keys, vec![(EK_OBJECT, 0)], vec![LegB::exists(1, succ)], cond_leg(1), calibration(&[]), tracks);
+    assert_at_cap(&spec);
     let (cu, _) = bench("state_heavy_at_cap", spec, &[]);
     assert!(cu <= CU_BUDGET, "{cu} CU exceeds {CU_BUDGET}");
 }
@@ -96,8 +104,8 @@ fn event_heavy_two_objects_and_zone() {
     assert!(cu <= CU_BUDGET, "{cu} CU exceeds {CU_BUDGET}");
 }
 
+/// 8 legs (count with attempts + 7 exists) over 4 segments at the cap: (386 + 4) × 21 = 8190.
 #[test]
-#[ignore]
 fn worst_case_eight_legs_at_cost_cap() {
     let keys: Vec<Pubkey> = default_users(2).iter().map(|u| u.pubkey()).collect();
     let a = 0u8;
@@ -109,10 +117,63 @@ fn worst_case_eight_legs_at_cost_cap() {
     for id in 2..=8u8 {
         cond = [vec![OP_AND], cond, cond_leg(id)].concat();
     }
-    let n = 780u16;
-    let tracks = tracks_bin(FLAGS_OK, &[(0, 0xFF, 0)], &[(0, 200), (220, 200), (450, 200), (700, n - 600)], |_, f| wobble(f));
+    let tracks = tracks_bin(FLAGS_OK, &[(0, 0xFF, 0)], &[(0, 100), (110, 100), (230, 100), (350, 86)], |_, f| wobble(f));
     let spec = rules_spec(23, 0, &keys, vec![(EK_OBJECT, 0)], legs, cond, calibration(&[]), tracks);
+    assert_at_cap(&spec);
     let (cu, _) = bench("eight_legs_at_cap", spec, &[]);
+    assert!(cu <= CU_BUDGET, "{cu} CU exceeds {CU_BUDGET}");
+}
+
+/// 8-point zig-zag zone (every edge crosses the person's row): the heaviest leaves per unit
+/// of weight (person anchors ⇒ two polygon tests for `overlaps`). (451 + 4) × 18 = 8190.
+fn zigzag() -> Vec<(u16, u16)> {
+    vec![(1000, 3000), (2500, 9500), (3500, 3000), (4500, 9500), (5500, 3000), (6500, 9500), (7500, 3000), (9000, 9500)]
+}
+
+fn walker(f: u32) -> Rec {
+    if f % 11 == 10 {
+        return ABSENT;
+    }
+    person_at(1500 + ((f * 97) % 7000) as u16, 6000 + ((f * 31) % 3000) as u16)
+}
+
+#[test]
+fn worst_case_polygon_at_cost_cap() {
+    let keys: Vec<Pubkey> = default_users(2).iter().map(|u| u.pubkey()).collect();
+    let (p, z) = (0u8, 1u8);
+    let succ = or(leaf(OP_OVERLAPS, p, z, 0), and(leaf(OP_TOUCHES, p, z, 0), leaf(OP_ENTERS, p, z, 0)));
+    let n = 451u16;
+    let tracks = tracks_bin(FLAGS_OK, &[(p, 0, 0)], &[(0, n)], |_, f| walker(f));
+    let spec = rules_spec(26, FLAG_ACTOR_BOUND, &keys, vec![(EK_PERSON, 0), (EK_ZONE, 0)], vec![LegB::exists(1, succ).actor()], cond_leg(1), calibration(&[(z, zigzag())]), tracks);
+    assert_at_cap(&spec);
+    let (cu, _) = bench("polygon_at_cap", spec, &[]);
+    assert!(cu <= CU_BUDGET, "{cu} CU exceeds {CU_BUDGET}");
+}
+
+/// Balanced tree of 32 `leaf`s joined by `then_within` (63 nodes, the per-expression maximum).
+fn big(lf: &[u8]) -> Vec<u8> {
+    fn tree(n: usize, lf: &[u8]) -> Vec<u8> {
+        if n == 1 {
+            return lf.to_vec();
+        }
+        then_within(20, tree(n / 2, lf), tree(n - n / 2, lf))
+    }
+    tree(32, lf)
+}
+
+/// Set-up heavy: 2 count legs × (63 + 63) polygon-event nodes at |F| = 5, the most frames the
+/// cap allows: (5 + 4) × 892 = 8028.
+#[test]
+fn worst_case_setup_heavy_at_cost_cap() {
+    let keys: Vec<Pubkey> = default_users(2).iter().map(|u| u.pubkey()).collect();
+    let (p, z) = (0u8, 1u8);
+    let lf = leaf(OP_TOUCHES, p, z, 0);
+    let legs: Vec<LegB> = (1..=2u8).map(|id| LegB::count(id, 0, 1, 8, big(&lf), big(&lf)).actor()).collect();
+    let cond = [vec![OP_AND], cond_leg(1), cond_leg(2)].concat();
+    let tracks = tracks_bin(FLAGS_OK, &[(p, 0, 0)], &[(0, 5)], |_, f| walker(f));
+    let spec = rules_spec(27, FLAG_ACTOR_BOUND, &keys, vec![(EK_PERSON, 0), (EK_ZONE, 0)], legs, cond, calibration(&[(z, zigzag())]), tracks);
+    assert_at_cap(&spec);
+    let (cu, _) = bench("setup_heavy_at_cap", spec, &[]);
     assert!(cu <= CU_BUDGET, "{cu} CU exceeds {CU_BUDGET}");
 }
 
@@ -154,7 +215,7 @@ fn over_cost_cap_goes_to_panel_cheaply() {
         and(and(leaf(OP_MOVING, a, 0, 0), leaf(OP_AT_REST, a, 0, 5)), and(leaf(OP_SPEED, a, 0, 100), leaf(OP_DIRECTION, a, 1, 0))),
         and(and(present(a), leaf(OP_INTACT, a, 0, 0)), and(leaf(OP_MOVING, a, 0, 0), present(a))),
     );
-    let n = 800u16; // 800 × 23 > MAX_EVAL_COST
+    let n = 800u16; // (800 + 4) × 23 > MAX_EVAL_COST
     let tracks = tracks_bin(FLAGS_OK, &[(0, 0xFF, 1000)], &[(0, n)], |_, f| wobble(f));
     let spec = rules_spec(25, 0, &keys, vec![(EK_OBJECT, 0)], vec![LegB::exists(1, succ)], cond_leg(1), calibration(&[]), tracks);
     let (cu, b) = bench("over_cap", spec, &[]);

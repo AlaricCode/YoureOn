@@ -31,6 +31,7 @@ pub fn handle_verify_sp1_run(ctx: Context<VerifySp1Run>, public_values: Vec<u8>,
     let bet = &mut ctx.accounts.bet;
     require!(bet.state == STATE_PERCEIVING, VerdictError::InvalidState);
     require!(bet.tracks_finalized == TRACKS_SP1_ONLY, VerdictError::TracksNotFinalized);
+    require!(now <= bet.ended_at.saturating_add(PERCEPTION_TIMEOUT_S), VerdictError::DeadlinePassed);
     let pv = &public_values;
     require!(pv.len() == SP1_PUBLIC_VALUES_LEN, VerdictError::BadProof);
     let h = |i: usize| -> &[u8] { &pv[32 * i..32 * i + 32] };
@@ -43,9 +44,20 @@ pub fn handle_verify_sp1_run(ctx: Context<VerifySp1Run>, public_values: Vec<u8>,
 
     verify_sp1_proof(&public_values, &proof)?;
 
+    // The ruling must be self-consistent (errata chainmodel; mirrors the TS chain model): a
+    // WINNER has reason 0 and a nonzero mask within the participants; NEEDS_PANEL has a §3.2
+    // panel reason (10..=13) and mask 0; leg results are 0/1/2 or 0xFF.
+    let (pre, reason, mask) = (pv[160], pv[161], pv[162]);
+    if pre == PRERULING_WINNER {
+        require!(reason == 0 && mask != 0 && mask & !bet.all_mask() == 0, VerdictError::BadProof);
+    } else {
+        require!(pre == PRERULING_NEEDS_PANEL && (10..=13).contains(&reason) && mask == 0, VerdictError::BadProof);
+    }
+    require!(pv[163..171].iter().all(|&v| v <= 2 || v == 0xff), VerdictError::BadProof);
+
     let mut leg_results = [0u8; 8];
     leg_results.copy_from_slice(&pv[163..171]);
-    let ruling = Ruling { preruling: pv[160], reason: pv[161], winner_mask: pv[162], leg_results };
+    let ruling = Ruling { preruling: pre, reason, winner_mask: mask, leg_results };
     apply_ruling(bet, bet_key, &ruling, now)
 }
 

@@ -21,7 +21,7 @@ import { MockGemini, mockWalkPrice } from '../src/providers/mock/gemini.js';
 import { MockIdentity } from '../src/providers/mock/identity.js';
 import { MockPerception } from '../src/providers/mock/perception.js';
 import { MockStt, MockTts } from '../src/providers/mock/voice.js';
-import { HttpPerception } from '../src/providers/real/perception.js';
+import { HttpPerception, NOSANA_EXPLORER_JOB_URL, NosanaPerception, type PerceptionUpload } from '../src/providers/real/perception.js';
 import { HttpEmbedder } from '../src/providers/real/sidecars.js';
 import { probBpsFromPrices } from '../src/providers/real/world.js';
 import { createProviders } from '../src/providers/registry.js';
@@ -55,6 +55,13 @@ describe('registry', () => {
     expect(p.judges.map((j) => j.name)).toEqual(['mock', 'mock', 'mock']);
     expect(p.sp1.enabled).toBe(false);
     expect(p.mockScenario).toBe('pass');
+  });
+
+  it('SP1_PROVER=mock is treated as off: disabled and refuses to prove (D-9, errata sp1-dropped)', async () => {
+    const p = createProviders(loadConfig(testEnv({ SP1_PROVER: 'mock' })));
+    expect(p.sp1.name).toBe('mock');
+    expect(p.sp1.enabled).toBe(false);
+    await expect(p.sp1.proveRun({ bet: 'x', payload: new Uint8Array(0) })).rejects.toThrow(/SP1 path not implemented \(D-9\)/);
   });
 });
 
@@ -286,10 +293,96 @@ describe('real providers (fake fetch, no network)', () => {
       seed: 0,
     });
     expect(posted).toHaveLength(2);
-    expect(posted[0]).toMatchObject({ bet: 'B', fps: 10, offset_ms: 5 });
+    expect(posted[0]).toMatchObject({ bet: 'B', fps: 10, offset_ms: 5, need_faces: false });
+    expect((posted[0] as { job_nonce: string }).job_nonce).not.toBe((posted[1] as { job_nonce: string }).job_nonce);
     expect(r.a.host.job_id).toBe('j2');
     expect(r.a.raw).toHaveLength(1);
     expect(() => new HttpPerception(loadConfig(testEnv()), { baseUrl: 'http://perc' })).toThrow(/ALLOW_SPEND|SPEND/);
+  });
+
+  it('NosanaPerception posts two pinned-image GPU jobs to two markets; host A = first COMPLETED; distinct nodes', async () => {
+    expect(process.env['ALLOW_SPEND'] ?? '').toBe(''); // never set in tests
+    const image = `ghcr.io/verdict/perception@sha256:${'cd'.repeat(32)}`;
+    const markets = ['MarketA1111111111111111111111111111111111111', 'MarketB1111111111111111111111111111111111111'];
+    const created: { auth: string | null; market: string; def: Record<string, any> }[] = [];
+    const uploads = new Map<string, PerceptionUpload>();
+    const sink = {
+      uploadUrl: (bet: string, nonce: string) => `https://backend.test/v1/media/perception/${bet}/${nonce}?exp=1&sig=x`,
+      take: (bet: string, nonce: string) => uploads.get(`${bet}/${nonce}`) ?? null,
+    };
+    let polls = 0;
+    const nodeOf = (addr: string, sameNode: boolean) => (sameNode ? 'NodeX' : `Node-${addr}`);
+    const makeFetch = (sameNode: boolean) =>
+      (async (url: string, init?: RequestInit) => {
+        if (url.endsWith('/jobs/create-with-credits')) {
+          const b = JSON.parse(String(init!.body));
+          created.push({ auth: new Headers(init!.headers).get('authorization'), market: b.market, def: b.jobDefinition });
+          const addr = `Job${created.length}`;
+          // The worker runs and uploads its result to the signed URL.
+          const job = JSON.parse(Buffer.from(b.jobDefinition.ops[0].args.env.VERDICT_JOB, 'base64').toString('utf8'));
+          uploads.set(`${job.bet}/${job.job_nonce}`, {
+            model_hash: 'ef'.repeat(32),
+            flags: 1,
+            frame: { width_px: 1280, height_px: 720 },
+            detections_jsonl: `{"t_ms":0,"entity":"ball","track_id":1,"bbox_px":[0,0,1,1],"mask_area_px":1,"confidence":0.9,"x":"${addr}"}\n`,
+          });
+          return new Response(JSON.stringify({ job: addr }));
+        }
+        const addr = url.split('/').pop()!;
+        polls++;
+        const done = addr === 'Job2' || polls > 3;
+        return new Response(JSON.stringify({ state: done ? 'COMPLETED' : 'RUNNING', node: nodeOf(addr, sameNode), market: addr === 'Job1' ? markets[0] : markets[1] }));
+      }) as typeof fetch;
+    const cfg = loadConfig(testEnv({ ALLOW_SPEND: '1', NOSANA_API_KEY: 'nos-key' }));
+    const req = {
+      bet: 'B',
+      program: {} as never,
+      calibration: null,
+      offset_ms: 0,
+      video_urls: [],
+      prompts: [{ entity: 'ball', phrase: 'ball' }],
+      need_pose: false,
+      need_reid: true,
+      need_faces: true,
+      seed: 0,
+    };
+    const p = new NosanaPerception(cfg, { image, markets, apiUrl: 'https://nos.test/api', fetch: makeFetch(false), pollIntervalMs: 1 });
+    p.attachResultSink(sink);
+    const r = await p.runPair(req);
+    expect(created).toHaveLength(2);
+    expect(created.map((c) => c.market)).toEqual(markets);
+    expect(created.every((c) => c.auth === 'Bearer nos-key')).toBe(true);
+    const op = created[0]!.def.ops[0];
+    expect(op).toMatchObject({ type: 'container/run', args: { image, gpu: true } });
+    const j0 = JSON.parse(Buffer.from(op.args.env.VERDICT_JOB, 'base64').toString('utf8'));
+    const j1 = JSON.parse(Buffer.from(created[1]!.def.ops[0].args.env.VERDICT_JOB, 'base64').toString('utf8'));
+    expect(j0).toMatchObject({ bet: 'B', fps: 10, need_reid: true, need_faces: true });
+    expect(j0.job_nonce).not.toBe(j1.job_nonce);
+    expect(r.a.host).toEqual({ provider: 'nosana', job_id: 'Job2', url: `${NOSANA_EXPLORER_JOB_URL}Job2`, market: markets[1] });
+    expect(r.b.host.job_id).toBe('Job1');
+    expect(r.a).toMatchObject({ network: 'mainnet', model_hash: 'ef'.repeat(32), flags: 1, frame: { width_px: 1280, height_px: 720 } });
+    expect(r.a.raw).toHaveLength(1);
+
+    // Same node for both jobs: not independent → the pair fails.
+    created.length = 0;
+    polls = 0;
+    const same = new NosanaPerception(cfg, { image, markets, apiUrl: 'https://nos.test/api', fetch: makeFetch(true), pollIntervalMs: 1 });
+    same.attachResultSink(sink);
+    await expect(same.runPair(req)).rejects.toThrow(/independent hosts/);
+    // Spend guard, image digest pin.
+    expect(() => new NosanaPerception(loadConfig(testEnv({ NOSANA_API_KEY: 'k' })), { image, markets })).toThrow(/ALLOW_SPEND|SPEND/);
+    expect(() => new NosanaPerception(cfg, { image: 'ghcr.io/verdict/perception:latest', markets })).toThrow(/digest/);
+  });
+
+  it('NosanaPerception fails on FAILED/STOPPED jobs', async () => {
+    const cfg = loadConfig(testEnv({ ALLOW_SPEND: '1', NOSANA_API_KEY: 'k' }));
+    const f = (async (url: string) =>
+      url.endsWith('/create-with-credits') ? new Response(JSON.stringify({ job: 'J' })) : new Response(JSON.stringify({ state: 'STOPPED', node: 'n' }))) as typeof fetch;
+    const p = new NosanaPerception(cfg, { image: `x@sha256:${'00'.repeat(32)}`, markets: ['M'], fetch: f, pollIntervalMs: 1 });
+    p.attachResultSink({ uploadUrl: () => 'u', take: () => null });
+    await expect(
+      p.runPair({ bet: 'B', program: {} as never, calibration: null, offset_ms: 0, video_urls: [], prompts: [], need_pose: false, need_reid: false, seed: 0 }),
+    ).rejects.toThrow(/STOPPED/);
   });
 
   it('HttpEmbedder validates dimensions and normalizes', async () => {

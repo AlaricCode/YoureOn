@@ -115,7 +115,7 @@ export const ENUM_VARS = {
     name: 'SP1_PROVER',
     values: ['off', 'mock', 'network'],
     spend: ['network'],
-    doc: 'SP1 prover (network costs money)',
+    doc: 'SP1 prover: not implemented (D-9); any value is treated as off with a startup warning (network still needs ALLOW_SPEND)',
   },
 } as const satisfies Record<string, EnumVar>;
 
@@ -139,6 +139,9 @@ export const STRING_DEFAULTS = {
   SOLANA_WS_URL: '',
   GEMINI_BASE_URL: 'https://api.gemini.com',
   PERCEPTION_URL: '',
+  NOSANA_API_URL: '',
+  NOSANA_PERCEPTION_IMAGE: '',
+  NOSANA_MARKETS: '',
   EMBEDDER_URL: 'http://127.0.0.1:8090',
   DETECTOR_URL: 'http://127.0.0.1:8091',
   LOG_LEVEL: 'info',

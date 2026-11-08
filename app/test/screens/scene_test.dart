@@ -130,6 +130,9 @@ void main() {
     await settle(tester);
     expect(find.byType(RecordScreen), findsOneWidget);
     expect(devices.runners['b1']!.registered, [true], reason: 'camera + audio witnesses');
+    // Scene check closed the camera before Record opened it again.
+    expect(devices.scene.log, ['open', 'close', 'open']);
+    expect(devices.scene.isOpen, isTrue);
     c.dispose();
   });
 

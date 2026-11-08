@@ -5,9 +5,14 @@
  * tooling. Nothing is sent unless SOLANA_MODE=devnet is configured (the
  * registry only constructs this class then).
  *
- * TODO(chain/keeper agents):
- *  - rpc_ws event source: `connection.onLogs(programId)` → handler (§12.5);
- *    wire in chain/events.ts `startRpcWsSource`.
+ * The rpc_ws event source lives in chain/rpcWs.ts (wired by
+ * routes/chainEvents.ts). `submit()` also feeds the events of every confirmed
+ * backend transaction to the `onEvents` listeners, so with
+ * CHAIN_EVENTS_SOURCE=rpc_ws the same events can arrive twice (submit +
+ * logsSubscribe). That is harmless: both paths index events per transaction
+ * in log order and ChainEventHandler deduplicates on `eventKey(signature,
+ * index)` (test/streams.test.ts, "handles a backend-submitted tx once").
+ * Open items:
  *  - retries / priority fees / durable confirmation strategy.
  *  - re-read the Bet after every observed transaction (§9.5 lost-log rule).
  */
@@ -38,6 +43,7 @@ import {
   type VerdictEvent,
 } from '@verdict/engine';
 import type { KeyPair } from '../crypto/keys.js';
+import { ApiError } from '../errors.js';
 import { toBase58, toHex } from '../util/bytes.js';
 import type { Clock } from '../util/clock.js';
 import type { VerdictIdl } from './idl.js';
@@ -109,7 +115,7 @@ export class DevnetChain implements ChainClient {
   }
 
   get mint(): string {
-    if (!this.mintAddress) throw new Error('devnet: no USDC mint yet; call ensureTestMint() or set USDC_MINT');
+    if (!this.mintAddress) throw new ApiError('INTERNAL', 'devnet: no USDC mint yet (startup init failed?); set USDC_MINT or fund the fee payer', 503);
     return this.mintAddress;
   }
 
@@ -158,18 +164,40 @@ export class DevnetChain implements ChainClient {
     try {
       signature = await this.connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
       const conf = await this.connection.confirmTransaction(signature, this.opts.commitment ?? 'confirmed');
-      if (conf.value.err) return { status: 'failed', signature, error: JSON.stringify(conf.value.err), code: 'TX_FAILED' };
+      if (conf.value.err) {
+        const error = txErrorName(conf.value.err, this.idlErrors);
+        return { status: 'failed', signature, error, code: error === 'InsufficientFunds' ? 'INSUFFICIENT_FUNDS' : 'TX_FAILED', raw: JSON.stringify(conf.value.err) };
+      }
     } catch (e) {
       const msg = (e as Error).message ?? String(e);
-      const expired = /blockhash not found|block height exceeded|expired/i.test(msg);
-      const insufficient = /insufficient funds/i.test(msg);
+      // Already landed (a retry, a restart, another instance): ask the cluster instead of failing.
+      if (/already (been )?processed/i.test(msg)) {
+        const sig = toBase58(tx.signature ?? new Uint8Array(64));
+        const st = (await this.connection.getSignatureStatus(sig, { searchTransactionHistory: true })).value;
+        if (st && !st.err) {
+          signature = sig;
+          return this.confirmed(sig);
+        }
+      }
+      const logs = await sendErrorLogs(e, this.connection);
+      const error = programErrorName(msg, logs, this.idlErrors);
       return {
         status: 'failed',
         signature,
-        error: msg,
-        code: expired ? 'TX_EXPIRED' : insufficient ? 'INSUFFICIENT_FUNDS' : 'TX_FAILED',
+        error,
+        code: error === 'BlockhashNotFound' ? 'TX_EXPIRED' : error === 'InsufficientFunds' ? 'INSUFFICIENT_FUNDS' : 'TX_FAILED',
+        raw: msg,
+        ...(logs ? { logs } : {}),
       };
     }
+    return this.confirmed(signature);
+  }
+
+  private get idlErrors(): IdlErrors {
+    return this.opts.idl.errors ?? [];
+  }
+
+  private async confirmed(signature: string): Promise<SendResult> {
     const events = await this.fetchEvents(signature);
     if (events.length > 0) for (const l of this.listeners) await l(events);
     const slot = events[0]?.slot ?? Number(await this.connection.getSlot());
@@ -224,6 +252,11 @@ export class DevnetChain implements ChainClient {
       createAtaIdempotentIx(this.feePayer, owner, this.mint),
       mintToIx(this.mint, associatedTokenAddress(owner, this.mint), this.feePayer, amount),
     ]);
+  }
+
+  /** Startup hook (main/buildApp onReady): create the test mint before any route reads `mint`. */
+  async init(): Promise<void> {
+    if (!this.mintAddress) await this.ensureTestMint();
   }
 
   /**
@@ -320,6 +353,70 @@ export function parseProgramLogs(logs: string[], programId: string): VerdictEven
     }
   }
   return out;
+}
+
+type IdlErrors = { code: number; name: string }[];
+
+const RUNTIME_NAMES: [RegExp, string][] = [
+  [/blockhash not found|block height exceeded|expired/i, 'BlockhashNotFound'],
+  [/insufficient funds|insufficient lamports/i, 'InsufficientFunds'],
+  [/signature verification fail|invalid signature|missing signature/i, 'SignatureVerificationFailed'],
+];
+
+/** §9.6 name of an Anchor/custom program error code (6000 + contract order), else `Custom(n)`. */
+export function customErrorName(code: number, idlErrors: IdlErrors): string {
+  return idlErrors.find((e) => e.code === code)?.name ?? `Custom(${code})`;
+}
+
+/**
+ * Error name of a failed send: the Anchor `Error Code: X` log line, else a
+ * `custom program error: 0x…` code mapped through the IDL, else a fixed
+ * runtime name (BlockhashNotFound, InsufficientFunds,
+ * SignatureVerificationFailed), else `TransactionFailed`.
+ */
+export function programErrorName(message: string, logs: string[] | null, idlErrors: IdlErrors): string {
+  const all = [message, ...(logs ?? [])];
+  for (const l of all) {
+    const m = /Error Code: (\w+)/.exec(l);
+    if (m) return m[1]!;
+  }
+  const hexMatch = all.map((l) => /custom program error: 0x([0-9a-f]+)/i.exec(l)).find(Boolean);
+  const code = hexMatch ? parseInt(hexMatch[1]!, 16) : null;
+  if (code !== null && code >= 6000) return customErrorName(code, idlErrors);
+  // SPL / runtime failures (e.g. SPL Token 0x1 "insufficient funds") keep a fixed name.
+  for (const [re, name] of RUNTIME_NAMES) if (all.some((l) => re.test(l))) return name;
+  if (code !== null) return `Custom(${code})`;
+  return 'TransactionFailed';
+}
+
+/** Name of a confirmed transaction's `err` (`{InstructionError:[i,{Custom:n}]}`, `"InsufficientFundsForFee"`, …). */
+export function txErrorName(err: unknown, idlErrors: IdlErrors): string {
+  if (typeof err === 'string') return /InsufficientFunds/.test(err) ? 'InsufficientFunds' : err;
+  if (err && typeof err === 'object') {
+    const ie = (err as { InstructionError?: [number, unknown] }).InstructionError;
+    if (ie) {
+      const inner = ie[1];
+      if (inner && typeof inner === 'object' && 'Custom' in inner) return customErrorName(Number((inner as { Custom: number }).Custom), idlErrors);
+      if (typeof inner === 'string') return inner;
+      if (inner && typeof inner === 'object') return Object.keys(inner)[0] ?? 'InstructionError';
+    }
+    return Object.keys(err)[0] ?? 'TransactionFailed';
+  }
+  return 'TransactionFailed';
+}
+
+/** Program logs of a web3.js SendTransactionError (simulation failure), or null. */
+async function sendErrorLogs(e: unknown, connection: Connection): Promise<string[] | null> {
+  const x = e as { logs?: unknown; getLogs?: (c: Connection) => Promise<string[]> } | null;
+  if (x && Array.isArray(x.logs)) return x.logs as string[];
+  if (x && typeof x.getLogs === 'function') {
+    try {
+      return await x.getLogs(connection);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function readMintState(path: string): string | null {

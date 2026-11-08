@@ -40,6 +40,7 @@ class _TermsScreenState extends State<TermsScreen> with Guarded, WsWatch {
   bool _dictating = false;
   bool _agentAsked = false;
   bool _leaving = false;
+  String? _following;
   final Set<String> _spoken = {};
 
   String? get _me => app.userId;
@@ -74,7 +75,13 @@ class _TermsScreenState extends State<TermsScreen> with Guarded, WsWatch {
         final h = await app.api.huddle(widget.args.huddleId);
         if (mounted) setState(() => _huddle = h);
         final id = widget.args.draftId;
-        if (id != null) _setDraft(await app.api.draft(id));
+        if (id != null) {
+          _setDraft(await app.api.draft(id));
+        } else {
+          // A draft that arrived before the huddle loaded may already name its bet.
+          final d = _draft;
+          if (d != null) _follow(d);
+        }
       });
 
   void _setDraft(DraftView d) {
@@ -83,6 +90,31 @@ class _TermsScreenState extends State<TermsScreen> with Guarded, WsWatch {
     if (cur != null && cur.draftId == d.draftId && cur.updatedAtMs > d.updatedAtMs) return;
     setState(() => _draft = d);
     _speakNext(d);
+    _follow(d);
+  }
+
+  /// Every non-creator phone (counterparties and bystanders) follows the
+  /// creator once the draft names its confirmed bet. Only `huddle:<id>`
+  /// reaches every member, so the draft update is the signal; the bet is
+  /// fetched and matched on `program_hash`.
+  void _follow(DraftView d) {
+    final id = d.betId;
+    if (id == null || _leaving || _following == id || _huddle == null || _isCreator) return;
+    _following = id;
+    unawaited(_followBet(id, d.programHash));
+  }
+
+  Future<void> _followBet(String id, String? programHash) async {
+    try {
+      final bet = await app.api.bet(id);
+      if (!mounted || _leaving) return;
+      if (programHash != null && bet.programHash != programHash) return;
+      app.upsertBet(bet);
+      _goToBet(bet);
+    } on ApiException {
+      // Not visible yet: the next draft/bet update retries.
+      if (_following == id) _following = null;
+    }
   }
 
   /// Speaks the first unanswered question not spoken yet.
@@ -102,6 +134,14 @@ class _TermsScreenState extends State<TermsScreen> with Guarded, WsWatch {
         _setDraft(draft);
       case WsHuddle(:final huddle) when huddle.id == widget.args.huddleId:
         setState(() => _huddle = huddle);
+        final d = _draft;
+        if (d != null) _follow(d);
+      case WsNotify(:final betId) when betId != null && _huddle != null && !_isCreator && _draft?.programHash != null:
+        // Counterparties also hear "Bet offered" on the `user` topic.
+        if (!_leaving && _following != betId) {
+          _following = betId;
+          unawaited(_followBet(betId, _draft!.programHash));
+        }
       case WsBet(:final bet):
         final d = _draft;
         if (d != null && d.programHash != null && bet.programHash == d.programHash && !_isCreator) {

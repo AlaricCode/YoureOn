@@ -45,7 +45,8 @@ pub fn handle_consent<'info>(ctx: Context<'_, '_, 'info, 'info, Consent<'info>>,
         let before_deadline = now <= bet.consent_deadline;
         let idx = bet.participant_index(&auth);
         if before_deadline {
-            let i = idx.ok_or(VerdictError::NotParticipant)?;
+            // Non-participant before the deadline: DeadlineNotReached (errata chainmodel).
+            let i = idx.ok_or(VerdictError::DeadlineNotReached)?;
             require!(bet.consent_mask & (1 << i) == 0, VerdictError::AlreadyConsented);
             bet.consent_mask |= 1 << i;
             emit!(Consented { bet: bet_key, participant: auth, consent_mask: bet.consent_mask });

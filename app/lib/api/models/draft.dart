@@ -97,6 +97,7 @@ class DraftView {
     this.yaml,
     this.readback,
     this.programHash,
+    this.betId,
     this.errors = const [],
     this.warnings = const [],
   });
@@ -111,6 +112,11 @@ class DraftView {
   final String? yaml;
   final List<String>? readback;
   final String? programHash;
+
+  /// The bet created from this draft, once `create_bet` confirmed
+  /// (errata: lets every huddle member, bystanders included, follow the
+  /// creator from Terms).
+  final String? betId;
   final Map<String, String> labels;
   final List<DraftParticipant> participants;
   final List<CompileError> errors;
@@ -135,6 +141,7 @@ class DraftView {
       yaml: asStringOrNull(j['yaml']),
       readback: j['readback'] == null ? null : asStringList(j['readback']),
       programHash: asStringOrNull(j['program_hash']),
+      betId: asStringOrNull(j['bet_id']),
       labels: asStringMap(j['labels']),
       participants: asList(j['participants'], DraftParticipant.fromJson),
       errors: asList(j['errors'], CompileError.fromJson),

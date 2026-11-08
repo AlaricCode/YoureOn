@@ -18,7 +18,7 @@ import type { SignPayload } from '../tx/service.js';
 import { chainBet, ixEnv, participantIndex, requireState, type BetInfo } from './betInfo.js';
 import { ensurePayoutAtas, participantsOf } from './oracle.js';
 import { calibrationComplete } from './scene.js';
-import type { LifecycleStores } from './stores.js';
+import { pinCommittedCalibration, type LifecycleStores } from './stores.js';
 
 /** §12.9 money: "$1,234.50" from USDC base units. */
 export function formatUsd(units: bigint | number): string {
@@ -51,14 +51,15 @@ export async function fundSign(ctx: AppContext, s: LifecycleStores, info: BetInf
 
   let calibrationHashHex = ZERO_HASH_HEX;
   if (info.program.kind === 'rules') {
-    const scene = s.scenes.get(info.id);
+    // Once a fund committed a calibration_hash, that calibration is the scene (not a later PUT).
+    const scene = pinCommittedCalibration(s, info.id, bet.calibration_hash);
+    if (bet.calibration_hash !== ZERO_HASH_HEX && scene?.calibration_hash !== bet.calibration_hash) {
+      throw new ApiError('CALIBRATION_LOCKED', 'calibration differs from the committed one');
+    }
     if (!scene?.calibration || !scene.calibration_hash || !calibrationComplete(info.program, scene.calibration)) {
       throw new ApiError('CALIBRATION_INCOMPLETE');
     }
     calibrationHashHex = scene.calibration_hash;
-    if (bet.calibration_hash !== ZERO_HASH_HEX && bet.calibration_hash !== calibrationHashHex) {
-      throw new ApiError('CALIBRATION_LOCKED', 'calibration differs from the committed one');
-    }
   }
   const stake = bet.stakes[idx]!;
   await requireBalance(ctx, user.wallet, stake);
@@ -74,7 +75,7 @@ export async function fundSign(ctx: AppContext, s: LifecycleStores, info: BetInf
       }),
     ],
     summary: `Stake ${formatUsd(stake)}`,
-    meta: { bet: info.id, participant: idx },
+    meta: { bet: info.id, participant: idx, calibration_hash: calibrationHashHex },
   });
 }
 

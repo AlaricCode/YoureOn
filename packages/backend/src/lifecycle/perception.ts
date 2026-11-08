@@ -28,7 +28,7 @@ import { biometricVault } from './identity.js';
 import { KeyedLock } from './locks.js';
 import type { PerceptionRecord, ProofPlan } from './records.js';
 import { sealBet } from './seal.js';
-import type { LifecycleStores } from './stores.js';
+import { pinCommittedCalibration, type LifecycleStores } from './stores.js';
 
 export const PERCEPTION_RETRY_BASE_MS = 30_000;
 export const PERCEPTION_MAX_ATTEMPTS = 5;
@@ -127,7 +127,11 @@ export class PerceptionOrchestrator {
   }
 
   private async seal(info: BetInfo, rec: PerceptionRecord): Promise<PerceptionRecord> {
-    const scene = this.s.scenes.get(info.id);
+    const bet = await this.ctx.chain.getBet(info.id);
+    const scene = bet ? pinCommittedCalibration(this.s, info.id, bet.calibration_hash) : this.s.scenes.get(info.id);
+    if (bet && info.program.kind === 'rules' && scene?.calibration_hash !== bet.calibration_hash) {
+      throw new Error(`committed calibration ${bet.calibration_hash} is unknown to this backend`);
+    }
     const sealed = await sealBet(this.ctx, this.s, info, scene?.calibration ?? null);
     if (sealed.sealed) {
       this.ctx.blobs.putBlob(BLOB_NS_PERCEPTION, sealedBlobKey(info.id), new TextEncoder().encode(JSON.stringify(sealed.sealed)));
@@ -199,6 +203,8 @@ export class PerceptionOrchestrator {
         for (const cp of r.checkpoints) needed.add(`${cp.participant}:${cp.frame}`);
       }
       const done = new Set(bet.bio.slice(0, bet.n_bio).map((b) => `${b.participant}:${b.frame}`));
+      let attempted = 0;
+      let failed = 0;
       for (const plan of rec.proofs) {
         if (plan.status !== 'pending') continue;
         const k = `${plan.participant}:${plan.frame}`;
@@ -206,8 +212,19 @@ export class PerceptionOrchestrator {
         else if (!needed.has(k)) {
           plan.status = 'skipped';
           plan.error = 'checkpoint not in the posted buffer';
-        } else await this.proveOne(info, bet, plan);
+        } else {
+          await this.proveOne(info, bet, plan);
+          attempted++;
+          if ((plan.status as ProofPlan['status']) === 'failed') failed++;
+        }
         this.save(rec);
+      }
+      if (attempted > 0 && failed === attempted) {
+        // Every proof of the bet failed: almost always a misconfiguration (prover/chain/vkey), not bad luck.
+        this.ctx.log.error(
+          { bet: info.id, failed, prover: this.ctx.providers.prover.name, errors: [...new Set(rec.proofs.map((p) => p.error).filter(Boolean))] },
+          'every biometric proof failed; identity checkpoints stay unverified (IDENTITY → panel)',
+        );
       }
     }
     return this.save({ ...rec, step: 'proved' });

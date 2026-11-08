@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
 import '../api/models/chunk.dart';
@@ -104,10 +105,23 @@ class WitnessSession implements WitnessRunner {
     if (!_began || _ended) return;
     _ended = true;
     await Future<void>.delayed(tail);
-    await Future.wait([
-      if (_camera != null) _camera!.stop(),
-      if (_audio != null) _audio!.stop(),
-    ]);
-    await _audio?.dispose();
+    // One witness failing must not hide the other's final chunk, and the
+    // microphone is always released.
+    Future<void> quietly(Future<void> Function() f, String what) async {
+      try {
+        await f();
+      } catch (e) {
+        debugPrint('witness $what stop: $e');
+      }
+    }
+
+    try {
+      await Future.wait([
+        if (_camera != null) quietly(_camera!.stop, 'camera'),
+        if (_audio != null) quietly(_audio!.stop, 'audio'),
+      ]);
+    } finally {
+      await _audio?.dispose();
+    }
   }
 }

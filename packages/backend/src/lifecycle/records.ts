@@ -13,7 +13,15 @@ export const LC_COLLECTIONS = {
   chunks: COLLECTIONS.chunks,
   live: 'bet_live',
   perception: 'perception',
+  chunkArchive: 'chunks_archive',
 } as const;
+
+/** Chunk records of a terminal bet, moved out of the hot `chunks` collection at close-out. */
+export interface ChunkArchiveRecord {
+  bet: string;
+  chunks: ChunkMetaRecord[];
+  archived_at_ms: number;
+}
 
 /** Scene check state (§5.2, §12.3 calibration / crops). */
 export interface SceneRecord {
@@ -24,6 +32,11 @@ export interface SceneRecord {
   /** entity → sha256 hex of the uploaded crop JPEG */
   crops: Record<string, string>;
   updated_at_ms: number;
+  /**
+   * Every validated calibration by hash. Once the first `fund` commits a
+   * calibration_hash onchain, that entry (not the latest PUT) is the scene.
+   */
+  history?: Record<string, Calibration>;
 }
 
 export interface WitnessRecord {

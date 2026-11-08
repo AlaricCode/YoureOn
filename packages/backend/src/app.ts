@@ -6,17 +6,21 @@ import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastif
 import { MAX_CHUNK_BODY_BYTES } from '@verdict/engine';
 import type { AppContext } from './context.js';
 import { ApiError, errorBody, toApiError } from './errors.js';
+import { registerHousekeeping } from './persistence/housekeeping.js';
 import { ROUTE_MODULES } from './routes/index.js';
 import { badRequest } from './routes/util.js';
 import { RateLimiter } from './util/rateLimit.js';
 import { jsonReplacer } from './util/bytes.js';
 
-/** Routes that do not need a bearer token (§12: `/auth/*` and `/webhooks/*`). */
-const PUBLIC_PREFIXES = ['/v1/auth/', '/v1/webhooks/', '/v1/health'];
+/** Routes that do not need a bearer token (§12: `/auth/*` and `/webhooks/*`; `/media/*` is HMAC-signed). */
+const PUBLIC_PREFIXES = ['/v1/auth/', '/v1/webhooks/', '/v1/health', '/v1/media/'];
 /** JSON requests may carry base64 frames (practice: ≤ 50 JPEGs). */
 export const JSON_BODY_LIMIT = 48 * 1024 * 1024;
 const AUTH_RATE_LIMIT = 60;
 const AUTH_RATE_WINDOW_MS = 60_000;
+/** Unauthenticated routes get small bodies (they are parsed before any secret check). */
+export const AUTH_BODY_LIMIT = 16 * 1024;
+export const WEBHOOK_RATE_LIMIT = 600;
 
 export interface BuildAppOptions {
   logger?: FastifyServerOptions['logger'];
@@ -32,6 +36,11 @@ export async function buildApp(ctx: AppContext, opts: BuildAppOptions = {}): Pro
     forceCloseConnections: true,
   });
   const authLimiter = new RateLimiter(ctx.clock, AUTH_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
+  const webhookLimiter = new RateLimiter(ctx.clock, WEBHOOK_RATE_LIMIT, AUTH_RATE_WINDOW_MS);
+  // /v1/auth/* bodies are tiny; the 48 MiB default is only for authenticated frame uploads.
+  app.addHook('onRoute', (route) => {
+    if (route.url.startsWith('/v1/auth/') && route.bodyLimit === undefined) route.bodyLimit = AUTH_BODY_LIMIT;
+  });
 
   app.decorateRequest('userId', null);
   app.decorateRequest('rawBody', undefined);
@@ -42,6 +51,8 @@ export async function buildApp(ctx: AppContext, opts: BuildAppOptions = {}): Pro
     const buf = body as Buffer;
     req.rawBody = buf;
     if (buf.length === 0) return done(null, undefined);
+    // Routes that authenticate the raw bytes (QuickNode HMAC) parse after verifying.
+    if ((req.routeOptions.config as { rawBody?: boolean } | undefined)?.rawBody) return done(null, undefined);
     try {
       done(null, JSON.parse(buf.toString('utf8')));
     } catch {
@@ -58,6 +69,7 @@ export async function buildApp(ctx: AppContext, opts: BuildAppOptions = {}): Pro
   app.addHook('onRequest', async (req) => {
     const path = req.url.split('?')[0]!;
     if (path.startsWith('/v1/auth/') && !authLimiter.hit(req.ip)) throw new ApiError('RATE_LIMITED');
+    if (path.startsWith('/v1/webhooks/') && !webhookLimiter.hit(req.ip)) throw new ApiError('RATE_LIMITED');
     if (!path.startsWith('/v1/') || PUBLIC_PREFIXES.some((p) => path.startsWith(p))) return;
     const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '');
     const userId = m ? ctx.auth.authenticate(m[1]!) : null;
@@ -91,8 +103,18 @@ export async function buildApp(ctx: AppContext, opts: BuildAppOptions = {}): Pro
   }));
 
   for (const m of ROUTE_MODULES) await m.register(app, ctx);
+  registerHousekeeping(ctx);
 
   app.addHook('onReady', async () => {
+    if (ctx.chain.init) {
+      try {
+        await ctx.chain.init();
+      } catch (e) {
+        // Unfunded fee payer / RPC down: keep serving; routes needing the mint answer 503
+        // and POST /faucet retries the mint creation.
+        ctx.log.error({ err: e }, 'chain init failed (devnet test mint not created; fund the fee payer or set USDC_MINT)');
+      }
+    }
     ctx.hub.attach(app.server);
     if (opts.startKeeper ?? true) ctx.keeper.start();
   });
@@ -101,6 +123,8 @@ export async function buildApp(ctx: AppContext, opts: BuildAppOptions = {}): Pro
     await ctx.hub.close();
     await ctx.events.idle();
     await ctx.chain.close();
+    await ctx.providers.prover.close?.();
+    ctx.store.close();
   });
 
   return app;

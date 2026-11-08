@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../api/api_error.dart';
 import '../core/bytes.dart';
 import '../crypto/ed25519.dart';
 import '../crypto/messages.dart';
@@ -15,7 +16,8 @@ class WalletLockedException implements Exception {
 /// The embedded wallet (CONTRACTS.md §12.1, [D-10]): one device-generated
 /// ed25519 key in secure storage, unlocked by the passkey/biometric prompt.
 /// The public key is readable without a prompt; every signature needs an
-/// unlock within [unlockWindow] (acceptance always needs a fresh one).
+/// unlock within [unlockWindow] (acceptance and money-moving transactions
+/// always need a fresh one; signing in doesn't open the window).
 class Wallet {
   Wallet({
     required this.store,
@@ -57,9 +59,9 @@ class Wallet {
   void lock() => _unlockedAt = null;
 
   /// Shows the device prompt unless still inside the unlock window.
-  Future<void> unlock({bool fresh = false}) async {
+  Future<void> unlock({bool fresh = false, String? reason}) async {
     if (!fresh && unlocked) return;
-    final ok = await authenticator.unlock();
+    final ok = await authenticator.unlock(reason: reason);
     if (!ok) {
       _unlockedAt = null;
       throw const WalletLockedException();
@@ -68,19 +70,83 @@ class Wallet {
   }
 
   /// Signs raw bytes behind the prompt.
-  Future<Uint8List> sign(List<int> message, {bool fresh = false}) async {
+  Future<Uint8List> sign(List<int> message, {bool fresh = false, String? reason}) async {
     final key = await _load();
-    await unlock(fresh: fresh);
+    await unlock(fresh: fresh, reason: reason);
     return key.sign(message);
   }
 
-  /// `wallet_sig` for `POST /auth/session`.
-  Future<Uint8List> signLogin(String nonce) => sign(loginMessage(nonce));
+  /// `wallet_sig` for `POST /auth/session`. Signing in does not open the
+  /// unlock window for later transactions.
+  Future<Uint8List> signLogin(String nonce) async {
+    try {
+      return await sign(loginMessage(nonce));
+    } finally {
+      lock();
+    }
+  }
 
   /// `accept_sig` (§4.2); always a fresh prompt.
   Future<Uint8List> signAcceptance({required String programHashHex, required Uint8List wav}) =>
       sign(acceptSigMessage(programHash: fromHex(programHashHex), wavBytes: wav), fresh: true);
 
-  /// Signs a serialized Solana message (`message_b64`).
-  Future<Uint8List> signTxMessage(String messageB64) => sign(fromB64(messageB64));
+  /// Signs a serialized Solana message (`message_b64`) after checking its
+  /// shape, so server-supplied bytes can't be a login or acceptance message
+  /// (or any non-transaction) signed with the same key. [summary] is the
+  /// prompt reason; [fresh] forces a prompt (money-moving transactions).
+  Future<Uint8List> signTxMessage(String messageB64, {String? summary, bool fresh = false}) async {
+    final Uint8List bytes;
+    try {
+      bytes = fromB64(messageB64);
+    } on FormatException {
+      throw ApiException('TX_FAILED');
+    }
+    checkTxMessage(bytes, await publicKey());
+    return sign(bytes, fresh: fresh, reason: summary);
+  }
+
+  /// Throws `TX_FAILED` unless [m] looks like a legacy or v0 Solana message
+  /// that [signer] must sign: header, compact-u16 key count ≥ required
+  /// signatures, room for the keys and blockhash, [signer] among the
+  /// signing keys, and no `VERDICT/` domain tag.
+  static void checkTxMessage(Uint8List m, Uint8List signer) {
+    Never bad() => throw ApiException('TX_FAILED');
+    if (m.isEmpty) bad();
+    const tag = 'VERDICT/';
+    if (m.length >= tag.length && String.fromCharCodes(m.sublist(0, tag.length)) == tag) bad();
+    var i = 0;
+    if (m[0] & 0x80 != 0) {
+      if (m[0] != 0x80) bad(); // only v0
+      i = 1;
+    }
+    if (m.length < i + 4) bad();
+    final nSig = m[i];
+    final nRoSigned = m[i + 1];
+    final nRoUnsigned = m[i + 2];
+    if (nSig < 1 || nSig > 16 || nRoSigned >= nSig) bad();
+    i += 3;
+    var count = 0;
+    var shift = 0;
+    for (var k = 0;; k++) {
+      if (k >= 3 || i >= m.length) bad();
+      final b = m[i++];
+      count |= (b & 0x7f) << shift;
+      shift += 7;
+      if (b & 0x80 == 0) break;
+    }
+    if (count < nSig || count > 256 || nRoUnsigned > count - nSig) bad();
+    if (m.length < i + 32 * count + 32) bad();
+    for (var k = 0; k < nSig; k++) {
+      final off = i + 32 * k;
+      var same = true;
+      for (var j = 0; j < 32; j++) {
+        if (m[off + j] != signer[j]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return;
+    }
+    bad();
+  }
 }
