@@ -4,8 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../api/api_error.dart';
-import '../capture/face_capture.dart';
-import '../capture/voice_capture.dart';
 import '../state/app_controller.dart';
 import '../state/app_scope.dart';
 import '../ui/tokens.dart';
@@ -13,11 +11,19 @@ import '../ui/widgets/controls.dart';
 import '../ui/widgets/page.dart';
 import '../ui/widgets/text.dart';
 import '../wallet/wallet.dart';
+import 'enroll/enroll_capture.dart';
 import 'enroll/enroll_flow.dart';
 
-enum _Step { idle, face, voice }
+/// The three screens of first-time enrollment, in order.
+enum _Step { consent, face, voice }
 
-/// Enroll (CONTRACTS.md §12.13): Camera · Face · Voice · "I consent" · Done.
+/// Enroll (CONTRACTS.md §12.13) as a sequence of three screens:
+///   1 Consent        → "I consent" checkbox, Continue
+///   2 Register face  → a series of photos, Continue once saved
+///   3 Register voice → three phrases, Done once saved
+/// Each screen has a back arrow: Voice → Face → Consent → Sign in (signs
+/// out). Captured templates stay pending until Done; withdrawing consent or
+/// leaving deletes them (DELETE /enroll/pending).
 /// In enrolled mode: Face/Voice status and "Delete biometrics".
 class EnrollScreen extends StatefulWidget {
   const EnrollScreen({super.key});
@@ -28,13 +34,16 @@ class EnrollScreen extends StatefulWidget {
 
 class _EnrollScreenState extends State<EnrollScreen> {
   late final AppController _app = AppScope.read(context);
-  late final EnrollFlow _flow = EnrollFlow(_app.api);
-  FaceCapture? _camera;
-  VoiceCapture? _mic;
-  _Step _step = _Step.idle;
+  // Created on first use, so dispose() can tell whether anything was started
+  // without looking up the (by then deactivated) AppScope.
+  EnrollFlow? _flowInstance;
+  EnrollFlow get _flow => _flowInstance ??= EnrollFlow(_app.api);
+  _Step _step = _Step.consent;
   bool _busy = false;
-  bool _recording = false;
   String? _error;
+
+  /// Set once Done succeeded: leaving the screen then must not discard.
+  bool _completed = false;
 
   /// "Delete biometrics" needs a second tap within [_armWindow].
   bool _armed = false;
@@ -44,8 +53,13 @@ class _EnrollScreenState extends State<EnrollScreen> {
   @override
   void dispose() {
     _disarm?.cancel();
-    _camera?.close();
-    _mic?.dispose();
+    // Left before Done: nothing captured may outlive the screen without
+    // consent being completed. Best effort; the backend also expires
+    // pending templates after 24 h.
+    final flow = _flowInstance;
+    if (!_completed && flow != null && flow.hasPending) {
+      unawaited(flow.discardPending().catchError((Object _) {}));
+    }
     super.dispose();
   }
 
@@ -67,76 +81,57 @@ class _EnrollScreenState extends State<EnrollScreen> {
     }
   }
 
-  // ---- face -------------------------------------------------------------
+  // ---- navigation -------------------------------------------------------------
 
-  Future<void> _startFace() => _guard(() async {
-        await _stopMic();
-        await _flow.ensureChallenge();
-        final cam = _camera ??= _app.newFaceCapture();
-        try {
-          await cam.open(front: true);
-        } catch (_) {
-          throw ApiException('NO_CAMERA');
-        }
-        _flow.faceFrames.clear();
-        if (mounted) setState(() => _step = _Step.face);
+  void _go(_Step step) => setState(() {
+        _error = null;
+        _step = step;
       });
 
-  Future<void> _captureFace() => _guard(() async {
-        final cam = _camera;
-        if (cam == null) return;
-        final frame = await cam.capture();
-        final code = _flow.addFaceFrame(frame);
-        if (code != null) throw ApiException(code);
-        if (_flow.faceReady) {
-          await _flow.submitFace();
-          await cam.close();
-          _camera = null;
-          if (mounted) setState(() => _step = _Step.idle);
-        } else {
-          if (mounted) setState(() {});
-        }
-      });
-
-  // ---- voice ------------------------------------------------------------
-
-  Future<void> _startVoice() => _guard(() async {
-        await _camera?.close();
-        _camera = null;
-        await _flow.ensureChallenge();
-        final mic = _mic ??= _app.newVoiceCapture();
-        if (!await mic.hasPermission()) throw ApiException('PHRASE_NOT_HEARD');
-        _flow.voiceClips.clear();
-        if (mounted) setState(() => _step = _Step.voice);
-      });
-
-  Future<void> _toggleRecord() => _guard(() async {
-        final mic = _mic;
-        if (mic == null) return;
-        if (!_recording) {
-          await mic.start();
-          if (mounted) setState(() => _recording = true);
-          return;
-        }
-        final wav = await mic.stop();
-        if (mounted) setState(() => _recording = false);
-        _flow.voiceClips.add(wav);
-        if (_flow.voiceReady) {
-          await _flow.submitVoice();
-          if (mounted) setState(() => _step = _Step.idle);
-        } else {
-          if (mounted) setState(() {});
-        }
-      });
-
-  Future<void> _stopMic() async {
-    if (_recording) {
-      await _mic?.stop();
-      _recording = false;
+  /// Back arrow and system back: Voice → Face → Consent → Sign in.
+  void _back() {
+    if (_busy) return;
+    switch (_step) {
+      case _Step.voice:
+        _go(_Step.face);
+      case _Step.face:
+        _go(_Step.consent);
+      case _Step.consent:
+        unawaited(_leaveToSignIn());
     }
   }
 
-  // ---- finish / delete ----------------------------------------------------
+  /// Back from Consent: drop anything captured, then sign out so the app
+  /// returns to the Sign in screen.
+  Future<void> _leaveToSignIn() => _guard(() async {
+        final flow = _flowInstance;
+        if (flow != null && flow.hasPending) {
+          try {
+            await flow.discardPending();
+          } catch (_) {
+            // The backend also expires pending templates after 24 h.
+          }
+        }
+        await _app.signOut();
+      });
+
+  /// Consent checkbox. Unchecking it deletes anything already captured.
+  void _setConsent(bool on) {
+    if (on) {
+      setState(() => _flow.consent = true);
+      return;
+    }
+    if (!_flow.hasPending) {
+      setState(() => _flow.consent = false);
+      return;
+    }
+    unawaited(_guard(() async {
+      await _flow.discardPending();
+      if (mounted) setState(() => _flow.consent = false);
+    }));
+  }
+
+  // ---- finish / delete --------------------------------------------------------
 
   Future<void> _done() => _guard(() async {
         final name = _app.user?.displayName ?? '';
@@ -145,6 +140,7 @@ class _EnrollScreenState extends State<EnrollScreen> {
           () async => (await _app.api.enrollComplete(displayName: name)).sign,
           first: first.sign,
         );
+        _completed = true;
         await _app.refreshUser();
         if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
       });
@@ -172,16 +168,14 @@ class _EnrollScreenState extends State<EnrollScreen> {
         await _app.refreshUser();
       });
 
-  // ---- UI -----------------------------------------------------------------
+  // ---- UI -------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
     final user = AppScope.of(context).user;
     final enrolled = user?.enrolled ?? false;
-    return AppPage(
-      title: 'Enroll',
-      child: enrolled ? _enrolled() : _enrolling(),
-    );
+    if (!enrolled) return _sequence();
+    return AppPage(title: 'Enroll', child: _enrolled());
   }
 
   Widget _enrolled() {
@@ -208,100 +202,226 @@ class _EnrollScreenState extends State<EnrollScreen> {
     );
   }
 
-  Widget _enrolling() {
+  /// First-time enrollment: one screen per step, with a back arrow and a
+  /// three-segment progress bar at the top.
+  Widget _sequence() {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _back();
+      },
+      child: Scaffold(
+        backgroundColor: Palette.background,
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _StepHeader(step: _step.index, count: _Step.values.length, onBack: _busy ? null : _back),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Space.page),
+                  child: AnimatedSwitcher(
+                    duration: Motion.fast,
+                    switchInCurve: Motion.curve,
+                    child: switch (_step) {
+                      _Step.consent => _consentStep(),
+                      _Step.face => _faceStep(),
+                      _Step.voice => _voiceStep(),
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _consentStep() {
+    final consent = _flow.consent;
+    return _StepBody(
+      key: const ValueKey('enroll-consent'),
+      title: 'Your consent',
+      body: 'Verdict uses your face and voice to recognize you in bet videos, confirm '
+          "who's in a huddle, and let friends pay you. We keep an encrypted template, "
+          'not your photos or recordings, and only a one-way hash of it goes onchain. '
+          'You can delete it anytime.',
+      error: _error,
+      action: PrimaryButton(
+        key: const ValueKey('enroll-continue'),
+        label: 'Continue',
+        busy: _busy,
+        onPressed: consent ? () => _go(_Step.face) : null,
+      ),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: _ConsentCheck(
+          value: consent,
+          onChanged: _busy ? null : _setConsent,
+        ),
+      ),
+    );
+  }
+
+  Widget _faceStep() {
+    return _StepBody(
+      key: const ValueKey('enroll-face'),
+      title: 'Register face',
+      body: 'Follow the prompts on the camera. Use good light and keep your face centered.',
+      error: _error,
+      action: PrimaryButton(
+        key: const ValueKey('enroll-continue'),
+        label: 'Continue',
+        onPressed: _flow.faceDone ? () => _go(_Step.voice) : null,
+      ),
+      child: FaceCapturePanel(flow: _flow, onSaved: () => setState(() {})),
+    );
+  }
+
+  Widget _voiceStep() {
+    return _StepBody(
+      key: const ValueKey('enroll-voice'),
+      title: 'Register voice',
+      body: 'Read each phrase aloud as it appears. Tap the button, read the phrase, '
+          'then tap again to stop.',
+      error: _error,
+      action: PrimaryButton(
+        key: const ValueKey('enroll-done'),
+        label: 'Done',
+        busy: _busy,
+        onPressed: _flow.canFinish ? _done : null,
+      ),
+      child: VoiceCapturePanel(flow: _flow, onSaved: () => setState(() {})),
+    );
+  }
+}
+
+/// Back arrow on the left and the step progress (one segment per step).
+class _StepHeader extends StatelessWidget {
+  const _StepHeader({required this.step, required this.count, required this.onBack});
+  final int step;
+  final int count;
+  final VoidCallback? onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: Space.x6 + Space.x1,
+      child: Row(
+        children: [
+          Semantics(
+            button: true,
+            label: 'Back',
+            child: GestureDetector(
+              key: const ValueKey('enroll-back'),
+              behavior: HitTestBehavior.opaque,
+              onTap: onBack,
+              child: const SizedBox(
+                width: Space.x6,
+                height: Space.x6,
+                child: Icon(LucideIcons.chevronLeft, size: 20, color: Palette.text),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              children: [
+                for (var i = 0; i < count; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  Expanded(
+                    child: AnimatedContainer(
+                      duration: Motion.fast,
+                      curve: Motion.curve,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: i < step ? Palette.text : (i == step ? Palette.accent : Palette.hairline),
+                        borderRadius: const BorderRadius.all(Radius.circular(2)),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: Space.page),
+        ],
+      ),
+    );
+  }
+}
+
+/// One enrollment screen: title, a one- or two-sentence explanation, the
+/// step's content, then its error line and main button.
+class _StepBody extends StatelessWidget {
+  const _StepBody({
+    super.key,
+    required this.title,
+    required this.body,
+    required this.child,
+    required this.action,
+    this.error,
+  });
+
+  final String title;
+  final String body;
+  final Widget child;
+  final Widget action;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: Space.x1),
-        AspectRatio(
-          aspectRatio: 3 / 4,
-          child: ClipRRect(
-            borderRadius: const BorderRadius.all(Radius.circular(12)),
-            child: ColoredBox(color: Palette.surface, child: _stage()),
-          ),
-        ),
         const SizedBox(height: Space.x2),
-        ListRow(
-          label: 'Face',
-          trailing: StatusDot(on: _flow.faceDone),
-          chevron: !_flow.faceDone,
-          onTap: _busy || _flow.faceDone ? null : _startFace,
-        ),
-        const Hairline(),
-        ListRow(
-          label: 'Voice',
-          trailing: StatusDot(on: _flow.voiceDone),
-          chevron: !_flow.voiceDone,
-          onTap: _busy || _flow.voiceDone ? null : _startVoice,
-        ),
-        const Hairline(),
-        ListRow(
-          label: 'I consent',
-          trailing: Switch(
-            key: const ValueKey('consent'),
-            value: _flow.consent,
-            onChanged: _busy ? null : (v) => setState(() => _flow.consent = v),
-          ),
-        ),
-        const Spacer(),
-        ErrorLine(_error),
-        PrimaryButton(label: 'Done', busy: _busy && _step == _Step.idle, onPressed: _flow.canFinish ? _done : null),
+        Label(title, style: Typo.title),
+        const SizedBox(height: Space.x1),
+        BodyText(body),
+        const SizedBox(height: Space.x3),
+        Expanded(child: child),
+        ErrorLine(error),
+        action,
         const SizedBox(height: Space.x2),
       ],
     );
   }
+}
 
-  /// The camera / phrase area at the top of the screen.
-  Widget _stage() {
-    switch (_step) {
-      case _Step.face:
-        final cam = _camera;
-        final prompt = _flow.nextFacePrompt;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            if (cam != null && cam.isOpen) cam.preview(),
-            Positioned(
-              top: Space.x2,
-              left: 0,
-              right: 0,
-              child: Label(prompt?.label ?? 'Look ahead', style: Typo.heading, textAlign: TextAlign.center),
-            ),
-            Positioned(
-              bottom: Space.x2,
-              left: 0,
-              right: 0,
-              child: Center(child: ShutterButton(onPressed: _busy ? null : _captureFace)),
-            ),
-          ],
-        );
-      case _Step.voice:
-        final phrase = _flow.nextPhrase;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(Space.x3),
-                child: DataText(phrase ?? '', style: Typo.title, maxLines: 3, textAlign: TextAlign.center),
+/// "I consent" with a checkbox; the whole row is tappable.
+class _ConsentCheck extends StatelessWidget {
+  const _ConsentCheck({required this.value, required this.onChanged});
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final change = onChanged;
+    return Semantics(
+      checked: value,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: change == null ? null : () => change(!value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: Space.x1),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Checkbox(
+                key: const ValueKey('consent'),
+                value: value,
+                onChanged: change == null ? null : (v) => change(v ?? false),
+                activeColor: Palette.accent,
+                checkColor: Palette.text,
+                side: const BorderSide(color: Palette.secondary, width: 1.5),
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(4))),
               ),
-            ),
-            Positioned(
-              bottom: Space.x2,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: ShutterButton(
-                  semanticLabel: 'Record',
-                  active: _recording,
-                  onPressed: _busy ? null : _toggleRecord,
-                ),
-              ),
-            ),
-          ],
-        );
-      case _Step.idle:
-        return const Center(child: Icon(LucideIcons.scanFace, size: 32, color: Palette.secondary));
-    }
+              const SizedBox(width: Space.x1),
+              const Label('I consent', style: Typo.labelStrong),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

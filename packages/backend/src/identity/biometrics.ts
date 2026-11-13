@@ -29,6 +29,13 @@ import type { Clock } from '../util/clock.js';
 
 export const ZERO_COMMIT_HEX = '00'.repeat(32);
 
+/**
+ * A pending (not completed) enrollment is kept only this long after its last
+ * capture. Templates become permanent only on `POST /enroll/complete` with
+ * consent; anything abandoned is dropped on read and pruned by housekeeping.
+ */
+export const PENDING_ENROLLMENT_TTL_MS = 24 * 3_600_000;
+
 export const DIM: Record<Modality, number> = { face: FACE_DIM, voice: VOICE_DIM };
 
 export interface PendingEnrollment {
@@ -115,12 +122,25 @@ export class BiometricVault {
   getPending(user: Pick<UserRecord, 'id' | 'wallet'>, modality: Modality): Int8Array | null {
     const rec = this.pending.get(user.id);
     if (!rec || rec.wallet !== user.wallet) return null;
+    if (this.clock.nowMs() - rec.updated_at_ms > PENDING_ENROLLMENT_TTL_MS) {
+      this.pending.delete(user.id);
+      return null;
+    }
     const b64 = modality === 'face' ? rec.face_template_enc : rec.voice_template_enc;
     return b64 ? bytesToInt8(this.dec(user, modality, 'pending', b64), DIM[modality]) : null;
   }
 
   clearPending(userId: string): void {
     this.pending.delete(userId);
+  }
+
+  /** Deletes pending enrollments idle for more than [PENDING_ENROLLMENT_TTL_MS]; returns how many. */
+  prunePending(nowMs: number): number {
+    let n = 0;
+    for (const [k, rec] of this.pending.entries()) {
+      if (nowMs - rec.updated_at_ms > PENDING_ENROLLMENT_TTL_MS && this.pending.delete(k)) n++;
+    }
+    return n;
   }
 
   // ---- committed templates ---------------------------------------------------

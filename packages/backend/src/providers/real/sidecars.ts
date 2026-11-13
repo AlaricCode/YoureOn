@@ -9,16 +9,37 @@
  *    (request/response shape chosen by the backend; see CONTRACTS-ERRATA.md)
  */
 import { FACE_DIM, VOICE_DIM } from '@verdict/engine';
+import { ApiError } from '../../errors.js';
 import { toBase64 } from '../../util/bytes.js';
 import { l2normalize } from '../../util/prng.js';
 import type { Detection, DetectorProvider, IdentityProvider } from '../types.js';
 
 export type FetchFn = typeof fetch;
 
+/** A non-2xx answer from a sidecar; `status` is the HTTP status. */
+export class SidecarHttpError extends Error {
+  constructor(
+    readonly url: string,
+    readonly status: number,
+  ) {
+    super(`POST ${url} → HTTP ${status}`);
+  }
+}
+
 async function postJson<T>(f: FetchFn, url: string, body: unknown): Promise<T> {
   const r = await f(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error(`POST ${url} → HTTP ${r.status}`);
+  if (!r.ok) throw new SidecarHttpError(url, r.status);
   return (await r.json()) as T;
+}
+
+/**
+ * The embedder answers 422 when the input itself is unusable (no detectable
+ * face; a voice clip of the wrong length). That is the user's frame, not a
+ * server fault: report it with the matching §12.8 code.
+ */
+function rejectedInput(e: unknown, code: 'FACE_NOT_MATCHED' | 'PHRASE_NOT_HEARD', detail: string): never {
+  if (e instanceof SidecarHttpError && e.status === 422) throw new ApiError(code, detail);
+  throw e;
 }
 
 function checkVector(v: unknown, dim: number, what: string): number[] {
@@ -36,12 +57,16 @@ export class HttpEmbedder implements IdentityProvider {
   ) {}
 
   async embedFace(jpeg: Uint8Array): Promise<number[]> {
-    const r = await postJson<{ embeddings?: unknown[] }>(this.f, `${this.baseUrl}/embed/face`, { images_b64: [toBase64(jpeg)] });
+    const r = await postJson<{ embeddings?: unknown[] }>(this.f, `${this.baseUrl}/embed/face`, {
+      images_b64: [toBase64(jpeg)],
+    }).catch((e: unknown) => rejectedInput(e, 'FACE_NOT_MATCHED', 'no face found in the image'));
     return checkVector(r.embeddings?.[0], FACE_DIM, 'embed/face');
   }
 
   async embedVoice(wav: Uint8Array): Promise<number[]> {
-    const r = await postJson<{ embedding?: unknown }>(this.f, `${this.baseUrl}/embed/voice`, { wav_b64: toBase64(wav) });
+    const r = await postJson<{ embedding?: unknown }>(this.f, `${this.baseUrl}/embed/voice`, {
+      wav_b64: toBase64(wav),
+    }).catch((e: unknown) => rejectedInput(e, 'PHRASE_NOT_HEARD', 'voice clip rejected by the embedder'));
     return checkVector(r.embedding, VOICE_DIM, 'embed/voice');
   }
 }

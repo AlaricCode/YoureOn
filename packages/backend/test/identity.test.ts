@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { commitmentFromBytes, poseidonCommit, hexToBytes, RECENT_HUDDLE_S } from '@verdict/engine';
 import { decryptAesGcm } from '../src/crypto/aes.js';
-import { commitTemplate } from '../src/identity/biometrics.js';
+import { commitTemplate, PENDING_ENROLLMENT_TTL_MS } from '../src/identity/biometrics.js';
 import { identityHuddleServices } from '../src/huddles/services.js';
 import { MAX_PENDING_JOINS, PENDING_JOIN_TTL_MS } from '../src/huddles/service.js';
 import { JOIN_RATE } from '../src/routes/huddles.js';
@@ -117,6 +117,47 @@ describe('enrollment (§8, §12.3)', () => {
     expect(noConsent.statusCode).toBe(400);
     const longName = await post(t.app, u, '/v1/enroll/complete', { consent: true, display_name: 'x'.repeat(33) });
     expect(longName.statusCode).toBe(400);
+  });
+
+  it('DELETE /enroll/pending drops captured templates that were never completed', async () => {
+    t = await makeAppWith();
+    const u = await login(t.app, 'alice@example.com');
+    const ch = (await get(t.app, u, '/v1/enroll/challenge')).json();
+    const f = await post(t.app, u, '/v1/enroll/face', { challenge_id: ch.challenge_id, frames_b64: [fakeJpeg(), fakeJpeg(), fakeJpeg()].map(b64) });
+    expect(f.statusCode, f.body).toBe(200);
+    expect(t.ctx.store.collection('enrollments').get(u.user.id)).toBeDefined();
+
+    const d = await t.app.inject({ method: 'DELETE', url: '/v1/enroll/pending', headers: auth(u) });
+    expect(d.statusCode, d.body).toBe(200);
+    expect(d.json()).toEqual({ deleted: true });
+    expect(t.ctx.store.collection('enrollments').get(u.user.id)).toBeUndefined();
+    // Nothing left to complete; a second delete is a no-op.
+    const c = await post(t.app, u, '/v1/enroll/complete', { consent: true, display_name: 'Alice' });
+    expect(c.json().error.code).toBe('NOT_ENROLLED');
+    expect((await t.app.inject({ method: 'DELETE', url: '/v1/enroll/pending', headers: auth(u) })).statusCode).toBe(200);
+  });
+
+  it('DELETE /enroll/pending leaves a completed enrollment untouched', async () => {
+    t = await makeAppWith();
+    const u = await login(t.app, 'alice@example.com');
+    const commits = await enroll(t.app, u, 'Alice');
+    const d = await t.app.inject({ method: 'DELETE', url: '/v1/enroll/pending', headers: auth(u) });
+    expect(d.statusCode, d.body).toBe(200);
+    expect((await get(t.app, u, '/v1/me')).json().enrolled).toEqual({ face: true, voice: true });
+    const { identity } = identityHuddleServices(t.ctx);
+    expect(identity.vault.commits(identity.vault.users.get(u.user.id)!)).toEqual({ face_commit: commits.face_commit, voice_commit: commits.voice_commit });
+  });
+
+  it('abandoned pending templates expire after PENDING_ENROLLMENT_TTL_MS', async () => {
+    t = await makeAppWith();
+    const u = await login(t.app, 'alice@example.com');
+    const ch = (await get(t.app, u, '/v1/enroll/challenge')).json();
+    const f = await post(t.app, u, '/v1/enroll/face', { challenge_id: ch.challenge_id, frames_b64: [fakeJpeg(), fakeJpeg(), fakeJpeg()].map(b64) });
+    expect(f.statusCode, f.body).toBe(200);
+    t.clock.advance(PENDING_ENROLLMENT_TTL_MS + 1);
+    const c = await post(t.app, u, '/v1/enroll/complete', { consent: true, display_name: 'Alice' });
+    expect(c.json().error.code).toBe('NOT_ENROLLED');
+    expect(t.ctx.store.collection('enrollments').get(u.user.id)).toBeUndefined();
   });
 
   it('face-only enrollment commits a zero voice commitment', async () => {

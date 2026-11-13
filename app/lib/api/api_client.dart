@@ -107,6 +107,12 @@ class ApiClient {
         EnrollComplete.fromJson,
       );
 
+  /// `DELETE /enroll/pending`: drops captured but not completed templates
+  /// (consent withdrawn, or Enroll left before Done). Idempotent.
+  Future<void> enrollDiscard() async {
+    await t.delete('/enroll/pending');
+  }
+
   Future<SignRequest> enrollDelete() async =>
       decode(await t.delete('/enroll'), (v) => SignRequest.fromJson(asJson(v)['sign']));
 

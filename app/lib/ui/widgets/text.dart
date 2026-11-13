@@ -38,3 +38,16 @@ class Label extends StatelessWidget {
   Widget build(BuildContext context) =>
       Text(text, style: style, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: textAlign);
 }
+
+/// A short explanatory paragraph (what a step is for, what it will ask).
+/// The one place UI copy may be a full sentence: the copy rule exempts it
+/// from the 3-word limit. Keep it to one or two sentences.
+class BodyText extends StatelessWidget {
+  const BodyText(this.text, {super.key, this.textAlign});
+  final String text;
+  final TextAlign? textAlign;
+
+  @override
+  Widget build(BuildContext context) =>
+      Text(text, style: Typo.label.copyWith(color: Palette.secondary, height: 22 / 15), textAlign: textAlign);
+}

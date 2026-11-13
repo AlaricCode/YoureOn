@@ -7,7 +7,7 @@
       "source": "url",
       "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
       "unzip_to": "insightface/models/buffalo_l",
-      "sha256": null
+      "sha256": "80ffe37d8a5940d59a7384c201a2a38d4741f2f3c51eef46ebb28218a7b0ca2f"
     },
     {
       "name": "ecapa_embedding_model",
@@ -16,7 +16,7 @@
       "repo": "speechbrain/spkrec-ecapa-voxceleb",
       "revision": "main",
       "path": "embedding_model.ckpt",
-      "sha256": null
+      "sha256": "0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
     },
     {
       "name": "ecapa_hyperparams",
@@ -25,7 +25,7 @@
       "repo": "speechbrain/spkrec-ecapa-voxceleb",
       "revision": "main",
       "path": "hyperparams.yaml",
-      "sha256": null
+      "sha256": "6f78854fa04ba59e761437b76a2575d3aba5e5016de3e9b69f0c9a5077fb1a41"
     },
     {
       "name": "ecapa_mean_var_norm_emb",
@@ -34,7 +34,7 @@
       "repo": "speechbrain/spkrec-ecapa-voxceleb",
       "revision": "main",
       "path": "mean_var_norm_emb.ckpt",
-      "sha256": null
+      "sha256": "cd70225b05b37be64fc5a95e24395d804231d43f74b2e1e5a513db7b69b34c33"
     },
     {
       "name": "ecapa_label_encoder",
@@ -43,7 +43,7 @@
       "repo": "speechbrain/spkrec-ecapa-voxceleb",
       "revision": "main",
       "path": "label_encoder.txt",
-      "sha256": null
+      "sha256": "e13c3a167bb4112685670ee896d20e2b565af16b3a4ceeaa8689fa4d22adb8b9"
     }
   ],
   "derived": {

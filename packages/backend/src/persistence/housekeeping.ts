@@ -7,10 +7,13 @@
  *   txs                     settled (confirmed/failed) older than TX_RETENTION_MS;
  *                           never-submitted ones once their blockhash expired a day ago
  *   challenges              expired more than a day ago
+ *   enrollments             pending (never completed) biometric templates idle
+ *                           for more than PENDING_ENROLLMENT_TTL_MS
  * Chunk records of terminal bets are archived per bet by the lifecycle
  * close-out (lifecycle/service.ts), not here.
  */
 import type { AppContext } from '../context.js';
+import { PENDING_ENROLLMENT_TTL_MS } from '../identity/biometrics.js';
 import { COLLECTIONS, type TxRecord } from './records.js';
 
 export const PROCESSED_RETENTION_MS = 7 * 24 * 3_600_000;
@@ -18,8 +21,11 @@ export const TX_RETENTION_MS = 30 * 24 * 3_600_000;
 export const EXPIRED_RETENTION_MS = 24 * 3_600_000;
 export const HOUSEKEEPING_EVERY_MS = 3_600_000;
 
-export function pruneHotCollections(ctx: AppContext, nowMs: number): { events: number; txs: number; challenges: number } {
-  const out = { events: 0, txs: 0, challenges: 0 };
+export function pruneHotCollections(
+  ctx: AppContext,
+  nowMs: number,
+): { events: number; txs: number; challenges: number; enrollments: number } {
+  const out = { events: 0, txs: 0, challenges: 0, enrollments: 0 };
   const processed = ctx.store.collection<{ at_ms: number }>(COLLECTIONS.chainEvents);
   for (const [k, v] of processed.entries()) {
     if (nowMs - v.at_ms > PROCESSED_RETENTION_MS && processed.delete(k)) out.events++;
@@ -34,6 +40,10 @@ export function pruneHotCollections(ctx: AppContext, nowMs: number): { events: n
   for (const [k, c] of challenges.entries()) {
     if (nowMs - c.expires_at_ms > EXPIRED_RETENTION_MS && challenges.delete(k)) out.challenges++;
   }
+  const enrollments = ctx.store.collection<{ updated_at_ms: number }>(COLLECTIONS.enrollments);
+  for (const [k, e] of enrollments.entries()) {
+    if (nowMs - e.updated_at_ms > PENDING_ENROLLMENT_TTL_MS && enrollments.delete(k)) out.enrollments++;
+  }
   return out;
 }
 
@@ -46,7 +56,7 @@ export function registerHousekeeping(ctx: AppContext): void {
       if (now - last < HOUSEKEEPING_EVERY_MS) return;
       last = now;
       const n = pruneHotCollections(ctx, now);
-      if (n.events + n.txs + n.challenges > 0) ctx.log.info(n, 'pruned hot collections');
+      if (n.events + n.txs + n.challenges + n.enrollments > 0) ctx.log.info(n, 'pruned hot collections');
     },
   });
 }

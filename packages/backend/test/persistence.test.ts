@@ -134,6 +134,7 @@ describe('housekeeping (hot collection pruning)', () => {
   it('drops old processed events, settled/expired txs and expired challenges', async () => {
     const { makeApp } = await import('./appHelpers.js');
     const { pruneHotCollections, PROCESSED_RETENTION_MS, TX_RETENTION_MS } = await import('../src/persistence/housekeeping.js');
+    const { PENDING_ENROLLMENT_TTL_MS } = await import('../src/identity/biometrics.js');
     const t = await makeApp();
     try {
       const now = t.clock.nowMs();
@@ -150,7 +151,11 @@ describe('housekeeping (hot collection pruning)', () => {
       const ch = t.ctx.store.collection<Record<string, unknown>>('challenges');
       ch.set('c-old', { id: 'c-old', expires_at_ms: now - 2 * 86_400_000 });
       ch.set('c-new', { id: 'c-new', expires_at_ms: now + 60_000 });
-      expect(pruneHotCollections(t.ctx, now)).toEqual({ events: 1, txs: 2, challenges: 1 });
+      const en = t.ctx.store.collection<Record<string, unknown>>('enrollments');
+      en.set('u-old', { user_id: 'u-old', wallet: 'w', challenge_id: 'c', updated_at_ms: now - PENDING_ENROLLMENT_TTL_MS - 1 });
+      en.set('u-new', { user_id: 'u-new', wallet: 'w', challenge_id: 'c', updated_at_ms: now });
+      expect(pruneHotCollections(t.ctx, now)).toEqual({ events: 1, txs: 2, challenges: 1, enrollments: 1 });
+      expect([...en.entries()].map(([k]) => k)).toEqual(['u-new']);
       expect([...ev.entries()].map(([k]) => k)).toEqual(['new:0']);
       expect([...txs.entries()].map(([k]) => k).sort()).toEqual(['t-new', 't-pending']);
       expect([...ch.entries()].map(([k]) => k)).toEqual(['c-new']);

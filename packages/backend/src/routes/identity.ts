@@ -1,7 +1,7 @@
 /**
  * Identity / enroll / pay routes (§12.3, §8):
  *  GET  /enroll/challenge, POST /enroll/face, POST /enroll/voice,
- *  POST /enroll/complete, DELETE /enroll,
+ *  POST /enroll/complete, DELETE /enroll/pending, DELETE /enroll,
  *  GET  /pay/challenge, POST /pay/scan, POST /pay/voice, POST /pay
  */
 import type { FastifyRequest } from 'fastify';
@@ -57,6 +57,8 @@ export const identityRoutes: RouteModule = (app, ctx) => {
     const b = bodyObject(req);
     return svc().completeEnrollment(user, b['consent'], b['display_name']);
   });
+
+  app.delete('/v1/enroll/pending', async (req) => svc().discardPendingEnrollment(currentUser(ctx, req)));
 
   app.delete('/v1/enroll', async (req) => svc().deleteEnrollment(currentUser(ctx, req)));
 

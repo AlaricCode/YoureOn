@@ -60,9 +60,9 @@ describe('HttpEmbedder ↔ services/embedder (§8.1)', () => {
     expect(seen[1]!.body).toEqual({ wav_b64: Buffer.from([82, 73, 70, 70]).toString('base64') });
   });
 
-  it('a 4xx (no face found) is an error, never a zero vector', async () => {
+  it('a 422 (no face found) is FACE_NOT_MATCHED, never a zero vector', async () => {
     mode = 'noface';
-    await expect(new HttpEmbedder(base).embedFace(new Uint8Array([1]))).rejects.toThrow(/HTTP 422/);
+    await expect(new HttpEmbedder(base).embedFace(new Uint8Array([1]))).rejects.toMatchObject({ code: 'FACE_NOT_MATCHED' });
     mode = 'ok';
   });
 });

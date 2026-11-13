@@ -383,6 +383,7 @@ sponsor. Once that is settled, this section will hold the 3–4 sentence descrip
   Illinois under BIPA, require informed consent, a retention policy and deletion for biometric identifiers. Templates are encrypted at
   rest (AES-256-GCM, `BIOMETRIC_KEY`). Only Poseidon commitments go onchain, and the face/voice data itself is never published.
 - **Deletion actually deletes.** `DELETE /v1/enroll` erases the stored templates and zeroes the Profile commitments onchain.
+- **Nothing is kept without consent.** The app asks for consent before any capture. Face and voice templates captured during enrollment are only *pending* until Done (`POST /v1/enroll/complete` with consent). Withdrawing consent or leaving Enroll before Done deletes them (`DELETE /v1/enroll/pending`), and the backend deletes any pending enrollment idle for more than 24 hours.
 - **Identity checks run only when needed.** Face and voice matching run only for legs that name a specific person (actor-bound legs).
 - **Visible consent.** Each bet is accepted out loud and signed on the participant's own device, and settlement is consent-first.
 

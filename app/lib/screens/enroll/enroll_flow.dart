@@ -21,6 +21,17 @@ class EnrollFlow {
 
   bool get canFinish => faceDone && voiceDone && consent;
 
+  /// Something was captured that the backend may hold as a pending template.
+  bool get hasPending => faceDone || voiceDone || faceFrames.isNotEmpty || voiceClips.isNotEmpty;
+
+  /// Deletes pending templates on the backend and starts over. Templates
+  /// only become permanent on Done with consent; this is for consent
+  /// withdrawn or Enroll left early.
+  Future<void> discardPending() async {
+    await api.enrollDiscard();
+    resetChallenge();
+  }
+
   Future<EnrollChallenge> ensureChallenge() async => challenge ??= await api.enrollChallenge();
 
   /// Resets everything tied to the current challenge.

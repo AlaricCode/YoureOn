@@ -99,13 +99,24 @@ void main() {
       isTrue,
     );
 
-    // Not enrolled → Enroll.
+    // Not enrolled → Enroll, screen 1: consent. Continue stays off until checked.
     expect(find.byType(EnrollScreen), findsOneWidget);
-    expectCopyRule(tester, screen: 'Enroll');
-
-    // Face: neutral + two prompts.
-    await tester.tap(find.text('Face'));
+    expect(find.text('Your consent'), findsOneWidget);
+    expectCopyRule(tester, screen: 'Enroll consent');
+    await tester.tap(find.byKey(const ValueKey('enroll-continue')));
     await tester.pumpAndSettle();
+    expect(find.text('Register face'), findsNothing);
+    await tester.tap(find.text('I consent'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+
+    // Screen 2: face. Neutral + two prompts; Continue only once saved.
+    // The camera opens on its own.
+    expect(find.text('Register face'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('enroll-continue')));
+    await tester.pumpAndSettle();
+    expect(find.text('Register voice'), findsNothing);
     expect(find.text('Look ahead'), findsOneWidget);
     expectCopyRule(tester, screen: 'Enroll face');
     await tester.tap(find.bySemanticsLabel('Capture'));
@@ -119,10 +130,21 @@ void main() {
     final faceBody = FakeServer.body(server.called('POST /enroll/face').single);
     expect(faceBody['challenge_id'], 'c1');
     expect((faceBody['frames_b64'] as List).length, 3);
+    expect(find.text('Face saved'), findsOneWidget);
 
-    // Voice: three phrases.
-    await tester.tap(find.text('Voice'));
+    // Back to consent and forward again keeps the saved face.
+    await tester.tap(find.byKey(const ValueKey('enroll-back')));
     await tester.pumpAndSettle();
+    expect(find.text('Your consent'), findsOneWidget);
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Face saved'), findsOneWidget);
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+
+    // Screen 3: voice. Three phrases, then Done.
+    // The microphone opens on its own.
+    expect(find.text('Register voice'), findsOneWidget);
     expect(find.text('red apple seven'), findsOneWidget);
     expectCopyRule(tester, screen: 'Enroll voice');
     for (var i = 0; i < 3; i++) {
@@ -133,14 +155,9 @@ void main() {
     }
     final voiceBody = FakeServer.body(server.called('POST /enroll/voice').single);
     expect((voiceBody['clips_b64'] as List).length, 3);
+    expect(find.text('Voice saved'), findsOneWidget);
 
-    // Done requires consent.
     expect(server.called('POST /enroll/complete'), isEmpty);
-    await tester.tap(find.text('Done'));
-    await tester.pumpAndSettle();
-    expect(server.called('POST /enroll/complete'), isEmpty);
-    await tester.tap(find.byKey(const ValueKey('consent')));
-    await tester.pumpAndSettle();
     await tester.runAsync(() async {
       await tester.tap(find.text('Done'));
       await Future<void>.delayed(const Duration(milliseconds: 200));
@@ -194,9 +211,11 @@ void main() {
     expect(find.text('Delete biometrics'), findsNothing);
     expect(find.text('I consent'), findsOneWidget);
 
-    // A frame without a turned head fails the prompt with a §12.8 message.
+    // A frame without a face fails with a §12.8 message.
     face.faces = const [];
-    await tester.tap(find.text('Face'));
+    await tester.tap(find.text('I consent'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();
     await tester.tap(find.bySemanticsLabel('Capture'));
     await tester.pumpAndSettle();

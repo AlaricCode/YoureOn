@@ -191,6 +191,16 @@ export class IdentityService {
     return { ...commits, sign };
   }
 
+  /**
+   * `DELETE /enroll/pending`: drops any captured but not completed templates
+   * (consent withdrawn, or Enroll left before Done). Committed templates are
+   * untouched (that is `DELETE /enroll`). Idempotent.
+   */
+  discardPendingEnrollment(user: UserRecord): { deleted: true } {
+    this.vault.clearPending(user.id);
+    return { deleted: true };
+  }
+
   /** Erases all biometrics and returns the zero-commitment `init_profile` sign payload. */
   async deleteEnrollment(user: UserRecord): Promise<{ deleted: true; sign: SignPayload }> {
     const erased = this.vault.erase(user.id);
