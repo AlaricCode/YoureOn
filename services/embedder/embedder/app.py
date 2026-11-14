@@ -10,6 +10,9 @@ from __future__ import annotations
 import base64
 import binascii
 import math
+import os
+import threading
+from contextlib import asynccontextmanager
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException
@@ -49,19 +52,41 @@ def _unit(v: list[float], dim: int, what: str) -> list[float]:
     return [x / n for x in v]
 
 
-def create_app(face_factory: Callable[[], FaceModel], voice_factory: Callable[[], VoiceModel]) -> FastAPI:
-    app = FastAPI(title="verdict-embedder", version="1.0.0")
+def create_app(
+    face_factory: Callable[[], FaceModel],
+    voice_factory: Callable[[], VoiceModel],
+    preload: bool = False,
+) -> FastAPI:
+    """`preload`: load both models during startup (before the server accepts
+    requests) instead of on the first request, which on a CPU can take longer
+    than a client is willing to wait."""
     cache: dict = {}
+    lock = threading.Lock()
+
+    def _model(key: str, factory: Callable):
+        m = cache.get(key)
+        if m is None:
+            # One load even if several requests arrive while it is loading.
+            with lock:
+                m = cache.get(key)
+                if m is None:
+                    m = cache[key] = factory()
+        return m
 
     def face() -> FaceModel:
-        if "face" not in cache:
-            cache["face"] = face_factory()
-        return cache["face"]
+        return _model("face", face_factory)
 
     def voice() -> VoiceModel:
-        if "voice" not in cache:
-            cache["voice"] = voice_factory()
-        return cache["voice"]
+        return _model("voice", voice_factory)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if preload:
+            face()
+            voice()
+        yield
+
+    app = FastAPI(title="verdict-embedder", version="1.0.0", lifespan=lifespan)
 
     @app.get("/health")
     def health():
@@ -96,4 +121,5 @@ def create_app(face_factory: Callable[[], FaceModel], voice_factory: Callable[[]
 def real_app() -> FastAPI:
     from .models import EcapaModel, InsightFaceModel
 
-    return create_app(InsightFaceModel, EcapaModel)
+    # VERDICT_PRELOAD=0 restores lazy loading (faster start, slow first request).
+    return create_app(InsightFaceModel, EcapaModel, preload=os.environ.get("VERDICT_PRELOAD", "1") != "0")

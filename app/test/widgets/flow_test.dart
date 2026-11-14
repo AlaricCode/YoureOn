@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:verdict/capture/face_capture.dart';
 import 'package:verdict/crypto/ed25519.dart';
 import 'package:verdict/crypto/messages.dart';
 import 'package:verdict/screens/enroll_screen.dart';
@@ -122,6 +123,15 @@ void main() {
     await tester.tap(find.bySemanticsLabel('Capture'));
     await tester.pumpAndSettle();
     expect(find.text('Turn left'), findsOneWidget);
+    // Not turned far enough: the bubble asks for more, with no error and
+    // without losing the photo already taken.
+    face.faces = const [DetectedFace(bbox: [3000, 2000, 7000, 7000], yawDeg: 4, pitchDeg: 2)];
+    await tester.tap(find.bySemanticsLabel('Capture'));
+    await tester.pumpAndSettle();
+    expect(find.text('Turn further left'), findsOneWidget);
+    expect(find.text('Turn left'), findsOneWidget);
+    expect(find.text('Liveness failed'), findsNothing);
+    face.faces = const [DetectedFace(bbox: [3000, 2000, 7000, 7000], yawDeg: 20, pitchDeg: 20)];
     await tester.tap(find.bySemanticsLabel('Capture'));
     await tester.pumpAndSettle();
     expect(find.text('Look up'), findsOneWidget);
@@ -219,7 +229,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.bySemanticsLabel('Capture'));
     await tester.pumpAndSettle();
-    expect(find.text('Face not matched'), findsOneWidget);
+    expect(find.text('No face found'), findsOneWidget);
 
     c.dispose();
   });

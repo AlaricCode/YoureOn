@@ -69,6 +69,17 @@ class ApiTransport {
         ),
       );
 
+  /// [postJson] with its own [timeout], for calls the backend needs longer
+  /// to answer (enrollment: the face/voice model runs on every capture).
+  Future<Object?> postJsonSlow(String path, Object body, {required Duration timeout}) => _send(
+        () => _client.post(
+          uri(path),
+          headers: _headers(contentType: 'application/json'),
+          body: jsonEncode(body),
+        ),
+        timeout: timeout,
+      );
+
   Future<Object?> patchJson(String path, Object body) => _send(
         () => _client.patch(
           uri(path),
@@ -108,9 +119,9 @@ class ApiTransport {
   Uri _target(String t) =>
       Uri.parse(t).hasScheme || t.startsWith('/v1/') ? resolve(t) : uri(t);
 
-  Future<http.Response> _raw(Future<http.Response> Function() f) async {
+  Future<http.Response> _raw(Future<http.Response> Function() f, {Duration? timeout}) async {
     try {
-      return await f().timeout(timeout);
+      return await f().timeout(timeout ?? this.timeout);
     } on TimeoutException catch (e) {
       throw ApiException.internal(e);
     } on http.ClientException catch (e) {
@@ -122,8 +133,8 @@ class ApiTransport {
     }
   }
 
-  Future<Object?> _send(Future<http.Response> Function() f) async {
-    final res = await _raw(f);
+  Future<Object?> _send(Future<http.Response> Function() f, {Duration? timeout}) async {
+    final res = await _raw(f, timeout: timeout);
     if (res.statusCode == 204) return null;
     if (res.statusCode >= 200 && res.statusCode < 300) {
       if (res.bodyBytes.isEmpty) return null;

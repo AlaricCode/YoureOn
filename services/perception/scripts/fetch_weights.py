@@ -77,7 +77,13 @@ def main() -> int:
             out = root / w["unzip_to"]
             if not out.exists():
                 with zipfile.ZipFile(dest) as z:
-                    z.extractall(out.parent)
+                    files = [n for n in z.namelist() if not n.endswith("/")]
+                    # A zip that wraps its files in a folder named like the target
+                    # (buffalo_l/...) extracts next to it; a flat zip (InsightFace's
+                    # buffalo_l.zip is flat) extracts into it. Either way the files end
+                    # up in `out`, where the model loader looks before downloading.
+                    wrapped = bool(files) and all(n.startswith(out.name + "/") for n in files)
+                    z.extractall(out.parent if wrapped else out)
         print(f"ok {w['name']} {d}")
     if a.pin:
         LOCK.write_text(json.dumps(lock, indent=2) + "\n", "utf-8")

@@ -35,23 +35,33 @@ class CapturedFrame {
 
 /// Head-turn prompts of the enrollment / pay liveness challenge.
 enum HeadPrompt {
-  left('left', 'Turn left'),
-  right('right', 'Turn right'),
-  up('up', 'Look up'),
-  down('down', 'Look down');
+  left('left', 'Turn left', 'Turn further left'),
+  right('right', 'Turn right', 'Turn further right'),
+  up('up', 'Look up', 'Look further up'),
+  down('down', 'Look down', 'Look further down');
 
-  const HeadPrompt(this.wire, this.label);
+  const HeadPrompt(this.wire, this.label, this.furtherLabel);
   final String wire;
   final String label;
+
+  /// Shown when a photo did not turn far enough for this prompt.
+  final String furtherLabel;
+
+  /// Up/down tilt (pitch) reads much smaller than a left/right turn (yaw) on
+  /// ML Kit, so it gets a lower bar.
+  static const double minYawDeg = 12;
+  static const double minPitchDeg = 7;
 
   static HeadPrompt parse(String s) => values.firstWhere((p) => p.wire == s, orElse: () => left);
 
   /// Loose client-side check (the server decides liveness): the head is
-  /// turned at least [minDeg] on the prompt's axis. The sign of ML Kit's
+  /// turned at least [minDeg] on the prompt's axis ([minYawDeg] for
+  /// left/right, [minPitchDeg] for up/down by default). The sign of ML Kit's
   /// angles depends on camera mirroring, so only the magnitude is checked.
-  bool satisfiedBy(DetectedFace f, {double minDeg = 12}) {
-    final v = (this == left || this == right) ? f.yawDeg : f.pitchDeg;
-    return v != null && v.abs() >= minDeg;
+  bool satisfiedBy(DetectedFace f, {double? minDeg}) {
+    final yaw = this == left || this == right;
+    final v = yaw ? f.yawDeg : f.pitchDeg;
+    return v != null && v.abs() >= (minDeg ?? (yaw ? minYawDeg : minPitchDeg));
   }
 }
 

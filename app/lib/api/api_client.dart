@@ -78,15 +78,23 @@ class ApiClient {
   Future<EnrollChallenge> enrollChallenge() async =>
       decode(await t.getJson('/enroll/challenge'), EnrollChallenge.fromJson);
 
+  /// Enrollment uploads run the face / voice model on every capture, which
+  /// on a CPU-only embedder can take well over the default 30 s.
+  static const Duration enrollTimeout = Duration(minutes: 2);
+
   /// [frames]: full-frame JPEGs ≤ 640 px long side; `frames[0]` neutral,
   /// `frames[1..2]` in `face_prompts` order, extras neutral (3..5 total).
   Future<FaceEnrollResult> enrollFace(String challengeId, List<Uint8List> frames) async {
     if (frames.length < 3 || frames.length > 5) throw ArgumentError('3..5 frames');
     return decode(
-      await t.postJson('/enroll/face', {
-        'challenge_id': challengeId,
-        'frames_b64': [for (final f in frames) toB64(f)],
-      }),
+      await t.postJsonSlow(
+        '/enroll/face',
+        {
+          'challenge_id': challengeId,
+          'frames_b64': [for (final f in frames) toB64(f)],
+        },
+        timeout: enrollTimeout,
+      ),
       FaceEnrollResult.fromJson,
     );
   }
@@ -94,10 +102,14 @@ class ApiClient {
   Future<bool> enrollVoice(String challengeId, List<Uint8List> wavClips) async {
     if (wavClips.length != 3) throw ArgumentError('3 clips');
     return decode(
-      await t.postJson('/enroll/voice', {
-        'challenge_id': challengeId,
-        'clips_b64': [for (final c in wavClips) toB64(c)],
-      }),
+      await t.postJsonSlow(
+        '/enroll/voice',
+        {
+          'challenge_id': challengeId,
+          'clips_b64': [for (final c in wavClips) toB64(c)],
+        },
+        timeout: enrollTimeout,
+      ),
       (v) => asBool(asJson(v)['ok']),
     );
   }

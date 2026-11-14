@@ -11,6 +11,9 @@ abstract final class Palette {
 
   /// The only accent: primary action and the live dot.
   static const Color accent = Color(0xFF5E6AD2);
+
+  /// Capture problems the user can fix (turn further, no face found).
+  static const Color danger = Color(0xFFE5484D);
 }
 
 /// 8-pt grid.

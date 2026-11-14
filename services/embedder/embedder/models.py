@@ -58,11 +58,15 @@ class EcapaModel:
 
         self.torch = torch
         local = WEIGHTS_DIR / "spkrec-ecapa-voxceleb"
+        baked = (local / "hyperparams.yaml").exists()
         # Baked, digest-checked files (scripts/fetch_weights.py) win over a hub download.
+        # The model's hyperparams.yaml points its pretrainer at the hub repo
+        # (`pretrained_path`); override it so the checkpoints load from `local` too.
         self.enc = EncoderClassifier.from_hparams(
-            source=str(local) if (local / "hyperparams.yaml").exists() else "speechbrain/spkrec-ecapa-voxceleb",
+            source=str(local) if baked else "speechbrain/spkrec-ecapa-voxceleb",
             savedir=str(local),
             revision=ECAPA_REVISION,
+            overrides={"pretrained_path": str(local)} if baked else {},
             run_opts={"device": "cuda" if os.environ.get("VERDICT_DEVICE") == "cuda" else "cpu"},
         )
 

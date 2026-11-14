@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../api/api_error.dart';
+import '../../capture/capture_permissions.dart';
 import '../../capture/face_capture.dart';
 import '../../capture/voice_capture.dart';
 import '../../state/app_controller.dart';
@@ -25,6 +26,68 @@ mixin _CapturePanel<T extends StatefulWidget> on State<T> {
   bool snap = false;
   Timer? _snapTimer;
 
+  /// Camera / microphone access: null while the system prompt is up.
+  DeviceAccess? access;
+
+  /// Asks for [device] (the system prompt shows right away the first time).
+  /// Returns true when allowed; otherwise the stage shows the "allow" state.
+  Future<bool> ensureAccess(CaptureDevice device) async {
+    if (mounted) setState(() => access = null);
+    final a = await CapturePermissions.instance.request(device);
+    if (mounted) setState(() => access = a);
+    return a == DeviceAccess.granted;
+  }
+
+  /// Back from the system settings: if access was turned on there, start.
+  Future<void> recheckAccess(CaptureDevice device, VoidCallback start) async {
+    if (access == DeviceAccess.granted || access == null) return;
+    final a = await CapturePermissions.instance.status(device);
+    if (!mounted) return;
+    setState(() => access = a);
+    if (a == DeviceAccess.granted) start();
+  }
+
+  /// The stage before the camera / microphone runs: waiting for the prompt,
+  /// denied (ask again), blocked (open settings), or opening / failed.
+  Widget accessStage({
+    required CaptureDevice device,
+    required IconData icon,
+    required VoidCallback onRetry,
+  }) {
+    final cam = device == CaptureDevice.camera;
+    return switch (access) {
+      null => _AccessView(
+          key: const ValueKey('access-asking'),
+          icon: icon,
+          label: cam ? 'Allow camera access' : 'Allow microphone access',
+        ),
+      DeviceAccess.denied => _AccessView(
+          key: const ValueKey('access-denied'),
+          icon: icon,
+          button: QuietButton(label: cam ? 'Allow camera' : 'Allow microphone', onPressed: onRetry),
+        ),
+      DeviceAccess.blocked => _AccessView(
+          key: const ValueKey('access-blocked'),
+          icon: icon,
+          button: QuietButton(label: 'Open settings', onPressed: CapturePermissions.instance.openSettings),
+        ),
+      DeviceAccess.granted => StartView(
+          key: const ValueKey('access-start'),
+          icon: icon,
+          label: 'Try again',
+          busy: busy || error == null,
+          onPressed: onRetry,
+        ),
+    };
+  }
+
+  /// The red line under the stage: a capture problem, or missing access.
+  String? alertFor(CaptureDevice device) => switch (access) {
+        DeviceAccess.denied || DeviceAccess.blocked =>
+          device == CaptureDevice.camera ? 'Camera access needed' : 'Microphone access needed',
+        _ => error,
+      };
+
   Future<void> guard(Future<void> Function() f) async {
     setState(() {
       busy = true;
@@ -33,8 +96,12 @@ mixin _CapturePanel<T extends StatefulWidget> on State<T> {
     try {
       await f();
     } on ApiException catch (e) {
-      if (mounted) setState(() => error = e.message);
-    } catch (_) {
+      // The full error (code, HTTP status, the backend's message) goes to the
+      // `flutter run` console; the user sees the short line.
+      debugPrint('enroll capture failed: $e');
+      if (mounted) setState(() => error = describe(e));
+    } catch (e) {
+      debugPrint('enroll capture failed: $e');
       if (mounted) setState(() => error = ApiException('INTERNAL').message);
     } finally {
       if (mounted) setState(() => busy = false);
@@ -51,8 +118,12 @@ mixin _CapturePanel<T extends StatefulWidget> on State<T> {
 
   void disposeTimers() => _snapTimer?.cancel();
 
+  /// The line shown for a failed capture; panels override it to say what to
+  /// fix ("No face found") instead of the generic §12.8 message.
+  String describe(ApiException e) => e.message;
+
   /// The rounded stage (camera / phrase / start / saved) and the error line.
-  Widget panel(Widget stage) {
+  Widget panel(Widget stage, {String? alert}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -65,7 +136,7 @@ mixin _CapturePanel<T extends StatefulWidget> on State<T> {
             ),
           ),
         ),
-        ErrorLine(error),
+        _AlertLine(alert ?? error),
       ],
     );
   }
@@ -95,15 +166,17 @@ class FaceCapturePanel extends StatefulWidget {
   State<FaceCapturePanel> createState() => _FaceCapturePanelState();
 }
 
-class _FaceCapturePanelState extends State<FaceCapturePanel> with _CapturePanel<FaceCapturePanel> {
+class _FaceCapturePanelState extends State<FaceCapturePanel>
+    with _CapturePanel<FaceCapturePanel>, WidgetsBindingObserver {
   EnrollFlow get _flow => widget.flow;
   FaceCapture? _camera;
 
   @override
   void initState() {
     super.initState();
-    // Open the camera as soon as the step shows; the system permission
-    // prompt ("Allow Verdict to take pictures") appears here the first time.
+    WidgetsBinding.instance.addObserver(this);
+    // Ask for the camera as soon as the step shows: the system prompt
+    // ("Allow Verdict to take pictures") appears right away the first time.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_flow.faceDone) _open();
     });
@@ -111,14 +184,21 @@ class _FaceCapturePanelState extends State<FaceCapturePanel> with _CapturePanel<
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     disposeTimers();
     _camera?.close();
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _camera == null && !_flow.faceDone) {
+      recheckAccess(CaptureDevice.camera, _open);
+    }
+  }
+
   Future<void> _open() => guard(() async {
-        await _flow.ensureChallenge();
-        _flow.faceFrames.clear();
+        if (!await ensureAccess(CaptureDevice.camera)) return;
         final cam = app.newFaceCapture();
         try {
           await cam.open(front: true);
@@ -129,14 +209,33 @@ class _FaceCapturePanelState extends State<FaceCapturePanel> with _CapturePanel<
           await cam.close();
           return;
         }
+        _flow.faceFrames.clear();
         setState(() => _camera = cam);
+        // The prompts come from the backend; fetched once the camera shows.
+        await _flow.ensureChallenge();
+        if (mounted) setState(() {});
       });
+
+  @override
+  String describe(ApiException e) => switch (e.code) {
+        // On-device detector or the backend's face model found no face.
+        'FACE_NOT_MATCHED' => 'No face found',
+        // Backend: the photos do not look like the same person; start over.
+        'LIVENESS_FAILED' => "Photos didn't match",
+        _ => e.message,
+      };
 
   Future<void> _capture() => guard(() async {
         final cam = _camera;
         if (cam == null) return;
         final frame = await cam.capture();
         final code = _flow.addFaceFrame(frame);
+        if (code == 'LIVENESS_FAILED') {
+          // Head not turned far enough: say which way, keep the photos so far.
+          final p = _flow.nextFacePrompt;
+          if (mounted) setState(() => error = p?.furtherLabel ?? 'Turn further');
+          return;
+        }
         if (code != null) throw ApiException(code);
         if (!_flow.faceReady) {
           if (mounted) flashSnap();
@@ -158,14 +257,10 @@ class _FaceCapturePanelState extends State<FaceCapturePanel> with _CapturePanel<
     if (_flow.faceDone) return panel(const SavedView(key: ValueKey('face-saved'), label: 'Face saved'));
     final cam = _camera;
     if (cam == null) {
-      // Opening (spinner), or it failed (permission denied, no camera).
-      return panel(StartView(
-        key: const ValueKey('face-start'),
-        icon: LucideIcons.scanFace,
-        label: 'Try again',
-        busy: busy || error == null,
-        onPressed: _open,
-      ));
+      return panel(
+        accessStage(device: CaptureDevice.camera, icon: LucideIcons.scanFace, onRetry: _open),
+        alert: alertFor(CaptureDevice.camera),
+      );
     }
     final checking = _flow.faceReady;
     final prompt = _flow.nextFacePrompt;
@@ -212,7 +307,8 @@ class VoiceCapturePanel extends StatefulWidget {
   State<VoiceCapturePanel> createState() => _VoiceCapturePanelState();
 }
 
-class _VoiceCapturePanelState extends State<VoiceCapturePanel> with _CapturePanel<VoiceCapturePanel> {
+class _VoiceCapturePanelState extends State<VoiceCapturePanel>
+    with _CapturePanel<VoiceCapturePanel>, WidgetsBindingObserver {
   EnrollFlow get _flow => widget.flow;
   VoiceCapture? _mic;
   bool _recording = false;
@@ -220,15 +316,24 @@ class _VoiceCapturePanelState extends State<VoiceCapturePanel> with _CapturePane
   @override
   void initState() {
     super.initState();
-    // Ask for the microphone as soon as the step shows; the system permission
-    // prompt ("Allow Verdict to record audio") appears here the first time.
+    WidgetsBinding.instance.addObserver(this);
+    // Ask for the microphone as soon as the step shows: the system prompt
+    // ("Allow Verdict to record audio") appears right away the first time.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && !_flow.voiceDone) _open();
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _mic == null && !_flow.voiceDone) {
+      recheckAccess(CaptureDevice.microphone, _open);
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     disposeTimers();
     final mic = _mic;
     if (mic != null) {
@@ -242,6 +347,7 @@ class _VoiceCapturePanelState extends State<VoiceCapturePanel> with _CapturePane
   }
 
   Future<void> _open() => guard(() async {
+        if (!await ensureAccess(CaptureDevice.microphone)) return;
         await _flow.ensureChallenge();
         _flow.voiceClips.clear();
         final mic = app.newVoiceCapture();
@@ -281,14 +387,10 @@ class _VoiceCapturePanelState extends State<VoiceCapturePanel> with _CapturePane
   Widget build(BuildContext context) {
     if (_flow.voiceDone) return panel(const SavedView(key: ValueKey('voice-saved'), label: 'Voice saved'));
     if (_mic == null) {
-      // Opening (spinner), or it failed (permission denied).
-      return panel(StartView(
-        key: const ValueKey('voice-start'),
-        icon: LucideIcons.mic,
-        label: 'Try again',
-        busy: busy || error == null,
-        onPressed: _open,
-      ));
+      return panel(
+        accessStage(device: CaptureDevice.microphone, icon: LucideIcons.mic, onRetry: _open),
+        alert: alertFor(CaptureDevice.microphone),
+      );
     }
     final phrase = _flow.nextPhrase;
     final clips = _flow.challenge?.voicePhrases.length ?? 0;
@@ -337,7 +439,7 @@ class _VoiceCapturePanelState extends State<VoiceCapturePanel> with _CapturePane
 // ---- shared widgets ---------------------------------------------------------
 
 /// While the camera / microphone opens (button shows a spinner), or after it
-/// could not open (permission denied): an icon and a retry button.
+/// could not open: an icon and a retry button.
 class StartView extends StatelessWidget {
   const StartView({super.key, required this.icon, required this.label, required this.onPressed, this.busy = false});
   final IconData icon;
@@ -469,6 +571,57 @@ class _CheckingLabelState extends State<CheckingLabel> {
           child: Text('.' * _dots, style: Typo.heading, maxLines: 1),
         ),
       ],
+    );
+  }
+}
+
+/// A capture problem the user can fix, in red, in the same slot (and height)
+/// as [ErrorLine] so the layout does not jump.
+class _AlertLine extends StatelessWidget {
+  const _AlertLine(this.message);
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = message;
+    return AnimatedSwitcher(
+      duration: Motion.fast,
+      switchInCurve: Motion.curve,
+      child: m == null
+          ? const SizedBox(height: Space.x3)
+          : SizedBox(
+              key: ValueKey(m),
+              height: Space.x3,
+              child: Center(child: Label(m, style: Typo.label.copyWith(color: Palette.danger))),
+            ),
+    );
+  }
+}
+
+/// The stage before capture can start: the device icon with either a quiet
+/// label (waiting for the system prompt) or a button (ask again / settings).
+class _AccessView extends StatelessWidget {
+  const _AccessView({super.key, required this.icon, this.label, this.button});
+  final IconData icon;
+  final String? label;
+  final Widget? button;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Space.x3),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Icon(icon, size: 40, color: Palette.secondary),
+            const SizedBox(height: Space.x3),
+            if (label != null) Label(label!, style: Typo.label.copyWith(color: Palette.secondary), textAlign: TextAlign.center),
+            if (button != null) button!,
+          ],
+        ),
+      ),
     );
   }
 }
