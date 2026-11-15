@@ -6,6 +6,7 @@ import type {
   LocalAuthenticationResult,
 } from 'expo-local-authentication';
 import type { SecureStoreOptions } from 'expo-secure-store';
+import type { DevicePolicyPins } from '@youre-on/shared/device-policy';
 
 export type {
   LocalAuthenticationError,
@@ -38,4 +39,10 @@ export type WalletPlatform = {
   getRandomValues(array: Uint8Array): Uint8Array;
   /** Wall clock in ms (defaults to Date.now). Injected so tests control timestamps. */
   now?: () => number;
+  /**
+   * TESTS ONLY: replaces the device policy's compiled-in DEVICE_POLICY_PINS (the G1 root of trust)
+   * so fixture worlds can use their own fee payer / mint. expoPlatform never sets it, and the
+   * policy ignores it in a release build. Screens cannot reach it: requests carry no pins.
+   */
+  policyPinsForTests?: DevicePolicyPins;
 };

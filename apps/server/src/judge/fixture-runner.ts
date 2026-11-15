@@ -2,7 +2,10 @@
 // PG-13 quip refusal with the right RefusalCategory for 4/4 unsafe ones, with ≤ 2 clarifying
 // questions each"). PENDING-KEY: the live run needs ANTHROPIC_API_KEY.
 //
-//   ANTHROPIC_API_KEY=… npx tsx apps/server/src/judge/fixture-runner.ts [--only=01-bottle-flip] [--model=claude-haiku-5-5]
+//   ALLOW_SPEND=true ANTHROPIC_API_KEY=… npx tsx apps/server/src/judge/fixture-runner.ts [--only=01-bottle-flip] [--model=claude-haiku-5-5]
+//
+// Every fixture makes paid Anthropic calls, so it refuses to run (SPEND_DISABLED, exit 2) unless
+// ALLOW_SPEND=true, like every other paid mode (src/providers/spend.ts).
 //
 // It plays the judge's terms phase as text: the system prompt is the agent's persona
 // (packages/shared/src/judge/persona.ts) with the dynamic variables filled in, the only tool is
@@ -39,6 +42,7 @@ import {
   type ToolReply,
 } from '@youre-on/shared/judge/reply';
 import { SpokenBetFixture } from '@youre-on/shared/judge/fixture-schema';
+import { assertSpendAllowed } from '../providers/spend';
 
 export const FIXTURE_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -299,12 +303,19 @@ async function main() {
       return [m[1]!, m[2]!];
     }),
   );
-  if (!process.env.ANTHROPIC_API_KEY) {
+  try {
+    assertSpendAllowed({ ALLOW_SPEND: process.env.ALLOW_SPEND === 'true' }, 'fixture-runner');
+  } catch (e) {
+    process.stderr.write(`fixture-runner: ${(e as Error).message}\n`);
+    process.exit(2);
+  }
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
     process.stderr.write('fixture-runner: ANTHROPIC_API_KEY is not set (PENDING-KEY)\n');
     process.exit(2);
   }
   const { default: AnthropicClient } = await import('@anthropic-ai/sdk');
-  const client = new AnthropicClient();
+  const client = new AnthropicClient({ apiKey });
   const create: CreateMessage = (p) => client.messages.create(p);
   const fixtures = loadFixtures().filter((f) => !args.only || f.id === args.only);
   const grades: Grade[] = [];

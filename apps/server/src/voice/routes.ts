@@ -5,6 +5,12 @@
 // createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
 // sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
 // routes.ts registers.
+//
+// Spend guard (README D14): a conversation token starts a billable ElevenLabs Agent session
+// (agent minutes + LLM usage), so the default client calls ElevenLabs only with ALLOW_SPEND=true.
+// Without it the token route answers 502 UPSTREAM_ERROR {reason: 'spend_disabled'} and never
+// calls out; the server still boots (ELEVENLABS_API_KEY in .env is also used by
+// scripts/el-agent.ts, whose agent / tool configuration calls are not billed).
 import { eq } from 'drizzle-orm';
 import { bets, voiceSessions } from '@youre-on/db';
 import { isTerminalBetState, type BetState } from '@youre-on/shared/bet-state';
@@ -31,10 +37,17 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
   return {
     name: 'voice',
     register(app, deps) {
-      const el: ElevenLabsClient =
+      const el: ElevenLabsClient | null =
         typeof o.elevenlabs === 'function'
           ? o.elevenlabs(deps)
-          : (o.elevenlabs ?? createElevenLabsClient({ apiKey: deps.env.ELEVENLABS_API_KEY }));
+          : (o.elevenlabs ??
+            (deps.env.ALLOW_SPEND === true
+              ? createElevenLabsClient({ apiKey: deps.env.ELEVENLABS_API_KEY })
+              : null));
+      if (!el && deps.env.ELEVENLABS_API_KEY)
+        deps.log.warn('voice.spend_disabled', {
+          hint: 'ELEVENLABS_API_KEY is set but ALLOW_SPEND is not true: voice tokens are refused',
+        });
       const state = o.state ?? new ToolState();
 
       app.post(VOICE_TOKENS_PATH, requireSignedRequest, async (c) => {
@@ -64,6 +77,13 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
             'UPSTREAM_ERROR',
             "The judge isn't set up yet.",
             { reason: 'not_configured' },
+            { retryable: false },
+          );
+        if (!el)
+          throw new HttpError(
+            'UPSTREAM_ERROR',
+            "The judge isn't set up yet.",
+            { reason: deps.env.ELEVENLABS_API_KEY ? 'spend_disabled' : 'not_configured' },
             { retryable: false },
           );
         let minted;

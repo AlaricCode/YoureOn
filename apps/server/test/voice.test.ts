@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { auditLog, voiceSessions } from '@youre-on/db';
 import { VoiceTokenResponse } from '@youre-on/shared/judge/voice';
@@ -192,6 +192,31 @@ describeDb('voice: POST /v1/voice/tokens and /el/tools/propose_terms (DB)', () =
       'not_configured',
     ]);
     expect(el.calls.length).toBe(before);
+  });
+
+  it('spend guard: with ELEVENLABS_API_KEY but no ALLOW_SPEND, the default client never calls ElevenLabs', async () => {
+    const guarded = await startTestServer({
+      modules: [
+        ...routeModules.filter((r) => r.name !== 'voice'),
+        createVoiceRoutes(), // the production default client
+      ],
+      env: { ELEVENLABS_AGENT_ID: AGENT, ELEVENLABS_API_KEY: 'xi-test-not-a-real-key' },
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      const A = await signUp(guarded.base, 'Logan');
+      const r = await post(guarded, A, '/v1/voice/tokens', { purpose: 'terms' });
+      expect([r.status, r.json!.error.code, r.json!.error.details?.reason]).toEqual([
+        502,
+        'UPSTREAM_ERROR',
+        'spend_disabled',
+      ]);
+      const urls = fetchSpy.mock.calls.map(([u]) => String(u instanceof Request ? u.url : u));
+      expect(urls.some((u) => u.includes('elevenlabs'))).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      await guarded.server.close();
+    }
   });
 
   it('the pre-minted conversation is bound by POST /v1/bets (D0-J4 binding)', async () => {
