@@ -1,0 +1,31 @@
+{
+  "v": 1,
+  "programId": "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm",
+  "network": "solana-devnet",
+  "dataset": "block",
+  "batchStart": 519807091,
+  "batchEnd": 519807091,
+  "txs": [
+    {
+      "signature": "52i3cfdiJhBc6Wko6rxC2MUJBK2SoB7JBt6wLy8UEYUwyLPzxMvLr8PTvx1PjQJsCMjW3gCDWNaiymADMGhazeUk",
+      "blockHeight": 400118207,
+      "parentSlot": 519807090,
+      "blockTime": 1795284425,
+      "txIndex": 2,
+      "events": [
+        {
+          "outerIx": 3,
+          "innerIx": 0,
+          "name": "BetCreated",
+          "eventBase64": "IJlpR7xIa3J/PCqeSx1OipwvGis8TV5vA1LE43Ea52H5H0SsPgcT3GHeL4Px/bEIvFwfr7gd0mBQ3EmJAAzoub7lY8xu4QAfZA3l4BhD4Uzj28xUwIp+O1PFrCQT90UUERwmAAaC1YwTSpGA6g28ZHXuhqa5Wl3jYDf4K99bO/djzUjX13OR9Wv8jQLexhfXXwzXlE6pyb3fEmoXmJWYBqkVo0/asUhriVPOSbGPR2pNxbk9QdjymkBLTAAAAAAAQEtMAAAAAADOqfAfyxu3P9z0lRXXW4bTF7fFpt7vB9yKgWvbMawFj+9D5M3c5Xb0hESjozOaIYa8wRTFEcPT8MQjXoH/XAU+bVreBKmDnFhM79Hrx5XOXI/YDBNN0db4W0t0vRmfDJAU3gFrAAAAAJlqaAebbNBEYX21JfIlHIqRwz4z2YIVTLzHjW/s02V4sN0BawAAAAA="
+        },
+        {
+          "outerIx": 4,
+          "innerIx": 0,
+          "name": "BetAccepted",
+          "eventBase64": "pvm2TVUf4WR/PCqeSx1OipwvGis8TV5vrlxUp6GcOVEA1KWFlqaHNoRq+DFMwBaNZ6VBRvp28ky8UPzGZgMStY1a8InoMGjOctYgfzdrZMQt1+b8YcrQV4u/m7I4L4dp9Rb8h1TLBqPWU8MNU1sKh5h59Pjn3CQCQEtMAAAAAABAS0wAAAAAAICWmAAAAAAAwOsBawAAAACw3QFrAAAAAA=="
+        }
+      ]
+    }
+  ]
+}
