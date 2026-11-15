@@ -19,10 +19,10 @@ export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 
 /**
- * Server fee payer = durable-nonce authority (SETUP-CHECKLIST KP3).
- * PENDING: the key does not exist yet. It must be pinned here before preview build #3 (TASKS D1).
+ * Server fee payer = durable-nonce authority (SETUP-CHECKLIST KP3), made by `npm run keys`
+ * (2026-11-15). Phones re-derive the nonce pool from it, so rotating it needs a new app build.
  */
-export const FEE_PAYER_PUBKEY: string | null = null;
+export const FEE_PAYER_PUBKEY: string | null = 'E9JtQxzH3zuMNpnddeSgzimDZRk3Zx1fVoL15os7zbbk';
 
 /** PDA seeds (ESCROW §2), UTF-8. Bet and vault append the 16 RFC 4122 bytes of bet_id. */
 export const CONFIG_SEED = 'config';
