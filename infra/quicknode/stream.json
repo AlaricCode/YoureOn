@@ -1,29 +1,28 @@
 {
-  "name": "verdict-devnet",
+  "name": "youre-on-escrow-devnet",
   "network": "solana-devnet",
   "dataset": "block",
+  "filter_function": "<base64 of filter.js: npx tsx infra/quicknode/build-filter.ts --create-body https://<FLY_APP>.fly.dev>",
+  "filter_language": "javascript",
   "region": "usa_east",
-  "start_range": -1,
-  "end_range": -1,
-  "dataset_batch_size": 1,
-  "include_stream_metadata": "header",
-  "status": "active",
-  "elastic_batch_enabled": false,
-  "filter_function_file": "filter.js",
-  "filter_function": "<base64 of filter.js (see notes)>",
+  "dataset_batch_size": 5,
+  "elastic_batch_enabled": true,
   "destination": "webhook",
   "destination_attributes": {
-    "url": "${API}/v1/webhooks/quicknode",
+    "url": "https://<FLY_APP>.fly.dev/webhooks/quicknode",
     "compression": "none",
-    "headers": { "content-type": "application/json" },
     "max_retry": 3,
     "retry_interval_sec": 1,
     "post_timeout_sec": 10,
-    "security_token": "${QUICKNODE_SECRET}"
+    "headers": {}
   },
+  "fix_block_reorgs": 0,
+  "keep_distance_from_tip": 0,
+  "status": "active",
   "notes": [
-    "CONTRACTS §12.5. Create with the QuickNode Streams API (POST https://api.quicknode.com/streams/rest/v1/streams) after replacing ${API} and ${QUICKNODE_SECRET} and setting filter_function to base64(filter.js).",
-    "The webhook verifies x-qn-nonce / x-qn-timestamp / x-qn-signature = hex(HMAC_SHA256(QUICKNODE_SECRET, nonce || timestamp || raw_body)) with |now - timestamp| <= 300 s (packages/backend/src/chain/quicknode.ts).",
-    "VERDICT_PROGRAM_ID is a constant at the top of filter.js; change it together with VERDICT_PROGRAM_ID in .env."
+    "API-CONTRACT §5.1. Create with POST https://api.quicknode.com/streams/rest/v1/streams (header x-api-key) only after the hosted URL exists; build-filter.ts --create-body fills filter_function and url and drops this notes key.",
+    "The response's destination_attributes.security_token goes into the Fly secret QN_STREAM_SECURITY_TOKEN; the server verifies X-QN-Signature = hex HMAC-SHA256(token, X-QN-Nonce + X-QN-Timestamp + decompressed body), |now - ts| <= 300 s (apps/server/src/chain/quicknode.ts).",
+    "dataset_batch_size must be >= 5 (422 otherwise). filter_language is unverified (FINDINGS §6 step 4): validate with POST /streams/test_filter and --probe first.",
+    "Pause the Stream when idle (~11 M credits/day at 24/7, shared with the RPC)."
   ]
 }

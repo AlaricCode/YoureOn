@@ -1,0 +1,78 @@
+{
+  "id": "06-plank",
+  "title": "Plank for a minute",
+  "kind": "benign",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "A",
+      "text": "I bet you seven dollars I can hold a plank for a full minute."
+    }
+  ],
+  "answers": [
+    {
+      "speaker": "B",
+      "text": "Whatever, knees stay up though."
+    }
+  ],
+  "min_questions": 0,
+  "max_questions": 2,
+  "sample_args": {
+    "type": "skill",
+    "claim": "Logan holds a plank for sixty seconds.",
+    "performer": "A",
+    "yes_party": "A",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "Logan holds a plank on forearms and toes for sixty seconds.",
+      "Logan's knees never touch the floor."
+    ],
+    "failure_criteria": ["Knees touching the floor.", "Hips dropping to the floor."],
+    "edge_cases": [
+      {
+        "question": "Forearms or straight arms?",
+        "answer": "Either. Knees off the floor the whole time."
+      }
+    ],
+    "amount_usd": "7",
+    "market_side": "none",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "skill",
+    "claim": "Logan holds a plank for sixty seconds.",
+    "performer": "A",
+    "yes_party": "A",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "Logan holds a plank on forearms and toes for sixty seconds.",
+      "Logan's knees never touch the floor."
+    ],
+    "failure_criteria": ["Knees touching the floor.", "Hips dropping to the floor."],
+    "edge_cases": [
+      {
+        "question": "Forearms or straight arms?",
+        "answer": "Either. Knees off the floor the whole time.",
+        "asked_by": "judge"
+      }
+    ],
+    "evidence_source": "camera",
+    "amount": "7000000",
+    "market_query": null,
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "skill",
+    "performer": "A",
+    "yes_party": "A",
+    "amount": "7000000"
+  }
+}

@@ -1,0 +1,14 @@
+# BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile (fly deploy uses BuildKit).
+**/node_modules
+**/.env*
+**/*.log
+**/target
+**/.expo
+**/dist
+**/*-keypair.json
+keys
+docs
+programs
+apps/mobile
+apps/stage
+.git

@@ -1,0 +1,26 @@
+# Local development Postgres (stand-in for Neon; DATA-MODEL §12).
+#   docker compose up -d db
+#   DATABASE_URL=postgres://yo:yo@localhost:54329/youre_on
+# Port 54329 avoids clashing with any other local Postgres.
+services:
+  db:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: yo
+      POSTGRES_PASSWORD: yo
+      POSTGRES_DB: youre_on
+      TZ: UTC
+      PGTZ: UTC
+    command: ['postgres', '-c', 'timezone=UTC']
+    ports:
+      - '54329:5432'
+    volumes:
+      - yo-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U yo -d youre_on']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  yo-pgdata:

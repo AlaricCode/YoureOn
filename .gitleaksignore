@@ -1,0 +1,10 @@
+# Reviewed false positives (gitleaks generic-api-key), 2026-11-14. None is a credential:
+# - Groth16 verifying key constants in the retired Verdict code (a VK is public by design).
+0fd103fa44c7c3c84f11e9ea34be21a472cedcb7:docs/CONTRACTS.md:generic-api-key:1202
+b9faad80807f43ccf36d02081765ad506c767e26:circuits/build/vk.rs:generic-api-key:9
+b9faad80807f43ccf36d02081765ad506c767e26:circuits/scripts/vk-to-rust.ts:generic-api-key:89
+b9faad80807f43ccf36d02081765ad506c767e26:programs/verdict/src/zk/vk.rs:generic-api-key:9
+# - A SecureStore slot name ('youreon.diagnostics.probe.v1').
+11811c80e44d0cee5cc104db8fd6461057021816:apps/mobile/src/diagnostics/autoChecks.ts:generic-api-key:10
+# - A public Solana address in a test fixture.
+11811c80e44d0cee5cc104db8fd6461057021816:packages/shared/test/realtime.test.ts:generic-api-key:292

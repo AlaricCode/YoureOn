@@ -1,0 +1,26 @@
+diff --git a/node_modules/react-native-vision-camera-face-detector/ios/Extensions/ML+FaceDetectorOptions.swift b/node_modules/react-native-vision-camera-face-detector/ios/Extensions/ML+FaceDetectorOptions.swift
+index 518612a..f29ea36 100644
+--- a/node_modules/react-native-vision-camera-face-detector/ios/Extensions/ML+FaceDetectorOptions.swift
++++ b/node_modules/react-native-vision-camera-face-detector/ios/Extensions/ML+FaceDetectorOptions.swift
+@@ -40,7 +40,7 @@ extension FaceDetectorOutputOptions {
+ }
+ 
+ private func buildMLFaceDetectorOptions(
+-    performanceMode: Any?,
++    performanceMode: PerformanceMode?,
+     runLandmarks: Bool?,
+     runContours: Bool?,
+     runClassifications: Bool?,
+@@ -49,8 +49,11 @@ private func buildMLFaceDetectorOptions(
+ ) -> MLKitFaceDetection.FaceDetectorOptions {
+   let options = MLKitFaceDetection.FaceDetectorOptions()
+ 
++  // patch-package (You're On): the upstream check was `String(describing: performanceMode) == "accurate"`
++  // on an `Any?`, which yields "Optional(...)" and so always picked .fast on iOS. Compare the
++  // nitrogen enum's string value instead.
+   options.performanceMode = (
+-    String(describing: performanceMode) == "accurate"
++    performanceMode?.stringValue == "accurate"
+   ) ? .accurate : .fast
+ 
+   options.landmarkMode = (
