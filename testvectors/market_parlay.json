@@ -1,0 +1,108 @@
+{
+  "name": "market_parlay",
+  "description": "Two-leg parlay (no + yes): both resolve as picked, plus an unrelated extra entry ⇒ True",
+  "covers": [
+    "market",
+    "market_parlay"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "market",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 0,
+        "market": {
+          "venue": "gemini",
+          "event_id": "NBA-FINALS-2027",
+          "contract_id": "LAL",
+          "side": "no",
+          "prob_bps": 8000
+        }
+      },
+      {
+        "id": 2,
+        "actor_bound": false,
+        "attempt_window_frames": 0,
+        "market": {
+          "venue": "gemini",
+          "event_id": "BTC-EOY-2026",
+          "contract_id": "ABOVE-150K",
+          "side": "yes",
+          "prob_bps": 4000
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "leg",
+            "id": 1
+          },
+          {
+            "op": "leg",
+            "id": 2
+          }
+        ]
+      },
+      "else": 1
+    },
+    "stakes": [
+      2000000,
+      23000000
+    ],
+    "time_limit_s": 2592000
+  },
+  "yaml": "version: 2\nkind: market\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nlegs:\n  - id: 1\n    actor_bound: false\n    market:\n      event_id: NBA-FINALS-2027\n      contract_id: LAL\n      side: no\n      prob_bps: 8000\n      venue: gemini\n  - id: 2\n    actor_bound: false\n    market:\n      event_id: BTC-EOY-2026\n      contract_id: ABOVE-150K\n      side: yes\n      prob_bps: 4000\n      venue: gemini\noutcome: side(A) wins iff leg 1 and leg 2; else side(B)\nstakes: [2000000, 23000000]\ntime_limit_s: 2592000\n",
+  "readback": [
+    "NBA-FINALS-2027/LAL resolves no",
+    "BTC-EOY-2026/ABOVE-150K resolves yes",
+    "Alex win if leg 1 and leg 2; otherwise Maya win",
+    "Stakes $2.00 / $23.00",
+    "Time limit 43200m"
+  ],
+  "program_canonical_json": "{\"entities\":[],\"kind\":\"market\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":0,\"id\":1,\"market\":{\"contract_id\":\"LAL\",\"event_id\":\"NBA-FINALS-2027\",\"prob_bps\":8000,\"side\":\"no\",\"venue\":\"gemini\"}},{\"actor_bound\":false,\"attempt_window_frames\":0,\"id\":2,\"market\":{\"contract_id\":\"ABOVE-150K\",\"event_id\":\"BTC-EOY-2026\",\"prob_bps\":4000,\"side\":\"yes\",\"venue\":\"gemini\"}}],\"outcome\":{\"condition\":{\"args\":[{\"id\":1,\"op\":\"leg\"},{\"id\":2,\"op\":\"leg\"}],\"op\":\"and\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stakes\":[2000000,23000000],\"time_limit_s\":2592000,\"version\":2}",
+  "json_hash": "b448646f7cb705978f8b03bf59520b38310d8b3185407f327480253d9fe9fd3b",
+  "program_bin": "5652445002020a02b448646f7cb705978f8b03bf59520b38310d8b3185407f327480253d9fe9fd3b008d2700626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc80841e0000000000c0f35e01000000000200020100050000000000000000000000200025237a93d71385f30c7079d5543a52d556d5b4666b68a7006d987ea13c55cce2020005000100000000000000000020002eb4ee7bcee7c3400cfbd02e65aeb043e32f2653a90a028b27abc37e8f53bfb2000105000150015002",
+  "program_hash": "014dc6c195b70247e387996b6fca08fc0f920831c4be51da32fd6d5c9a72124b",
+  "calibration": null,
+  "calibration_bin": "",
+  "calibration_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "market_bin": "564d4b540103000025237a93d71385f30c7079d5543a52d556d5b4666b68a7006d987ea13c55cce2002eb4ee7bcee7c3400cfbd02e65aeb043e32f2653a90a028b27abc37e8f53bfb20112729d8820a924c86684dcec6462701960c69573e898322f8ce35036835f5d7d02",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "ok",
+    "reason": 0,
+    "leg_results": [
+      1,
+      1
+    ],
+    "leg_causes": [
+      [],
+      []
+    ],
+    "preruling": 1,
+    "winner_mask": 1,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [],
+      []
+    ],
+    "attempts": [],
+    "cost": 0
+  }
+}

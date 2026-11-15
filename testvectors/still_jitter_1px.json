@@ -1,0 +1,128 @@
+{
+  "name": "still_jitter_1px",
+  "description": "A resting ball with uniform ±1 px center jitter per frame on a 1920×1080 camera (normalized per §0.4): at_rest 1s and never moving",
+  "covers": [
+    "primitive still_1px"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "ball",
+        "kind": "object",
+        "phrase": "ball"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "at_rest",
+          "a": {
+            "e": "ball"
+          },
+          "frames": 10
+        },
+        "rule": {
+          "kind": "exists"
+        }
+      },
+      {
+        "id": 2,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "moving",
+          "a": {
+            "e": "ball"
+          }
+        },
+        "rule": {
+          "kind": "never"
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "and",
+        "args": [
+          {
+            "op": "leg",
+            "id": 1
+          },
+          {
+            "op": "leg",
+            "id": 2
+          }
+        ]
+      },
+      "else": 1
+    },
+    "stake_each": 1000000,
+    "time_limit_s": 60
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  ball: object(\"ball\")\nlegs:\n  - id: 1\n    actor_bound: false\n    success: ball at_rest 1s\n    rule: success\n    attempt_window_s: 5s\n  - id: 2\n    actor_bound: false\n    success: ball moving\n    rule: never(success)\n    attempt_window_s: 5s\noutcome: side(A) wins iff leg 1 and leg 2; else side(B)\nstake_each: 1000000\ntime_limit_s: 60\n",
+  "readback": [
+    "ball stays still for 1s",
+    "Never: ball is moving",
+    "Alex win if leg 1 and leg 2; otherwise Maya win",
+    "$1.00 each",
+    "Time limit 1m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"object\",\"name\":\"ball\",\"phrase\":\"ball\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"kind\":\"exists\"},\"success\":{\"a\":{\"e\":\"ball\"},\"frames\":10,\"op\":\"at_rest\"}},{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":2,\"rule\":{\"kind\":\"never\"},\"success\":{\"a\":{\"e\":\"ball\"},\"op\":\"moving\"}}],\"outcome\":{\"condition\":{\"args\":[{\"id\":1,\"op\":\"leg\"},{\"id\":2,\"op\":\"leg\"}],\"op\":\"and\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1000000,\"time_limit_s\":60,\"version\":2}",
+  "json_hash": "b02de8e75bc08e15c6f61f574d7c69d1f7549c92255d885854a27d4f30916b75",
+  "program_bin": "5652445002000a02b02de8e75bc08e15c6f61f574d7c69d1f7549c92255d885854a27d4f30916b753c000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc40420f000000000040420f00000000000201020002010000000000000000003200000007002100000a0000000200030000000000000032000000070020000000000000000105000150015002",
+  "program_hash": "463c02cde06c38d21ad2fd0e26cc71e77d0198921e3851399878b65280364020",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": []
+    },
+    "regions": []
+  },
+  "calibration_bin": "5643414c0100000073968acd2427f4f7c49bb124bced2773dbaa5a9c7c0d285b17a2e173d1b42c2d",
+  "calibration_hash": "36455794808f2a12a4a4fe544e4c8f81ca6b73d4461650bd439a702a6e5742c8",
+  "track_bin": "5654524b010a010102000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a00ff7201000000001e0000002513c512f51337145a0000001a13d812ea134a145a0000001a13d812ea134a145a0000002513ce12f51341145a0000002513d812f5134a145a0000001a13d812ea134a145a0000001f13c512f01337145a0000002513ce12f51341145a0000001f13c512f01337145a0000001f13d812f0134a145a0000001a13c512ea1337145a0000001f13c512f01337145a0000001a13c512ea1337145a0000001a13d812ea134a145a0000001f13d812f0134a145a0000001f13d812f0134a145a0000001a13d812ea134a145a0000002513ce12f51341145a0000001f13d812f0134a145a0000002513c512f51337145a0000001a13ce12ea1341145a0000002513c512f51337145a0000002513c512f51337145a0000001a13c512ea1337145a0000002513c512f51337145a0000001f13ce12f01341145a0000001f13ce12f01341145a0000001a13d812ea134a145a0000002513ce12f51341145a0000001f13ce12f01341145a000000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "ok",
+    "reason": 0,
+    "leg_results": [
+      1,
+      1
+    ],
+    "leg_causes": [
+      [],
+      []
+    ],
+    "preruling": 1,
+    "winner_mask": 1,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [
+        11
+      ],
+      []
+    ],
+    "attempts": [],
+    "cost": 136
+  }
+}

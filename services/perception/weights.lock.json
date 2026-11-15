@@ -1,0 +1,26 @@
+{
+  "comment": "Pinned model weights for services/perception. scripts/fetch_weights.py downloads each file and refuses any whose sha256 differs. Entries with sha256=null are not pinned yet: run `python scripts/fetch_weights.py --pin` once (HF_TOKEN needed for the gated SAM 3 repo), review, and commit the digests. The Docker build runs fetch_weights.py --require-pinned, so an unpinned lock cannot produce an image. model_hash (§6.0) = sha256 over these digests + the canonical SETTINGS blob (perception/settings.py).",
+  "weights": [
+    {
+      "name": "sam3",
+      "file": "sam3.pt",
+      "source": "huggingface",
+      "repo": "facebook/sam3",
+      "revision": "main",
+      "path": "sam3.pt",
+      "gated": true,
+      "sha256": null
+    },
+    {
+      "name": "insightface_buffalo_l",
+      "file": "insightface/models/buffalo_l.zip",
+      "source": "url",
+      "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+      "unzip_to": "insightface/models/buffalo_l",
+      "sha256": null
+    }
+  ],
+  "derived": {
+    "face_projection": "aa572808485d1cbde1c81d7675499aae07b35c371a7e92a447f2446cedf5871f"
+  }
+}

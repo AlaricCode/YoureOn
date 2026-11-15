@@ -1,0 +1,154 @@
+{
+  "name": "checkpoints_more_than_8",
+  "description": "Actor-bound count(standing) >= 9: 9 anchors ⇒ 9 checkpoints > MAX_CHECKPOINTS ⇒ n_checkpoints 0, empty list, every actor-bound leg Unknown (IDENTITY). Decodable but CHECKPOINT_LIMIT at compile time",
+  "covers": [
+    "checkpoints_more_than_8",
+    "unknown_cause IDENTITY"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "jumper",
+        "kind": "person",
+        "participant": 0
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": true,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "standing",
+          "a": {
+            "e": "jumper"
+          }
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": ">=",
+          "k": 9,
+          "attempts": 0
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "leg",
+        "id": 1
+      },
+      "else": 1
+    },
+    "stake_each": 1000000,
+    "time_limit_s": 60
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  jumper: person(7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3)\nlegs:\n  - id: 1\n    actor_bound: true\n    success: jumper standing\n    rule: count(success) >= 9\n    attempt_window_s: 5s\noutcome: side(A) wins iff leg 1; else side(B)\nstake_each: 1000000\ntime_limit_s: 60\n",
+  "readback": [
+    "Alex is standing, at least 9 times",
+    "Alex win if leg 1; otherwise Maya win",
+    "$1.00 each",
+    "Time limit 1m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"person\",\"name\":\"jumper\",\"participant\":0}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":true,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"attempts\":0,\"cmp\":\">=\",\"k\":9,\"kind\":\"count\"},\"success\":{\"a\":{\"e\":\"jumper\"},\"op\":\"standing\"}}],\"outcome\":{\"condition\":{\"id\":1,\"op\":\"leg\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1000000,\"time_limit_s\":60,\"version\":2}",
+  "json_hash": "4b955a60b756630a2167af38fdda42d003b85291db10dff706d0c693c6cf801b",
+  "program_bin": "5652445002000a024b955a60b756630a2167af38fdda42d003b85291db10dff706d0c693c6cf801b3c000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc40420f000000000040420f000000000002010000010101010009000000000032000000070040000000000000000102005001",
+  "program_hash": "4a7f4fa21d5c25d787bee29b36987fd82dbfe69eeabb5e555c9b9bce2f867392",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": []
+    },
+    "regions": []
+  },
+  "calibration_bin": "5643414c0100000073968acd2427f4f7c49bb124bced2773dbaa5a9c7c0d285b17a2e173d1b42c2d",
+  "calibration_hash": "36455794808f2a12a4a4fe544e4c8f81ca6b73d4461650bd439a702a6e5742c8",
+  "compile_errors": [
+    "CHECKPOINT_LIMIT"
+  ],
+  "track_bin": "5654524b010a010102000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a0000581b0000000014000000b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a01b80bd007881328235a325a00b80bd007881328235a325a00b80bd007881328235a325a00",
+  "verified_checkpoints": [
+    {
+      "participant": 0,
+      "frame": 0
+    },
+    {
+      "participant": 0,
+      "frame": 2
+    },
+    {
+      "participant": 0,
+      "frame": 4
+    },
+    {
+      "participant": 0,
+      "frame": 6
+    },
+    {
+      "participant": 0,
+      "frame": 8
+    },
+    {
+      "participant": 0,
+      "frame": 10
+    },
+    {
+      "participant": 0,
+      "frame": 12
+    },
+    {
+      "participant": 0,
+      "frame": 14
+    },
+    {
+      "participant": 0,
+      "frame": 16
+    }
+  ],
+  "expected": {
+    "status": "needs_panel",
+    "reason": 10,
+    "leg_results": [
+      2
+    ],
+    "leg_causes": [
+      [
+        "IDENTITY"
+      ]
+    ],
+    "preruling": 3,
+    "winner_mask": 0,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16
+      ]
+    ],
+    "attempts": [],
+    "cost": 48
+  }
+}

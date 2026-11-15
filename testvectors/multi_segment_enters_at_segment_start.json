@@ -1,0 +1,135 @@
+{
+  "name": "multi_segment_enters_at_segment_start",
+  "description": "Three segments [0,10) [40,50) [100,110). The ball is inside the zone from the first frame of segment 2 (no lastSeen across segments ⇒ no enters at 40); it enters at 103 in segment 3",
+  "covers": [
+    "multi_segment",
+    "primitive segment_start"
+  ],
+  "program": {
+    "version": 2,
+    "kind": "rules",
+    "participants": [
+      "7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3",
+      "FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq"
+    ],
+    "sides": [
+      0,
+      1
+    ],
+    "entities": [
+      {
+        "name": "ball",
+        "kind": "object",
+        "phrase": "ball"
+      },
+      {
+        "name": "bin",
+        "kind": "region",
+        "shape": "zone"
+      }
+    ],
+    "legs": [
+      {
+        "id": 1,
+        "actor_bound": false,
+        "attempt_window_frames": 50,
+        "success": {
+          "op": "enters",
+          "a": {
+            "e": "ball"
+          },
+          "b": {
+            "e": "bin"
+          }
+        },
+        "rule": {
+          "kind": "count",
+          "cmp": ">=",
+          "k": 1,
+          "attempts": 0
+        }
+      }
+    ],
+    "outcome": {
+      "if_true": 0,
+      "condition": {
+        "op": "leg",
+        "id": 1
+      },
+      "else": 1
+    },
+    "stake_each": 1000000,
+    "time_limit_s": 60
+  },
+  "yaml": "version: 2\nkind: rules\nparticipants:\n  - 7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\n  - FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\nsides: [0, 1]\nentities:\n  ball: object(\"ball\")\n  bin: region(zone)\nlegs:\n  - id: 1\n    actor_bound: false\n    success: ball enters bin\n    rule: count(success) >= 1\n    attempt_window_s: 5s\noutcome: side(A) wins iff leg 1; else side(B)\nstake_each: 1000000\ntime_limit_s: 60\n",
+  "readback": [
+    "ball enters the zone, at least 1 times",
+    "Alex win if leg 1; otherwise Maya win",
+    "$1.00 each",
+    "Time limit 1m"
+  ],
+  "program_canonical_json": "{\"entities\":[{\"kind\":\"object\",\"name\":\"ball\",\"phrase\":\"ball\"},{\"kind\":\"region\",\"name\":\"bin\",\"shape\":\"zone\"}],\"kind\":\"rules\",\"legs\":[{\"actor_bound\":false,\"attempt_window_frames\":50,\"id\":1,\"rule\":{\"attempts\":0,\"cmp\":\">=\",\"k\":1,\"kind\":\"count\"},\"success\":{\"a\":{\"e\":\"ball\"},\"b\":{\"e\":\"bin\"},\"op\":\"enters\"}}],\"outcome\":{\"condition\":{\"id\":1,\"op\":\"leg\"},\"else\":1,\"if_true\":0},\"participants\":[\"7dEr7cjNoH37VgRJoXHHeJHNvZmZh45xHCAZMZp3UYa3\",\"FJQ4C4H9P1Dx9NR9tYaqzX9E3xL2oSMvxetkuqJA25Tq\"],\"sides\":[0,1],\"stake_each\":1000000,\"time_limit_s\":60,\"version\":2}",
+  "json_hash": "18595a866169a7d4a5da0c324c050f0ef0e6cae20d4f92114c78fad0ca26f5c0",
+  "program_bin": "5652445002000a0218595a866169a7d4a5da0c324c050f0ef0e6cae20d4f92114c78fad0ca26f5c03c000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfc40420f000000000040420f0000000000020202000400010100010001000000000032000000070030000100000000000102005001",
+  "program_hash": "cf99dbbf89dcacf6cdabdbf5e3de549036ef72c9869cbdc71389951031e9aa81",
+  "calibration": {
+    "version": 1,
+    "scene": {
+      "camera": {
+        "width_px": 1920,
+        "height_px": 1080,
+        "orientation": "landscape"
+      },
+      "entity_refs": []
+    },
+    "regions": [
+      {
+        "entity": "bin",
+        "shape": "zone",
+        "points": [
+          [
+            2000,
+            2000
+          ],
+          [
+            6000,
+            2000
+          ],
+          [
+            6000,
+            6000
+          ],
+          [
+            2000,
+            6000
+          ]
+        ]
+      }
+    ]
+  },
+  "calibration_bin": "5643414c0101000073968acd2427f4f7c49bb124bced2773dbaa5a9c7c0d285b17a2e173d1b42c2d01010400d007d0077017d00770177017d0077017",
+  "calibration_hash": "943c9a2de654b283288524b785c310eabbcd71f1b8b3fb62cc60b46dc653a1b6",
+  "track_bin": "5654524b010a010302000000c25cc12865694d7a906ba419b79bac9763d7969424067a2fcec9e6cc9da6a36a00ffc800000000000a000000280000000a000000640000000a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a000000dc1edc1ea41fa41f5a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a0000003c0f3c0f041004105a000000",
+  "verified_checkpoints": [],
+  "expected": {
+    "status": "ok",
+    "reason": 0,
+    "leg_results": [
+      1
+    ],
+    "leg_causes": [
+      []
+    ],
+    "preruling": 1,
+    "winner_mask": 1,
+    "n_checkpoints": 0,
+    "checkpoints": [],
+    "decisive_frames": [
+      [
+        103
+      ]
+    ],
+    "attempts": [],
+    "cost": 204
+  }
+}

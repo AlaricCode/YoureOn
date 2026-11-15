@@ -1,0 +1,14 @@
+{
+  "name": "reject_ai_judged_with_leg",
+  "description": "ai_judged program with L = 1",
+  "covers": [
+    "decoder_rejection program_bin"
+  ],
+  "program_bin": "5652445002010a02dcf3e9bd72b92ce1d1d99e1bb53893e19df39abf3bf84191f93b35b631293d7b78000000626eaff3394ed5c4a4a1ba3ff3b8b04e0b2043c5b0c06233f40f0c7c3becf390d4788f21a47518fb1fba6fe06ff0067da1f68d39f46e8161ae8c315672945cfcc0c62d0000000000c0c62d000000000002000101000000000000000000320000000700240100000000000100010051",
+  "calibration_bin": "",
+  "track_bin": "5654524b010a0000020000000000000000000000000000000000000000000000000000000000000000000000",
+  "verified_checkpoints": [],
+  "expected": {
+    "error": "MalformedProgram"
+  }
+}
