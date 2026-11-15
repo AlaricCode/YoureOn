@@ -6,10 +6,14 @@
 //   fallback, a prompt on every read, and a double prompt next to authenticateAsync; FINDINGS §7).
 // - The public key is a separate item, so app start never reads the seed and never prompts.
 // - authorize(messageBytes, prompt): LocalAuthentication -> read seed -> sign with noble -> wipe seed.
+// - authorizeTransaction(policyRequest, prompt): signs a server-built Solana message only if the
+//   device signing policy (packages/shared/device-policy, ESCROW §5.0.2) passes on its exact bytes,
+//   checked with this wallet's own stored key and clock, before any prompt.
 //
 // The seed's hex string from SecureStore cannot be wiped (JS strings are immutable); the decoded
 // Uint8Array is zeroed in a finally block, and the string reference is dropped immediately.
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
+import type { DevicePolicyPass, DevicePolicyRule } from '@youre-on/shared/device-policy';
 
 import {
   runAuthorizationGate,
@@ -18,6 +22,7 @@ import {
   type AuthStage,
 } from './authMethod';
 import { base58Encode, wipe } from './bytes';
+import { messageBytesOf, runDevicePolicy, type DevicePolicyRequest } from './devicePolicy';
 import { ed, sha256 } from './noble';
 import type {
   LocalAuthenticationError,
@@ -50,6 +55,10 @@ export class WalletError extends Error {
   readonly code: WalletErrorCode;
   readonly authError?: LocalAuthenticationError | 'exception';
   readonly authStage?: AuthStage;
+  /** POLICY_REJECTED from the device signing policy: the API-CONTRACT §6.3 rule to report. */
+  readonly policyRule?: DevicePolicyRule;
+  /** With policyRule: the `{bet_id, kind}` for POST /v1/bets/:bet_id/policy-rejections. */
+  readonly policyReport?: { bet_id: string | null; kind: string | null; rule: DevicePolicyRule };
 
   constructor(
     code: WalletErrorCode,
@@ -58,6 +67,7 @@ export class WalletError extends Error {
       authError?: LocalAuthenticationError | 'exception';
       authStage?: AuthStage;
       cause?: unknown;
+      policyReport?: { bet_id: string | null; kind: string | null; rule: DevicePolicyRule };
     } = {},
   ) {
     super(message, extra.cause === undefined ? undefined : { cause: extra.cause });
@@ -65,6 +75,10 @@ export class WalletError extends Error {
     this.code = code;
     if (extra.authError !== undefined) this.authError = extra.authError;
     if (extra.authStage !== undefined) this.authStage = extra.authStage;
+    if (extra.policyReport !== undefined) {
+      this.policyReport = extra.policyReport;
+      this.policyRule = extra.policyReport.rule;
+    }
   }
 }
 
@@ -76,6 +90,11 @@ export type SigningPolicy = (messageBytes: Uint8Array) => boolean | void;
 
 export type AuthorizeOptions = {
   policy?: SigningPolicy;
+  /**
+   * The device signing policy (packages/shared/device-policy). Runs on the exact bytes after the
+   * stored public key is read and before any prompt, with that key and the platform clock.
+   */
+  devicePolicy?: DevicePolicyRequest;
 };
 
 export type AuthorizeResult = {
@@ -94,6 +113,8 @@ export type AuthorizeResult = {
   messageSha256: string;
   /** 1 = Face ID only, 2 = the passcode fallback prompt also ran. */
   prompts: 1 | 2;
+  /** Set when options.devicePolicy ran: kind, party and the recomputed terms_hash. */
+  policy?: DevicePolicyPass;
 };
 
 export type Wallet = {
@@ -112,6 +133,14 @@ export type Wallet = {
     prompt: string | AuthPrompt,
     options?: AuthorizeOptions,
   ): Promise<AuthorizeResult>;
+  /**
+   * The only way screens sign a Solana message: decodes the request's own message_b64 and signs
+   * it only if the device signing policy passes (ESCROW §5.0.2). A rejection never prompts.
+   */
+  authorizeTransaction(
+    request: DevicePolicyRequest,
+    prompt: string | AuthPrompt,
+  ): Promise<AuthorizeResult & { policy: DevicePolicyPass }>;
   /** Deletes both items. For a debug screen / tests only; there is no backup. */
   destroy(): Promise<void>;
 };
@@ -186,7 +215,7 @@ export function createWallet(platform: WalletPlatform): Wallet {
 
   const getPublicKey = () => store.getItemAsync(PUBKEY_KEY, itemOptions);
 
-  return {
+  const wallet: Wallet = {
     getPublicKey,
 
     ensureWallet: () =>
@@ -255,6 +284,22 @@ export function createWallet(platform: WalletPlatform): Wallet {
         }
         const publicKey = await getPublicKey();
         if (publicKey === null) throw new WalletError('NO_WALLET', 'no wallet on this device');
+        let policy: DevicePolicyPass | undefined;
+        if (options.devicePolicy) {
+          const verdict = runDevicePolicy(message, options.devicePolicy, {
+            devicePubkey: publicKey,
+            nowMs: now(),
+            ...(platform.policyPinsForTests ? { pinsForTests: platform.policyPinsForTests } : {}),
+          });
+          if (!verdict.ok) {
+            throw new WalletError(
+              'POLICY_REJECTED',
+              `device policy ${verdict.rule}: ${verdict.reason}`,
+              { policyReport: { bet_id: verdict.bet_id, kind: verdict.kind, rule: verdict.rule } },
+            );
+          }
+          policy = verdict;
+        }
 
         // 1. LocalAuthentication (one prompt, or two on the passcode fallback).
         const gate = await runAuthorizationGate(platform.localAuth, prompt);
@@ -294,10 +339,25 @@ export function createWallet(platform: WalletPlatform): Wallet {
           authSucceededAtMs,
           messageSha256: bytesToHex(sha256(message)),
           prompts: gate.prompts,
+          ...(policy ? { policy } : {}),
         };
       } finally {
         state.busy = false;
       }
+    },
+
+    async authorizeTransaction(request, prompt) {
+      let message: Uint8Array;
+      try {
+        message = messageBytesOf(request.request);
+      } catch (cause) {
+        throw new WalletError('BAD_MESSAGE', 'request carries no decodable message_b64', {
+          cause,
+        });
+      }
+      const result = await wallet.authorize(message, prompt, { devicePolicy: request });
+      if (!result.policy) throw new WalletError('POLICY_REJECTED', 'device policy did not run');
+      return { ...result, policy: result.policy };
     },
 
     destroy: () =>
@@ -308,4 +368,5 @@ export function createWallet(platform: WalletPlatform): Wallet {
         await store.deleteItemAsync(SEED_KEY, itemOptions);
       }),
   };
+  return wallet;
 }
