@@ -512,6 +512,11 @@ DEMO_MODE=                      # true only on the demo deployment; /v1/demo/* r
 # NONCE_POOL_SIZE (5) is a packages/shared constant (SCHEMAS §0.1), not an env var
 ELEVENLABS_AGENT_ID=            # K2
 ELEVENLABS_JUDGE_VOICE_ID=      # K2 Voice Design voice
+# Paid-provider switches (apps/server/src/providers; planning D14). Default mock = offline and free.
+ALLOW_SPEND=                    # true allows any *_PROVIDER=live; never set in tests or CI
+LLM_PROVIDER=                   # mock (default) | live: Anthropic + OpenAI + Google judge/panel calls
+STT_PROVIDER=                   # mock (default) | live: ElevenLabs Scribe (hearing turn B)
+SFX_PROVIDER=                   # mock (default) | live: ElevenLabs Sound Effects (stage cues)
 # --- Solana / QuickNode (secret)
 SOLANA_DEVNET_RPC=
 SOLANA_DEVNET_WS=
@@ -575,3 +580,4 @@ EXPO_PUBLIC_WS_URL=             # wss://<app>.fly.dev/v1/ws
   - **§7.** Added `DEMO_MODE`, `STAGE_KEY`, `FACE_SEAL_SECRET_KEY`; described `SESSION_SECRET` and `DEMO_ADMIN_TOKEN`; `NONCE_POOL_SIZE` is a constant, not an env var; mobile pins are `packages/shared` constants.
   - **SOL deadline** aligned to TASKS P-09: ~10 SOL in the bank by Thu Nov 12 21:00 CST. §5 conflicts marked done, and rows 13–16 added.
 - **2026-11-08, completeness pass** (`TRACEABILITY.md`): devnet USDC timing aligned with TASKS P-10 and FINDINGS §1 ("claim early"). C2, the summary's "Window only" line, master row C2 and §6 (new step 13) now say: collect into human-held addresses before the window, then move the float into the product wallets with `scripts/fund.ts` (TASKS D1-L6) in the window.
+- **2026-11-14, merge (planning D14):** §7 gains `ALLOW_SPEND`, `LLM_PROVIDER`, `STT_PROVIDER` and `SFX_PROVIDER`, matching `apps/server/src/env.ts` and `.env.example`. Any `*_PROVIDER=live` refuses to start unless `ALLOW_SPEND=true`.

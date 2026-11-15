@@ -1090,7 +1090,7 @@ Everything below runs at terms-card mount: noble is pre-warmed, PDAs are derived
 | # | Kinds `concede` / `appeal` (ESCROW §5.0 unchanged) | Reject if |
 |---|---|---|
 | T1 | Instruction list | anything other than ComputeBudget, an ATA `CreateIdempotent` with funder = the fee payer (concede only), **exactly one** escrow instruction of the expected kind, and an optional trailing `close_bet` (concede only). Any `AdvanceNonceAccount` is rejected. |
-| T2 | Ruling | `ruling_ref.ruling_hash` ≠ the `ruling_hash` of the last `ruling.issued` the phone verified; the caller isn't the loser for `ruling_ref.outcome` (SCHEMAS §5.3) |
+| T2 | Ruling | `ruling_ref.ruling_hash` or `ruling_ref.outcome` ≠ the `ruling_hash` / `outcome` of the last `ruling.issued` the phone verified; the caller isn't the loser for that **verified** outcome (SCHEMAS §5.3) |
 | T3 | `close_bet` | `rent_payer` ≠ the fee payer; `party_a_token` (if present) isn't A's ATA |
 
 Tests (`packages/shared`): the 4 MEASURED gaps of the spike harness (mint swap, other `bet_id`, deadline +1 year, unpinned fee payer or nonce authority; FINDINGS §3.4), plus one negative case per rule above. The row IDs to implement are ESCROW §9.2 A13 and DP1–DP16; ESCROW §5.0.2 owns the policy, and this table is its phone-side checklist.
@@ -1127,7 +1127,7 @@ Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side
 | Seat | Provider | Model / call | Params |
 |---|---|---|---|
 | 0 | `anthropic` | `claude-opus-5-5` via Messages | effort `low`, `VisionVerdict` schema |
-| 1 | `openai` | `gpt-6.1-terra` via `openai@7.53.0` `responses.parse` + `zodTextFormat` | `reasoning.effort:"low"`, image `detail:"high"` |
+| 1 | `openai` | `gpt-6.1-terra` via `openai@7.53.0` `responses.create` + `zodTextFormat` (same request as `responses.parse`; the output goes through the shared enum-upper-case + zod path like the other vendors, 2026-11-14) | `reasoning.effort:"low"`, image `detail:"high"` |
 | 2 | `google` | `gemini-3.8-flash` via `@google/genai@2.32.0` `ai.interactions.create` | `generation_config.thinking_level:"low"`, `response_format {type:"text", mime_type:"application/json", schema}`. **Not** 3.0.0. |
 
 - **Inputs** are identical across seats: terms, the same frames, and the hearing transcripts if there was a hearing. Gemini bets use the `GeminiSettlementRecord` instead. **The panel never sees the original ruling or the other votes.**
