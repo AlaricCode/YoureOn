@@ -109,6 +109,8 @@ jobs:
         if: steps.present.outputs.yes == 'true'
         run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
+      # avm + the anchor proxy live in their own cargo root, NOT ~/.cargo/bin: rust-cache's post
+      # step deletes ~/.cargo/bin binaries it did not install, which emptied the old cache.
       - name: cache Anchor (avm)
         if: steps.present.outputs.yes == 'true'
         id: anchor-cache
@@ -116,18 +118,29 @@ jobs:
         with:
           path: |
             ~/.avm
-            ~/.cargo/bin/avm
-            ~/.cargo/bin/anchor
-          key: anchor-${{ env.ANCHOR_VERSION }}-${{ runner.os }}
-      - name: install Anchor ${{ env.ANCHOR_VERSION }} via avm (otter-sec/anchor)
-        if: steps.present.outputs.yes == 'true' && steps.anchor-cache.outputs.cache-hit != 'true'
+            ~/.anchor-tools
+          key: anchor-${{ env.ANCHOR_VERSION }}-v2-${{ runner.os }}
+      - name: put avm and the anchor proxy (~/.avm/bin/anchor) on PATH
+        if: steps.present.outputs.yes == 'true'
         run: |
-          cargo install --git https://github.com/otter-sec/anchor --tag "v${ANCHOR_VERSION}" avm --locked --force
-          avm install "${ANCHOR_VERSION}"
+          echo "$HOME/.anchor-tools/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.avm/bin" >> "$GITHUB_PATH"
+      # Keyed on the files, not on cache-hit, so a partial cache heals itself.
+      - name: install Anchor ${{ env.ANCHOR_VERSION }} via avm (otter-sec/anchor)
+        if: steps.present.outputs.yes == 'true'
+        run: |
+          if [ ! -x "$HOME/.anchor-tools/bin/avm" ]; then
+            cargo install --git https://github.com/otter-sec/anchor --tag "v${ANCHOR_VERSION}" avm \
+              --locked --force --root "$HOME/.anchor-tools"
+          fi
+          if [ ! -x "$HOME/.avm/bin/anchor-${ANCHOR_VERSION}" ]; then
+            avm install "${ANCHOR_VERSION}"
+          fi
       - name: select Anchor
         if: steps.present.outputs.yes == 'true'
         run: |
           avm use "${ANCHOR_VERSION}"
+          command -v avm anchor
           anchor --version
           solana --version
 
