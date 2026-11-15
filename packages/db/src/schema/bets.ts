@@ -4,7 +4,7 @@
 // tables that later streams add (they come with that stream's migration):
 //   - gemini_market_id (FK gemini_markets), pricing_snapshot_id (FK market_snapshots),
 //     CHECK bets_gemini_market and index bets_market_idx  -> Gemini stream (§5.16)
-//   - bet_events.chain_event_id FK -> chain_events         -> Streams stream (§5.9)
+//   (bet_events.chain_event_id FK -> chain_events landed with the Streams migration 0003, §5.9)
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -38,6 +38,7 @@ import { hex32Check, pubkeyCheck, txSigCheck } from './checks';
 import { tstz } from './types';
 import { rooms } from './rooms';
 import { users } from './users';
+import { chainEvents } from './chain';
 
 const micro = () => bigint({ mode: 'bigint' });
 
@@ -221,7 +222,7 @@ export const betEvents = pgTable(
     type: text().notNull(),
     source: text().notNull(),
     envelope: jsonb().notNull(),
-    chain_event_id: bigint({ mode: 'bigint' }), // FK to chain_events added by the Streams migration
+    chain_event_id: bigint({ mode: 'bigint' }).references((): AnyPgColumn => chainEvents.id), // FK added by migration 0003 (Streams)
     created_at: tstz().notNull().defaultNow(),
   },
   (t) => [
