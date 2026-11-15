@@ -177,9 +177,15 @@ export class PresenceTracker {
 
   private async touchAndBroadcast(userId: string, broadcast: boolean): Promise<void> {
     const { db } = this.deps;
+    // Monotonic: fire() does not serialize its writes (an online and an offline touch, or two
+    // trackers on one hub, can commit out of order), so an older timestamp must never
+    // overwrite a newer one.
+    const seenAt = new Date(this.deps.now()).toISOString();
     const touched = await db
       .update(roomMembers)
-      .set({ last_seen_at: new Date(this.deps.now()) })
+      .set({
+        last_seen_at: sql`GREATEST(${roomMembers.last_seen_at}, ${seenAt}::timestamptz)`,
+      })
       .where(and(eq(roomMembers.user_id, userId), isNull(roomMembers.left_at)))
       .returning({ room_id: roomMembers.room_id });
     if (!broadcast) return;
