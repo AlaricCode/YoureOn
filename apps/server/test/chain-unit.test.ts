@@ -503,6 +503,47 @@ describe('infra/quicknode/filter.js (ESCROW §7.1 rules 1-5)', () => {
     ]);
   });
 
+  it('E3: a mimic program (our BetFinalized, its own ID) via emit_cpi! and emit!: 0 events (TM-E1, TM-E4)', () => {
+    // Captured from LiteSVM by packages/shared/test/escrow/e3-mimic.test.ts (E3_WRITE_FIXTURE=1)
+    // with the real programs/escrow/test-programs/mimic: [emit_via_cpi], [emit_via_log], both.
+    const fx = JSON.parse(readFileSync(INFRA('fixtures/block-mimic-e3.json'), 'utf8'));
+    const txs = fx.data[0].transactions as {
+      meta: { logMessages: string[]; innerInstructions: unknown[] };
+      transaction: { message: { accountKeys: string[] } };
+    }[];
+    expect(txs).toHaveLength(3);
+    // the capture lists our program and event authority, and carries the forged event both ways
+    for (const tx of txs) expect(tx.transaction.message.accountKeys).toContain(ESCROW_ID);
+    expect(txs[0]!.meta.innerInstructions).toHaveLength(1);
+    expect(txs[1]!.meta.logMessages.some((l) => l.startsWith('Program data: '))).toBe(true);
+    expect(filter.main(fx)).toBeNull();
+  });
+
+  it('E3 (emit! path): a "Program data:" BetFinalized log from OUR program id is never decoded', async () => {
+    const ea = await eventAuthorityAddress();
+    const bytes = encodeEvent('BetFinalized', samplePayload('BetFinalized'));
+    const programData = `Program data: ${Buffer.from(bytes).toString('base64')}`;
+    const withLog = (tx: ReturnType<typeof jsonTx>) => ({
+      ...tx,
+      meta: {
+        ...tx.meta,
+        logMessages: [
+          `Program ${ESCROW_ID} invoke [1]`,
+          programData,
+          `Program ${ESCROW_ID} success`,
+        ],
+      },
+    });
+    // our program id in the keys, no event inner ix, a valid emit!-style log line
+    const ours = withLog(jsonTx({ eventAuthority: ea, events: [] }));
+    // the same log next to a mimic program's emit_cpi! (rule 2a)
+    const mimic = withLog(
+      jsonTx({ eventAuthority: ea, events: [{ outer: 0, bytes, program: randomPubkey() }] }),
+    );
+    expect(filter.main({ data: [block([ours, mimic])] })).toBeNull();
+    expect(filter.main({ data: [block([toJsonParsed(ours), toJsonParsed(mimic)])] })).toBeNull();
+  });
+
   it('forwards an unknown discriminator from our program with name null (stored, never applied)', async () => {
     const ea = await eventAuthorityAddress();
     const out = filter.main({

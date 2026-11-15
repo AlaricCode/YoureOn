@@ -101,3 +101,35 @@ export PATH=$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bi
 - **Escrow test coverage is partly approximate.** The N-row lock tests are LiteSVM approximations. N10, N11 (CU across ≥ 50 bet_ids), N13–N17 and DP1–DP16 still need the local-validator/TS suites and D2-L1. CI must run `anchor build` before `cargo test`.
 - **Hermes is unverified.** `String#normalize` and the canonicalize transpile are untested there (D1-M4). Mobile now imports `@youre-on/shared/chain/constants`, which is dependency-free.
 - **Large file.** The `.tflite` is 13.6 MB. TASKS §3.2 rule 9 allows it in git, but check the LFS policy before the first commit.
+
+## Escrow status
+
+Updated 2026-11-15 on branch `escrow/complete`. Everything below was run on LiteSVM or on local validators only. Nothing touched devnet.
+
+**What the D1 rows now provide**
+
+- **D1-L1 (program).**
+  - Instructions: all 12 are done (`initialize_config`, `update_config`, `create_bet`, `accept_bet`, `cancel_open_bet`, `resolve`, `concede`, `appeal`, `resolve_appeal`, `finalize`, `timeout_refund`, `close_bet`). Every payout goes through the single `payout()`/`compute_payout` path, and each state change emits one `emit_cpi!` event.
+  - Tests: the Rust LiteSVM matrix (`programs/escrow/programs/escrow/tests/matrix`) has 167 tests, all green, with the §9.1 global post-conditions checked after every terminal test. Token-2022 coverage now includes T22-1 (create → accept → resolve → finalize, plus timeout_refund, each bundled with close_bet).
+  - Token-2022 allowlist: `MintCloseAuthority` is now **rejected** (ESC-SEC-1 / TM-K8, B21). Without that, a closeable mint could be closed between the terminal ix and `close_bet`, which would strand the Bet and vault rent. ESCROW §3.3, TM-K8 and B21 are updated to match.
+- **D1-L2 (atomic lock tests).**
+  - N1–N16 run on TS LiteSVM (`npm run test:escrow -w @youre-on/shared`).
+  - The Agave-only behaviour (N1/N6/N8/N10/N11/N13–N15) runs on a local Agave 4.1.2 validator (`npm run test:validator -w @youre-on/shared`).
+  - The sequential fallback rows A14 and A15 are covered too (`sequential-lock.test.ts`). Measured: LiteSVM accepts only the latest blockhash.
+- **D1-L3 (deploy tooling).** `scripts/keys.ts`, `init-config.ts`, `check-config.ts` and `nonce-pool.ts` are written, plus the `scripts/deploy-devnet.md` runbook. `npm run e2e:local` proves them end to end against a throwaway `solana-test-validator`.
+- **D1-L5 (smoke).** `scripts/smoke-devnet.ts` runs the atomic lock, then resolve, then `[finalize, close_bet]` with the custodial demo keys. It checks that both party wallets hold 0 lamports and that all 5 events are on chain. It is proven locally by `e2e:local`.
+- **D1-L6 (float).** `scripts/fund.ts` tops wallets up from the treasury, with the fee payer paying fees and ATA rent. It is proven locally.
+- **Crank (D3-L2 P1, CR1, TM-L10).**
+  - `npm run crank -- --payer <key>` (`scripts/crank.ts`, `scripts/lib/crank.ts`) finds every Bet with `getProgramAccounts` and a memcmp on the discriminator. For each one past its deadline it sends `timeout_refund` or `finalize` together with `close_bet`.
+  - It refuses public clusters unless `--devnet` is passed, and always refuses mainnet.
+  - `e2e:local` runs a local CR1 equivalent. With no server running, it sets up an expired Locked bet, an Open bet and a Resolved bet. A fresh, locally airdropped key then cranks all three, and the run checks that payouts are exact and that S gets exactly the rent back.
+- **E3 (filter, TM-E1/E4).**
+  - A real mimic program (`programs/escrow/test-programs/mimic`) uses our `BetFinalized` under its own ID and emits it through both `emit_cpi!` and `emit!`. It sits outside the Anchor workspace, needs no keypair and is never deployed. Build it with `bash packages/shared/scripts/build-mimic.sh`; CI does this too.
+  - Its transactions are captured from LiteSVM and run through `infra/quicknode/filter.js`, which forwards 0 events. A real escrow transaction captured the same way is forwarded, as the positive control. The captured fixture is `infra/quicknode/fixtures/block-mimic-e3.json`, and `apps/server/test/chain-unit.test.ts` checks it along with a synthetic `Program data:` case.
+
+**Still human-only** (none of this can or should be done by an agent):
+
+- Funding devnet: ≥ 5 SOL for the deployer and ≥ 0.5 SOL for the fee payer (faucet, P-09), and the devnet USDC float for the treasury (P-10). Then run the `scripts/deploy-devnet.md` steps against devnet.
+- Fly secrets: `FEE_PAYER_SECRET_KEY`, `JUDGE_AUTHORITY_SECRET_KEY`, `APPEAL_AUTHORITY_SECRET_KEY`, `TREASURY_SECRET_KEY` (from `npm run keys`) and the RPC URL.
+- QuickNode: the account and API key, then creating the Stream from `infra/quicknode/stream.json` and `filter.js` and setting its webhook HMAC secret. The D1-L4 "every smoke event lands in `chain_events` exactly once" check also needs the live Stream.
+- Deploying: use `anchor deploy` with the real `escrow-keypair.json`. That file is never copied or committed.

@@ -685,6 +685,8 @@ fn b21_extension_allowlist() {
         Ext::ScaledUiAmount,
         Ext::InterestBearing,
         Ext::ConfidentialTransferMint,
+        // TM-K8 / ESC-SEC-1: a closeable mint can vanish between the terminal ix and close_bet.
+        Ext::MintCloseAuthority,
     ] {
         let (mut env, mint, a_tok) = t22_env_with(&[ext]);
         let a_bal = env.token_balance(&a_tok);
@@ -700,23 +702,28 @@ fn b21_extension_allowlist() {
         assert_eq!(env.token_balance(&a_tok), a_bal, "{ext:?}");
     }
     // An allowed extension does not launder a rejected one.
-    let (mut env, mint, a_tok) = t22_env_with(&[Ext::MintCloseAuthority, Ext::PermanentDelegate]);
-    let (res, _) = t22_create(&mut env, mint, a_tok, 1);
-    assert_eq!(
-        custom_code(&res),
-        Some(err_code(EscrowError::MintExtensionNotAllowed))
-    );
-
-    // Allowed: MetadataPointer + TokenMetadata, MintCloseAuthority, and combinations.
     for exts in [
-        &[Ext::MetadataPointer][..],
-        &[Ext::MetadataPointer, Ext::TokenMetadata][..],
-        &[Ext::MintCloseAuthority][..],
+        &[Ext::MetadataPointer, Ext::PermanentDelegate][..],
         &[
             Ext::MintCloseAuthority,
             Ext::MetadataPointer,
             Ext::TokenMetadata,
         ][..],
+    ] {
+        let (mut env, mint, a_tok) = t22_env_with(exts);
+        let (res, vault) = t22_create(&mut env, mint, a_tok, 1);
+        assert_eq!(
+            custom_code(&res),
+            Some(err_code(EscrowError::MintExtensionNotAllowed)),
+            "{exts:?}"
+        );
+        assert!(!env.exists(&vault), "{exts:?}");
+    }
+
+    // Allowed: MetadataPointer, MetadataPointer + TokenMetadata.
+    for exts in [
+        &[Ext::MetadataPointer][..],
+        &[Ext::MetadataPointer, Ext::TokenMetadata][..],
     ] {
         let (mut env, mint, a_tok) = t22_env_with(exts);
         let (res, vault) = t22_create(&mut env, mint, a_tok, 1);

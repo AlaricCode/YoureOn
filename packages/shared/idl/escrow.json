@@ -107,6 +107,278 @@
       ]
     },
     {
+      "name": "appeal",
+      "docs": ["Resolved → Appealed (a loser, before `appeal_deadline`)."],
+      "discriminator": [250, 91, 1, 244, 179, 52, 75, 236],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "appellant",
+          "docs": ["A party's device key; must be a loser of the stored outcome."],
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_open_bet",
+      "docs": ["Open → Cancelled; refund A (signer: A, B or the bet's judge key)."],
+      "discriminator": [138, 94, 14, 220, 197, 180, 144, 124],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "canceller",
+          "docs": [
+            "`bet.party_a`, `bet.party_b` or `bet.judge_authority` (`NotAuthorizedToCancel`)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_a_token",
+          "docs": ["Receives the whole vault. SPL owner field == `bet.party_a` (I1, TM-F1/F4)."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "party_b_token",
+          "docs": [
+            "Always receives 0 here, so it may be omitted (B may never have had an account, X6)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_bet",
+      "docs": ["Settled / Refunded / Cancelled → closed; rent to `bet.rent_payer` (anyone)."],
+      "discriminator": [185, 206, 13, 184, 176, 108, 140, 107],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": ["Anyone. Gets nothing: rent goes to `rent_payer` (TM-F9, TM-R3)."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_a_token",
+          "docs": [
+            "Required iff the vault is non-empty (tokens donated after settlement go to A only, I1)."
+          ],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "rent_payer",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "concede",
+      "docs": ["Resolved → Settled; the loser of a PartyA / PartyB ruling pays out at once."],
+      "discriminator": [19, 182, 3, 3, 43, 35, 60, 202],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "party",
+          "docs": ["The loser's device key (`NotParty`, `NotLoser`)."],
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_a_token",
+          "docs": ["Required iff `to_a > 0`. SPL owner field == `bet.party_a` (I1, TM-F1/F4)."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "party_b_token",
+          "docs": ["Required iff `to_b > 0`. SPL owner field == `bet.party_b`."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "create_bet",
       "discriminator": [197, 42, 153, 2, 59, 63, 143, 246],
       "accounts": [
@@ -219,6 +491,79 @@
       ]
     },
     {
+      "name": "finalize",
+      "docs": ["Resolved → Settled (anyone, at or after `appeal_deadline`)."],
+      "discriminator": [171, 61, 218, 56, 127, 115, 12, 217],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": ["Anyone (normally the server's 10 s timer)."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_a_token",
+          "docs": ["Required iff `to_a > 0`. SPL owner field == `bet.party_a` (I1, TM-F1/F4)."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "party_b_token",
+          "docs": ["Required iff `to_b > 0`. SPL owner field == `bet.party_b`."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "initialize_config",
       "discriminator": [208, 127, 21, 1, 194, 190, 196, 70],
       "accounts": [
@@ -267,6 +612,235 @@
           }
         }
       ]
+    },
+    {
+      "name": "resolve",
+      "docs": ["Locked → Resolved (bet's judge key, before `resolve_deadline`)."],
+      "discriminator": [246, 150, 236, 206, 108, 63, 58, 10],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "judge_authority",
+          "docs": ["Must be the bet's snapshotted `judge_authority` (I7, I11)."],
+          "signer": true,
+          "relations": ["bet"]
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "outcome",
+          "type": {
+            "defined": {
+              "name": "Outcome"
+            }
+          }
+        },
+        {
+          "name": "evidence_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        },
+        {
+          "name": "ruling_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "resolve_appeal",
+      "docs": ["Appealed → Settled (bet's appeal key, before `appeal_resolve_deadline`)."],
+      "discriminator": [225, 133, 69, 13, 240, 143, 68, 170],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "appeal_authority",
+          "docs": ["Must be the bet's snapshotted `appeal_authority` (I8, I11)."],
+          "signer": true,
+          "relations": ["bet"]
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_a_token",
+          "docs": ["Required iff `to_a > 0`. SPL owner field == `bet.party_a` (I1, TM-F1/F4)."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "party_b_token",
+          "docs": ["Required iff `to_b > 0`. SPL owner field == `bet.party_b`."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "final_outcome",
+          "type": {
+            "defined": {
+              "name": "Outcome"
+            }
+          }
+        },
+        {
+          "name": "appeal_ruling_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        }
+      ]
+    },
+    {
+      "name": "timeout_refund",
+      "docs": ["Open / Locked / Appealed → Refunded (anyone, at or after that status's deadline)."],
+      "discriminator": [194, 205, 141, 37, 231, 118, 147, 9],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": ["Anyone (the server's deadline sweeper, or `scripts/crank.ts`)."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_a_token",
+          "docs": ["Required iff `to_a > 0`. SPL owner field == `bet.party_a` (I1, TM-F1/F4)."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "party_b_token",
+          "docs": ["Required iff `to_b > 0` (may be omitted from `Open`)."],
+          "writable": true,
+          "optional": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
     },
     {
       "name": "update_config",

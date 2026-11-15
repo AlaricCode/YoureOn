@@ -10,15 +10,31 @@
     "node": ">=22.4"
   },
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/tsconfig.json",
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "codama": "tsx scripts/codama.ts",
+    "keys": "tsx scripts/keys.ts",
+    "init-config": "tsx scripts/init-config.ts",
+    "check-config": "tsx scripts/check-config.ts",
+    "nonce-pool": "tsx scripts/nonce-pool.ts",
+    "fund": "tsx scripts/fund.ts",
+    "smoke-devnet": "tsx scripts/smoke-devnet.ts",
+    "crank": "tsx scripts/crank.ts",
+    "e2e:local": "bash scripts/e2e-local.sh"
   },
   "devDependencies": {
+    "@codama/nodes-from-anchor": "1.5.6",
+    "@codama/renderers-js": "2.8.0",
+    "@solana-program/system": "0.14.1",
+    "@solana-program/token": "0.16.1",
+    "@solana/kit": "8.6.0",
     "@types/node": "^26.6.6",
+    "codama": "1.11.0",
     "eslint": "^10.14.0",
+    "postgres": "3.4.9",
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
     "typescript": "~5.9",

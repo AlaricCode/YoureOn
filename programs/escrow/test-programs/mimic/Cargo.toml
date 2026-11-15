@@ -1,0 +1,36 @@
+# ESCROW §9.2 E3 test fixture: NOT deployed anywhere. A program that copies the escrow's event
+# structs under its own ID and emits `BetFinalized` through both `emit_cpi!` and `emit!`, so the
+# production QuickNode filter can be run on a real captured transaction (TM-E1, TM-E4).
+#
+# Deliberately OUTSIDE the Anchor workspace (its own [workspace] root): `anchor build` / `anchor
+# deploy` never see it, and it needs no program keypair. Build: packages/shared/scripts/build-mimic.sh
+[package]
+name = "mimic"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.89.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "mimic"
+
+[features]
+default = []
+no-entrypoint = []
+cpi = ["no-entrypoint"]
+idl-build = []
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { version = "1.2.2", features = ["event-cpi"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[workspace]
+
+[profile.release]
+overflow-checks = true
