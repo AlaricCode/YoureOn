@@ -233,7 +233,6 @@ For Token-2022 mints, `create_bet` parses the mint's extension types and accepts
 | Allowed extension | Why it is safe |
 |---|---|
 | `MetadataPointer`, `TokenMetadata` | Display only |
-| `MintCloseAuthority` | A mint can close only at supply 0, and the vault's tokens are part of supply, so it can't close mid-bet |
 
 It is an allowlist, not a denylist, so extensions added to Token-2022 later are rejected by default. Notable rejections:
 
@@ -247,6 +246,7 @@ It is an allowlist, not a denylist, so extensions added to Token-2022 later are 
 | `NonTransferable` | Tokens can't move |
 | `Pausable` | The issuer can halt payouts |
 | `ScaledUiAmount`, `InterestBearingConfig` | Raw units stop meaning $0.000001, so the dollar display and `max_stake` lie |
+| `MintCloseAuthority` | The vault's tokens keep supply above 0 only until a terminal ix pays out. Between that ix and `close_bet` every holder can burn, the mint can close, and `close_bet` (which loads the mint) then fails forever, stranding the Bet and vault rent (TM-K8) |
 
 Mint extensions are fixed at `InitializeMint`. Their authorities can change parameters but can't add an extension, so a check at create covers the bet's whole lifetime. Parse with the `spl_token_2022` re-exported by `anchor_spl` to avoid version skew. **This check is P1 hardening**: the admin allowlist (classic devnet USDC only) is the P0 control. The extension check also bounds a compromised admin, who otherwise could allowlist a `PermanentDelegate` mint for new bets. Classic mints have no extensions and skip the parse. A mint's `freeze_authority` is allowed (Circle's USDC has one); see §1.2.
 
@@ -1190,7 +1190,7 @@ Every row names its mitigation (spec section) and the test that proves it (§9.2
 | TM-K5 | Destination account extensions (`MemoTransfer` required, frozen) | Fresh party-owned account (TM-L3) | K14 |
 | TM-K6 | `CpiGuard` on A's source account | `create_bet` fails harmlessly (A's own setting) | — |
 | TM-K7 | An extension added after create | Impossible: mint extensions are fixed at `InitializeMint` | — |
-| TM-K8 | `MintCloseAuthority` closes and re-inits the mint with new decimals | Impossible while supply > 0 (the vault holds supply) | — |
+| TM-K8 | `MintCloseAuthority` closes the mint: mid-bet (re-init with new decimals), or after the terminal ix emptied the vault and before `close_bet`, which then can't load the mint and strands the Bet and vault rent | Rejected by the extension allowlist (§3.3). Mid-bet it was already impossible (the vault holds supply), but the post-settlement window is not | B21 |
 | TM-K9 | A future extension the spec doesn't know about | Allowlist, not denylist | B21 |
 
 ### TM-E: events, Streams and webhook
@@ -1337,7 +1337,7 @@ Notation: `[x]` = expected error. Shorthands used in the setup column:
 | B18 | create_bet | Mallory pre-sends lamports to the Bet PDA and vault PDA addresses | ok (Anchor's funded `init` path); the extra lamports come back in `rent_returned` |
 | B19 | create_bet | **squat**: Mallory front-runs with A's `bet_id`, `party_a = Mallory`, `party_b = B`, the same `terms_hash` and stakes | Mallory's create ok; A's create → already in use; B's accept with `expected_party_a = A` → `[PartyMismatch]`; B's balance unchanged (TM-I1) |
 | B20 | create_bet | after every create: `bet.bet_id == arg`; `create_program_address(["bet", bet_id, [bump]]) == bet` and the same for the vault with `vault_bump`; both bumps canonical | holds (I16) |
-| B21 | create_bet | Token-2022 mints with each of `TransferHook`, `DefaultAccountState`, `Pausable`, `NonTransferable`, `ScaledUiAmount`, `InterestBearingConfig`, `ConfidentialTransferMint` → reject; `MetadataPointer` + `TokenMetadata`, `MintCloseAuthority` → ok | as listed (P1) |
+| B21 | create_bet | Token-2022 mints with each of `TransferHook`, `DefaultAccountState`, `Pausable`, `NonTransferable`, `ScaledUiAmount`, `InterestBearingConfig`, `ConfidentialTransferMint`, `MintCloseAuthority` → reject; `MetadataPointer` + `TokenMetadata` → ok | as listed (P1) |
 | B22 | create_bet | `accept_deadline = now` / `now − 1`; `= now + 600` (cap); `= now + 601`; `= now + 60` | `[InvalidDeadline]`; ok; `[InvalidDeadline]`; ok, and `accept_bet` at `now + 60` → `[AcceptDeadlinePassed]` (TM-T6) |
 | A1 | accept_bet | correct hash and stakes | ok; Locked; vault = pot; `resolve_deadline = now + 3600`; `BetAccepted` |
 | A2 | accept_bet | **wrong `expected_terms_hash`** | `[TermsHashMismatch]`; B's balance unchanged |
