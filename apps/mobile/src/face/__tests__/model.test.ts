@@ -20,8 +20,12 @@ const noticePath = fileURLToPath(
   new URL('../../../assets/models/NOTICE-w600k_mbf.txt', import.meta.url),
 );
 
-describe('committed face model (TASKS D0-M2, made by scripts/face-model.sh)', () => {
-  it('exists, is a TFLite flatbuffer and matches the pinned sha256 and size', () => {
+// The .tflite is not committed (non-commercial weights; rebuild with scripts/face-model.sh).
+// Without it this check is skipped, unless REQUIRE_FACE_MODEL=1 makes a missing file a failure.
+const haveModel = existsSync(modelPath) || process.env.REQUIRE_FACE_MODEL === '1';
+
+describe('face model (TASKS D0-M2, made by scripts/face-model.sh)', () => {
+  it.skipIf(!haveModel)('is a TFLite flatbuffer and matches the pinned sha256 and size', () => {
     expect(existsSync(modelPath)).toBe(true);
     const bytes = readFileSync(modelPath);
     expect(bytes.length).toBe(FACE_MODEL.sizeBytes);
