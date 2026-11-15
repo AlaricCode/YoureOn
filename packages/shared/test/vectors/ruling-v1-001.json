@@ -1,0 +1,36 @@
+{
+  "name": "ruling-v1-001",
+  "schema": "Ruling",
+  "expect": "ok",
+  "input": {
+    "schema_version": 1,
+    "ruling_id": "3d6f0e1a-2b4c-4d8e-9f10-a1b2c3d4e5f6",
+    "bet_id": "7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f",
+    "stage": "attempt",
+    "attempt_no": 1,
+    "outcome": "B_WINS",
+    "claim_result": "MET",
+    "redo_reason": null,
+    "void_reason": null,
+    "confidence": 0.93,
+    "reason": "Two full rotations, lands upright on its base in frame 7 and stays there. Jake never touches it.",
+    "cited_frames": [5, 6, 7],
+    "frame_hashes": [
+      "4a732389e86b3cd38588077272022a6a56d2a4cae8b30a3d9e2471c44727aae6",
+      "779dfb7bac671c5b00cb760fea9dbc9f45daccf6d44e3be1586bd94d86c5e90b",
+      "d747a480b302119220981100fc1df0ba4d6f1b1b8a1c6f8946d695b89ed1b62c",
+      "1d7fbd55211518f8d0166027e2a7f7dcb7c1a18df3ce039ac91b09509108768e",
+      "171462f9c80234e023c7516aee81427dcc87dd313addbbac39600ae2f30eea12",
+      "f8644bdba19f4a483baefa3f3c64811ef73fe8af25b725739d16e3fff5e6d5b8",
+      "eb659b35c77775acce60072634526149fc1d321d7118ef4e74d26c8874e30a5e",
+      "bdd11e96085964c7d1a7437baf23c95b52a76243f6c2febfaf856ea0827d82f8"
+    ],
+    "model": "anthropic/claude-sonnet-4-5",
+    "evidence_hash": "6d16c2ef16a63aba518b2e229f7d80e11663560fcd38112d38c5e26a66e14a06",
+    "terms_hash": "05860f0a9c9034685ddbed902667f8453258056a21de30138b430ba3903f998f",
+    "created_at": "2026-11-21T18:07:04.512Z"
+  },
+  "canonical": "{\"attempt_no\":1,\"bet_id\":\"7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f\",\"cited_frames\":[5,6,7],\"claim_result\":\"MET\",\"confidence\":0.93,\"created_at\":\"2026-11-21T18:07:04.512Z\",\"evidence_hash\":\"6d16c2ef16a63aba518b2e229f7d80e11663560fcd38112d38c5e26a66e14a06\",\"frame_hashes\":[\"4a732389e86b3cd38588077272022a6a56d2a4cae8b30a3d9e2471c44727aae6\",\"779dfb7bac671c5b00cb760fea9dbc9f45daccf6d44e3be1586bd94d86c5e90b\",\"d747a480b302119220981100fc1df0ba4d6f1b1b8a1c6f8946d695b89ed1b62c\",\"1d7fbd55211518f8d0166027e2a7f7dcb7c1a18df3ce039ac91b09509108768e\",\"171462f9c80234e023c7516aee81427dcc87dd313addbbac39600ae2f30eea12\",\"f8644bdba19f4a483baefa3f3c64811ef73fe8af25b725739d16e3fff5e6d5b8\",\"eb659b35c77775acce60072634526149fc1d321d7118ef4e74d26c8874e30a5e\",\"bdd11e96085964c7d1a7437baf23c95b52a76243f6c2febfaf856ea0827d82f8\"],\"model\":\"anthropic/claude-sonnet-4-5\",\"outcome\":\"B_WINS\",\"reason\":\"Two full rotations, lands upright on its base in frame 7 and stays there. Jake never touches it.\",\"redo_reason\":null,\"ruling_id\":\"3d6f0e1a-2b4c-4d8e-9f10-a1b2c3d4e5f6\",\"schema_version\":1,\"stage\":\"attempt\",\"terms_hash\":\"05860f0a9c9034685ddbed902667f8453258056a21de30138b430ba3903f998f\",\"void_reason\":null}",
+  "hash": "997ce27843ff323b7f7f8816f9eff0d0044a485a43c5625512a8967f82755daa",
+  "note": "SCHEMAS §5.2 example ruling with frame_hashes (O3, D7)."
+}

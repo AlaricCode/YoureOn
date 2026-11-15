@@ -1,0 +1,97 @@
+{
+  "id": "01-bottle-flip",
+  "title": "Bottle flip (Beat 2 line)",
+  "kind": "clarify",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "A",
+      "text": "Bet you five bucks you can't land a bottle flip."
+    }
+  ],
+  "answers": [
+    {
+      "speaker": "B",
+      "text": "Base only, obviously. Cap is cheating."
+    },
+    {
+      "speaker": "A",
+      "text": "One flip. One shot."
+    }
+  ],
+  "min_questions": 1,
+  "max_questions": 2,
+  "sample_args": {
+    "type": "skill",
+    "claim": "Jake lands a water bottle flip upright on the table.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "The bottle leaves Jake's hand and rotates at least once.",
+      "The bottle comes to rest standing upright on its base on the table."
+    ],
+    "failure_criteria": ["Landing on the cap.", "Touching the bottle after it is released."],
+    "edge_cases": [
+      {
+        "question": "Does landing on the cap count?",
+        "answer": "No. Only upright on its base counts."
+      },
+      {
+        "question": "One flip or best of three?",
+        "answer": "One flip."
+      }
+    ],
+    "amount_usd": "5",
+    "market_side": "none",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "skill",
+    "claim": "Jake lands a water bottle flip upright on the table.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "The bottle leaves Jake's hand and rotates at least once.",
+      "The bottle comes to rest standing upright on its base on the table."
+    ],
+    "failure_criteria": ["Landing on the cap.", "Touching the bottle after it is released."],
+    "edge_cases": [
+      {
+        "question": "Does landing on the cap count?",
+        "answer": "No. Only upright on its base counts.",
+        "asked_by": "judge"
+      },
+      {
+        "question": "One flip or best of three?",
+        "answer": "One flip.",
+        "asked_by": "judge"
+      }
+    ],
+    "evidence_source": "camera",
+    "amount": "5000000",
+    "market_query": null,
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "skill",
+    "performer": "B",
+    "yes_party": "B",
+    "amount": "5000000",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "edge_case_mentions": ["cap"]
+  },
+  "note": "BRIEF §3 / TASKS D2-J1: the Beat 2 line must get 1-2 edge-case questions (cap landing, attempts)."
+}

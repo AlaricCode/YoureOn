@@ -1,0 +1,13 @@
+node_modules
+.env*
+!.env.example
+target/
+**/*-keypair.json
+keys/
+.expo/
+ios/
+android/
+*.log
+dist/
+.DS_Store
+apps/mobile/assets/models/*.tflite
