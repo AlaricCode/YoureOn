@@ -182,10 +182,8 @@ export class DevicePolicyError extends Error {
 }
 
 // ---------------------------------------------------------------------------------------
-// Escrow instruction layouts (Anchor). create_bet / accept_bet = idl/escrow.json, checked by a test.
-// PENDING (not in the IDL yet): concede, appeal, close_bet follow ESCROW §5.2's struct order
-// (payer, the party signer, then the payout set / close accounts, then #[event_cpi]). The test
-// fails as soon as the IDL gains them with a different order.
+// Escrow instruction layouts (Anchor), each checked against idl/escrow.json by a test: payer, the
+// party signer, then the payout set / close accounts, then #[event_cpi] (ESCROW §5.2).
 // ---------------------------------------------------------------------------------------
 
 export type EscrowIxName = 'create_bet' | 'accept_bet' | 'concede' | 'appeal' | 'close_bet';

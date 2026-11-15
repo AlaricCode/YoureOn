@@ -1,5 +1,6 @@
 # CI (TASKS K-07): ts (npm ci, typecheck, unit tests of every workspace), secrets (gitleaks),
-# escrow (Agave 4.1.2, Anchor 1.2.2, Rust 1.89, cached; anchor build + cargo test).
+# escrow (Agave 4.1.2, Anchor 1.2.2, Rust 1.89, cached; anchor build, IDL/Codama drift check,
+# TS client suite on litesvm, cargo test).
 name: ci
 
 on:
@@ -148,7 +149,9 @@ jobs:
         if: steps.present.outputs.yes == 'true'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: programs/escrow -> target
+          workspaces: |
+            programs/escrow -> target
+            programs/escrow/test-programs/mimic -> target
 
       - name: throwaway CI wallet (never funded, never the deployer key)
         if: steps.present.outputs.yes == 'true'
@@ -159,6 +162,34 @@ jobs:
       - name: anchor build
         if: steps.present.outputs.yes == 'true'
         run: anchor build --provider.wallet "$ANCHOR_WALLET"
+      # ESCROW §9.2 E3: the mimic test program (outside the Anchor workspace; never deployed).
+      - name: build the E3 mimic test program
+        if: steps.present.outputs.yes == 'true'
+        working-directory: .
+        run: bash packages/shared/scripts/build-mimic.sh
+
+      # TS client suite (ESCROW §9.1): the Codama client on npm litesvm against the escrow.so
+      # just built. ESCROW_SO_REQUIRED=1 turns the local "no .so: skip" into a failure.
+      - uses: actions/setup-node@v7
+        if: steps.present.outputs.yes == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: npm ci
+        if: steps.present.outputs.yes == 'true'
+        working-directory: .
+        run: npm ci --no-audit --no-fund
+      - name: IDL + Codama client up to date (npm run codama -- --check)
+        if: steps.present.outputs.yes == 'true'
+        working-directory: .
+        run: npm run codama -- --check
+      - name: TS client suite (npm run test:escrow)
+        if: steps.present.outputs.yes == 'true'
+        working-directory: .
+        env:
+          ESCROW_SO_REQUIRED: '1'
+        run: npm run test:escrow -w packages/shared
+
       - name: cargo test
         if: steps.present.outputs.yes == 'true'
         run: cargo test

@@ -259,7 +259,7 @@ export function jsonTx(o: {
         instructions: ixs,
       })),
       loadedAddresses: loaded,
-      logMessages: [],
+      logMessages: [] as string[],
     },
     transaction: {
       message: { accountKeys: staticKeys, instructions },

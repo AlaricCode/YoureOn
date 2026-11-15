@@ -4,6 +4,8 @@ node_modules
 target/
 **/*-keypair.json
 keys/
+# scripts/keys.ts output if kept inside the repo (default is ~/.config/solana/youre-on/)
+.keys/
 .expo/
 ios/
 android/
