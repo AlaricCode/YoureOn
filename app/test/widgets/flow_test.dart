@@ -195,24 +195,28 @@ void main() {
     await pumpApp(tester, c);
     expect(find.byType(HomeScreen), findsOneWidget);
 
-    // Profile row → Enroll in enrolled mode.
+    // Profile row → Profile (enrolled mode).
     await tester.tap(find.byKey(const ValueKey('profile')));
     await tester.pumpAndSettle();
+    expect(find.text('Profile'), findsOneWidget);
+    expect(find.text('Biometrics saved'), findsOneWidget);
+    expect(find.text('Saved'), findsNWidgets(2));
     expect(find.text('Delete biometrics'), findsOneWidget);
-    expectCopyRule(tester, screen: 'Enroll (enrolled)');
-    // One tap only arms the button; it disarms after 3 s.
+    expectCopyRule(tester, screen: 'Profile');
+    // Delete asks to confirm; "No" keeps everything.
     await tester.tap(find.text('Delete biometrics'));
-    await tester.pump();
-    expect(find.text('Confirm delete'), findsOneWidget);
-    expectCopyRule(tester, screen: 'Enroll (armed)');
-    await tester.pump(const Duration(seconds: 4));
-    expect(find.text('Delete biometrics'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('Delete biometrics?'), findsOneWidget);
+    expectCopyRule(tester, screen: 'Delete confirm');
+    await tester.tap(find.text('No'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete biometrics?'), findsNothing);
     expect(server.called('DELETE /enroll'), isEmpty);
-    // A second tap within the window deletes.
+    // "Yes, delete" deletes.
     await tester.tap(find.text('Delete biometrics'));
-    await tester.pump();
+    await tester.pumpAndSettle();
     await tester.runAsync(() async {
-      await tester.tap(find.text('Confirm delete'));
+      await tester.tap(find.text('Yes, delete'));
       await Future<void>.delayed(const Duration(milliseconds: 200));
     });
     await tester.pumpAndSettle();

@@ -409,6 +409,7 @@ class _VoiceCapturePanelState extends State<VoiceCapturePanel>
                 key: const ValueKey('voice-progress'),
                 prompt: _recording ? 'Recording' : 'Tap, then read',
                 checking: checking,
+                recording: _recording,
               ),
             ),
           ),
@@ -507,10 +508,13 @@ class CheckBadge extends StatelessWidget {
 /// ("Turn left"), or an animated "Checking" while the backend verifies.
 /// The scrim keeps the text readable over any camera image.
 class StageBubble extends StatelessWidget {
-  const StageBubble({super.key, required this.prompt, this.checking = false});
+  const StageBubble({super.key, required this.prompt, this.checking = false, this.recording = false});
 
   final String prompt;
   final bool checking;
+
+  /// The microphone is on: red text with a red dot.
+  final bool recording;
 
   /// Palette.background at ~80% opacity.
   static const Color scrim = Color(0xCC0B0B0C);
@@ -526,7 +530,21 @@ class StageBubble extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: Space.x2, vertical: 10),
         child: checking
             ? const CheckingLabel(key: ValueKey('checking'))
-            : Label(prompt, style: Typo.heading, textAlign: TextAlign.center),
+            : recording
+                ? Row(
+                    key: const ValueKey('recording'),
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(color: Palette.danger, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: Space.x1),
+                      Label(prompt, style: Typo.heading.copyWith(color: Palette.danger)),
+                    ],
+                  )
+                : Label(prompt, style: Typo.heading, textAlign: TextAlign.center),
       ),
     );
   }

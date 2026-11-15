@@ -9,6 +9,7 @@ import '../state/app_scope.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets/controls.dart';
 import '../ui/widgets/page.dart';
+import '../ui/widgets/sheet.dart';
 import '../ui/widgets/text.dart';
 import '../wallet/wallet.dart';
 import 'enroll/enroll_capture.dart';
@@ -24,7 +25,8 @@ enum _Step { consent, face, voice }
 /// Each screen has a back arrow: Voice → Face → Consent → Sign in (signs
 /// out). Captured templates stay pending until Done; withdrawing consent or
 /// leaving deletes them (DELETE /enroll/pending).
-/// In enrolled mode: Face/Voice status and "Delete biometrics".
+/// In enrolled mode (Profile): what is saved, "Delete biometrics" (asks
+/// to confirm) and "Sign out".
 class EnrollScreen extends StatefulWidget {
   const EnrollScreen({super.key});
 
@@ -45,14 +47,8 @@ class _EnrollScreenState extends State<EnrollScreen> {
   /// Set once Done succeeded: leaving the screen then must not discard.
   bool _completed = false;
 
-  /// "Delete biometrics" needs a second tap within [_armWindow].
-  bool _armed = false;
-  Timer? _disarm;
-  static const Duration _armWindow = Duration(seconds: 3);
-
   @override
   void dispose() {
-    _disarm?.cancel();
     // Left before Done: nothing captured may outlive the screen without
     // consent being completed. Best effort; the backend also expires
     // pending templates after 24 h.
@@ -145,23 +141,17 @@ class _EnrollScreenState extends State<EnrollScreen> {
         if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
       });
 
-  void _onDeleteTap() {
-    if (!_armed) {
-      setState(() => _armed = true);
-      _disarm?.cancel();
-      _disarm = Timer(_armWindow, () {
-        if (mounted) setState(() => _armed = false);
-      });
-      return;
-    }
-    _disarm?.cancel();
-    setState(() => _armed = false);
-    _delete();
+  /// "Delete biometrics" → a sheet asking to confirm; only "Yes, delete"
+  /// deletes.
+  Future<void> _onDeleteTap() async {
+    final yes = await showAppSheet<bool>(context, (c) => const _ConfirmDeleteSheet());
+    if (yes == true && mounted) await _delete();
   }
 
   Future<void> _delete() => _guard(() async {
         final sign = await _app.api.enrollDelete();
         await _app.tx.run(_app.api.enrollDelete, first: sign);
+        _completed = false;
         _flow
           ..resetChallenge()
           ..consent = false;
@@ -174,8 +164,19 @@ class _EnrollScreenState extends State<EnrollScreen> {
   Widget build(BuildContext context) {
     final user = AppScope.of(context).user;
     final enrolled = user?.enrolled ?? false;
-    if (!enrolled) return _sequence();
-    return AppPage(title: 'Enroll', child: _enrolled());
+    // The Profile view is only for the screen opened from Home (a pushed
+    // route). The app's root Enroll screen (shown while not enrolled) never
+    // switches to it: when enrollment completes, the app fades that screen
+    // out to Home, and showing Profile there would flash it. Same for a screen
+    // that has just finished enrolling.
+    final openedFromHome = !(ModalRoute.of(context)?.isFirst ?? true);
+    if (!enrolled || _completed) return _sequence();
+    if (!openedFromHome) {
+      // Root screen, enrolled elsewhere (e.g. re-enrolled from Profile): it is
+      // about to be replaced by Home; show nothing rather than a stale step.
+      return const ColoredBox(color: Palette.background, child: SizedBox.expand());
+    }
+    return AppPage(title: 'Profile', child: _enrolled());
   }
 
   Widget _enrolled() {
@@ -183,15 +184,28 @@ class _EnrollScreenState extends State<EnrollScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: Space.x2),
-        const ListRow(label: 'Face', trailing: Icon(LucideIcons.check, size: 18, color: Palette.text)),
+        const Row(
+          children: [
+            CheckBadge(size: 40, color: Palette.accent),
+            SizedBox(width: Space.x2),
+            Expanded(child: Label('Biometrics saved', style: Typo.heading)),
+          ],
+        ),
+        const SizedBox(height: Space.x2),
+        const BodyText(
+          'Verdict can recognize you in bets, huddles and payments. Only an encrypted '
+          'template is kept, not your photos or recordings.',
+        ),
+        const SizedBox(height: Space.x3),
+        const _SavedRow(label: 'Face'),
         const Hairline(),
-        const ListRow(label: 'Voice', trailing: Icon(LucideIcons.check, size: 18, color: Palette.text)),
+        const _SavedRow(label: 'Voice'),
         const Hairline(),
         const Spacer(),
         ErrorLine(_error),
-        QuietButton(
+        DangerButton(
           key: const ValueKey('delete-biometrics'),
-          label: _armed ? 'Confirm delete' : 'Delete biometrics',
+          label: 'Delete biometrics',
           busy: _busy,
           onPressed: _busy ? null : _onDeleteTap,
         ),
@@ -422,6 +436,63 @@ class _ConsentCheck extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// "Face · Saved ✓" on the Profile page.
+class _SavedRow extends StatelessWidget {
+  const _SavedRow({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListRow(
+      label: label,
+      value: 'Saved',
+      trailing: const Icon(LucideIcons.check, size: 18, color: Palette.accent),
+    );
+  }
+}
+
+/// Bottom sheet confirming "Delete biometrics": pops true on "Yes, delete".
+class _ConfirmDeleteSheet extends StatelessWidget {
+  const _ConfirmDeleteSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Label('Delete biometrics?', style: Typo.heading),
+        const SizedBox(height: Space.x1),
+        const BodyText(
+          "Your face and voice templates are erased and removed from your profile on "
+          "Solana. You'll need to enroll again before you can join a bet.",
+        ),
+        const SizedBox(height: Space.x3),
+        Row(
+          children: [
+            Expanded(
+              child: QuietButton(
+                key: const ValueKey('delete-no'),
+                label: 'No',
+                onPressed: () => Navigator.of(context).pop(false),
+              ),
+            ),
+            const SizedBox(width: Space.x2),
+            Expanded(
+              child: DangerButton(
+                key: const ValueKey('delete-yes'),
+                label: 'Yes, delete',
+                filled: true,
+                onPressed: () => Navigator.of(context).pop(true),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

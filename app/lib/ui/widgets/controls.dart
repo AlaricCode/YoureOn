@@ -63,6 +63,54 @@ class PrimaryButton extends StatelessWidget {
   }
 }
 
+/// A destructive action (delete): red outline by default, red fill when
+/// [filled] (the final "Yes, delete" in a confirmation).
+class DangerButton extends StatelessWidget {
+  const DangerButton({super.key, required this.label, required this.onPressed, this.busy = false, this.filled = false});
+
+  final String label;
+  final VoidCallback? onPressed;
+  final bool busy;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null && !busy;
+    final fg = filled ? Palette.text : Palette.danger;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled ? onPressed : null,
+        child: AnimatedOpacity(
+          duration: Motion.fast,
+          curve: Motion.curve,
+          opacity: enabled ? 1 : 0.4,
+          child: Container(
+            height: Space.control,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: filled ? Palette.danger : null,
+              border: filled ? null : Border.all(color: Palette.danger, width: 1),
+              borderRadius: const BorderRadius.all(Radius.circular(8)),
+            ),
+            child: busy
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: fg),
+                  )
+                : Label(label, style: Typo.labelStrong.copyWith(color: fg)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A secondary action: hairline outline, no fill.
 class QuietButton extends StatelessWidget {
   const QuietButton({super.key, required this.label, required this.onPressed, this.busy = false});
@@ -251,6 +299,12 @@ class ShutterButton extends StatelessWidget {
   final bool active;
   final String semanticLabel;
 
+  /// Inner disc: the ring (64) minus its 2 px border and a 4 px gap per side.
+  static const double _discSide = Space.x8 - 2 * 2 - Space.x1;
+
+  /// The stop square while recording, well inside the ring.
+  static const double _stopSide = 24;
+
   @override
   Widget build(BuildContext context) {
     return Semantics(
@@ -258,20 +312,23 @@ class ShutterButton extends StatelessWidget {
       label: semanticLabel,
       child: GestureDetector(
         onTap: onPressed,
-        child: AnimatedContainer(
-          duration: Motion.fast,
-          curve: Motion.curve,
+        child: Container(
           width: Space.x8,
           height: Space.x8,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(color: Palette.text, width: 2),
           ),
-          padding: const EdgeInsets.all(Space.x1 / 2),
-          child: DecoratedBox(
+          // Idle: a filled disc inside the ring. Active (recording): a small
+          // rounded square centred inside the ring, like a stop button.
+          child: AnimatedContainer(
+            duration: Motion.fast,
+            curve: Motion.curve,
+            width: active ? _stopSide : _discSide,
+            height: active ? _stopSide : _discSide,
             decoration: BoxDecoration(
-              shape: active ? BoxShape.rectangle : BoxShape.circle,
-              borderRadius: active ? const BorderRadius.all(Radius.circular(6)) : null,
+              borderRadius: BorderRadius.all(Radius.circular(active ? 5 : _discSide / 2)),
               color: onPressed == null ? Palette.secondary : (active ? Palette.accent : Palette.text),
             ),
           ),
