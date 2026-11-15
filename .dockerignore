@@ -1,0 +1,15 @@
+# Root build context (fly.toml builds apps/server/Dockerfile from the repo root). Mirrors
+# apps/server/Dockerfile.dockerignore for builders that only read the root file.
+**/node_modules
+**/.env*
+**/*.log
+**/target
+**/.expo
+**/dist
+**/*-keypair.json
+keys
+docs
+programs
+apps/mobile
+apps/stage
+.git

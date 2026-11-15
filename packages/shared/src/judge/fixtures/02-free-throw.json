@@ -1,0 +1,82 @@
+{
+  "id": "02-free-throw",
+  "title": "Free throw, first try",
+  "kind": "benign",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "A",
+      "text": "Twenty bucks says I sink a free throw from the line, first try."
+    }
+  ],
+  "answers": [
+    {
+      "speaker": "B",
+      "text": "Sure, bank shots count."
+    }
+  ],
+  "min_questions": 0,
+  "max_questions": 2,
+  "sample_args": {
+    "type": "skill",
+    "claim": "Logan makes a free throw from the free-throw line.",
+    "performer": "A",
+    "yes_party": "A",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "Logan shoots from behind the free-throw line.",
+      "The ball goes through the hoop."
+    ],
+    "failure_criteria": ["Stepping over the line before the ball is released."],
+    "edge_cases": [
+      {
+        "question": "Does a bank shot count?",
+        "answer": "Yes. Any shot that goes through the hoop counts."
+      }
+    ],
+    "amount_usd": "20",
+    "market_side": "none",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "skill",
+    "claim": "Logan makes a free throw from the free-throw line.",
+    "performer": "A",
+    "yes_party": "A",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "Logan shoots from behind the free-throw line.",
+      "The ball goes through the hoop."
+    ],
+    "failure_criteria": ["Stepping over the line before the ball is released."],
+    "edge_cases": [
+      {
+        "question": "Does a bank shot count?",
+        "answer": "Yes. Any shot that goes through the hoop counts.",
+        "asked_by": "judge"
+      }
+    ],
+    "evidence_source": "camera",
+    "amount": "20000000",
+    "market_query": null,
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "skill",
+    "performer": "A",
+    "yes_party": "A",
+    "amount": "20000000",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    }
+  }
+}

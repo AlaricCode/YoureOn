@@ -1,0 +1,95 @@
+{
+  "id": "04-paper-ball",
+  "title": "Paper ball into the trash",
+  "kind": "clarify",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "A",
+      "text": "Bet you three dollars you can't get a paper ball in the trash from behind the couch."
+    }
+  ],
+  "answers": [
+    {
+      "speaker": "A",
+      "text": "It has to stay in. Bouncing out doesn't count."
+    },
+    {
+      "speaker": "B",
+      "text": "Best of three, I'm not doing this in one."
+    }
+  ],
+  "min_questions": 1,
+  "max_questions": 2,
+  "sample_args": {
+    "type": "skill",
+    "claim": "Jake throws a paper ball into the trash can from behind the couch.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 3,
+      "rule": "best_of"
+    },
+    "success_criteria": [
+      "Jake throws from behind the couch.",
+      "The paper ball ends up inside the trash can."
+    ],
+    "failure_criteria": ["Stepping in front of the couch before throwing."],
+    "edge_cases": [
+      {
+        "question": "Does it count if it bounces in and out?",
+        "answer": "No. It has to stay in the can."
+      },
+      {
+        "question": "One throw or best of three?",
+        "answer": "Best of three."
+      }
+    ],
+    "amount_usd": "3",
+    "market_side": "none",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "skill",
+    "claim": "Jake throws a paper ball into the trash can from behind the couch.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 3,
+      "rule": "best_of"
+    },
+    "success_criteria": [
+      "Jake throws from behind the couch.",
+      "The paper ball ends up inside the trash can."
+    ],
+    "failure_criteria": ["Stepping in front of the couch before throwing."],
+    "edge_cases": [
+      {
+        "question": "Does it count if it bounces in and out?",
+        "answer": "No. It has to stay in the can.",
+        "asked_by": "judge"
+      },
+      {
+        "question": "One throw or best of three?",
+        "answer": "Best of three.",
+        "asked_by": "judge"
+      }
+    ],
+    "evidence_source": "camera",
+    "amount": "3000000",
+    "market_query": null,
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "skill",
+    "performer": "B",
+    "yes_party": "B",
+    "amount": "3000000",
+    "attempts": {
+      "count": 3,
+      "rule": "best_of"
+    }
+  }
+}

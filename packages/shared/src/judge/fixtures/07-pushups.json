@@ -1,0 +1,82 @@
+{
+  "id": "07-pushups",
+  "title": "Twenty push-ups in thirty seconds",
+  "kind": "benign",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "A",
+      "text": "Five bucks you can't do twenty push-ups in thirty seconds."
+    },
+    {
+      "speaker": "B",
+      "text": "Easy money."
+    }
+  ],
+  "answers": [
+    {
+      "speaker": "A",
+      "text": "Chest to the floor or it doesn't count."
+    }
+  ],
+  "min_questions": 0,
+  "max_questions": 2,
+  "sample_args": {
+    "type": "skill",
+    "claim": "Jake does twenty push-ups in thirty seconds.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "Jake completes twenty push-ups within thirty seconds.",
+      "Each push-up goes chest near the floor, then arms straight."
+    ],
+    "failure_criteria": ["Knees touching the floor."],
+    "edge_cases": [
+      {
+        "question": "What counts as a push-up?",
+        "answer": "Chest near the floor, then arms fully straight."
+      }
+    ],
+    "amount_usd": "5",
+    "market_side": "none",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "skill",
+    "claim": "Jake does twenty push-ups in thirty seconds.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": [
+      "Jake completes twenty push-ups within thirty seconds.",
+      "Each push-up goes chest near the floor, then arms straight."
+    ],
+    "failure_criteria": ["Knees touching the floor."],
+    "edge_cases": [
+      {
+        "question": "What counts as a push-up?",
+        "answer": "Chest near the floor, then arms fully straight.",
+        "asked_by": "judge"
+      }
+    ],
+    "evidence_source": "camera",
+    "amount": "5000000",
+    "market_query": null,
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "skill",
+    "performer": "B",
+    "yes_party": "B",
+    "amount": "5000000"
+  }
+}

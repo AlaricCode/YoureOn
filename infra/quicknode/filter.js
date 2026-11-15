@@ -1,81 +1,81 @@
-/**
- * QuickNode Streams filter for Verdict (CONTRACTS §12.5).
- *
- * Dataset: Solana `block`. Keeps successful transactions that mention
- * VERDICT_PROGRAM_ID, decodes their `Program data:` log lines (emitted while
- * the Verdict program is the innermost invoked program) into §9.5 events and
- * returns
- *   { stream: "verdict-devnet", events: [{signature, slot, block_time, index, name, data}] }
- * or null when a batch has no Verdict events (QuickNode then delivers nothing).
- *
- * Decoded encoding (§12.5): Pubkey → base58, [u8;32] → hex, u64/i64 → decimal
- * string, smaller ints → number, bool → boolean, [u8;8] → number array,
- * [u64;8] / Vec<u64> → decimal strings. This is a self-contained copy of the
- * engine's `decodeEvent` (no imports are available in the Streams runtime);
- * packages/backend/test/quicknode-filter.test.ts checks it against the engine
- * for every event.
- */
-
-var VERDICT_PROGRAM_ID = 'dbqDmF6YtjPygXTvJD31CNADoLqiUG8pZgj1zpHaMye';
-var STREAM_NAME = 'verdict-devnet';
-
-/** sha256("event:<Name>")[0..8], hex. */
-var EVENT_DISCRIMINATORS = {
-  ProfileUpdated: 'baf83e627062a1fc',
-  BetCreated: '20996947bc486b72',
-  Funded: '43543858c00cc9b1',
-  BetCancelled: '20b380b87dc16a68',
-  BetStarted: '671f55ce06a39d69',
-  EvidenceCommitted: 'adbb652726e51296',
-  BetEnded: '49603a6113b50671',
-  TracksPosted: '0cffc0730c7c7a0f',
-  BiometricVerified: '68637bb16675c483',
-  PreRuled: 'ff4d998bdff74418',
-  Consented: 'dd27e06ffca4a774',
-  Disputed: 'baeb5bd1945d98d9',
-  Settled: 'e8d228118e7c91ee',
-  Refunded: '236795f6c47bdd63',
+// QuickNode Streams filter for the You're On escrow (API-CONTRACT §5.2, ESCROW §7.1 rules 1-5).
+//
+// Dataset "block" (getBlock objects, encoding json or jsonParsed). Emits one envelope per batch
+// with >= 1 matching event, else null (QuickNode then sends nothing).
+//
+// Rules:
+//   1. drop transactions with meta.err != null (a failed tx still records the inner instructions
+//      that ran before the failure);
+//   2. an event is an INNER instruction whose program (resolved through accountKeys +
+//      meta.loadedAddresses) == CONFIG.programId, whose data starts with the Anchor event-ix tag,
+//      and whose first account == CONFIG.eventAuthority (only our program can sign as that PDA);
+//   3. top-level instructions are never decoded;
+//   4. there is no emit! / "Program data:" log-path decoder;
+//   5. forward {signature, blockHeight, parentSlot, blockTime, txIndex, outerIx, innerIx,
+//      eventBase64 = disc(8) ‖ borsh}. `name` is a routing hint; the server re-decodes with the
+//      IDL compiled into it and ignores `name`.
+//
+// No BigInt / atob / TextDecoder / Buffer / require: QuickNode's JS engine is undocumented.
+// Adapted from youre-on-spikes/06-quicknode-solana/filter/stream-filter.js (base58 / base64
+// helpers, block walking) with Verdict's infra/quicknode layout (CONFIG + stream.json).
+//
+// The CONFIG block is generated: `npx tsx infra/quicknode/build-filter.ts` (from the escrow IDL
+// and ESCROW_ID). apps/server/test/chain-unit.test.ts fails if it drifts.
+/*__CONFIG_START__*/
+var CONFIG = {
+  programId: 'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm',
+  eventAuthority: '9j8rLku2jyJ11H4cgPXoEK2ea3cQdKp6XW5Kx1pWs8ME',
+  eventIxTag: [228, 69, 165, 46, 81, 203, 154, 29],
+  events: {
+    '820c89bfbdd91abd': 'AppealResolved',
+    a6f9b64d551fe164: 'BetAccepted',
+    '89d7039bc4cb4fd7': 'BetAppealed',
+    '20b380b87dc16a68': 'BetCancelled',
+    '7a149dfedd002781': 'BetClosed',
+    '8d5c42c6b1d3bb91': 'BetConceded',
+    '20996947bc486b72': 'BetCreated',
+    '3af4902f755cc791': 'BetFinalized',
+    '20eaad666a0402cb': 'BetRefunded',
+    '8559597d04db5289': 'BetResolved',
+    b531c89c13a7b25b: 'ConfigInitialized',
+    '28f1e67a0b13c6c2': 'ConfigUpdated',
+  },
 };
+/*__CONFIG_END__*/
 
-/** Field order per §9.5. */
-var EVENT_SCHEMAS = {
-  ProfileUpdated: [['wallet', 'pubkey'], ['flags', 'u8']],
-  BetCreated: [
-    ['bet', 'pubkey'], ['creator', 'pubkey'], ['nonce', 'u64'], ['participants', 'vec_pubkey'], ['stakes', 'vec_u64'],
-    ['side_b_mask', 'u8'], ['flags', 'u8'], ['program_hash', 'hash'], ['time_limit_s', 'u32'], ['fund_deadline', 'i64'],
-  ],
-  Funded: [
-    ['bet', 'pubkey'], ['participant', 'pubkey'], ['participant_idx', 'u8'], ['amount', 'u64'], ['funded_mask', 'u8'],
-    ['all_funded', 'bool'], ['calibration_hash', 'hash'],
-  ],
-  BetCancelled: [['bet', 'pubkey']],
-  BetStarted: [['bet', 'pubkey'], ['beacon_slot', 'u64'], ['beacon_hash', 'hash'], ['started_at', 'i64'], ['n_witnesses', 'u8']],
-  EvidenceCommitted: [['bet', 'pubkey'], ['seq', 'u32'], ['root', 'hash'], ['gap_mask', 'u8'], ['is_final', 'bool']],
-  BetEnded: [['bet', 'pubkey'], ['evidence_root', 'hash'], ['ended_at', 'i64']],
-  TracksPosted: [['bet', 'pubkey'], ['perception_root', 'hash'], ['tracks_hash', 'hash'], ['payload_len', 'u32']],
-  BiometricVerified: [['bet', 'pubkey'], ['participant_idx', 'u8'], ['modality', 'u8'], ['frame', 'u32']],
-  PreRuled: [
-    ['bet', 'pubkey'], ['preruling', 'u8'], ['reason', 'u8'], ['winner_mask', 'u8'], ['leg_results', 'u8x8'], ['consent_deadline', 'i64'],
-  ],
-  Consented: [['bet', 'pubkey'], ['participant', 'pubkey'], ['consent_mask', 'u8']],
-  Disputed: [['bet', 'pubkey'], ['disputer', 'pubkey'], ['reason', 'u8'], ['bond', 'u64']],
-  Settled: [['bet', 'pubkey'], ['path', 'u8'], ['winner_mask', 'u8'], ['pot', 'u64'], ['payouts', 'u64x8']],
-  Refunded: [['bet', 'pubkey'], ['reason', 'u8'], ['amounts', 'u64x8']],
-};
-
-// ---- encodings -------------------------------------------------------------------
-
-var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 var B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-function base64Decode(s) {
-  var clean = s.replace(/=+$/, '');
-  if (/[^A-Za-z0-9+/]/.test(clean) || clean.length % 4 === 1) throw new Error('base64');
+function b58decode(s) {
+  var bytes = [];
+  for (var i = 0; i < s.length; i++) {
+    var v = B58.indexOf(s.charAt(i));
+    if (v < 0) return null;
+    var carry = v;
+    for (var j = 0; j < bytes.length; j++) {
+      carry += bytes[j] * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (var k = 0; k < s.length && s.charAt(k) === '1'; k++) bytes.push(0);
+  return bytes.reverse();
+}
+
+function b64decode(s) {
   var out = [];
   var buf = 0;
   var bits = 0;
-  for (var i = 0; i < clean.length; i++) {
-    buf = (buf << 6) | B64.indexOf(clean[i]);
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (c === '=') break;
+    var v = B64.indexOf(c);
+    if (v < 0) return null;
+    buf = ((buf << 6) | v) & 0xffffff;
     bits += 6;
     if (bits >= 8) {
       bits -= 8;
@@ -85,182 +85,128 @@ function base64Decode(s) {
   return out;
 }
 
-function base58Encode(bytes) {
-  var digits = [0];
-  for (var i = 0; i < bytes.length; i++) {
-    var carry = bytes[i];
-    for (var j = 0; j < digits.length; j++) {
-      carry += digits[j] << 8;
-      digits[j] = carry % 58;
-      carry = (carry / 58) | 0;
-    }
-    while (carry > 0) {
-      digits.push(carry % 58);
-      carry = (carry / 58) | 0;
-    }
+function b64encode(bytes) {
+  var out = '';
+  for (var i = 0; i < bytes.length; i += 3) {
+    var a = bytes[i];
+    var b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    var c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    var n = (a << 16) | (b << 8) | c;
+    out += B64.charAt((n >> 18) & 63) + B64.charAt((n >> 12) & 63);
+    out += i + 1 < bytes.length ? B64.charAt((n >> 6) & 63) : '=';
+    out += i + 2 < bytes.length ? B64.charAt(n & 63) : '=';
   }
-  var s = '';
-  for (var k = 0; k < bytes.length && bytes[k] === 0; k++) s += '1';
-  for (var q = digits.length - 1; q >= 0; q--) s += B58[digits[q]];
-  return s;
-}
-
-function hex(bytes) {
-  var s = '';
-  for (var i = 0; i < bytes.length; i++) s += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
-  return s;
-}
-
-function Reader(bytes, off) {
-  this.b = bytes;
-  this.o = off;
-}
-Reader.prototype.take = function (n) {
-  if (this.o + n > this.b.length) throw new Error('truncated');
-  var out = this.b.slice(this.o, this.o + n);
-  this.o += n;
   return out;
-};
-Reader.prototype.uint = function (n) {
-  var v = BigInt(0);
-  var x = this.take(n);
-  for (var i = n - 1; i >= 0; i--) v = (v << BigInt(8)) | BigInt(x[i]);
-  return v;
-};
-Reader.prototype.field = function (t) {
-  switch (t) {
-    case 'pubkey': return base58Encode(this.take(32));
-    case 'hash': return hex(this.take(32));
-    case 'u8': return this.take(1)[0];
-    case 'u32': return Number(this.uint(4));
-    case 'u64': return this.uint(8).toString();
-    case 'i64': return BigInt.asIntN(64, this.uint(8)).toString();
-    case 'bool': {
-      var b = this.take(1)[0];
-      if (b > 1) throw new Error('bool');
-      return b === 1;
-    }
-    case 'vec_pubkey':
-    case 'vec_u64': {
-      var n = Number(this.uint(4));
-      if (n > 255) throw new Error('vec too long');
-      var out = [];
-      for (var i = 0; i < n; i++) out.push(this.field(t === 'vec_pubkey' ? 'pubkey' : 'u64'));
-      return out;
-    }
-    case 'u8x8': return this.take(8);
-    case 'u64x8': {
-      var a = [];
-      for (var k = 0; k < 8; k++) a.push(this.uint(8).toString());
-      return a;
-    }
-  }
-  throw new Error('field type ' + t);
-};
+}
 
-/** Decodes `disc ‖ borsh` (base64 string) → {name, data} or null. */
-function decodeEventBase64(b64) {
-  var bytes;
-  try {
-    bytes = base64Decode(b64);
-  } catch (e) {
-    return null;
+function hexOf(bytes, off, n) {
+  var s = '';
+  for (var i = off; i < off + n; i++) s += (bytes[i] < 16 ? '0' : '') + bytes[i].toString(16);
+  return s;
+}
+
+function startsWith(bytes, prefix) {
+  if (bytes.length < prefix.length) return false;
+  for (var i = 0; i < prefix.length; i++) if (bytes[i] !== prefix[i]) return false;
+  return true;
+}
+
+function keyStr(k) {
+  return typeof k === 'string' ? k : k && k.pubkey;
+}
+
+// json: static keys, then loadedAddresses.writable, then .readonly (the runtime's index order).
+// jsonParsed: accountKeys are objects that already include the lookup-table keys.
+function accountKeysOf(tx) {
+  var msg = tx.transaction && tx.transaction.message;
+  var keys = (msg && msg.accountKeys) || [];
+  var all = [];
+  var parsed = false;
+  for (var i = 0; i < keys.length; i++) {
+    if (typeof keys[i] !== 'string') parsed = true;
+    all.push(keyStr(keys[i]));
   }
-  if (bytes.length < 8) return null;
-  var disc = hex(bytes.slice(0, 8));
-  for (var name in EVENT_DISCRIMINATORS) {
-    if (EVENT_DISCRIMINATORS[name] !== disc) continue;
-    try {
-      var r = new Reader(bytes, 8);
-      var data = {};
-      var schema = EVENT_SCHEMAS[name];
-      for (var i = 0; i < schema.length; i++) data[schema[i][0]] = r.field(schema[i][1]);
-      if (r.o !== bytes.length) return null;
-      return { name: name, data: data };
-    } catch (e) {
-      return null;
-    }
+  var la = tx.meta && tx.meta.loadedAddresses;
+  if (la && !parsed) all = all.concat(la.writable || [], la.readonly || []);
+  return all;
+}
+
+function accountAt(ix, keys, n) {
+  var a = ix.accounts && ix.accounts[n];
+  if (typeof a === 'number') return keys[a];
+  return keyStr(a);
+}
+
+function ixData(ix) {
+  var d = ix.data;
+  if (typeof d === 'string') return b58decode(d);
+  if (d && d.length === 2 && typeof d[0] === 'string') {
+    return d[1] === 'base64' ? b64decode(d[0]) : b58decode(d[0]);
   }
   return null;
 }
 
-/** Verdict events from one transaction's logs (innermost-program rule, like the backend's parseProgramLogs). */
-function eventsFromLogs(logs, programId) {
-  var stack = [];
+function eventsOf(tx, keys) {
   var out = [];
-  for (var i = 0; i < logs.length; i++) {
-    var line = logs[i];
-    var inv = /^Program (\S+) invoke \[\d+\]$/.exec(line);
-    if (inv) {
-      stack.push(inv[1]);
-      continue;
-    }
-    if (/^Program (\S+) (success|failed)/.test(line)) {
-      stack.pop();
-      continue;
-    }
-    var m = /^Program data: ([A-Za-z0-9+/=]+)\s*$/.exec(line);
-    if (m && stack[stack.length - 1] === programId) {
-      var ev = decodeEventBase64(m[1]);
-      if (ev) out.push(ev);
+  var inner = (tx.meta && tx.meta.innerInstructions) || [];
+  for (var g = 0; g < inner.length; g++) {
+    var ixs = inner[g].instructions || [];
+    for (var j = 0; j < ixs.length; j++) {
+      var ix = ixs[j];
+      var pid = ix.programId || (ix.programIdIndex !== undefined ? keys[ix.programIdIndex] : null);
+      if (pid !== CONFIG.programId) continue;
+      if (accountAt(ix, keys, 0) !== CONFIG.eventAuthority) continue;
+      var bytes = ixData(ix);
+      if (!bytes || bytes.length < 16 || !startsWith(bytes, CONFIG.eventIxTag)) continue;
+      out.push({
+        outerIx: inner[g].index,
+        innerIx: j,
+        name: CONFIG.events[hexOf(bytes, 8, 8)] || null,
+        eventBase64: b64encode(bytes.slice(8)),
+      });
     }
   }
   return out;
 }
 
-function accountKeysOf(tx) {
-  var msg = tx && tx.transaction && tx.transaction.message;
-  var keys = (msg && msg.accountKeys) || [];
-  var out = [];
-  for (var i = 0; i < keys.length; i++) out.push(typeof keys[i] === 'string' ? keys[i] : keys[i] && keys[i].pubkey);
-  var loaded = tx && tx.meta && tx.meta.loadedAddresses;
-  if (loaded) out = out.concat(loaded.writable || [], loaded.readonly || []);
-  return out;
-}
-
-function mentionsProgram(tx, programId) {
-  if (accountKeysOf(tx).indexOf(programId) >= 0) return true;
-  var logs = (tx && tx.meta && tx.meta.logMessages) || [];
-  for (var i = 0; i < logs.length; i++) if (logs[i].indexOf(programId) >= 0) return true;
-  return false;
-}
-
-/** Events of one block (getBlock JSON shape). `fallbackSlot` when the block omits `slot`. */
-function blockEvents(block, programId, fallbackSlot) {
-  var events = [];
-  if (!block || !block.transactions) return events;
-  var slot = typeof block.slot === 'number' ? block.slot : fallbackSlot;
-  var blockTime = typeof block.blockTime === 'number' ? block.blockTime : null;
-  for (var t = 0; t < block.transactions.length; t++) {
-    var tx = block.transactions[t];
-    if (!tx || !tx.meta || tx.meta.err) continue;
-    if (!mentionsProgram(tx, programId)) continue;
-    var sig = tx.transaction && tx.transaction.signatures && tx.transaction.signatures[0];
-    if (!sig) continue;
-    var evs = eventsFromLogs(tx.meta.logMessages || [], programId);
-    for (var i = 0; i < evs.length; i++) {
-      events.push({ signature: sig, slot: slot, block_time: blockTime, index: i, name: evs[i].name, data: evs[i].data });
-    }
-  }
-  return events;
-}
-
-/** QuickNode Streams entry point. */
 function main(stream) {
-  var data = stream && stream.data;
-  var blocks = Array.isArray(data) ? data : data ? [data] : [];
+  var data = stream && stream.data ? stream.data : stream;
   var meta = (stream && stream.metadata) || {};
-  var start = typeof meta.batch_start_range === 'number' ? meta.batch_start_range : null;
-  var events = [];
-  for (var b = 0; b < blocks.length; b++) {
-    var block = blocks[b];
-    var fallback = start !== null ? start + b : block && typeof block.parentSlot === 'number' ? block.parentSlot + 1 : 0;
-    events = events.concat(blockEvents(block, VERDICT_PROGRAM_ID, fallback));
+  if (!data || !data.length) return null;
+  var txs = [];
+  for (var b = 0; b < data.length; b++) {
+    var blk = data[b];
+    if (!blk || !blk.transactions) continue;
+    for (var t = 0; t < blk.transactions.length; t++) {
+      var tx = blk.transactions[t];
+      if (!tx || !tx.meta || (tx.meta.err !== null && tx.meta.err !== undefined)) continue;
+      var keys = accountKeysOf(tx);
+      if (keys.indexOf(CONFIG.programId) < 0) continue; // cheap pre-filter
+      var events = eventsOf(tx, keys);
+      if (!events.length) continue;
+      txs.push({
+        signature: tx.transaction.signatures[0],
+        blockHeight: blk.blockHeight === undefined ? null : blk.blockHeight,
+        parentSlot: blk.parentSlot === undefined ? null : blk.parentSlot,
+        blockTime: blk.blockTime === undefined ? null : blk.blockTime,
+        txIndex: t,
+        events: events,
+      });
+    }
   }
-  if (events.length === 0) return null;
-  return { stream: STREAM_NAME, events: events };
+  if (!txs.length) return null;
+  return {
+    v: 1,
+    programId: CONFIG.programId,
+    network: meta.network === undefined ? null : meta.network,
+    dataset: meta.dataset === undefined ? null : meta.dataset,
+    batchStart: meta.batch_start_range === undefined ? null : meta.batch_start_range,
+    batchEnd: meta.batch_end_range === undefined ? null : meta.batch_end_range,
+    txs: txs,
+  };
 }
 
+// Node-only test hook; QuickNode calls main() directly.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { main: main, decodeEventBase64: decodeEventBase64, eventsFromLogs: eventsFromLogs, blockEvents: blockEvents, VERDICT_PROGRAM_ID: VERDICT_PROGRAM_ID, EVENT_DISCRIMINATORS: EVENT_DISCRIMINATORS };
+  module.exports = { main: main, CONFIG: CONFIG, b58decode: b58decode, b64encode: b64encode };
 }
