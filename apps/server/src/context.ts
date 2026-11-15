@@ -8,6 +8,8 @@ import type { RealtimeHub } from './realtime/hub';
 import type { ChallengeStore } from './auth/challenges';
 import type { IdempotencyCache } from './http/idempotency';
 import type { RateLimiter } from './http/rate-limit';
+import type { Keeper } from './keeper/keeper';
+import type { Providers } from './providers/types';
 
 /** Who is calling, after `requireSession` (bearer) or the WS hello. */
 export interface AuthContext {
@@ -42,6 +44,10 @@ export interface AppDeps {
   idempotency: IdempotencyCache;
   /** null disables rate limiting (tests). */
   rateLimit: RateLimiter | null;
+  /** Paid external capabilities (LLM, STT, SFX); mocks unless *_PROVIDER=live + ALLOW_SPEND (src/providers). */
+  providers: Providers;
+  /** Periodic Postgres sweeps (src/keeper); started/stopped by startServer. Absent in tests by default. */
+  keeper?: Keeper;
 }
 
 export type AppVariables = {

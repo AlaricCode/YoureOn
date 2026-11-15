@@ -11,7 +11,10 @@ import type { AppDeps, RouteModule } from './context';
 import type { Env } from './env';
 import { IdempotencyCache } from './http/idempotency';
 import { RateLimiter } from './http/rate-limit';
+import { createServerKeeper } from './keeper';
 import { createLogger, type Logger } from './log';
+import { createProviders } from './providers/registry';
+import type { Providers } from './providers/types';
 import { dbHubAccess } from './realtime/access';
 import { RealtimeHub } from './realtime/hub';
 
@@ -24,6 +27,10 @@ export interface CreateDepsOptions {
   rateLimit?: boolean;
   heartbeatMs?: number;
   helloTimeoutMs?: number;
+  /** Replace specific providers (tests, demo); the rest come from the env (src/providers/registry). */
+  providers?: Partial<Providers>;
+  /** Build the periodic sweeper (src/keeper). Default: on, except NODE_ENV=test. */
+  keeper?: boolean;
 }
 
 export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbHandle } {
@@ -46,7 +53,10 @@ export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbH
     challenges: new ChallengeStore(now),
     idempotency: new IdempotencyCache({ now }),
     rateLimit: o.rateLimit === false ? null : new RateLimiter(now),
+    // Spend guard: throws SPEND_DISABLED here if a *_PROVIDER=live lacks ALLOW_SPEND=true.
+    providers: createProviders(o.env, { overrides: o.providers }),
   };
+  if (o.keeper ?? o.env.NODE_ENV !== 'test') deps.keeper = createServerKeeper(deps);
   return { deps, dbHandle };
 }
 
@@ -80,6 +90,7 @@ export async function startServer(
     );
   });
   deps.hub.start();
+  deps.keeper?.start();
   const port = (server.address() as AddressInfo).port;
 
   let closing: Promise<void> | null = null;
@@ -89,6 +100,7 @@ export async function startServer(
     deps,
     close() {
       closing ??= (async () => {
+        await deps.keeper?.stop(); // waits for an in-flight sweep before the pool closes
         deps.hub.stop();
         for (const client of wss.clients) client.terminate();
         wss.close();

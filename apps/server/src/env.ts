@@ -37,6 +37,15 @@ export const EnvSchema = z.object({
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
+  // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)
+  /** Spend guard: any `*_PROVIDER=live` refuses to start unless this is true. Never set in tests/CI. */
+  ALLOW_SPEND: z.preprocess(unset, boolStr.default(false)),
+  /** mock = deterministic offline LLM; live = Anthropic / OpenAI / Google (needs ALLOW_SPEND). */
+  LLM_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
+  /** mock = echo transcript; live = ElevenLabs Scribe (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
+  STT_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
+  /** mock = generated beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
+  SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
   // --- Solana / QuickNode (secret)
   SOLANA_DEVNET_RPC: opt(z.url()),
   SOLANA_DEVNET_WS: opt(z.url()),
