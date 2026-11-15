@@ -46,6 +46,10 @@ pub struct CreateBet<'info> {
 
 /// Token-2022 extension ALLOWLIST (ESCROW §3.3): anything not listed is rejected, so
 /// extensions added to Token-2022 later are rejected by default. Classic mints have none.
+///
+/// `MintCloseAuthority` is NOT allowed (TM-K8): once a terminal ix empties the vault, supply can
+/// reach 0 and the mint can close before `close_bet` runs, and `close_bet` (which loads the mint)
+/// would then strand the Bet and vault rent forever.
 fn check_mint_extensions(mint: &AccountInfo) -> Result<()> {
     if *mint.owner != spl_token_2022::ID {
         return Ok(());
@@ -54,9 +58,7 @@ fn check_mint_extensions(mint: &AccountInfo) -> Result<()> {
     let state = StateWithExtensions::<spl_token_2022::state::Mint>::unpack(&data)?;
     for ext in state.get_extension_types()? {
         match ext {
-            ExtensionType::MetadataPointer
-            | ExtensionType::TokenMetadata
-            | ExtensionType::MintCloseAuthority => {}
+            ExtensionType::MetadataPointer | ExtensionType::TokenMetadata => {}
             _ => return err!(EscrowError::MintExtensionNotAllowed),
         }
     }
