@@ -1,0 +1,151 @@
+# CI (TASKS K-07): ts (npm ci, typecheck, unit tests of every workspace), secrets (gitleaks),
+# escrow (Agave 4.1.2, Anchor 1.2.2, Rust 1.89, cached; anchor build + cargo test).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      # Stand-in for Neon (DATA-MODEL §12): DB-backed tests run against it instead of skipping.
+      db:
+        image: docker.io/library/postgres:17
+        env:
+          POSTGRES_USER: yo
+          POSTGRES_PASSWORD: yo
+          POSTGRES_DB: youre_on
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U yo -d youre_on"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgres://yo:yo@localhost:5432/youre_on
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: typecheck (every workspace)
+        run: npm run typecheck
+      - name: lint
+        run: npm run lint
+      - name: format check
+        run: npm run format:check
+      - name: migrations apply (drizzle-kit migrate)
+        run: npm run db:migrate -w packages/db
+      - name: unit tests (every workspace)
+        run: npm test
+
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # scan the full history: it is public (TASKS K-08)
+      - name: install gitleaks (pinned + checksum)
+        run: |
+          curl -sSfL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check
+          tar -xzf gitleaks.tgz gitleaks
+      - name: gitleaks
+        run: ./gitleaks git --redact --verbose --exit-code 1 .
+
+  escrow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AGAVE_VERSION: 4.1.2
+      ANCHOR_VERSION: 1.2.2
+      RUST_TOOLCHAIN: 1.89.0
+      NO_DNA: '1'
+    defaults:
+      run:
+        working-directory: programs/escrow
+    steps:
+      - uses: actions/checkout@v7
+      - name: escrow present?
+        id: present
+        working-directory: .
+        run: |
+          if [ -f programs/escrow/Anchor.toml ]; then echo "yes=true" >> "$GITHUB_OUTPUT"; else echo "yes=false" >> "$GITHUB_OUTPUT"; echo "programs/escrow not scaffolded yet: skipping"; fi
+
+      - name: rust ${{ env.RUST_TOOLCHAIN }}
+        if: steps.present.outputs.yes == 'true'
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c rustfmt,clippy
+
+      - name: cache Agave
+        if: steps.present.outputs.yes == 'true'
+        id: agave-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: agave-${{ env.AGAVE_VERSION }}-${{ runner.os }}
+      - name: install Agave ${{ env.AGAVE_VERSION }}
+        if: steps.present.outputs.yes == 'true' && steps.agave-cache.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL https://release.anza.xyz/v${AGAVE_VERSION}/install)"
+      - name: put Agave on PATH
+        if: steps.present.outputs.yes == 'true'
+        run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: cache Anchor (avm)
+        if: steps.present.outputs.yes == 'true'
+        id: anchor-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.avm
+            ~/.cargo/bin/avm
+            ~/.cargo/bin/anchor
+          key: anchor-${{ env.ANCHOR_VERSION }}-${{ runner.os }}
+      - name: install Anchor ${{ env.ANCHOR_VERSION }} via avm (otter-sec/anchor)
+        if: steps.present.outputs.yes == 'true' && steps.anchor-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/otter-sec/anchor --tag "v${ANCHOR_VERSION}" avm --locked --force
+          avm install "${ANCHOR_VERSION}"
+      - name: select Anchor
+        if: steps.present.outputs.yes == 'true'
+        run: |
+          avm use "${ANCHOR_VERSION}"
+          anchor --version
+          solana --version
+
+      - name: cache cargo build
+        if: steps.present.outputs.yes == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: programs/escrow -> target
+
+      - name: throwaway CI wallet (never funded, never the deployer key)
+        if: steps.present.outputs.yes == 'true'
+        run: |
+          solana-keygen new --no-bip39-passphrase --silent --force -o "$RUNNER_TEMP/ci-wallet.json"
+          echo "ANCHOR_WALLET=$RUNNER_TEMP/ci-wallet.json" >> "$GITHUB_ENV"
+
+      - name: anchor build
+        if: steps.present.outputs.yes == 'true'
+        run: anchor build --provider.wallet "$ANCHOR_WALLET"
+      - name: cargo test
+        if: steps.present.outputs.yes == 'true'
+        run: cargo test

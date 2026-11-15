@@ -1,0 +1,57 @@
+{
+  "name": "terms-v1-key-order",
+  "schema": "Terms",
+  "expect": "ok",
+  "input": {
+    "created_at": "2026-11-21T18:05:12.345Z",
+    "deadline": "2026-11-21T18:15:00.000Z",
+    "stakes": {
+      "currency": "USDC",
+      "b": "5000000",
+      "a": "5000000"
+    },
+    "market": null,
+    "evidence_source": "camera",
+    "edge_cases": [
+      {
+        "asked_by": "judge",
+        "answer": "No. Only upright on its base counts.",
+        "question": "Does landing on the cap count?"
+      }
+    ],
+    "failure_criteria": [
+      "The bottle ends on its side, upside down, or off the table.",
+      "Jake touches the bottle after releasing it."
+    ],
+    "success_criteria": [
+      "The bottle rotates at least once in the air.",
+      "The bottle comes to rest standing upright on its base."
+    ],
+    "attempts": {
+      "rule": "single",
+      "count": 1
+    },
+    "yes_party": "B",
+    "performer": "B",
+    "claim": "Jake lands a water bottle flip upright on the table.",
+    "type": "skill",
+    "party_b": {
+      "display_name": "Jake",
+      "pubkey": "CnsajwK7djGNjGnXhGk7ZtzMqn58zBs4CTbhXrCaDsQr"
+    },
+    "party_a": {
+      "display_name": "Logan",
+      "pubkey": "E97T44N6hdDS7S8r6vDYGrFPzNb9uKJsg5Eecya3AR4"
+    },
+    "escrow": {
+      "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "program_id": "HrN54SG8B4uJzrcfkAJNgqNyafpCNek9XZ9o8NcR15YX",
+      "cluster": "devnet"
+    },
+    "bet_id": "7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f",
+    "schema_version": 1
+  },
+  "canonical": "{\"attempts\":{\"count\":1,\"rule\":\"single\"},\"bet_id\":\"7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f\",\"claim\":\"Jake lands a water bottle flip upright on the table.\",\"created_at\":\"2026-11-21T18:05:12.345Z\",\"deadline\":\"2026-11-21T18:15:00.000Z\",\"edge_cases\":[{\"answer\":\"No. Only upright on its base counts.\",\"asked_by\":\"judge\",\"question\":\"Does landing on the cap count?\"}],\"escrow\":{\"cluster\":\"devnet\",\"mint\":\"4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU\",\"program_id\":\"HrN54SG8B4uJzrcfkAJNgqNyafpCNek9XZ9o8NcR15YX\"},\"evidence_source\":\"camera\",\"failure_criteria\":[\"The bottle ends on its side, upside down, or off the table.\",\"Jake touches the bottle after releasing it.\"],\"market\":null,\"party_a\":{\"display_name\":\"Logan\",\"pubkey\":\"E97T44N6hdDS7S8r6vDYGrFPzNb9uKJsg5Eecya3AR4\"},\"party_b\":{\"display_name\":\"Jake\",\"pubkey\":\"CnsajwK7djGNjGnXhGk7ZtzMqn58zBs4CTbhXrCaDsQr\"},\"performer\":\"B\",\"schema_version\":1,\"stakes\":{\"a\":\"5000000\",\"b\":\"5000000\",\"currency\":\"USDC\"},\"success_criteria\":[\"The bottle rotates at least once in the air.\",\"The bottle comes to rest standing upright on its base.\"],\"type\":\"skill\",\"yes_party\":\"B\"}",
+  "hash": "05860f0a9c9034685ddbed902667f8453258056a21de30138b430ba3903f998f",
+  "note": "terms-v1-001 with every object's keys reversed: same canonical string and hash."
+}

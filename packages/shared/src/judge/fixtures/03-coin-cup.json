@@ -1,0 +1,86 @@
+{
+  "id": "03-coin-cup",
+  "title": "Coin bounce into a cup",
+  "kind": "benign",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "B",
+      "text": "Ten dollars says I can bounce a coin into that cup within three tries."
+    },
+    {
+      "speaker": "A",
+      "text": "You're on."
+    }
+  ],
+  "answers": [
+    {
+      "speaker": "B",
+      "text": "Yeah, first one in wins."
+    }
+  ],
+  "min_questions": 0,
+  "max_questions": 2,
+  "sample_args": {
+    "type": "skill",
+    "claim": "Jake bounces a coin into the cup on the table.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 3,
+      "rule": "first_success"
+    },
+    "success_criteria": [
+      "The coin bounces off the table at least once.",
+      "The coin ends up inside the cup."
+    ],
+    "failure_criteria": ["Throwing the coin directly into the cup without a bounce."],
+    "edge_cases": [
+      {
+        "question": "Three tries, first one in wins?",
+        "answer": "Yes. Up to three tries; the first coin in the cup wins."
+      }
+    ],
+    "amount_usd": "10",
+    "market_side": "none",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "skill",
+    "claim": "Jake bounces a coin into the cup on the table.",
+    "performer": "B",
+    "yes_party": "B",
+    "attempts": {
+      "count": 3,
+      "rule": "first_success"
+    },
+    "success_criteria": [
+      "The coin bounces off the table at least once.",
+      "The coin ends up inside the cup."
+    ],
+    "failure_criteria": ["Throwing the coin directly into the cup without a bounce."],
+    "edge_cases": [
+      {
+        "question": "Three tries, first one in wins?",
+        "answer": "Yes. Up to three tries; the first coin in the cup wins.",
+        "asked_by": "judge"
+      }
+    ],
+    "evidence_source": "camera",
+    "amount": "10000000",
+    "market_query": null,
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "skill",
+    "performer": "B",
+    "yes_party": "B",
+    "amount": "10000000",
+    "attempts": {
+      "count": 3,
+      "rule": "first_success"
+    }
+  }
+}

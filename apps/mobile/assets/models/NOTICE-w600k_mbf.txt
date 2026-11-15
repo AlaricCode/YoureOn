@@ -1,0 +1,18 @@
+w600k_mbf_float32.tflite: face-embedding model (512-d, fp32, batch 1)
+
+Source:     InsightFace model zoo, "buffalo_s" pack (MobileFaceNet trained on WebFace600K), file
+            w600k_mbf.onnx, from the official release
+            https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip
+            (model zoo: https://github.com/deepinsight/insightface/tree/master/model_zoo)
+Conversion: onnx2tf==2.6.9, `-b 1`, default flatbuffer_direct backend, float32 output.
+            Re-made in the build window by scripts/face-model.sh. It was not copied from any
+            earlier spike.
+sha256:     ca17b05ac6e92ff819d81191d865e3864f4e6779df60468f0db547c982091033 (13,635,536 bytes)
+            buffalo_s.zip  d85a87f503f691807cd8bb97128bdf7a0660326cd9cd02657127fa978bab8b5e
+            w600k_mbf.onnx 9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f
+
+LICENCE: NON-COMMERCIAL RESEARCH USE ONLY.
+The InsightFace model zoo states: "ALL models are available for non-commercial research purposes
+only." These weights are not covered by this repository's MIT licence. You're On uses them only
+for a hackathon demo. A production build would switch to a commercially licensed model, for
+example OpenCV SFace (Apache-2.0, 128-d, threshold 0.45; FINDINGS §3.2).

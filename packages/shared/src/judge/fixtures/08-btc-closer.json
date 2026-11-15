@@ -1,0 +1,66 @@
+{
+  "id": "08-btc-closer",
+  "title": "Bitcoin up in five minutes (Beat 6)",
+  "kind": "benign",
+  "party_a_name": "Logan",
+  "party_b_name": "Jake",
+  "opening": [
+    {
+      "speaker": "A",
+      "text": "Five bucks says Bitcoin's up in the next five minutes."
+    },
+    {
+      "speaker": "B",
+      "text": "Down. I'll take that."
+    }
+  ],
+  "answers": [],
+  "min_questions": 0,
+  "max_questions": 1,
+  "sample_args": {
+    "type": "real_world",
+    "claim": "Bitcoin finishes the current five-minute round at or above the line.",
+    "performer": "none",
+    "yes_party": "A",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": ["Gemini settles the five-minute Bitcoin contract at or above its line."],
+    "failure_criteria": [],
+    "edge_cases": [],
+    "amount_usd": "5",
+    "market_side": "YES",
+    "deadline_minutes": 0
+  },
+  "expected_proposal": {
+    "type": "real_world",
+    "claim": "Bitcoin finishes the current five-minute round at or above the line.",
+    "performer": null,
+    "yes_party": "A",
+    "attempts": {
+      "count": 1,
+      "rule": "single"
+    },
+    "success_criteria": ["Gemini settles the five-minute Bitcoin contract at or above its line."],
+    "failure_criteria": [],
+    "edge_cases": [],
+    "evidence_source": "gemini",
+    "amount": "5000000",
+    "market_query": {
+      "asset": "BTC",
+      "horizon": "5m",
+      "a_side": "YES"
+    },
+    "deadline_minutes": null
+  },
+  "refusal_category": null,
+  "checks": {
+    "type": "real_world",
+    "performer": null,
+    "yes_party": "A",
+    "amount": "5000000",
+    "market_side": "YES"
+  },
+  "note": "real_world is the devnet demo exception (SCHEMAS §2.2); the server answers NO_MARKET until D1-J3 lands."
+}

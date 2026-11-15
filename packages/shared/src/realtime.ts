@@ -1,0 +1,171 @@
+// SCHEMAS §10.1 — one envelope for WebSocket fan-out to both phones and the stage view.
+// Includes the extensions owned by API-CONTRACT §3.4 (tx.sign_request, judge.cue, hearing.turn_open,
+// bet.invite_answered, and attempt.started's recorder_device_id / go_at), payloads from ./api.
+import { z } from 'zod/v4';
+import {
+  AttemptStartedExtra,
+  BetInviteAnsweredPayload,
+  HearingTurnOpenPayload,
+  JudgeCuePayload,
+  TxSignRequestPayload,
+} from './api';
+import { AppealResult, AppealVote } from './appeal';
+import { AuthorizationMethod, AuthorizeRequest, TxKind } from './authorization';
+import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
+import { ChainEvents } from './chain-events';
+import { CameraEvidence } from './evidence';
+import { GeminiMarketSnapshot } from './gemini';
+import { HearingRuling, HearingTrigger, HearingTurn } from './hearing';
+import { ClarificationQuestion, GuardrailRefusal, TermsDraft } from './negotiation';
+import { BetId, Hex32, IsoUtc, Party, Signature, UserRef, Uuid } from './primitives';
+import { Ruling } from './ruling';
+import { TermsEnvelope } from './terms';
+
+export const REALTIME_ENVELOPE_VERSION = 1 as const;
+
+const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType>(
+  type: T,
+  source: S,
+  payload: P,
+) =>
+  z.strictObject({
+    /** Envelope version. */
+    v: z.literal(REALTIME_ENVELOPE_VERSION),
+    type: z.literal(type),
+    bet_id: BetId,
+    /** Per-bet, gapless, assigned at fan-out. */
+    seq: z.number().int().nonnegative(),
+    /** Server emit time. */
+    ts: IsoUtc,
+    source: z.literal(source),
+    payload,
+  });
+
+export const RealtimeEvent = z.discriminatedUnion('type', [
+  /** To B's user channel. */
+  env('bet.invited', 'server', z.object({ challenger: UserRef, room_id: Uuid })),
+  /** API-CONTRACT §3.4 NEW: B tapped accept/decline on the invite (not an authorization). */
+  env('bet.invite_answered', 'server', BetInviteAnsweredPayload),
+  env(
+    'bet.state',
+    'server',
+    z.object({
+      state: BetState,
+      prev: BetState.nullable(),
+      onchain_status: OnchainStatus.nullable(),
+      chain_ack: ChainAck,
+      pending_tx: PendingTx.nullable(),
+      reason: z.string().max(80).nullable(),
+    }),
+  ),
+  env('terms.draft', 'server', z.object({ draft: TermsDraft })),
+  /** Speech Engine fallback only (§3). */
+  env('terms.question', 'server', z.object({ question: ClarificationQuestion })),
+  env('terms.refused', 'server', z.object({ refusal: GuardrailRefusal })),
+  env('terms.proposed', 'server', z.object({ envelope: TermsEnvelope })),
+  /** §9: the same lock message to both phones. */
+  env('terms.authorize_request', 'server', AuthorizeRequest),
+  /** Signatures now held; count 2 = lock being sent. */
+  env(
+    'terms.authorized',
+    'server',
+    z.object({
+      party: Party,
+      method: AuthorizationMethod,
+      authorized_at: IsoUtc,
+      count: z.number().int().min(1).max(2),
+    }),
+  ),
+  env('terms.declined', 'server', z.object({ party: Party })),
+  /** API-CONTRACT §3.4 NEW: the loser's concede/appeal message (never the lock). */
+  env('tx.sign_request', 'server', TxSignRequestPayload),
+  /** API-CONTRACT §3.4 NEW: server-composed [EVENT] line; only A's phone (voice host) acts on it (§4.5). */
+  env('judge.cue', 'server', JudgeCuePayload),
+  env(
+    'judge.line',
+    'server',
+    z.object({ utterance_id: Uuid, text: z.string().max(400), final: z.boolean() }),
+  ),
+  env(
+    'party.line',
+    'server',
+    z.object({ party: Party, utterance_id: Uuid, text: z.string().max(600), final: z.boolean() }),
+  ),
+  env(
+    'attempt.started',
+    'server',
+    z.object({
+      attempt_no: z.number().int().min(1),
+      performer: Party,
+      max_ms: z.number().int().positive(),
+      // API-CONTRACT §3.4 NEW fields: the judge cam's countdown.
+      ...AttemptStartedExtra.shape,
+    }),
+  ),
+  /** frame_urls are signed and short-lived. */
+  env(
+    'attempt.evidence',
+    'server',
+    z.object({ evidence: CameraEvidence, frame_urls: z.array(z.url()).max(24) }),
+  ),
+  /** REDO too. */
+  env(
+    'ruling.issued',
+    'server',
+    z.object({ ruling: z.union([Ruling, HearingRuling]), ruling_hash: Hex32 }),
+  ),
+  env(
+    'hearing.opened',
+    'server',
+    z.object({
+      hearing_id: Uuid,
+      trigger: HearingTrigger,
+      order: z.tuple([z.literal('A'), z.literal('B')]),
+      turn_ms: z.number().int().positive(),
+    }),
+  ),
+  /** API-CONTRACT §3.4 NEW: each hearing turn's clock starts. */
+  env('hearing.turn_open', 'server', HearingTurnOpenPayload),
+  env('hearing.turn', 'server', z.object({ turn: HearingTurn })),
+  env('appeal.vote', 'server', z.object({ vote: AppealVote })),
+  env('appeal.result', 'server', z.object({ result: AppealResult, ruling_hash: Hex32 })),
+  /** 1 Hz per gemini bet; the stage chart uses the stage.market control frame (API-CONTRACT §3.1). */
+  env('market.tick', 'server', z.object({ snapshot: GeminiMarketSnapshot })),
+  env('tx.submitted', 'server', z.object({ kind: TxKind, signature: Signature })),
+  env(
+    'tx.confirmed',
+    'server',
+    z.object({ kind: TxKind, signature: Signature, slot: z.number().int() }),
+  ),
+  env(
+    'tx.failed',
+    'server',
+    z.object({ kind: TxKind, signature: Signature.nullable(), error: z.string().max(200) }),
+  ),
+  env('chain.BetCreated', 'chain', ChainEvents.BetCreated),
+  env('chain.BetAccepted', 'chain', ChainEvents.BetAccepted),
+  env('chain.BetCancelled', 'chain', ChainEvents.BetCancelled),
+  env('chain.BetResolved', 'chain', ChainEvents.BetResolved),
+  env('chain.BetConceded', 'chain', ChainEvents.BetConceded),
+  env('chain.BetAppealed', 'chain', ChainEvents.BetAppealed),
+  env('chain.AppealResolved', 'chain', ChainEvents.AppealResolved),
+  env('chain.BetFinalized', 'chain', ChainEvents.BetFinalized),
+  env('chain.BetRefunded', 'chain', ChainEvents.BetRefunded),
+  /** Housekeeping (rent back); not a "money moved" event. */
+  env('chain.BetClosed', 'chain', ChainEvents.BetClosed),
+]);
+export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
+export type RealtimeEventType = RealtimeEvent['type'];
+export type RealtimeEventOf<T extends RealtimeEventType> = Extract<RealtimeEvent, { type: T }>;
+export type RealtimePayload<T extends RealtimeEventType> = RealtimeEventOf<T>['payload'];
+
+/**
+ * Client-side tolerant parse (§10.1 "Unknown types"): returns { ok: false } for unknown types or
+ * invalid events, so the caller can drop them with a log line instead of throwing.
+ */
+export function parseRealtimeEvent(
+  raw: unknown,
+): { ok: true; event: RealtimeEvent } | { ok: false; error: z.ZodError } {
+  const r = RealtimeEvent.safeParse(raw);
+  return r.success ? { ok: true, event: r.data } : { ok: false, error: r.error };
+}

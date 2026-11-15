@@ -1,0 +1,70 @@
+{
+  "name": "@youre-on/mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo start --dev-client --ios",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "doctor": "expo-doctor",
+    "postinstall": "cd ../.. && patch-package --error-on-fail"
+  },
+  "dependencies": {
+    "@config-plugins/react-native-webrtc": "15.0.2",
+    "@elevenlabs/react-native": "1.2.38",
+    "@livekit/react-native": "2.12.0",
+    "@livekit/react-native-expo-plugin": "1.1.0",
+    "@livekit/react-native-webrtc": "144.2.0",
+    "@noble/ed25519": "3.2.0",
+    "@noble/hashes": "2.4.0",
+    "@youre-on/shared": "*",
+    "expo": "~58.0.23",
+    "expo-asset": "~58.0.20",
+    "expo-audio": "~58.0.11",
+    "expo-build-properties": "~58.0.12",
+    "expo-camera": "~58.0.14",
+    "expo-crypto": "~58.0.7",
+    "expo-dev-client": "~58.0.18",
+    "expo-file-system": "~58.0.13",
+    "expo-haptics": "~58.0.7",
+    "expo-image-manipulator": "~58.0.16",
+    "expo-local-authentication": "~58.0.2",
+    "expo-notifications": "~58.1.8",
+    "expo-secure-store": "~58.0.2",
+    "expo-status-bar": "~58.0.4",
+    "expo-video": "~58.0.13",
+    "expo-video-thumbnails": "~58.0.2",
+    "livekit-client": "2.23.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-fast-tflite": "3.0.1",
+    "react-native-gesture-handler": "~3.3.0",
+    "react-native-nitro-image": "0.15.2",
+    "react-native-nitro-modules": "0.37.2",
+    "react-native-reanimated": "4.7.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-screens": "~4.30.1",
+    "react-native-vision-camera": "5.2.4",
+    "react-native-vision-camera-face-detector": "2.1.0",
+    "react-native-worklets": "0.13.0"
+  },
+  "devDependencies": {
+    "@solana/kit": "8.6.0",
+    "@types/react": "~19.3.0",
+    "patch-package": "8.0.1",
+    "typescript": "~6.0.3"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-fast-tflite",
+          "@livekit/react-native-expo-plugin"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,1686 @@
+{
+  "address": "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm",
+  "metadata": {
+    "name": "escrow",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "You're On escrow: two-party stakes held in a PDA vault, settled by a judge key"
+  },
+  "instructions": [
+    {
+      "name": "accept_bet",
+      "discriminator": [251, 25, 85, 221, 41, 69, 191, 252],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "party_b",
+          "docs": ["B's device key."],
+          "signer": true,
+          "relations": ["bet"]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "account",
+                "path": "bet.bet_id",
+                "account": "Bet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "relations": ["bet"]
+        },
+        {
+          "name": "party_b_token",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "expected_terms_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        },
+        {
+          "name": "expected_stake_a",
+          "type": "u64"
+        },
+        {
+          "name": "expected_stake_b",
+          "type": "u64"
+        },
+        {
+          "name": "expected_party_a",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "create_bet",
+      "discriminator": [197, 42, 153, 2, 59, 63, 143, 246],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": ["Server fee payer → stored as `rent_payer`."],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "party_a",
+          "docs": ["A's device key."],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "bet",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [98, 101, 116]
+              },
+              {
+                "kind": "arg",
+                "path": "bet_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [118, 97, 117, 108, 116]
+              },
+              {
+                "kind": "arg",
+                "path": "bet_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "party_a_token",
+          "docs": ["Any A-owned account for the mint (normally A's ATA)."],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "docs": ["Classic SPL Token or Token-2022 only."]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "bet_id",
+          "type": {
+            "array": ["u8", 16]
+          }
+        },
+        {
+          "name": "party_b",
+          "type": "pubkey"
+        },
+        {
+          "name": "stake_a",
+          "type": "u64"
+        },
+        {
+          "name": "stake_b",
+          "type": "u64"
+        },
+        {
+          "name": "terms_hash",
+          "type": {
+            "array": ["u8", 32]
+          }
+        },
+        {
+          "name": "accept_deadline",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_config",
+      "discriminator": [208, 127, 21, 1, 194, 190, 196, 70],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow_program",
+          "address": "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "InitConfigArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_config",
+      "discriminator": [29, 158, 252, 191, 10, 83, 219, 99],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": ["config"]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [99, 111, 110, 102, 105, 103]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "UpdateConfigArgs"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Bet",
+      "discriminator": [147, 23, 35, 59, 15, 75, 155, 32]
+    },
+    {
+      "name": "Config",
+      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
+    }
+  ],
+  "events": [
+    {
+      "name": "AppealResolved",
+      "discriminator": [130, 12, 137, 191, 189, 217, 26, 189]
+    },
+    {
+      "name": "BetAccepted",
+      "discriminator": [166, 249, 182, 77, 85, 31, 225, 100]
+    },
+    {
+      "name": "BetAppealed",
+      "discriminator": [137, 215, 3, 155, 196, 203, 79, 215]
+    },
+    {
+      "name": "BetCancelled",
+      "discriminator": [32, 179, 128, 184, 125, 193, 106, 104]
+    },
+    {
+      "name": "BetClosed",
+      "discriminator": [122, 20, 157, 254, 221, 0, 39, 129]
+    },
+    {
+      "name": "BetConceded",
+      "discriminator": [141, 92, 66, 198, 177, 211, 187, 145]
+    },
+    {
+      "name": "BetCreated",
+      "discriminator": [32, 153, 105, 71, 188, 72, 107, 114]
+    },
+    {
+      "name": "BetFinalized",
+      "discriminator": [58, 244, 144, 47, 117, 92, 199, 145]
+    },
+    {
+      "name": "BetRefunded",
+      "discriminator": [32, 234, 173, 102, 106, 4, 2, 203]
+    },
+    {
+      "name": "BetResolved",
+      "discriminator": [133, 89, 89, 125, 4, 219, 82, 137]
+    },
+    {
+      "name": "ConfigInitialized",
+      "discriminator": [181, 49, 200, 156, 19, 167, 178, 91]
+    },
+    {
+      "name": "ConfigUpdated",
+      "discriminator": [40, 241, 230, 122, 11, 19, 198, 194]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NotUpgradeAuthority",
+      "msg": "Signer is not the program's upgrade authority"
+    },
+    {
+      "code": 6001,
+      "name": "NotAdmin",
+      "msg": "Signer is not the config admin"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidConfig",
+      "msg": "Config values are invalid"
+    },
+    {
+      "code": 6003,
+      "name": "Paused",
+      "msg": "The escrow is paused for new bets"
+    },
+    {
+      "code": 6004,
+      "name": "MintNotAllowed",
+      "msg": "Mint is not on the allowlist"
+    },
+    {
+      "code": 6005,
+      "name": "MintExtensionNotAllowed",
+      "msg": "Token-2022 mint carries an extension that is not allowed"
+    },
+    {
+      "code": 6006,
+      "name": "WrongMint",
+      "msg": "Mint does not match the bet's mint"
+    },
+    {
+      "code": 6007,
+      "name": "StakeZero",
+      "msg": "Stakes must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "StakeExceedsMax",
+      "msg": "Stake exceeds the configured maximum"
+    },
+    {
+      "code": 6009,
+      "name": "SameParty",
+      "msg": "party_a and party_b must differ"
+    },
+    {
+      "code": 6010,
+      "name": "InvalidParty",
+      "msg": "Party key is not allowed"
+    },
+    {
+      "code": 6011,
+      "name": "EmptyHash",
+      "msg": "Hash must not be all zero"
+    },
+    {
+      "code": 6012,
+      "name": "TermsHashMismatch",
+      "msg": "Terms hash does not match the bet"
+    },
+    {
+      "code": 6013,
+      "name": "StakeMismatch",
+      "msg": "Stakes do not match the bet"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidStatus",
+      "msg": "Bet status does not allow this instruction"
+    },
+    {
+      "code": 6015,
+      "name": "NotPartyB",
+      "msg": "Signer is not the bet's party_b"
+    },
+    {
+      "code": 6016,
+      "name": "NotParty",
+      "msg": "Signer is not a party to this bet"
+    },
+    {
+      "code": 6017,
+      "name": "NotLoser",
+      "msg": "Signer is not the losing party"
+    },
+    {
+      "code": 6018,
+      "name": "ConcedeNotAllowed",
+      "msg": "Concede is not allowed for this outcome"
+    },
+    {
+      "code": 6019,
+      "name": "NotAuthorizedToCancel",
+      "msg": "Signer may not cancel this bet"
+    },
+    {
+      "code": 6020,
+      "name": "NotJudge",
+      "msg": "Signer is not the bet's judge authority"
+    },
+    {
+      "code": 6021,
+      "name": "NotAppealAuthority",
+      "msg": "Signer is not the bet's appeal authority"
+    },
+    {
+      "code": 6022,
+      "name": "AcceptDeadlinePassed",
+      "msg": "Accept deadline has passed"
+    },
+    {
+      "code": 6023,
+      "name": "ResolveDeadlinePassed",
+      "msg": "Resolve deadline has passed"
+    },
+    {
+      "code": 6024,
+      "name": "AppealWindowClosed",
+      "msg": "Appeal window is closed"
+    },
+    {
+      "code": 6025,
+      "name": "AppealWindowOpen",
+      "msg": "Appeal window is still open"
+    },
+    {
+      "code": 6026,
+      "name": "AppealResolveDeadlinePassed",
+      "msg": "Appeal resolve deadline has passed"
+    },
+    {
+      "code": 6027,
+      "name": "DeadlineNotReached",
+      "msg": "Deadline has not been reached"
+    },
+    {
+      "code": 6028,
+      "name": "WrongPayoutAccount",
+      "msg": "Payout account is not owned by the party"
+    },
+    {
+      "code": 6029,
+      "name": "WrongRentPayer",
+      "msg": "Rent payer does not match the bet"
+    },
+    {
+      "code": 6030,
+      "name": "VaultUnderfunded",
+      "msg": "Vault received less than the stake"
+    },
+    {
+      "code": 6031,
+      "name": "VaultNotEmpty",
+      "msg": "Vault is not empty"
+    },
+    {
+      "code": 6032,
+      "name": "MathOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6033,
+      "name": "PartyMismatch",
+      "msg": "party_a does not match the bet"
+    },
+    {
+      "code": 6034,
+      "name": "WrongDecimals",
+      "msg": "Mint must have 6 decimals"
+    },
+    {
+      "code": 6035,
+      "name": "MissingPayoutAccount",
+      "msg": "Payout account required for a non-zero amount"
+    },
+    {
+      "code": 6036,
+      "name": "InvalidDeadline",
+      "msg": "Accept deadline is out of range"
+    }
+  ],
+  "types": [
+    {
+      "name": "AppealResolved",
+      "docs": ["D1: `resolve_appeal`"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "final_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "to_a",
+            "type": "u64"
+          },
+          {
+            "name": "to_b",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "original_outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "appeal_ruling_hash",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "overturned",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Bet",
+      "docs": ["One bet, PDA `[\"bet\", bet_id]`. INIT_SPACE = 401; account = 409 bytes."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "docs": ["= Postgres `bets.id` (UUID bytes, RFC 4122 order)."],
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "party_a",
+            "docs": ["Challenger; signs `create_bet`."],
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "docs": ["Challenged; fixed at create, signs `accept_bet`."],
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "docs": ["Allowlisted at create."],
+            "type": "pubkey"
+          },
+          {
+            "name": "rent_payer",
+            "docs": ["= `create_bet` payer; receives all rent on close."],
+            "type": "pubkey"
+          },
+          {
+            "name": "judge_authority",
+            "docs": ["Snapshot of `config.judge_authority`."],
+            "type": "pubkey"
+          },
+          {
+            "name": "appeal_authority",
+            "docs": ["Snapshot of `config.appeal_authority`."],
+            "type": "pubkey"
+          },
+          {
+            "name": "stake_a",
+            "type": "u64"
+          },
+          {
+            "name": "stake_b",
+            "type": "u64"
+          },
+          {
+            "name": "terms_hash",
+            "docs": ["Written once, in `create_bet` (I3)."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "evidence_hash",
+            "docs": ["Zero until resolve."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "ruling_hash",
+            "docs": ["Zero until resolve."],
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "docs": ["None until resolve."],
+            "type": {
+              "option": {
+                "defined": {
+                  "name": "Outcome"
+                }
+              }
+            }
+          },
+          {
+            "name": "appeal_window_secs",
+            "docs": ["Snapshot of `config.appeal_window_secs`."],
+            "type": "u32"
+          },
+          {
+            "name": "resolve_window_secs",
+            "docs": ["Snapshot of `config.resolve_deadline_secs`."],
+            "type": "u32"
+          },
+          {
+            "name": "appeal_resolve_secs",
+            "docs": ["Snapshot of `config.appeal_resolve_secs`."],
+            "type": "u32"
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "accept_deadline",
+            "docs": ["`created_at < accept_deadline ≤ created_at + config.accept_deadline_secs`."],
+            "type": "i64"
+          },
+          {
+            "name": "locked_at",
+            "docs": ["0 until Locked."],
+            "type": "i64"
+          },
+          {
+            "name": "resolve_deadline",
+            "docs": ["`locked_at + resolve_window_secs` (0 until Locked)."],
+            "type": "i64"
+          },
+          {
+            "name": "resolved_at",
+            "type": "i64"
+          },
+          {
+            "name": "appeal_deadline",
+            "docs": ["`resolved_at + appeal_window_secs`."],
+            "type": "i64"
+          },
+          {
+            "name": "appealed_at",
+            "type": "i64"
+          },
+          {
+            "name": "appeal_resolve_deadline",
+            "docs": ["`appealed_at + appeal_resolve_secs`."],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vault_bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetAccepted",
+      "docs": ["status = Locked"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "stake_a",
+            "type": "u64"
+          },
+          {
+            "name": "stake_b",
+            "type": "u64"
+          },
+          {
+            "name": "vault_amount",
+            "type": "u64"
+          },
+          {
+            "name": "resolve_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetAppealed",
+      "docs": ["status = Appealed (D1: `appeal`)"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "appellant",
+            "type": "pubkey"
+          },
+          {
+            "name": "original_outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "appeal_resolve_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetCancelled",
+      "docs": ["D1: `cancel_open_bet`"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "final_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "to_a",
+            "type": "u64"
+          },
+          {
+            "name": "to_b",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "cancelled_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetClosed",
+      "docs": [
+        "D1: `close_bet`. Housekeeping (P8): rent back; not a \"money moved\" event for the UI."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "final_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "rent_payer",
+            "type": "pubkey"
+          },
+          {
+            "name": "rent_returned",
+            "docs": ["Bet + vault lamports, read before closing."],
+            "type": "u64"
+          },
+          {
+            "name": "residual_to_a",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetConceded",
+      "docs": ["D1: `concede`"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "final_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "to_a",
+            "type": "u64"
+          },
+          {
+            "name": "to_b",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "conceded_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetCreated",
+      "docs": ["status = Open"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "bet",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "stake_a",
+            "type": "u64"
+          },
+          {
+            "name": "stake_b",
+            "type": "u64"
+          },
+          {
+            "name": "terms_hash",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "judge_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "appeal_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "accept_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "rent_payer",
+            "type": "pubkey"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetFinalized",
+      "docs": ["D1: `finalize`"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "final_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "to_a",
+            "type": "u64"
+          },
+          {
+            "name": "to_b",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetRefunded",
+      "docs": ["D1: `timeout_refund`"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "final_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_a_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "party_b_token",
+            "type": "pubkey"
+          },
+          {
+            "name": "to_a",
+            "type": "u64"
+          },
+          {
+            "name": "to_b",
+            "type": "u64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "from_status",
+            "type": {
+              "defined": {
+                "name": "BetStatus"
+              }
+            }
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetResolved",
+      "docs": ["status = Resolved (D1: `resolve`)"],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bet_id",
+            "type": {
+              "array": ["u8", 16]
+            }
+          },
+          {
+            "name": "judge",
+            "type": "pubkey"
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": {
+                "name": "Outcome"
+              }
+            }
+          },
+          {
+            "name": "evidence_hash",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "ruling_hash",
+            "type": {
+              "array": ["u8", 32]
+            }
+          },
+          {
+            "name": "appeal_deadline",
+            "type": "i64"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BetStatus",
+      "docs": ["Borsh u8 0..=6. Variant order is frozen after the first deploy."],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "Locked"
+          },
+          {
+            "name": "Resolved"
+          },
+          {
+            "name": "Appealed"
+          },
+          {
+            "name": "Settled"
+          },
+          {
+            "name": "Refunded"
+          },
+          {
+            "name": "Cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "docs": ["Global config, PDA `[\"config\"]`. INIT_SPACE = 254; account = 262 bytes."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "docs": ["May call `update_config`."],
+            "type": "pubkey"
+          },
+          {
+            "name": "judge_authority",
+            "docs": ["Copied into each new Bet."],
+            "type": "pubkey"
+          },
+          {
+            "name": "appeal_authority",
+            "docs": ["Copied into each new Bet; must differ from `judge_authority`."],
+            "type": "pubkey"
+          },
+          {
+            "name": "max_stake",
+            "docs": ["Per-side stake cap, micro-units."],
+            "type": "u64"
+          },
+          {
+            "name": "appeal_window_secs",
+            "type": "u32"
+          },
+          {
+            "name": "accept_deadline_secs",
+            "docs": ["Max accept window: `create_bet`'s `accept_deadline` must be ≤ now + this."],
+            "type": "u32"
+          },
+          {
+            "name": "resolve_deadline_secs",
+            "docs": ["Locked → must resolve within (snapshotted as `Bet::resolve_window_secs`)."],
+            "type": "u32"
+          },
+          {
+            "name": "appeal_resolve_secs",
+            "docs": ["Appealed → must resolve within."],
+            "type": "u32"
+          },
+          {
+            "name": "allowed_mints",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "paused",
+            "docs": ["Blocks `create_bet` and `accept_bet` only (I14)."],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "judge_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "appeal_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_stake",
+            "type": "u64"
+          },
+          {
+            "name": "appeal_window_secs",
+            "type": "u32"
+          },
+          {
+            "name": "accept_deadline_secs",
+            "type": "u32"
+          },
+          {
+            "name": "resolve_deadline_secs",
+            "type": "u32"
+          },
+          {
+            "name": "appeal_resolve_secs",
+            "type": "u32"
+          },
+          {
+            "name": "allowed_mints",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigUpdated",
+      "docs": ["Full post-update snapshot; identical fields to `ConfigInitialized`."],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "judge_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "appeal_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_stake",
+            "type": "u64"
+          },
+          {
+            "name": "appeal_window_secs",
+            "type": "u32"
+          },
+          {
+            "name": "accept_deadline_secs",
+            "type": "u32"
+          },
+          {
+            "name": "resolve_deadline_secs",
+            "type": "u32"
+          },
+          {
+            "name": "appeal_resolve_secs",
+            "type": "u32"
+          },
+          {
+            "name": "allowed_mints",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitConfigArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "judge_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "appeal_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_stake",
+            "type": "u64"
+          },
+          {
+            "name": "appeal_window_secs",
+            "type": "u32"
+          },
+          {
+            "name": "accept_deadline_secs",
+            "type": "u32"
+          },
+          {
+            "name": "resolve_deadline_secs",
+            "type": "u32"
+          },
+          {
+            "name": "appeal_resolve_secs",
+            "type": "u32"
+          },
+          {
+            "name": "allowed_mints",
+            "type": {
+              "vec": "pubkey"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Outcome",
+      "docs": ["Borsh u8 0..=3. Variant order is frozen after the first deploy."],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "PartyA"
+          },
+          {
+            "name": "PartyB"
+          },
+          {
+            "name": "Split"
+          },
+          {
+            "name": "Refund"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpdateConfigArgs",
+      "docs": [
+        "Every field is optional; `allowed_mints` replaces the whole list. Live bets are unaffected",
+        "(their guarantees are snapshotted at `create_bet`, I11)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "new_admin",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "judge_authority",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "appeal_authority",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "max_stake",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "appeal_window_secs",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "accept_deadline_secs",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "resolve_deadline_secs",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "appeal_resolve_secs",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "allowed_mints",
+            "type": {
+              "option": {
+                "vec": "pubkey"
+              }
+            }
+          },
+          {
+            "name": "paused",
+            "type": {
+              "option": "bool"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "constants": [
+    {
+      "name": "BET_SEED",
+      "docs": ["Bet PDA: `[\"bet\", bet_id(16)]`."],
+      "type": "bytes",
+      "value": "[98, 101, 116]"
+    },
+    {
+      "name": "CONFIG_SEED",
+      "docs": ["Config PDA: `[\"config\"]`."],
+      "type": "bytes",
+      "value": "[99, 111, 110, 102, 105, 103]"
+    },
+    {
+      "name": "MAX_STAKE_CEILING",
+      "docs": ["`validate_config` bound: `stake_a + stake_b` can never overflow a `u64`."],
+      "type": "u64",
+      "value": "4611686018427387903"
+    },
+    {
+      "name": "REQUIRED_DECIMALS",
+      "docs": [
+        "Every bet mint has 6 decimals, so `max_stake` always means dollars (1 unit = $0.000001)."
+      ],
+      "type": "u8",
+      "value": "6"
+    },
+    {
+      "name": "VAULT_SEED",
+      "docs": ["Vault PDA (token account, authority = Bet PDA): `[\"vault\", bet_id(16)]`."],
+      "type": "bytes",
+      "value": "[118, 97, 117, 108, 116]"
+    }
+  ]
+}
