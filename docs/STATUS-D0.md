@@ -1,5 +1,12 @@
 # STATUS — D0 (integration pass, 2026-11-08)
 
+> **Merged into the team repo (2026-11-14).** This snapshot was written before the You're On
+> monorepo was imported into the team repo, where it now sits at the root (so `cd youre-on` below
+> means the repo root). Later decisions are in [`MERGE-PLAN.md`](MERGE-PLAN.md) and rows D8–D15 of
+> [`planning/README.md`](planning/README.md). In particular: builds are local Xcode on the lead's
+> Mac (not EAS from Linux), the judge uses 12–16 frames plus deterministic checks, and
+> `LOCK_MODE=sequential` and APNs are out of demo scope. The rest of this file is unchanged.
+
 State of every TASKS §4.1 D0 task after the six parallel streams and one integration pass.
 "Done" means the code and its tests are in the repo and green locally. **PENDING** means the
 remaining step is blocked on something external (an account, a key, a phone, devnet SOL).
@@ -76,8 +83,8 @@ npm test -w @youre-on/stage
 npx tsx apps/server/scripts/smoke.ts http://127.0.0.1:8080   # against a running server
 
 export PATH=$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH
-cd programs/escrow && NO_DNA=1 anchor build && cargo test     # tests include_bytes! the built .so
-cd apps/mobile && CI=1 npx expo-doctor
+(cd programs/escrow && NO_DNA=1 anchor build && cargo test)   # tests include_bytes! the built .so
+(cd apps/mobile && CI=1 npx expo-doctor)
 ```
 
 ## Known risks and open items
