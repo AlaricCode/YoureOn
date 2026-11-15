@@ -5,7 +5,13 @@
 #![allow(clippy::result_large_err)]
 
 mod accept_bet;
+mod appeal;
 mod common;
 mod config;
 mod create_bet;
+mod events;
 mod lock;
+mod math;
+mod security;
+mod smoke_d1;
+mod terminal;
