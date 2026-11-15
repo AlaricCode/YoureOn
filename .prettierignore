@@ -3,6 +3,6 @@ target/
 programs/**/target/
 node_modules/
 package-lock.json
-packages/shared/src/generated/
+packages/shared/src/chain/generated/
 packages/db/migrations/meta/
 docs/reference/
