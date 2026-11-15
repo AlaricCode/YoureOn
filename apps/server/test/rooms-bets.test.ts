@@ -363,11 +363,19 @@ describeDb('rooms and challenge API over Postgres', () => {
           and(eq(roomMembersTable.room_id, room.room_id), eq(roomMembersTable.user_id, uid(B))),
         );
       b.close();
+      // Presence broadcasts are async and unordered across trackers: a frame computed before
+      // B connected (B offline, older last_seen_at) can still arrive after B's online frame.
+      // Only accept an offline frame computed after `before`.
       const off = WsRoomPresence.parse(
         await a.next(
           (f) =>
             f.op === 'room.presence' &&
-            f.members.some((m: any) => m.user.user_id === uid(B) && m.online === false),
+            f.members.some(
+              (m: any) =>
+                m.user.user_id === uid(B) &&
+                m.online === false &&
+                Date.parse(m.last_seen_at) >= before!.t.getTime(),
+            ),
         ),
       );
       const bOff = off.members.find((m) => m.user.user_id === uid(B))!;
