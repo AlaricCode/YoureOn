@@ -8,16 +8,24 @@
   "exports": {
     ".": "./src/index.ts",
     "./idl/escrow.json": "./idl/escrow.json",
+    "./escrow-client": "./src/chain/generated/index.ts",
     "./*": "./src/*.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "test:escrow": "vitest run --config vitest.escrow.config.ts",
+    "test:validator": "bash scripts/test-validator.sh"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0",
     "@solana/kit": "8.6.0",
     "canonicalize": "5.1.0",
     "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@solana-program/system": "0.14.1",
+    "@solana-program/token": "0.16.1",
+    "litesvm": "1.6.2"
   }
 }
