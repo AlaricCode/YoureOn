@@ -12,7 +12,6 @@
 // not offered (delete from FaceSettings instead).
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, BackHandler, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   BodyText,
@@ -29,6 +28,7 @@ import {
   StepScaffold,
   ToggleRow,
 } from '../ui/kit';
+import { Screen } from '../ui/parts';
 import { palette, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi, type FaceStatus } from './api';
 import type { FaceEmbedder } from './embedder';
@@ -93,7 +93,7 @@ export function FaceEnrollFlow({
   const tag = embedder.preview ? ENROLL_COPY.previewTag : undefined;
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}>
+    <Screen>
       <StepHeader step={STEPS.indexOf(step)} count={STEPS.length} onBack={back} tag={tag} />
       {step === 'consent' ? (
         <StepScaffold
@@ -160,7 +160,7 @@ export function FaceEnrollFlow({
           ) : null}
         </StepScaffold>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -214,7 +214,7 @@ export function FaceSettings({
   const enrolled = status === 'active' || status === 'disabled';
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}>
+    <Screen>
       <View style={styles.titleBar}>
         <StepHeader step={0} count={0} onBack={onBack} />
       </View>
@@ -278,7 +278,7 @@ export function FaceSettings({
         onConfirm={remove}
         onCancel={() => setConfirming(false)}
       />
-    </SafeAreaView>
+    </Screen>
   );
 }
 

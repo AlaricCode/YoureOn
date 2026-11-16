@@ -128,8 +128,8 @@ export function FaceCapturePanel({
     flash.setValue(1);
     Animated.timing(flash, {
       toValue: 0,
-      duration: 700,
-      delay: motion.fastMs,
+      duration: motion.fastMs,
+      delay: 500,
       useNativeDriver: true,
     }).start();
   }, [flash]);
