@@ -6,6 +6,7 @@ import { lazy, Suspense, useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Button,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -29,6 +30,8 @@ import {
 
 const VisionCameraPanel = lazy(() => import('./VisionCameraPanel'));
 const ExpoCameraPanel = lazy(() => import('./ExpoCameraPanel'));
+/** Sign-up and face enrollment screens on stand-in APIs, until auth (D0-M4) and navigation exist. */
+const EnrollPreview = lazy(() => import('../enroll/EnrollPreview'));
 
 /** The model is 13.6 MB; over a Metro tunnel the first load can take a while. */
 const TIMEOUTS_MS: Partial<Record<CheckId, number>> = { 'tflite-warmup': 90_000 };
@@ -45,6 +48,7 @@ export default function DiagnosticsScreen() {
   const [results, setResults] = useState<CheckResults>({});
   const [running, setRunning] = useState(false);
   const [panel, setPanel] = useState<CameraPanel | null>(null);
+  const [enroll, setEnroll] = useState<'signup' | 'flow' | 'settings' | null>(null);
 
   const setResult = useCallback((id: CheckId, result: CheckResult) => {
     setResults((prev) => ({ ...prev, [id]: result }));
@@ -136,6 +140,30 @@ export default function DiagnosticsScreen() {
           {panel ? <Button title="Close camera" onPress={() => setPanel(null)} /> : null}
         </View>
 
+        <View style={styles.row}>
+          <Button
+            title="Sign up"
+            onPress={() => {
+              setPanel(null);
+              setEnroll('signup');
+            }}
+          />
+          <Button
+            title="Face enrollment"
+            onPress={() => {
+              setPanel(null);
+              setEnroll('flow');
+            }}
+          />
+          <Button
+            title="Face settings"
+            onPress={() => {
+              setPanel(null);
+              setEnroll('settings');
+            }}
+          />
+        </View>
+
         {panel ? (
           <PanelErrorBoundary
             key={panel}
@@ -182,6 +210,20 @@ export default function DiagnosticsScreen() {
           );
         })}
       </ScrollView>
+      <Modal
+        visible={enroll !== null}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setEnroll(null)}
+      >
+        {enroll ? (
+          <PanelErrorBoundary name="Face enrollment" onError={() => undefined}>
+            <Suspense fallback={<ActivityIndicator />}>
+              <EnrollPreview initial={enroll} onClose={() => setEnroll(null)} />
+            </Suspense>
+          </PanelErrorBoundary>
+        ) : null}
+      </Modal>
     </SafeAreaView>
   );
 }

@@ -1,6 +1,8 @@
 // You're On design tokens. Ported from Verdict app/lib/ui/tokens.dart, app/lib/ui/theme.dart and
 // verdict-spec.md §6.2-§6.4 (docs/CONTRACTS.md §12.12), re-expressed as plain React Native style
-// values. Monochrome, dark, ONE accent reserved for the primary action and live state.
+// values. Monochrome, dark, ONE accent reserved for the primary action and live state, plus one
+// red (`danger`) from the enroll redesign: destructive actions and capture problems the user can
+// fix ("Turn further left"). Generic errors stay in the text color.
 //
 // Pure TS on purpose: no react-native / expo imports, so vitest can load it in Node and every
 // screen gets the same numbers. Haptics are named tokens only; the call site maps them to
@@ -11,7 +13,7 @@
 // API-CONTRACT §6.2, ARCHITECTURE §5.2); LOCKED is a double haptic on both phones (ARCHITECTURE §5.2).
 
 // ---------------------------------------------------------------------------------------
-// Color: monochrome + one accent (Verdict Palette)
+// Color: monochrome + one accent (Verdict Palette) + danger (enroll redesign)
 // ---------------------------------------------------------------------------------------
 
 export const palette = {
@@ -22,9 +24,15 @@ export const palette = {
   textSecondary: '#8A8A8F',
   /** The only accent: the primary action and the live dot. Nothing else. */
   accent: '#5E6AD2',
+  /**
+   * Red, from Verdict's enroll redesign (branch enroll-redesign): destructive actions ("Delete
+   * face data", "Yes, delete") and capture problems the user can fix ("Turn further left",
+   * "No face found"). Not for generic errors, which stay in the text color.
+   */
+  danger: '#E5484D',
 } as const;
 
-/** Semantic roles. Every role resolves to a palette value; there is no second hue. */
+/** Semantic roles. Every role resolves to a palette value. */
 export const color = {
   ...palette,
   onAccent: palette.text,
@@ -37,6 +45,9 @@ export const color = {
   pending: palette.textSecondary,
   live: palette.accent,
   primaryAction: palette.accent,
+  /** Destructive buttons and fixable capture problems (see palette.danger). */
+  destructive: palette.danger,
+  fixable: palette.danger,
 } as const;
 
 export type ColorToken = keyof typeof color;
