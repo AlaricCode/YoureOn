@@ -15,7 +15,12 @@
 // vitest without React Native.
 import { copy } from './tokens';
 
-export type CopyRole = 'label' | 'error' | 'data' | 'contract';
+/**
+ * `body` is a step's one- or two-sentence explanation under its title ("Follow the prompts on
+ * the camera. …"), from the enroll redesign. It may be a sentence and may sit under a label, but
+ * it still gets the emoji, address and crypto-jargon checks.
+ */
+export type CopyRole = 'label' | 'error' | 'data' | 'contract' | 'body';
 
 export type CopyViolationRule =
   | 'empty'
@@ -46,6 +51,14 @@ export const CONTRACT_COPY: readonly { readonly template: string; readonly sourc
   { template: 'Your {amount} is held until {name} locks in', source: 'ESCROW §5.0.3' },
   { template: "You're {n}-{n} against {name}", source: 'DATA-MODEL §7.1, TASKS D4-M2' },
   { template: "You're {n}-{n} against {name} ({signedAmount})", source: 'DATA-MODEL §7.1' },
+  { template: '{name} challenged you', source: 'ARCHITECTURE §3.1' },
+  { template: 'Challenge {name}?', source: 'TASKS D4-M1' },
+  { template: '{name} is in', source: 'ARCHITECTURE §5.2' },
+  { template: 'Hold to lock in {amount}', source: 'SCHEMAS §9.4' },
+  { template: 'Declined. Nothing moved.', source: 'SCHEMAS §9.4' },
+  { template: 'Expired. Nothing moved.', source: 'SCHEMAS §9.4' },
+  { template: "Couldn't lock it. Nothing moved.", source: 'SCHEMAS §9.4' },
+  { template: 'Terms changed, review again', source: 'TASKS D2-M4' },
 ];
 
 // Verdict's ranges (pictographs, misc symbols + dingbats, mahjong..enclosed, VS16), plus keycaps,
@@ -119,7 +132,7 @@ export function checkCopy(text: string, role: CopyRole = 'label'): CopyViolation
       v('not_contract_copy', 'not one of CONTRACT_COPY; use a 1-3 word label');
     return out;
   }
-  if (role === 'data') return out;
+  if (role === 'data' || role === 'body') return out;
 
   // label / error
   if (countWords(t) > copy.maxLabelWords)
@@ -170,10 +183,11 @@ export function checkScreenCopy(items: readonly ScreenText[]): CopyViolation[] {
   const out: CopyViolation[] = [];
   for (const item of items) out.push(...checkCopy(item.text, item.role));
   for (const a of items) {
-    if (a.role === 'data' || a.text.trim() === '') continue;
+    if (a.role === 'data' || a.role === 'body' || a.text.trim() === '') continue;
     const aBottom = a.rect.y + a.rect.height;
     for (const b of items) {
-      if (a === b || b.text.trim() === '') continue;
+      // A step's explanation (`body`) may sit under its title.
+      if (a === b || b.role === 'body' || b.text.trim() === '') continue;
       const below = b.rect.y >= aBottom - 1 && b.rect.y - aBottom <= copy.belowGapPt;
       const overlap = hOverlap(a.rect, b.rect) > 0.5 * Math.min(a.rect.width, b.rect.width);
       if (below && overlap && b.fontSize < a.fontSize) {
