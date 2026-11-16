@@ -22,11 +22,23 @@ const isGrey = (hex: string) => {
   return Math.max(r, g, b) - Math.min(r, g, b) <= 8;
 };
 
-describe('color: monochrome with one accent', () => {
-  it('every palette value is #RRGGBB; all but the accent are greys', () => {
+describe('color: monochrome with one accent and one red', () => {
+  it('every palette value is #RRGGBB; all but the accent and danger are greys', () => {
     const chromatic = Object.entries(palette).filter(([, v]) => !isGrey(v));
     for (const v of Object.values(palette)) expect(v).toMatch(HEX);
-    expect(chromatic).toEqual([['accent', palette.accent]]);
+    expect(chromatic).toEqual([
+      ['accent', palette.accent],
+      ['danger', palette.danger],
+    ]);
+  });
+
+  it('red is only for destructive actions, fixable capture problems and the loss cross', () => {
+    const redRoles = Object.entries(color)
+      .filter(([, v]) => v === palette.danger)
+      .map(([k]) => k)
+      .sort();
+    expect(redRoles).toEqual(['danger', 'destructive', 'fixable', 'negative']);
+    expect(color.error).toBe(palette.text);
   });
 
   it('semantic roles resolve to palette values only, and only primary action / live use the accent', () => {

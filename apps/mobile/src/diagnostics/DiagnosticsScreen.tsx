@@ -6,6 +6,7 @@ import { lazy, Suspense, useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Button,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -29,6 +30,8 @@ import {
 
 const VisionCameraPanel = lazy(() => import('./VisionCameraPanel'));
 const ExpoCameraPanel = lazy(() => import('./ExpoCameraPanel'));
+/** Every app screen on stand-in data, until auth (D0-M4), realtime and navigation exist. */
+const PreviewApp = lazy(() => import('../preview/PreviewApp'));
 
 /** The model is 13.6 MB; over a Metro tunnel the first load can take a while. */
 const TIMEOUTS_MS: Partial<Record<CheckId, number>> = { 'tflite-warmup': 90_000 };
@@ -45,6 +48,7 @@ export default function DiagnosticsScreen() {
   const [results, setResults] = useState<CheckResults>({});
   const [running, setRunning] = useState(false);
   const [panel, setPanel] = useState<CameraPanel | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const setResult = useCallback((id: CheckId, result: CheckResult) => {
     setResults((prev) => ({ ...prev, [id]: result }));
@@ -136,6 +140,16 @@ export default function DiagnosticsScreen() {
           {panel ? <Button title="Close camera" onPress={() => setPanel(null)} /> : null}
         </View>
 
+        <View style={styles.row}>
+          <Button
+            title="App preview"
+            onPress={() => {
+              setPanel(null);
+              setPreviewOpen(true);
+            }}
+          />
+        </View>
+
         {panel ? (
           <PanelErrorBoundary
             key={panel}
@@ -182,6 +196,20 @@ export default function DiagnosticsScreen() {
           );
         })}
       </ScrollView>
+      <Modal
+        visible={previewOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setPreviewOpen(false)}
+      >
+        {previewOpen ? (
+          <PanelErrorBoundary name="App preview" onError={() => undefined}>
+            <Suspense fallback={<ActivityIndicator />}>
+              <PreviewApp onClose={() => setPreviewOpen(false)} />
+            </Suspense>
+          </PanelErrorBoundary>
+        ) : null}
+      </Modal>
     </SafeAreaView>
   );
 }
