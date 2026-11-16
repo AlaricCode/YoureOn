@@ -192,3 +192,37 @@ describe('checkScreenCopy (Verdict rule 2: nothing smaller directly below a labe
     ]);
   });
 });
+
+describe('body copy (a step explanation, enroll redesign)', () => {
+  it('may be a sentence', () => {
+    expect(
+      checkCopy(
+        'Follow the prompts on the camera. Use good light and keep your face centered.',
+        'body',
+      ),
+    ).toEqual([]);
+  });
+
+  it('still gets the emoji and jargon checks', () => {
+    expect(rules('Your face never goes on Solana.', 'body')).toContain('crypto_jargon');
+    expect(rules('Smile \u{1F600}', 'body')).toContain('emoji');
+  });
+
+  it('may sit directly under a label', () => {
+    const items: ScreenText[] = [
+      {
+        text: 'Register face',
+        role: 'label',
+        fontSize: 22,
+        rect: { x: 24, y: 80, width: 200, height: 32 },
+      },
+      {
+        text: 'Follow the prompts on the camera.',
+        role: 'body',
+        fontSize: 15,
+        rect: { x: 24, y: 116, width: 320, height: 22 },
+      },
+    ];
+    expect(checkScreenCopy(items)).toEqual([]);
+  });
+});
