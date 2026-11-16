@@ -1,8 +1,9 @@
 // You're On design tokens. Ported from Verdict app/lib/ui/tokens.dart, app/lib/ui/theme.dart and
 // verdict-spec.md §6.2-§6.4 (docs/CONTRACTS.md §12.12), re-expressed as plain React Native style
 // values. Monochrome, dark, ONE accent reserved for the primary action and live state, plus one
-// red (`danger`) from the enroll redesign: destructive actions and capture problems the user can
-// fix ("Turn further left"). Generic errors stay in the text color.
+// red (`danger`) from the enroll redesign: destructive actions, capture problems the user can
+// fix ("Turn further left"), and the cross on a loss or a bet that ended ("You lost",
+// "Declined. Nothing moved."). Generic errors stay in the text color.
 //
 // Pure TS on purpose: no react-native / expo imports, so vitest can load it in Node and every
 // screen gets the same numbers. Haptics are named tokens only; the call site maps them to
@@ -48,6 +49,8 @@ export const color = {
   /** Destructive buttons and fixable capture problems (see palette.danger). */
   destructive: palette.danger,
   fixable: palette.danger,
+  /** The cross badge on a loss, a lock that ended, or a failed payout. */
+  negative: palette.danger,
 } as const;
 
 export type ColorToken = keyof typeof color;

@@ -32,12 +32,12 @@ describe('color: monochrome with one accent and one red', () => {
     ]);
   });
 
-  it('red is only for destructive actions and fixable capture problems', () => {
+  it('red is only for destructive actions, fixable capture problems and the loss cross', () => {
     const redRoles = Object.entries(color)
       .filter(([, v]) => v === palette.danger)
       .map(([k]) => k)
       .sort();
-    expect(redRoles).toEqual(['danger', 'destructive', 'fixable']);
+    expect(redRoles).toEqual(['danger', 'destructive', 'fixable', 'negative']);
     expect(color.error).toBe(palette.text);
   });
 

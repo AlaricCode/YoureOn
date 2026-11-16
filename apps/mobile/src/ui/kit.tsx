@@ -125,7 +125,7 @@ export function DangerButton({ filled = false, ...p }: ButtonProps & { filled?: 
 // ---------------------------------------------------------------------------------------
 
 /** A tick drawn with borders (no icon font, no emoji). */
-function Tick({ size, tint }: { size: number; tint: string }) {
+export function Tick({ size, tint }: { size: number; tint: string }) {
   const stroke = Math.max(2, Math.round(size * 0.12));
   return (
     <View
@@ -159,7 +159,8 @@ export function CheckBadge({ size, fill = palette.accent }: { size: number; fill
   );
 }
 
-function ChevronLeft() {
+/** A back chevron drawn with borders. */
+export function ChevronLeft() {
   return (
     <View
       style={{

@@ -4,9 +4,9 @@
 // reinstall, never sees this screen. Face enrollment is offered right after (D3-M3).
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AlertLine, BodyText, CheckRow, Label, PrimaryButton, TextField } from '../ui/kit';
+import { Screen } from '../ui/parts';
 import { palette, space } from '../ui/tokens';
 import { SignupApiError, type SignedUpUser, type SignupApi } from './api';
 import { SIGNUP_COPY } from './copy';
@@ -50,7 +50,7 @@ export function SignupScreen({
   };
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}>
+    <Screen>
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -95,7 +95,7 @@ export function SignupScreen({
           />
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 

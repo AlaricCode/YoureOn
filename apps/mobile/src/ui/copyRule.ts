@@ -51,6 +51,14 @@ export const CONTRACT_COPY: readonly { readonly template: string; readonly sourc
   { template: 'Your {amount} is held until {name} locks in', source: 'ESCROW §5.0.3' },
   { template: "You're {n}-{n} against {name}", source: 'DATA-MODEL §7.1, TASKS D4-M2' },
   { template: "You're {n}-{n} against {name} ({signedAmount})", source: 'DATA-MODEL §7.1' },
+  { template: '{name} challenged you', source: 'ARCHITECTURE §3.1' },
+  { template: 'Challenge {name}?', source: 'TASKS D4-M1' },
+  { template: '{name} is in', source: 'ARCHITECTURE §5.2' },
+  { template: 'Hold to lock in {amount}', source: 'SCHEMAS §9.4' },
+  { template: 'Declined. Nothing moved.', source: 'SCHEMAS §9.4' },
+  { template: 'Expired. Nothing moved.', source: 'SCHEMAS §9.4' },
+  { template: "Couldn't lock it. Nothing moved.", source: 'SCHEMAS §9.4' },
+  { template: 'Terms changed, review again', source: 'TASKS D2-M4' },
 ];
 
 // Verdict's ranges (pictographs, misc symbols + dingbats, mahjong..enclosed, VS16), plus keycaps,
