@@ -72,10 +72,19 @@ export const attempts = pgTable(
     evidence_hash: text(),
     /** JCS of the SCHEMAS CameraEvidence record. */
     evidence_canonical: text(),
-    frame_keys: text().array().notNull().default(sql`'{}'::text[]`),
-    frame_ts_ms: integer().array().notNull().default(sql`'{}'::integer[]`),
+    frame_keys: text()
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    frame_ts_ms: integer()
+      .array()
+      .notNull()
+      .default(sql`'{}'::integer[]`),
     /** sha256 of each frame = CameraEvidence.frames[i].sha256, in send order. */
-    frame_hashes: text().array().notNull().default(sql`'{}'::text[]`),
+    frame_hashes: text()
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     started_at: tstz().notNull().defaultNow(),
     uploaded_at: tstz(),
     purged_at: tstz(),
@@ -150,8 +159,14 @@ export const rulings = pgTable(
     void_reason: rulingVoidReason(),
     confidence: numeric({ precision: 3, scale: 2 }),
     reason: text(),
-    cited_frames: smallint().array().notNull().default(sql`'{}'::smallint[]`),
-    frame_hashes: text().array().notNull().default(sql`'{}'::text[]`),
+    cited_frames: smallint()
+      .array()
+      .notNull()
+      .default(sql`'{}'::smallint[]`),
+    frame_hashes: text()
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     evidence_kind: evidenceSource().notNull(),
     evidence_hash: text().notNull(),
     evidence_canonical: text(),
@@ -198,7 +213,9 @@ export const rulings = pgTable(
     ),
     check(
       'rulings_onchain_ix',
-      sql.raw(`onchain_ix IS NULL OR (onchain_ix IN ('resolve','resolve_appeal') AND outcome <> 'REDO')`),
+      sql.raw(
+        `onchain_ix IS NULL OR (onchain_ix IN ('resolve','resolve_appeal') AND outcome <> 'REDO')`,
+      ),
     ),
     hex32Check('rulings', 'evidence_hash'),
     hex32Check('rulings', 'ruling_hash'),
