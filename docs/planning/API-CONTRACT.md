@@ -120,7 +120,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 - Timestamps are `IsoUtc` (ms). Onchain-mirroring fields are unix seconds (SCHEMAS §0). `X-YO-Timestamp` is unix ms.
 - Ids are UUIDv4. Pubkeys and tx signatures are base58. Hashes are `Hex32`. Binary in JSON is base64 (standard, padded): `message_b64`, `embedding` ciphertext.
 - Pagination is `?cursor=<opaque>&limit=<1..50>` and returns `{items, next_cursor|null}`.
-- Size limits: JSON body 64 KB; frames multipart 2 MB; hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9); QuickNode webhook 1 MiB. Larger bodies return `413 PAYLOAD_TOO_LARGE`. A body above 64 KB without a `Content-Length` (chunked) is capped as the route reads it, after its auth / header checks, never buffered before them.
+- Size limits: JSON body 64 KB; frames multipart 3 MiB (12 frames + the landing crop, each ≤ 200 KB, §2.9); hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9); QuickNode webhook 1 MiB. Larger bodies return `413 PAYLOAD_TOO_LARGE`. A body above 64 KB without a `Content-Length` (chunked) is capped as the route reads it, after its auth / header checks, never buffered before them.
 - Every response carries `X-Request-Id`; a client-supplied one is echoed back.
 
 ### 1.5 Errors
@@ -198,7 +198,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 | `face/enrollment` writes | 5/h | user | |
 | `POST /v1/bets` | 6/min, ≤ 3 pre-lock bets per user | user | spam challenges |
 | lock authorization / decline | 10/min | bet + device | |
-| attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing |
+| attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing; a `409 no_judge_cam` gives its token back (the two-phone fallback, §2.9) |
 | appeal | 3/h | user | ESCROW TM-L9 |
 | markets | 60/min | user | Gemini limit is 120 req/min with no headers (FINDINGS §7), so the server caches |
 | `POST /v1/voice/tokens` | 6 / 10 min | user | each token opens a billed agent session of up to 20 min; under `DEMO_MODE` demo accounts only (`403 NOT_A_PARTY {reason:'demo_only'}`) |
@@ -373,7 +373,7 @@ Flows are in §1.3.
 
 - Request: `{kind: 'gavel'|'drumroll'|'buzzer'|'cheer'}`.
 - Response: 202.
-- Sent by the `cue` client tool (§4.4). The server relays a `stage.cue` control frame. The stage laptop plays the Sound Effects asset; A's phone does not, because that would stop mic capture (FINDINGS §4, LiveKit #286).
+- Sent by the `cue` client tool (§4.4). The server relays a `stage.cue` control frame. The stage laptop plays the Sound Effects clip; A's phone does not, because that would stop mic capture (FINDINGS §4, LiveKit #286). When the server's Sound Effects are live (`SFX_PROVIDER=live`, or the default `auto` with the ElevenLabs key, §4.5) the frame carries `audio_url` (`GET /v1/stage/sfx/:kind`); without it the stage synthesizes the cue.
 
 ### 2.7 Terms
 
@@ -434,22 +434,23 @@ Server timers:
 
 ### 2.9 Attempts and evidence (Beat 4)
 
-**`POST /v1/bets/:bet_id/attempts`** (S, A's voice device)
+**`POST /v1/bets/:bet_id/attempts`** (S, party)
 
-- Request: `{attempt_no, recorder: 'judge_cam'|'self'}`. A's phone calls it when the judge invokes the `request_attempt` client tool, or the "Start" fallback button.
+- Request: `{attempt_no, recorder: 'judge_cam'|'self'}`. A's phone calls it when the judge invokes the `request_attempt` client tool; the non-performer's phone calls it from its "Start" button (also the REDO "Ready").
+- **Who films (2026-11-18, two-phone fallback).** The phone asks for `'judge_cam'` first. `409 INVALID_STATE {reason:'no_judge_cam'}` means the room has no judge cam for this bet (two phones); the non-performer's phone then asks again with `'self'` and films the attempt itself, and the performer's phone never does (`403 NOT_A_PARTY {reason:'performer_cannot_record'}`). With a judge cam in the room the judge cam always records. The `no_judge_cam` refusal writes nothing and gives its token of the 6/min bucket back (§1.7), so the fallback costs no more than the judge-cam path. The recording phone records video only (no audio track): on A's phone the voice session keeps the mic. Phone side: `apps/mobile/src/attempt/recorder.ts`.
 - Response 201: `{attempt_no, performer, recorder_device_id, max_ms: 6000 × attempts.count, go_at}`.
 - Effects: state `ATTEMPT`; event `attempt.started` (SCHEMAS §10.1, extended with `recorder_device_id` and `go_at`, §3.4). The judge-cam shows "3-2-1, flip on GO".
 - Allowed from `LOCKED`, or from `JUDGING` after a REDO (`attempt_no = redo_count + 2`).
-- Errors: `INVALID_STATE`, `VALIDATION_FAILED` (wrong `attempt_no`).
-- Idem: `(bet_id, attempt_no)`.
+- Errors: `INVALID_STATE` (also `{reason:'no_judge_cam'}`), `VALIDATION_FAILED` (wrong `attempt_no`), `NOT_A_PARTY {reason:'performer_cannot_record'}` (`'self'` from the performer).
+- Idem: `(bet_id, attempt_no)`. A replay returns the attempt as started, whichever `recorder` the replay asks for.
 
-**Judge-cam identity.** For the demo, the judge-cam iPhone is registered as a second device of party A, with `devices.role='judge_cam'` set via `PATCH /v1/devices/current` and `CameraEvidence.recorded_by = 'A'`. In the product, `recorder:'self'` means the non-performer's own phone. DATA-MODEL §5.2 has the `devices.role` column; SCHEMAS §4 documents `recorded_by`.
+**Judge-cam identity.** For the demo, the judge-cam iPhone is registered as a second device of party A, with `devices.role='judge_cam'` set via `PATCH /v1/devices/current` and `CameraEvidence.recorded_by = 'A'`. `recorder:'self'` means the non-performer's own phone: the product default, and the demo's fallback with only phones A and B (then `recorded_by` is the non-performer's party). DATA-MODEL §5.2 has the `devices.role` column; SCHEMAS §4 documents `recorded_by`.
 
 **`POST /v1/bets/:bet_id/attempts/:n/frames`** (S, recorder device): `multipart/form-data`
 
 - Parts:
   1. `evidence`, `application/json`: SCHEMAS `CameraEvidence`, with `clip_sha256` already computed on the phone at record end.
-  2. `frame` × N, `image/jpeg`, in `frames[].index` order. Each is ≤ 200 KB and ≤ 512 px; N ≤ 24, normally 8 "u4d4" frames (FINDINGS §3.3).
+  2. `frame` × N, `image/jpeg`, in `frames[].index` order (planning D10, `packages/shared/src/judge/frames.ts`): 8..12 frames, each ≤ 512 px (the phone sends 12: 4 spread over the clip and 8 in its last ~1.2 s, the landing), then at most one **landing crop**, always last and flagged `frames[i].landing_crop: true` (the last frame again, the middle 80 % of the full-resolution still, ≤ 1024 px). Every JPEG, the crop included, is ≤ 200 KB. An 8-frame upload with no crop (older builds, `scripts/cp1-drive.ts --frames 8..12`) is accepted unchanged. Anything else is `422 VALIDATION_FAILED`. (Was: N ≤ 24, normally 8 "u4d4" frames, FINDINGS §3.3.)
 - Server steps:
   1. Check the attempt is open.
   2. sha256 each JPEG and compare it to `frames[i].sha256`.
@@ -502,6 +503,14 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
   - Effects: `appeals` row (`filing`) and `judge.cue APPEAL_FILED`. On rpc confirm: `bet.state APPEALED`, then `appeal.vote` × 3, `appeal.result`, `APPEAL_RESOLVED`, then PAID or VOIDED on the chain event.
   - Errors: `NOT_LOSER`, `APPEAL_WINDOW_CLOSED`, `STATE_MOVED_ON`, `RATE_LIMITED` (3/h).
   - Idem: `(bet_id, 'appeal')`; `appeals.bet_id` is UNIQUE.
+- **Built (2026-11-18, `apps/server/src/appeal`).** What the code does, where it is more precise than the lines above:
+  - GET answers `NOT_A_PARTY`, `NOT_LOSER` (the winner of a decisive ruling), `APPEAL_WINDOW_CLOSED` (server now ≥ `appeal_deadline − 1 s`, `details.appeal_deadline`), `STATE_MOVED_ON` (not `RULED` any more, or an appeal is already on its way), `INVALID_STATE` (before `RULED`). The message is `[SetComputeUnitLimit, appeal]` (no `SetComputeUnitPrice`: a phone signs it), rebuilt when > 20 s old and unsigned, like concede.
+  - POST verifies exactly as concede: `SIGN_REQUEST_EXPIRED` (no fresh built message for this party, or > 50 s old), `MESSAGE_MISMATCH` (`message_sha256` ≠ the stored message), `SIGNATURE_INVALID` (the signature does not verify over the stored bytes; concede answers the same, §1.5's `MESSAGE_MISMATCH` wording notwithstanding). A preflight refusal maps the program error: 6024 → `APPEAL_WINDOW_CLOSED` with `details.program_error`, 6017 → `NOT_LOSER`, 6014 → `STATE_MOVED_ON`, blockhash not found → `SIGN_REQUEST_EXPIRED`.
+  - The 3/h bucket is spent only by a filing that passed every check (a refused tap costs nothing). A repeat POST by the same appellant (a lost 202, a double tap under another `Idempotency-Key`) answers the filed appeal's 202.
+  - The filing is written before the send (`chain_txs` 'sent', `appeals` 'filing', `audit_log 'appeal.filed'`); `tx.submitted {kind:'appeal'}` and `judge.cue APPEAL_FILED` follow the accepted preflight. A failed or expired appeal tx sets `appeals` 'failed', discards its votes, pushes `tx.failed {kind:'appeal'}` and re-arms finalize; a failed appeal is re-filed in place.
+  - The panel starts at the accepted preflight (speculative); votes are stored as they land but `appeal.vote` is pushed only once the bet is `APPEALED` (our confirm, or the projector's `BetAppealed`). The `AppealResult` is decided when all three seats answered or hit their 8 s budget: it carries all three votes (SCHEMAS §7 `votes.length(3)`), and two agreeing votes already fix the majority, so waiting for the third changes the timing, never the outcome. `resolve_appeal` goes out right after, only from `APPEALED`.
+  - `LOCK_SIGNER=server` (custodial demo): the signature may be omitted and the server signs as the appellant's demo key (as for concede). The operator's route is `POST /v1/demo/bets/:bet_id/appeal` (§2.17).
+  - finalize (timer and `finalize-due`) skips a `RULED` bet whose appeal is signed / sent, and every `APPEALED` one. The keeper task `appeal-sweep` (also in the boot reconcile) settles 'sent' appeal / `resolve_appeal` txs whose confirm died and re-runs a lost panel (stored votes are reused); an undecided appeal past `appeal_resolve_deadline` is the timeout-refund keeper's (`EXPIRED`, both stakes back).
 
 ### 2.13 Gemini market (Beat 6)
 
@@ -524,6 +533,7 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 - **`GET /v1/bets/:bet_id`** (B+P or stage) returns `BetSnapshot` (§2.18), the full current state used for cold start and resync.
 - **`GET /v1/bets/:bet_id/events?after=<seq>&limit=200`** returns `{events: RealtimeEvent[], last_seq}`, replayed from `bet_events` (DATA-MODEL §5.19). This is the gap-recovery endpoint SCHEMAS §10.1 refers to.
 - **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed}`, from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
+  - Built (`apps/server/src/me/routes.ts`): a phone session's bearer (B, scope `app`; a stage token or the demo key is 401 `AUTH_REQUIRED`). It is always the caller's own record, so any user id may be asked; a stranger gets 0-0-0. A malformed or unknown `user_id` is 404 `NOT_FOUND`. It is the same `headToHead()` (`face/service.ts`) the §2.4 face-match reply carries, computed inline (the view is not migrated). `Cache-Control: private, no-store`.
 
 ### 2.15 Devices and push
 
@@ -543,14 +553,24 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `POST /v1/demo/accounts/:user_id/claim-token` | One-time QR payload for `POST /v1/auth/demo-claim` (10 min) |
 | `POST /v1/demo/users/:user_id/devices {device_pubkey}` | Registers a further device key of a demo account (the judge-cam iPhone as a device of A, §2.9); it then logs in with `POST /v1/auth/session` and binds itself with `PATCH /v1/devices/current`. 201 `{device_id, user_id}`; 200 on a repeat for the same user. Demo accounts only (`is_demo`, or the demo-a / demo-b wallet): `409 INVALID_STATE {reason:'not_demo_user'}` for any other user, so a leaked admin key cannot take over a real account |
 | `POST /v1/demo/bets/:bet_id/force-hearing` | Opens a hearing with `trigger:'demo'` (SCHEMAS §6) |
+| `POST /v1/demo/bets/:bet_id/appeal {party?}` | Built. `LOCK_SIGNER=server` only (else `409 INVALID_STATE {reason:'lock_signer_phones'}`): the losing demo party's appeal (§2.12), signed custodially by the server with that party's demo key; `party` only for a VOID ruling (either may appeal; default A), naming the winner is `NOT_LOSER`. 202 `{status:'submitted', signature, appeal_id}`. Not counted in the 3/h bucket (admin key). |
 | `POST /v1/demo/fallback {beat: 1..6, action: 'play'\|'stop'}` | The stage plays the pre-recorded beat (BRIEF 5i) |
 | `POST /v1/demo/stream/replay {fixture}` | Replays recorded webhook payloads to the stage ticker only (FINDINGS §4); never writes `chain_events` |
 | `POST /v1/demo/stream/{pause\|activate\|reset-start}` | QuickNode REST pause/activate. `reset-start` PATCHes `start_range` to the tip before the demo, because `activate` resumes from the pause point (FINDINGS §7). |
 | `POST /v1/demo/lock-mode {mode: 'atomic'\|'sequential'}` | `LOCK_MODE` switch (FINDINGS §3.7) |
-| `POST /v1/demo/toggles {cached_ruling?, gemini_fallback?, voice_fallback?, face_pick_list?}` | The remaining ARCHITECTURE §7.2 toggles; every replay is labelled REPLAY on stage |
+| `POST /v1/demo/toggles {cached_ruling?, gemini_fallback?, voice_fallback?, face_pick_list?}` | The remaining ARCHITECTURE §7.2 toggles; every replay is labelled REPLAY on stage. **Built: `cached_ruling` only** (`apps/server/src/demo/toggles.ts`), body `{cached_ruling?: boolean \| null}`, strict (an unknown key is 422, so a typo can't leave a fallback off). It is a runtime value the judge reads per call, no restart; env `CACHED_RULING` is the boot default and `null` goes back to it. Answers `{ok, toggles, changed: [{toggle, from, to, source}]}`; each named toggle is audited `demo.toggle`. `GET /v1/demo/toggles` returns `{cached_ruling, cached_ruling_source: 'env'\|'runtime', cached_ruling_env, updated_at}`. A cached ruling has `Ruling.model = 'cache/demo-bottle@1'` (shared `CACHED_RULING_MODEL` / `isCachedRuling`), which the stage can label. The others are elsewhere: the Gemini fallback is `POST /v1/demo/gemini {feed: 'live'\|'replay'}`, the voice fallback is the phone's "Type it instead", the face pick list is the phone's room list. |
 | `POST /v1/demo/timers {draft_idle_s, hearing_turn_s, finalize_delay_s}` | Offchain timers only. Onchain windows are snapshotted from `Config` and can't change per bet (ESCROW I11). |
-| `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch (FINDINGS §3.8). |
-| `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}` |
+| `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch (FINDINGS §3.8). **Built** (`apps/server/src/demo/warmup.ts`), no bet and no money: one live judge call through `deps.providers.llm` with the real prompt and output schema on a stored 16×16 JPEG (`judge/fixtures/warmup-16px.jpg`; it ignores `cached_ruling`), `getLatestBlockhash` on the server's RPC, one poll of the Gemini relay and its current contract (no WS: the relay polls REST, §7.3), and voice readiness (config only: a pre-minted token would open a billed session, so none is minted; no panel, it is cut). 200 `{ok, at, modes: {llm, judge_model, cached_ruling, markets_feed, lock_signer}, notes[], checks: {judge, rpc, gemini, voice}}`, each check `{ok, ms, error, …}`; `notes` say when a check hit a mock, the REPLAY feed or the cached ruling. One per 10 s per server: 429 `RATE_LIMITED` + `Retry-After`. Audited `demo.warmup`. |
+| `POST /v1/demo/seed-h2h {a_wins?, b_wins?}` | **Built** (`apps/server/src/demo/seed-h2h.ts`): the DATA-MODEL §11 SQL fallback as a route. Replaces the `is_seed` history between demo-a and demo-b (the users holding the demo wallets) with `a_wins + b_wins` settled bets, default 4-7 (each 0..30); `{0, 0}` clears it. Demo reset keeps them. 200 `{ok, a, b, a_wins, b_wins, replaced, inserted, head_to_head: {a_vs_b, b_vs_a}}`; 409 `INVALID_STATE {reason:'demo_player_missing', party}` before a demo wallet has an account. Audited `demo.seed_h2h`. |
+| `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}`. Built (`apps/server/src/chain/health.ts`) with more: also `toggles` (as `GET /v1/demo/toggles`), `judge_llm` (`{provider, model, cached_ruling, calls, failures, last_ok_at, last_ok_ms, last_ok_source, last_ok_model, last_error_at, last_error, last_error_source, window, p50_ms, p95_ms}`, in memory since boot; the warm-up counts) and `llm_last_ok` (= `judge_llm.last_ok_at`). Warnings (level `warn`): `judge_no_success` (no judge success since boot), `judge_failing` (the last call failed after the last success), `cached_ruling_on`. The projector polls it with its own stage token (scope `demo` under `DEMO_MODE`), so `#demo=` is optional in the stage URL. |
+
+**Stage audio** (stage token only; a phone session or no stage scope gets `404`; §4.5). The ElevenLabs key stays on the server; the stage fetches the bytes with its bearer and plays them through its own AudioContext.
+
+| Route | Effect |
+|---|---|
+| `GET /v1/stage/audio` | API-owned `StageAudioResponse` `{tts: boolean, tts_off: 'no_key'\|'off'\|'spend_disabled'\|null, model: string\|null, sfx: {gavel, drumroll, buzzer, cheer}\|null}`: is the stage voiced, and the cue clip URLs when the Sound Effects are live |
+| `GET /v1/stage/tts/:clip_id` | One stage line's MP3 (`audio/mpeg`). `clip_id` = sha256 hex of `voice_id \n model \n text`, so the response is `Cache-Control: private, max-age=31536000, immutable` with `ETag` (304 on a match). It waits for a generation in flight. `404` when the TTS is off or the id unknown; `502 UPSTREAM_ERROR` / `504 UPSTREAM_TIMEOUT` when ElevenLabs fails |
+| `GET /v1/stage/sfx/:kind` | One cue's ElevenLabs Sound Effects clip, generated once (at boot) and cached; `404` unless they are live |
 
 ### 2.18 API-owned types
 
@@ -640,7 +660,8 @@ Server control frames carry an `op` and are **not** `RealtimeEvent`s and not seq
 - `welcome`, `subscribed {bet_id, last_seq, replayed}`, `ping {t, server_time}`, `error {code, message}`;
 - `room.presence {room_id, members: RoomMember[]}`;
 - `stage.market {snapshot: GeminiMarketSnapshot}` (≤ 2/s; the chart ring buffer, FINDINGS §3.11);
-- `stage.cue {bet_id, kind}`.
+- `stage.cue {bet_id, kind, audio_url?}` (`audio_url`: the ElevenLabs Sound Effects clip, §2.6);
+- `stage.voice {bet_id, seq, type, voice, text, clip_id, audio_url}`, to the room's **stage sessions only**: the ElevenLabs TTS clip of the stage line for bet event `(bet_id, seq)` (§4.5). Sent right after that event, before the clip exists; `GET audio_url` waits for it. Never sent for a line the phone judge says (§4.5 "One judge at a time").
 
 **Event frames are bare SCHEMAS `RealtimeEvent` envelopes** (they have `v` and `type`, and no `op`). The client branches on whether `op` is present, then runs `RealtimeEvent.safeParse` and drops failures with a log line (SCHEMAS §10.1).
 
@@ -675,7 +696,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | `terms.refused` | `{refusal: GuardrailRefusal}` | guardrail refusal → CANCELLED |
 | `terms.proposed` | `{envelope: TermsEnvelope}` | each valid revision (TERMS_PROPOSED), and once more when frozen (→ AWAITING_AUTHORIZATIONS) |
 | `terms.authorize_request` | SCHEMAS `AuthorizeRequest` (the payload itself) | AWAITING_AUTHORIZATIONS once the lock is built: the same lock message to both parties; re-pushed after `STALE_LOCK_REQUEST` |
-| `tx.sign_request` **NEW** | `{request: SignRequest}` | RULED rpc-confirmed (`concede` + `appeal`, loser); rebuilt concede/appeal requests. Never the lock. |
+| `tx.sign_request` **NEW** | `{request: SignRequest}` | RULED rpc-confirmed (`concede` + `appeal`, loser); rebuilt concede/appeal requests. Never the lock. Built: `LOCK_SIGNER=phones`, decisive rulings only, `concede` first then `appeal` (camera bets; no appeal request for a Gemini bet); under the custodial signer nothing is pushed and the phone GETs on the tap. |
 | `terms.authorized` | `{party, method, authorized_at, count}` | each accepted `PartyAuthorization` (`count` 2 = the lock is being sent) |
 | `terms.declined` | `{party}` | §2.5, §2.8 decline |
 | `judge.line` / `party.line` | SCHEMAS | relayed from A's phone (§2.6) |
@@ -708,6 +729,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | RULED | `tx.confirmed(resolve)`, `tx.sign_request` (concede, appeal), `chain.BetResolved` | — (already voiced at `ruling.issued`) | `ruling` (A, B) |
 | CONCEDED / FINALIZED / APPEAL_RESOLVED | `tx.submitted`; `bet.state` at processed (**payout animation**); `tx.confirmed` | — | — |
 | APPEALED | `chain.BetAppealed`, `appeal.vote` × 3, `appeal.result` | `APPEAL_FILED`, `APPEAL_VOTE` × 3 (speak=false; the stage voices them, §4.5), `APPEAL_RESULT` | `appeal_decided` |
+| (built order) | at the filing, still RULED: `tx.submitted {appeal}`, `judge.cue APPEAL_FILED`; at our confirm: `bet.state APPEALED` (`pending_tx` appeal), `tx.confirmed {appeal}`, then `appeal.vote` + `judge.cue APPEAL_VOTE` per seat, `appeal.result` + `judge.cue APPEAL_RESULT`; then `bet.state APPEAL_RESOLVED` + `tx.submitted {resolve_appeal}`, `bet.state` again at processed, `bet.state PAID`/`VOIDED` + `tx.confirmed` + `judge.cue PAID`/`VOIDED` | | not sent (no outbox push yet) |
 | PAID / VOIDED | `chain.BetConceded` \| `BetFinalized` \| `AppealResolved`, `chain.BetClosed` | `PAID` / `VOIDED` | `payout` (A, B) |
 | CANCELLED / EXPIRED | `terms.declined` / `terms.refused` / `chain.BetRefunded` | `DECLINED` / `EXPIRED` | — |
 
@@ -868,9 +890,9 @@ Responses (≤ 300 B):
 
 | Tool | `parameters` | `expects_response` / timeout | App behavior |
 |---|---|---|---|
-| `request_attempt` | `{attempt_no: integer "1 for the first try; +1 after Run it back"}` | true / 5 s | `POST /v1/bets/:id/attempts {attempt_no, recorder:'judge_cam'}` (§2.9). Returns `"armed: judge cam counting down"`, or `"error: <code>"`. Allowed only after `[EVENT] LOCKED` or `[EVENT] REDO`. |
+| `request_attempt` | `{attempt_no: integer "1 for the first try; +1 after Run it back"}` | true / 5 s | `POST /v1/bets/:id/attempts {attempt_no, recorder:'judge_cam'}`, then `'self'` on `no_judge_cam` when A is the non-performer (§2.9, two phones). Returns `"armed: judge cam counting down"`, `"armed: this phone films, counting down"` (A's phone films), or `"error: <code>"` (`"error: NO_JUDGE_CAM"`: A performs and the room has no judge cam, so B taps Start). Allowed only after `[EVENT] LOCKED` or `[EVENT] REDO`. |
 | `show_terms_card` | none | false | Brings A's terms card to the front and re-sends the stage's card focus. The card appears anyway on `terms.authorize_request`. |
-| `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip. A light haptic on A's phone may be silent while the mic is live (FINDINGS §4). |
+| `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip (its synthesized cue when the server has none, §2.6). A light haptic on A's phone may be silent while the mic is live (FINDINGS §4). |
 
 Pass `clientTools` to `useConversation`, because `useConversationClientTool` isn't exported (FINDINGS §7).
 
@@ -906,7 +928,20 @@ Grammar:
 | `MARKET_SETTLED` | `[EVENT] MARKET_SETTLED side=yes line=97250.03 settle=97301.12 winner=Logan gg_secs=10 :: Announce Gemini settled UP and Logan wins.` |
 | `PAID` / `VOIDED` | `[EVENT] PAID winner=Jake amount=$10 :: Congratulate Jake in one line.` |
 
-**Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:vote_id`. This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
+**Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:clip_id` (§2.17). This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
+
+**The stage voice** (`apps/server/src/stage/voice.ts`, `apps/stage/src/voice.ts`). The projector also speaks the judge's other spoken moments, so the ruling is heard in the hall when no voice judge hosts the bet (no ElevenLabs key at all, the typed fallback before the agent spoke, a bet driven from the laptop with `cp1-drive`):
+
+| Event | Voice | Line (`packages/shared/src/stage-voice.ts`, the same words on server and stage) |
+|---|---|---|
+| `ruling.issued` | judge | `Jake wins. <reason>`; REDO `Run it back. <reason>`; VOID why, then `It's void: both stakes go back.`; a Gemini settlement starts `Gemini settles it.` |
+| `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
+| `appeal.vote` | `seat_1` … `seat_3` | `Judge 2, GPT, votes Logan. <reason>` / `Judge 3, Gemini, abstains.` |
+
+- **Server.** After each bet event goes out, the line becomes a clip: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128` with `{text, model_id}`, model `STAGE_TTS_MODEL` (default `eleven_v4_turbo`, §4.1). Voices: `ELEVENLABS_JUDGE_VOICE_ID` (else a premade voice) and `ELEVENLABS_PANEL_VOICE_IDS` (three ids, else three premade voices). Then a `stage.voice` frame (§3.1). The clip is cached (memory LRU, plus the OS tmp dir), so a repeated line costs nothing. On only with `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true`; `STAGE_TTS=off` is the kill switch. Nothing is generated with no stage socket on the room, or for a stale event. Lines are capped at 300 characters.
+- **Stage.** For a fresh voiced event it waits up to **800 ms** for the `stage.voice` frame. With one, it fetches the clip with its bearer and plays it (an announced clip may take up to 4 s to arrive while it is generated); with none, or when the clip fails, it speaks the same line with the browser's `speechSynthesis`. Lines take turns. `V` turns the voice off, `M` mutes everything.
+- **One judge at a time.** Once A's phone has relayed a `judge.line` for the bet (only its ElevenLabs session sends them, §2.6), a voice judge hosts it, and that judge says the ruling and the payout itself: every `ruling.issued` goes out with a speak:true `RULING` / `REDO` / `VOIDED` / `MARKET_SETTLED` cue, and the payout with a speak:true `PAID` / `VOIDED`. So for that bet the server sends no `stage.voice` (and generates no clip) for `ruling.issued` or `judge.cue`, and the stage, applying the same rule to its own history (`packages/shared/src/stage-voice.ts` `leftToPhoneJudge`), says nothing for them either: no clip, no browser voice. Otherwise the hall hears two judges over each other, and the projector's voice reaches A's speakerphone. Appeal votes stay on the stage. The strip says `last line: phone judge`. A voice judge that drops after it has spoken leaves that bet's ruling unspoken (it is still on screen). The `?preview` page has no phones, so it voices every line.
+- **Sound Effects.** `SFX_PROVIDER` defaults to `auto`: live exactly when the stage voice is on. The four cue clips are generated at boot and served by `GET /v1/stage/sfx/:kind`; the stage plays them for `stage.cue`, and for its own gavel (ruling), buzzer (REDO) and cheer (payout).
 
 ### 4.6 Post-call webhook
 
@@ -1120,7 +1155,7 @@ Settings for every call:
 |---|---|---|---|---|
 | Guardrail on each `propose_terms` (async) | `claude-haiku-5-5`, `thinking:{type:'disabled'}`, `output_config.effort:'low'`, `max_tokens` 256 | `TermsGuardrailVerdict` = `{kind:'ok'} \| {kind:'refuse', refusal: GuardrailRefusal}` (API-owned; SCHEMAS `GuardrailRefusal`) | 2 s, 1 retry; on failure, fail closed (the bet can't reach the lock; the judge says "Clerk's out. Try again.") | Off the voice path. A synchronous keyword prefilter catches the obvious cases. **No model was evaluated in Phase 0.** |
 | Terms step (Speech Engine fallback only) | `claude-haiku-5-5`, as above, `max_tokens` 600 | SCHEMAS `TermsStepOutput` | 3 s | Used only if ElevenLabs post-tool latency misses (FINDINGS §3.10) |
-| First ruling | Candidate A: `claude-haiku-5-5`, thinking `disabled`, effort `low`, `max_tokens` 2048, streaming. Candidate B: `claude-opus-5-5`, effort `low` (thinking can't be disabled), as the only model. **Pick after the eval (PENDING-KEY).** | SCHEMAS `VisionVerdict` → `toOutcome` → `Ruling` (with `frame_hashes`, D7) | first-token deadline 2.5 s, total 6 s, no SDK retry | 8 frames as separate images labelled `Frame k/8 at t=…s` + terms; frames inline base64, never URLs (DATA-MODEL §9). Play the pre-generated outcome stinger as soon as `claim_result` streams. |
+| First ruling | Candidate A: `claude-haiku-5-5`, thinking `disabled`, effort `low`, `max_tokens` 2048, streaming. Candidate B: `claude-opus-5-5`, effort `low` (thinking can't be disabled), as the only model. **Pick after the eval (PENDING-KEY).** | SCHEMAS `VisionVerdict` → `toOutcome` → `Ruling` (with `frame_hashes`, D7) | first-token deadline 2.5 s, total 6 s, no SDK retry | 12 frames + the landing crop (D10) as separate images labelled `Frame k/N at t=…s`, with `, LANDING` on the frames in the clip's last ~1.2 s and `LANDING CROP of frame k` on the crop, + terms; frames inline base64, never URLs (DATA-MODEL §9). Play the pre-generated outcome stinger as soon as `claim_result` streams. |
 | Re-check (parallel, from t=0) | `claude-sonnet-5-5` (adaptive, effort `low`) or `claude-opus-5-5` (effort `low`) | `VisionVerdict` | 6 s | Rule: take the primary if it is decisive at ≥ 0.8; else take the re-check if it is decisive at ≥ 0.8; else REDO. Timeouts and errors count as non-decisive REDO `unclear` and **count toward `MAX_REDOS`** (simplicity; §9 O4). |
 | Hearing | `claude-opus-5-5`, effort `medium`, streaming | SCHEMAS `HearingVerdict` → `toHearingOutcome` → `HearingRuling` | 15 s, then 1 retry on `claude-sonnet-5-5` (adaptive, low); both fail → `VOID / undecidable` (refund, appealable) | Inputs: terms, the same frames, both `HearingTurn` transcripts |
 
@@ -1143,6 +1178,7 @@ Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side
 - **No majority, including a tie, upholds the original ruling** (D7, SCHEMAS O7).
 - **Votes** stream as `appeal.vote`, late ones included, but can't change a decided result. The `AppealResult` becomes `appeal_ruling_hash` → `resolve_appeal`.
 - **Speculative start:** the panel starts at the `appeal` preflight (§2.12). Votes are stored, and `resolve_appeal` is sent only once `Appealed` is rpc-confirmed. If the `appeal` tx fails, the votes are discarded (`appeals.status='failed'`).
+- **Built (2026-11-18, `apps/server/src/appeal/panel.ts`):** one structured call per seat through `providers/structured.ts` (`deps.providers.llm`, the models of `DEFAULT_CHAT_MODELS`, effort `low`, the hand-written `VisionVerdict` schema `appeal_vote`). The 8 s budget is enforced around the provider call too, so a vendor that hangs abstains on time. Abstentions, in practice: no key (`not_configured`), a timeout, an HTTP / SDK error, a refusal, output that fails the schema, a thrown provider (the production mock), `UNCLEAR`, or confidence < 0.6. A vote's side is the voter's own (MET → the yes party, NOT_MET → the other): the first ruling's 0.8 REDO floor does not apply to votes (SCHEMAS §7). All three abstaining upholds the original. `CACHED_RULING` does not touch the panel. Votes are decided once all three are in (§2.12 built notes). The appeal ruling row is `rulings` stage `appeal`, model `panel/majority-of-3`, `onchain_ix` `resolve_appeal`; `resolve_appeal` pays only the sides that receive something (ATA created if missing) and bundles `close_bet`.
 
 ### 7.3 Gemini market service (FINDINGS §3.11; no key, no trading)
 
@@ -1206,7 +1242,7 @@ sequenceDiagram
     EL->>A: client tool request_attempt(1)
     A->>S: POST /v1/bets/:id/attempts {attempt_no:1}
     S-->>J: WS attempt.started (go_at)
-    J->>S: POST /attempts/1/frames (8 JPEG + CameraEvidence)
+    J->>S: POST /attempts/1/frames (12 JPEG + landing crop + CameraEvidence)
     S->>S: Haiku plus parallel re-check gives B_WINS 0.93
     S-->>A: WS ruling.issued + judge.cue RULING
     S->>C: resolve(PartyB)
@@ -1292,7 +1328,7 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 
 **6. 18:05:30: attempt.** The judge calls `request_attempt({attempt_no:1})` → A's phone sends `POST /v1/bets/7f3c…/attempts {"attempt_no":1,"recorder":"judge_cam"}` → 201 `{attempt_no:1, performer:"B", recorder_device_id:"<judge-cam>", max_ms:6000, go_at:"…:33.000Z"}`, and the judge cam counts down.
 
-**7. 18:07:01.8: STOP → frames.** The judge cam sends `POST …/attempts/1/frames` (multipart: `evidence` = `CameraEvidence{attempt_no:1, clip_sha256:"6d16c2ef…4a06", frames:[8 × {index, t_ms, sha256}], …}` plus 8 JPEGs ≈ 120–250 KB) → 202 `{judging:true, frame_hashes:["4a732389…aae6", … 8 entries], clip_upload:{url:"https://…/attempts/7f3c…/1/clip.mov?X-Amz-…", method:"PUT", headers:{"Content-Type":"video/quicktime"}, max_bytes:26214400, expires_at:"…:02.400Z"}}`. Haiku and the re-check start at t+0.05 s.
+**7. 18:07:01.8: STOP → frames.** The judge cam sends `POST …/attempts/1/frames` (multipart: `evidence` = `CameraEvidence{attempt_no:1, clip_sha256:"6d16c2ef…4a06", frames:[8 × {index, t_ms, sha256}], …}` plus 8 JPEGs ≈ 120–250 KB; since D10 it is 12 frames + the landing crop, ≈ 300–450 KB) → 202 `{judging:true, frame_hashes:["4a732389…aae6", … 8 entries], clip_upload:{url:"https://…/attempts/7f3c…/1/clip.mov?X-Amz-…", method:"PUT", headers:{"Content-Type":"video/quicktime"}, max_bytes:26214400, expires_at:"…:02.400Z"}}`. Haiku and the re-check start at t+0.05 s.
 
 **8. 18:07:04.5: ruling.** The primary returns `{claim_result:"MET", confidence:0.93, reason:"Two full rotations, lands upright on its base in frame 7. Jake never touches it.", cited_frames:[5,6,7], contested:false}` → `toOutcome` = `B_WINS` → `Ruling` (the SCHEMAS §5.2 example, `frame_hashes` included).
 
@@ -1372,3 +1408,9 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
   - **Lock build timing:** the nonce lease, build and simulation happen at `confirm_terms` (ESCROW §5.0.1), not speculatively at `propose_terms`. The skill `accept_deadline` is build time + 300 s; the trace now uses 1795284618 (18:10:18) and `expires_at` 18:10:13.
   - **D7:** `evidence_record_hash` replaced by `frame_hashes` (§2.9, §7.1, §8); the trace uses the recomputed SCHEMAS ruling hash `997ce278…5daa`.
   - `tx.*` payloads carry `kind: TxKind` (was `ix`). Nonce pool is created by `scripts/nonce-pool.ts` at deploy, not at boot (§6.1). `/v1/config` serves `nonce_seed_max`. Pins come from committed `packages/shared` constants, not EAS env. CU floor cites ESCROW N11. Added `GET /health` to §2.0, `POST /v1/demo/toggles` to §2.17, and a status note for every §9.1 conflict.
+- **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`):
+  - **§2.9 frames.** 8..12 frames + at most one landing crop (`frames[i].landing_crop`, last, ≤ 1024 px), every JPEG ≤ 200 KB; the phone sends 12 (8 in the last ~1.2 s) + the crop through the shared sampler `packages/shared/src/judge/frames.ts`. §1.4: the frames body limit is 3 MiB (it already was in code; the 2 MB here was stale).
+  - **§2.9 attempts.** Called by the non-performer's Start as well as A's `request_attempt`. `'judge_cam'` first, then `'self'` on `409 no_judge_cam`, never from the performer; the `no_judge_cam` refusal refunds its rate-limit token. Deviation from ARCHITECTURE §1.1 ("recording never happens on A's phone"): with two phones and B performing, A's phone films, video only, so WebRTC keeps the mic.
+  - **§4.4** `request_attempt` replies `"armed: this phone films, counting down"` or `"error: NO_JUDGE_CAM"` too. **§7.1** the first-ruling prompt labels the landing frames and the crop. **§1.7** notes the refund. **§8** the trace notes the D10 counts.
+- **2026-11-18 (Beat 5 appeal, built without the hearing).** §2.12 gains "Built" notes: the exact GET / POST error set (`SIGNATURE_INVALID` for a signature that does not verify, as concede; the program's 6024 → `APPEAL_WINDOW_CLOSED`), the bucket spent only by an accepted filing, idempotent repeats, the filing written before the send, the failed-appeal path, the decision once all three votes are in (the `AppealResult` carries three votes), finalize skipping an appeal in flight, the `appeal-sweep` keeper task. §2.17 adds `POST /v1/demo/bets/:bet_id/appeal` (custodial, `LOCK_SIGNER=server`). §3.4 pins the push order (concede then appeal) and the built event order; `appeal_decided` push is not sent. §7.2 describes the built panel (abstentions, no 0.8 floor on votes).
+- **2026-11-18, the stage voice (feat/stage-voice):** §2.17 gains the stage audio routes (`GET /v1/stage/audio`, `/v1/stage/tts/:clip_id`, `/v1/stage/sfx/:kind`) and says `GET /v1/demo/health` takes the stage token alone. §3.1 gains the `stage.voice` control frame (stage sessions only) and `stage.cue.audio_url`. §4.5: the TTS route is `/v1/stage/tts/:clip_id` (content-addressed: sha256 of voice, model and text), not `:vote_id`, because the same route also voices the rulings and payouts; the stage voice table and the browser fallback after 800 ms are new. §2.6 / §4.4: the cue clips are live with the key (`SFX_PROVIDER=auto`). §4.5 "One judge at a time": in a bet a voice judge hosts (a relayed `judge.line`), the stage leaves the ruling and the payout to A's phone (no `stage.voice`, no browser voice), so the hall never hears both.

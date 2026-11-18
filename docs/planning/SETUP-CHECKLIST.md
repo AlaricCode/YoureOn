@@ -511,12 +511,15 @@ LOCK_MODE=                      # atomic (D3) | sequential (fallback, FINDINGS �
 DEMO_MODE=                      # true only on the demo deployment; /v1/demo/* return 404 otherwise (API-CONTRACT §2.17)
 # NONCE_POOL_SIZE (5) is a packages/shared constant (SCHEMAS §0.1), not an env var
 ELEVENLABS_AGENT_ID=            # K2
-ELEVENLABS_JUDGE_VOICE_ID=      # K2 Voice Design voice
+ELEVENLABS_JUDGE_VOICE_ID=      # K2 Voice Design voice (also the stage TTS judge voice)
+ELEVENLABS_PANEL_VOICE_IDS=     # optional: 3 comma-separated voice ids, appeal seats 1-3 on the stage (default: premade voices)
+STAGE_TTS=                      # on (default) | off: kill switch for the stage's ElevenLabs voice (API-CONTRACT §4.5)
+STAGE_TTS_MODEL=                # optional: stage TTS model (default eleven_v4_turbo, A/B eleven_flash_v2)
 # Paid-provider switches (apps/server/src/providers; planning D14). Default mock = offline and free.
 ALLOW_SPEND=                    # true allows any *_PROVIDER=live; never set in tests or CI
 LLM_PROVIDER=                   # mock (default) | live: Anthropic + OpenAI + Google judge/panel calls
 STT_PROVIDER=                   # mock (default) | live: ElevenLabs Scribe (hearing turn B)
-SFX_PROVIDER=                   # mock (default) | live: ElevenLabs Sound Effects (stage cues)
+SFX_PROVIDER=                   # auto (default: live with ELEVENLABS_API_KEY + ALLOW_SPEND, else mock) | mock | live: ElevenLabs Sound Effects (stage cues)
 # --- Solana / QuickNode (secret)
 SOLANA_DEVNET_RPC=
 SOLANA_DEVNET_WS=
@@ -581,3 +584,4 @@ EXPO_PUBLIC_WS_URL=             # wss://<app>.fly.dev/v1/ws
   - **SOL deadline** aligned to TASKS P-09: ~10 SOL in the bank by Thu Nov 12 21:00 CST. §5 conflicts marked done, and rows 13–16 added.
 - **2026-11-08, completeness pass** (`TRACEABILITY.md`): devnet USDC timing aligned with TASKS P-10 and FINDINGS §1 ("claim early"). C2, the summary's "Window only" line, master row C2 and §6 (new step 13) now say: collect into human-held addresses before the window, then move the float into the product wallets with `scripts/fund.ts` (TASKS D1-L6) in the window.
 - **2026-11-14, merge (planning D14):** §7 gains `ALLOW_SPEND`, `LLM_PROVIDER`, `STT_PROVIDER` and `SFX_PROVIDER`, matching `apps/server/src/env.ts` and `.env.example`. Any `*_PROVIDER=live` refuses to start unless `ALLOW_SPEND=true`.
+- **2026-11-18, the stage voice:** §7 gains `STAGE_TTS`, `STAGE_TTS_MODEL` and `ELEVENLABS_PANEL_VOICE_IDS`; `SFX_PROVIDER` defaults to `auto` (live exactly when `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true` are set). The stage TTS needs the server key's Text to Speech and Sound Effects permissions (K2 `yo-server`).

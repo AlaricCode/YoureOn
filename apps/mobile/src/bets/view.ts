@@ -2,6 +2,12 @@
 // this phone's party. The terms card is rendered from `terms` alone (API-CONTRACT §6.3 G2), so
 // every string here comes from a Terms field, never from the server's presentation block.
 // Pure TS: tested in node.
+import {
+  PANEL_SEATS,
+  type AppealResult,
+  type AppealVote,
+  type PanelProvider,
+} from '@youre-on/shared/appeal';
 import { formatUsd, type MicroUsdc } from '@youre-on/shared/money';
 import { formatPrice } from '@youre-on/shared/settlement';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
@@ -124,6 +130,43 @@ export function canAppeal(
 ): boolean {
   return view.kind === 'skill' && result === 'lost' && nowMs < appealDeadlineMs - 1000;
 }
+
+/** One panel seat on the appeal screen (PlayScreens AppealScreen). */
+export interface AppealSeatView {
+  name: string;
+  vote: 'voting' | 'upholds' | 'overturns' | 'abstains';
+  reason: string | null;
+}
+
+/** Seat k = PANEL_SEATS[k] (API-CONTRACT §7.2); named by provider, never by model id. */
+const PANEL_NAMES: Readonly<Record<PanelProvider, string>> = {
+  anthropic: 'Claude',
+  openai: 'GPT',
+  google: 'Gemini',
+};
+
+/**
+ * The three seats as they stand: "voting" until a seat's appeal.vote arrives, then whether its
+ * counted vote upholds the appealed outcome, overturns it, or abstains (SCHEMAS §7 countVote).
+ */
+export function appealSeats(
+  votes: readonly Pick<AppealVote, 'seat' | 'provider' | 'counted_as' | 'reason'>[],
+  original: RulingOutcome | null,
+): AppealSeatView[] {
+  return PANEL_SEATS.map((provider, seat) => {
+    const v = votes.find((x) => x.seat === seat);
+    const name = PANEL_NAMES[v?.provider ?? provider];
+    if (!v) return { name, vote: 'voting', reason: null };
+    const vote =
+      v.counted_as === 'ABSTAIN' ? 'abstains' : v.counted_as === original ? 'upholds' : 'overturns';
+    return { name, vote, reason: v.reason || null };
+  });
+}
+
+/** The panel's verdict on the appeal screen: null while it votes. */
+export const appealVerdict = (
+  r: Pick<AppealResult, 'flipped'> | null,
+): 'stands' | 'flipped' | null => (r ? (r.flipped ? 'flipped' : 'stands') : null);
 
 /** GG is the loser's concede, for decisive outcomes only (CONCEDE_NOT_ALLOWED otherwise). */
 export const canConcede = (result: MyResult, appealDeadlineMs: number, nowMs: number): boolean =>

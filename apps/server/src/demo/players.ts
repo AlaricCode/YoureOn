@@ -42,6 +42,32 @@ export function demoWalletsOf(env: AppDeps['env'], rt: ChainRuntime | null): Set
   return out;
 }
 
+/**
+ * demo-a's and demo-b's wallet each (env DEMO_A / DEMO_B_SECRET_KEY first, then the chain runtime's
+ * custodial keys; the same in production), or null when this server knows neither.
+ */
+export async function demoPartyWallets(
+  deps: LifecycleDeps,
+): Promise<{ a: string | null; b: string | null }> {
+  const rt = await lifecycleOf(deps)
+    .runtime()
+    .catch(() => null);
+  const fromEnv = (party: 'a' | 'b'): string | null => {
+    try {
+      const k = demoPartyKey(deps.env, party);
+      if (!k) return null;
+      k.seed.fill(0);
+      return k.pubkey;
+    } catch {
+      return null; // a malformed key: demo-claim and the chain runtime report it
+    }
+  };
+  return {
+    a: fromEnv('a') ?? rt?.keys.demoA?.address ?? null,
+    b: fromEnv('b') ?? rt?.keys.demoB?.address ?? null,
+  };
+}
+
 /** The demo-a / demo-b wallet pubkeys this server knows. */
 export async function demoWallets(deps: LifecycleDeps): Promise<Set<string>> {
   const rt = await lifecycleOf(deps)

@@ -111,11 +111,12 @@ scan the QR."
 
 ### 2:25–3:20 · Beat 4: the attempt
 
-> **Presenter:** "Now B flips. The judge cam is that third phone."
+> **Presenter:** "Now B flips. The judge cam is that third phone." (Two phones only: "A's phone is
+> the camera now", and A films; [`runbook.md`](runbook.md#phones-and-room).)
 
-| Judge cam                                 | Phone A / Phone B                                                       | Stage                                                                                 |
-| ----------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| 3-2-1, records the flip, uploads 8 frames | "Judging…" → the ruling and the reason → the loser's phone shows **GG** | Attempt → Ruling on the phase rail; the evidence frames; the ruling and reason; gavel |
+| Judge cam (or phone A)                                      | Phone A / Phone B                                                       | Stage                                                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 3-2-1, records the flip, uploads 12 frames + a landing crop | "Judging…" → the ruling and the reason → the loser's phone shows **GG** | Attempt → Ruling on the phase rail; the evidence frames; the ruling and reason; gavel |
 
 > **Presenter:** "Claude looked at the frames and ruled in about three seconds. The ruling's hash,
 > which commits to every frame it saw, is on chain. Now the loser has two choices: GG, or appeal
@@ -128,7 +129,8 @@ in the ticker. Winner's phone: the payout. If nobody taps GG, the 10-second wind
 server finalizes.
 
 If the ruling is REDO ("Run it back"), flip again: that is the deterministic checks refusing a
-verdict they can't confirm. If the judge is slow or wrong, see the runbook (`CACHED_RULING`).
+verdict they can't confirm. If the judge is slow or wrong, see the runbook: the cached ruling is a
+runtime switch (`POST /v1/demo/toggles {"cached_ruling": true}`), no restart.
 
 ### 3:20–3:45 · Beat 5: what if you disagree? (talk, no demo)
 
@@ -138,8 +140,9 @@ verdict they can't confirm. If the judge is slow or wrong, see the runbook (`CAC
 > key. And if our server vanished tomorrow, every bet has a deadline after which anyone can refund
 > it. The program decides where money can go. The AI only decides who won."
 
-Stage: stays on the paid bet. Don't show the stage preview's sample appeal: the hearing and panel
-are not built.
+Stage: stays on the paid bet. Don't show the stage preview's sample appeal: the hearing is not
+built, and the panel (built and tested, see the runbook's "The appeal (Beat 5)") has not run live
+yet.
 
 ### 3:45–4:25 · Beat 6, part 2: the closer settles
 
@@ -165,8 +168,9 @@ are not built.
 Do not fake it. The money path runs without phones: on the laptop, `npm run cp1-drive -- --base-url
 https://youre-on.fly.dev --through paid --gg` plays both players over the real API with the demo
 keys, and the stage shows the real devnet bet. Say so: "The phones aren't signed yet, so the laptop
-plays both of them; what you see on the stage is the real escrow." Its judge-cam frames are
-synthetic test images, so don't present the ruling as a real flip. Use `REPLAY 1` for the face scan
+plays both of them; what you see on the stage is the real escrow." No voice judge hosts a laptop
+bet, so the projector speaks its ruling and payout itself. Its judge-cam frames are synthetic test
+images, so don't present the ruling as a real flip. Use `REPLAY 1` for the face scan
 only if a recorded clip of the real app exists, and say "replay".
 
 ## Demo video (2–3 minutes)
@@ -175,19 +179,23 @@ Required by the rules and the ElevenLabs bounty: it must show the voice judge **
 the phones' screens (iOS screen recording with the mic on), one over-the-shoulder camera, and the
 stage page. Label any replayed segment.
 
-| #   | Time      | Shot                                                                                                                                  | Audio                                | Proves             |
-| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------ |
-| 1   | 0:00–0:10 | Title card; two friends, a water bottle.                                                                                              | VO: the one-line pitch               | Hook               |
-| 2   | 0:10–0:25 | Close-up: an argument over a flip; "you owe me five".                                                                                 | VO: the problem                      | Problem            |
-| 3   | 0:25–0:40 | Over the shoulder: A scans B's face → "Challenge B?" → B's phone buzzes.                                                              | Ambient                              | Beat 1             |
-| 4   | 0:40–1:10 | Phone A screen recording + room audio: the judge's voice, its edge-case question, the read-back. Cut to the stage captions.           | **The ElevenLabs judge, audible**    | Beat 2, ElevenLabs |
-| 5   | 1:10–1:25 | Split screen: both phones, hold → Face ID → Locked. Stage LOCKED; Explorer page of the lock transaction.                              | VO: "one transaction, three signers" | Beat 3, Solana     |
-| 6   | 1:25–1:55 | Judge cam POV of the flip; the ruling on the phones and stage; the loser taps GG; the winner's payout; Explorer link.                 | Judge announces the result           | Beat 4             |
-| 7   | 1:55–2:25 | Beat 6: "Bet on Bitcoin" with Gemini's odds; time-lapse to expiry; settled, "verified", paid.                                         | VO: fair odds, evidence on chain     | Gemini             |
-| 8   | 2:25–2:45 | Under the hood: the architecture diagram; the stage ticker reading "via QuickNode Streams"; the webhook log; the program on Explorer. | VO: Streams, the program, the tests  | QuickNode, Solana  |
-| 9   | 2:45–3:00 | End card: program ID, repo URL, team.                                                                                                 | VO: close                            |                    |
+| #   | Time      | Shot                                                                                                                                  | Audio                                      | Proves             |
+| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------ |
+| 1   | 0:00–0:10 | Title card; two friends, a water bottle.                                                                                              | VO: the one-line pitch                     | Hook               |
+| 2   | 0:10–0:25 | Close-up: an argument over a flip; "you owe me five".                                                                                 | VO: the problem                            | Problem            |
+| 3   | 0:25–0:40 | Over the shoulder: A scans B's face → "Challenge B?" → B's phone buzzes.                                                              | Ambient                                    | Beat 1             |
+| 4   | 0:40–1:10 | Phone A screen recording + room audio: the judge's voice, its edge-case question, the read-back. Cut to the stage captions.           | **The ElevenLabs judge, audible**          | Beat 2, ElevenLabs |
+| 5   | 1:10–1:25 | Split screen: both phones, hold → Face ID → Locked. Stage LOCKED; Explorer page of the lock transaction.                              | VO: "one transaction, three signers"       | Beat 3, Solana     |
+| 6   | 1:25–1:55 | Judge cam POV of the flip; the ruling on the phones and stage; the loser taps GG; the winner's payout; Explorer link.                 | The judge announces the result (A's phone) | Beat 4             |
+| 7   | 1:55–2:25 | Beat 6: "Bet on Bitcoin" with Gemini's odds; time-lapse to expiry; settled, "verified", paid.                                         | VO: fair odds, evidence on chain           | Gemini             |
+| 8   | 2:25–2:45 | Under the hood: the architecture diagram; the stage ticker reading "via QuickNode Streams"; the webhook log; the program on Explorer. | VO: Streams, the program, the tests        | QuickNode, Solana  |
+| 9   | 2:45–3:00 | End card: program ID, repo URL, team.                                                                                                 | VO: close                                  |                    |
 
-Gates: shot 4 needs the ElevenLabs key; shot 8's "via QuickNode Streams" needs the live Stream (the
+Gates: shot 4 needs the ElevenLabs key. The stage speaks a ruling only in a bet no voice judge is
+hosting (the "No phones" run, or typed terms before the judge spoke): with the voice judge on, A's
+phone announces it and the projector stays quiet, so the hall hears one judge. The stage's own
+voice is ElevenLabs only with the key (without it the strip says `Voice browser`, so don't present
+it as ElevenLabs). Shot 8's "via QuickNode Streams" needs the live Stream (the
 stage only says it when the Stream delivered). Without them those bounties lose their evidence, so
 record those shots last and don't substitute footage that implies otherwise. No Beat 5 shot: the
 hearing and panel are not built.
@@ -202,8 +210,8 @@ Gemini's regulated market instead of our escrow.
 **What if the AI judge is wrong?** Three guards. It rules on frames whose hashes are committed on
 chain, so the evidence can't be swapped later. Deterministic checks can veto a verdict (REDO), and
 low confidence or a model error is a REDO too; a third REDO refunds both. And the loser
-can appeal inside the window; only a separate appeal key can settle an appeal. The three-model
-panel behind that key is the next thing we build.
+can appeal inside the window; only a separate appeal key can settle an appeal. Behind that key, a
+panel of three models from three companies votes on the same frames; two must agree to flip it.
 
 **Can your server steal the money?** No. The program pays out only to the two parties' own token
 accounts; there is no admin withdrawal. Our judge key can pick who won, not where money goes. We

@@ -4,7 +4,8 @@
 //   POST  /v1/bets/:bet_id/attempts/:n/frames    (S, recorder device; multipart) -> 202   ATTEMPT -> JUDGING
 //
 // After the 202 the ruling job runs in the background: one structured vision call through
-// deps.providers.llm (or the CACHED_RULING verdict), the deterministic bottle checks, the
+// deps.providers.llm (or, while cached_ruling is on, the stored verdict: env CACHED_RULING or the
+// runtime toggle POST /v1/demo/toggles, read per call), the deterministic bottle checks, the
 // SCHEMAS §5.1 mapping (toOutcome, REDO_BELOW, MAX_REDOS -> VOID), the Ruling record and its
 // ruling_hash (committing to the frame hashes, D7), one DB transaction (rulings row, attempt
 // status, redo_count, ruling.issued + judge.cue), fan-out to the bet channel and the room's
@@ -15,10 +16,19 @@
 // which is what lets POST …/attempts open attempt_no + 1.
 //
 // The performer never records: the judge cam must be the non-performer's device and
-// recorder:'self' is refused to the performer (§2.9). A lost ruling job (crash before its
-// commit, restart mid-call) never strands the bet in JUDGING: a throwing job commits REDO
-// 'unclear'; a replayed frames upload re-runs it from attempt_frames; the keeper task
-// 'judge-stuck' gives one older than STUCK_JUDGING_MS a REDO 'unclear' (no new model call).
+// recorder:'self' is refused to the performer (§2.9). With two phones (no judge cam in the room)
+// the non-performer's phone asks for 'judge_cam', gets 409 no_judge_cam, and records itself with
+// 'self' (apps/mobile src/attempt/recorder.ts); that refusal gives its rate-limit token back, so
+// the fallback spends no more of the bet's 6/min than the judge-cam path.
+//
+// Frames (planning D10, packages/shared/src/judge/frames): 8..12 frames plus at most one landing
+// crop, last, each ≤ 200 KB. The job hands the model duration_ms and the crop flag, so the prompt
+// labels the landing frames and the crop, also when it is re-run from the DB.
+//
+// A lost ruling job (crash before its commit, restart mid-call) never strands the bet in
+// JUDGING: a throwing job commits REDO 'unclear'; a replayed frames upload re-runs it from
+// attempt_frames; the keeper task 'judge-stuck' gives one older than STUCK_JUDGING_MS a REDO
+// 'unclear' (no new model call).
 //
 // Not here yet (no object storage): clip PresignedUpload (`clip_upload` is null), clip-upload /
 // clip-complete, signed frame_urls in attempt.evidence (empty). Frames are kept in Postgres.
@@ -26,6 +36,12 @@ import { randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { attemptFrames, attempts, auditLog, bets, devices, rulings, users } from '@youre-on/db';
 import { CameraEvidence } from '@youre-on/shared/evidence';
+import {
+  MAX_FRAME_BYTES as SHARED_MAX_FRAME_BYTES,
+  MAX_JUDGE_FRAMES,
+  MIN_JUDGE_FRAMES,
+  judgeFramesProblem,
+} from '@youre-on/shared/judge/frames';
 import { jcs } from '@youre-on/shared/jcs';
 import { sha256Hex, Uuid, type Party } from '@youre-on/shared/primitives';
 import type { Terms } from '@youre-on/shared/terms';
@@ -52,12 +68,15 @@ export const ATTEMPTS_BUCKET = { limit: 6, windowMs: 60_000 } as const;
 export const GO_DELAY_MS = 3_000;
 /** §2.9: per attempt try. */
 export const MS_PER_TRY = 6_000;
-/** Frames per upload (planning D10: 12–16 clustered at the end; capped at 12 for latency). */
-export const MIN_FRAMES = 8;
-export const MAX_FRAMES = 12;
-/** §2.9: each JPEG ≤ 200 KB. */
-export const MAX_FRAME_BYTES = 200 * 1024;
-/** The frames multipart body: 12 × 200 KB + the evidence JSON + multipart overhead. */
+/**
+ * Frames per upload, the landing crop not counted (planning D10: 12–16 clustered at the end,
+ * capped at 12 for latency; 8 still accepted from older phones and scripts/cp1-drive).
+ */
+export const MIN_FRAMES = MIN_JUDGE_FRAMES;
+export const MAX_FRAMES = MAX_JUDGE_FRAMES;
+/** §2.9: each JPEG ≤ 200 KB, the landing crop included (= the attempt_frames_size CHECK). */
+export const MAX_FRAME_BYTES = SHARED_MAX_FRAME_BYTES;
+/** The frames multipart body: 13 × 200 KB (12 frames + the crop) + the evidence JSON + overhead. */
 export const FRAMES_BODY_LIMIT = 3 * 1024 * 1024;
 /**
  * A ruling job this much past its upload, with no job running for it in this process, is
@@ -165,6 +184,21 @@ async function findJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow, perf
 const nonPerformerId = (bet: BetRow, performer: Party) =>
   performer === 'A' ? bet.party_b_id : bet.party_a_id;
 
+/** The upload's CameraEvidence as stored (attempts.evidence_canonical), or null. */
+function storedEvidence(att: AttemptRow): CameraEvidence | null {
+  if (!att.evidence_canonical) return null;
+  try {
+    const r = CameraEvidence.safeParse(JSON.parse(att.evidence_canonical));
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST …/attempts found no judge cam: the phone's cue to record itself ('self'). */
+const isNoJudgeCam = (e: unknown) =>
+  e instanceof HttpError && e.code === 'INVALID_STATE' && e.details?.reason === 'no_judge_cam';
+
 function startResponse(a: AttemptRow, performer: Party): StartAttemptResponse {
   return {
     attempt_no: a.attempt_no,
@@ -207,7 +241,10 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
       terms: Terms;
       evidence_hash: string;
       frame_hashes: string[];
-      frames: { t_ms: number; bytes: Uint8Array }[];
+      /** In send order; the landing crop (if any) last. */
+      frames: { t_ms: number; bytes: Uint8Array; landing_crop?: boolean | undefined }[];
+      /** CameraEvidence.duration_ms (the prompt's landing window). */
+      duration_ms: number | undefined;
       received_at: number;
     },
     /** Skip the vision call and commit this instead (the failure fallback of startJob). */
@@ -222,6 +259,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         terms: job.terms,
         performer_name: names[job.terms.performer ?? 'B'],
         frames: job.frames,
+        duration_ms: job.duration_ms,
       }));
     const now = deps.now();
     const ruling = buildRuling(
@@ -372,6 +410,10 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
       .where(eq(attemptFrames.attempt_id, att.id))
       .orderBy(asc(attemptFrames.idx));
     const terms = await termsFor(deps, bet);
+    // Which stored frame is the landing crop: the evidence record says (frames[i].landing_crop).
+    const crops = new Set(
+      storedEvidence(att)?.frames.flatMap((f) => (f.landing_crop ? [f.index] : [])),
+    );
     deps.log.warn('judge.job_restarted', {
       bet_id: bet.id,
       attempt_no: att.attempt_no,
@@ -386,7 +428,12 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         terms,
         evidence_hash: att.client_clip_hash,
         frame_hashes: att.frame_hashes,
-        frames: stored.map((f) => ({ t_ms: f.t_ms, bytes: new Uint8Array(f.bytes) })),
+        frames: stored.map((f, i) => ({
+          t_ms: f.t_ms,
+          bytes: new Uint8Array(f.bytes),
+          ...(crops.has(i) ? { landing_crop: true } : {}),
+        })),
+        duration_ms: att.duration_ms ?? undefined,
         received_at: att.uploaded_at.getTime(),
       },
       forced,
@@ -520,7 +567,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         const names = await displayNames(deps.db, bet0);
         const now = deps.now();
 
-        const out = await deps.db.transaction(async (tx) => {
+        const started = deps.db.transaction(async (tx) => {
           const bet = await lockBet(tx, betId);
           const prior = await tx
             .select()
@@ -615,6 +662,12 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             details: { from: bet.state, to: 'ATTEMPT', attempt_no: res.attempt_no },
           });
           return { res, events, recorderUser: recorder.user_id, room_id: bet.room_id };
+        });
+        // No judge cam: nothing was written, and the phone asks again with 'self' (two phones).
+        // The refusal gives its token back, so the fallback is free.
+        const out = await started.catch((e: unknown) => {
+          if (isNoJudgeCam(e)) deps.rateLimit?.refund('attempts', betId, ATTEMPTS_BUCKET);
+          throw e;
         });
 
         for (const e of out.events) deps.hub.publishBetEvent(e, bet0.room_id);
@@ -727,16 +780,21 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           bad('evidence.recorded_by', `must be ${recorderParty}`);
         }
         const parts = form.getAll('frame');
-        if (parts.length < MIN_FRAMES || parts.length > MAX_FRAMES) {
-          bad('frame', `send ${MIN_FRAMES} to ${MAX_FRAMES} frames (got ${parts.length})`);
-        }
         if (evidence.frames.length !== parts.length) {
           bad(
             'evidence.frames',
             `lists ${evidence.frames.length} frames, body has ${parts.length}`,
           );
         }
-        const frames: { t_ms: number; sha256: string; bytes: Uint8Array }[] = [];
+        // D10: MIN_FRAMES..MAX_FRAMES frames, plus at most one landing crop, sent last.
+        const problem = judgeFramesProblem(evidence.frames);
+        if (problem) bad(problem.path, problem.message);
+        const frames: {
+          t_ms: number;
+          sha256: string;
+          bytes: Uint8Array;
+          landing_crop?: boolean;
+        }[] = [];
         for (let i = 0; i < parts.length; i++) {
           const p = parts[i]!;
           const meta = evidence.frames[i]!;
@@ -756,7 +814,12 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
               got,
             });
           }
-          frames.push({ t_ms: meta.t_ms, sha256: got, bytes });
+          frames.push({
+            t_ms: meta.t_ms,
+            sha256: got,
+            bytes,
+            ...(meta.landing_crop ? { landing_crop: true } : {}),
+          });
         }
         const frameHashes = frames.map((f) => f.sha256);
         const terms = await termsFor(deps, bet0);
@@ -825,6 +888,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           evidence_hash: evidence.clip_sha256,
           frame_hashes: frameHashes,
           frames,
+          duration_ms: evidence.duration_ms,
           received_at: now,
         });
 

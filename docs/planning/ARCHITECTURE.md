@@ -15,7 +15,7 @@ How the pieces fit, what talks to what, who can move money, and what happens whe
 - **Lock = one atomic transaction (D3).** `[AdvanceNonce, ComputeBudget, create_bet, accept_bet]`, fee payer = nonce authority = server hot key, durable nonce from a server pool. Both phones get the same message bytes, run the device policy, and sign at their own hold + Face ID, in either order. The server submits once at the second signature, preflight ON. Nothing moves unless both sign. Decline or expiry advances the nonce (§3.3).
 - **Two lanes.** The fast lane is the server's own `signatureSubscribe` on QuickNode RPC: `confirmed` advances LOCKED/RULED, `processed` fires the payout animation. The Streams lane is the QuickNode Stream webhook: the source of truth for money moved, writes the projection, and confirms on the stage (§5).
 - **Voice (D6).** One ElevenLabs Agent session per bet on A's phone (speakerphone). Webhook tools for terms, client tools for UI, and server results voiced through a phone-side "[EVENT]" bridge. Spoken "accept" and "I appeal!" are theatre; the phones sign.
-- **Judging.** The judge-cam iPhone extracts 8 frames on the device; Claude rules from them (model PENDING-KEY). Below 0.8 confidence → REDO, at most 2 → HEARING. Hearing: 10 s push-to-talk per side, Claude Opus. Appeal: Anthropic + OpenAI + Google vote in parallel; no majority upholds the original ruling (D7).
+- **Judging.** The judge-cam iPhone (or, with two phones, the non-performer's own) extracts 12 frames, 8 of them in the last ~1.2 s, plus one landing crop on the device (D10); Claude rules from them (model PENDING-KEY). Below 0.8 confidence → REDO, at most 2 → HEARING. Hearing: 10 s push-to-talk per side, Claude Opus. Appeal: Anthropic + OpenAI + Google vote in parallel; no majority upholds the original ruling (D7).
 - **Gemini closer.** Public REST + one WebSocket, no key. Odds come from the mid price, are bound into `terms_hash`, and must be locked between strike-known and T−120 s (by ~W+1:30). Settlement: WS `Settled` → REST confirm → `resolve` with the settlement record's hash.
 - **Targets.** Four of the five brief targets are on track **on paper only** (all E; §4). The judge's post-tool read-back (1.25–2.2 s) is marginal against 1.5 s. Atomic lock 0.70–1.39 s. Payout < 1 s only when the UI flips at `processed`.
 - **Biggest risks** (FINDINGS §4): the iOS native build path (no Mac, EAS only), voice latency PENDING-KEY, vision accuracy unmeasured (20 clips needed), the narrow Beat 6 window, devnet SOL needing a human. Every beat has a labelled pre-recorded fallback (§7).
@@ -35,7 +35,7 @@ flowchart LR
   subgraph PH["iPhones · apps/mobile (Expo SDK 58 dev build)"]
     A["A · challenger<br/>face scan, terms card, wallet,<br/>hosts the judge voice session"]
     B["B · challenged<br/>terms card, wallet, hearing PTT"]
-    JC["Judge cam on a tripod<br/>records, 8 frames, hashes"]
+    JC["Judge cam on a tripod (optional)<br/>records, 12 frames + landing crop, hashes"]
   end
   ST["apps/stage<br/>projector SPA on the laptop"]
   SH["packages/shared<br/>Zod, JCS hashing, device signing policy,<br/>Codama Kit client, chain codec"]
@@ -50,7 +50,7 @@ flowchart LR
   end
   subgraph EL["ElevenLabs"]
     AG["Agents platform<br/>WebRTC via LiveKit"]
-    SAPI["STT, TTS APIs<br/>(Sound Effects at build time)"]
+    SAPI["STT, TTS, Sound Effects APIs<br/>(stage voice and cues)"]
   end
   ANT["Anthropic API · Claude"]
   OAI["OpenAI API · panel seat"]
@@ -71,7 +71,7 @@ flowchart LR
   A -->|"HTTPS: face embedding only"| FACE
   A <-->|"HTTPS + WSS: bets, RealtimeEvent, AuthorizeRequest, signatures"| HUB
   B <-->|"HTTPS + WSS: RealtimeEvent, AuthorizeRequest, signatures, hearing clip"| HUB
-  JC -->|"HTTPS multipart: 8 JPEG frames + CameraEvidence"| HUB
+  JC -->|"HTTPS multipart: 12 JPEG frames + landing crop + CameraEvidence"| HUB
   JC -->|"HTTPS presigned PUT: clip"| OBJ
   ST <-->|"WSS: bet room events, market.tick, cues"| HUB
   ST -->|"HTTPS signed GET: frames"| OBJ
@@ -103,9 +103,9 @@ flowchart LR
 | Component | Owns | Must never | Key libs (FINDINGS) |
 |---|---|---|---|
 | `apps/mobile`, party mode (A, B) | Face enrollment + scan (on-device embedding), terms card, hold-to-confirm, Face ID gate, seed custody, device signing policy, ed25519 signing, payout UX + haptics, WS client, hearing push-to-talk. A only: the judge voice session and the voice bridge (§3.2). | Call Solana RPC, hold an RPC key, be a fee payer, sign a message that fails the policy, send face images | §3.1, §3.2, §3.4, §3.10 |
-| `apps/mobile`, judge-cam mode | Countdown, `recordAsync`, on-device frame extraction (u4d4, 8 × 512 px), frame + clip SHA-256, upload frames first, clip after. Recording never happens on A's phone, whose mic is held by WebRTC (FINDINGS §4 Beat 4). | Hold a wallet | §3.3 |
+| `apps/mobile`, judge-cam mode | Countdown, `recordAsync`, on-device frame extraction (D10: 12 × 512 px, 8 of them in the last ~1.2 s, + one landing crop ≤ 1024 px; `packages/shared/src/judge/frames.ts`), frame + clip SHA-256, upload frames first, clip after. **Two-phone fallback (2026-11-18):** with no judge cam in the room the non-performer's own phone records (`recorder:'self'`, API-CONTRACT §2.9), which is A's phone when B performs. This deviates from "recording never happens on A's phone, whose mic is held by WebRTC" (FINDINGS §4 Beat 4): the recording is video only (`mute`, no audio input), so WebRTC keeps the mic. | Hold a wallet | §3.3 |
 | `apps/server` | REST + WS hub (per-bet rooms, per-user channels, `seq`), auth, face matching, ElevenLabs tools + token minting, Terms composition + hashing, LockService (nonce pool, build, simulate, verify, co-sign, send), TxService (resolve, concede, appeal, finalize, crank), fast-lane subscriptions, Streams ingest + projector + reconciler, JudgeService (vision, hearing, panel), Gemini module, evidence presigning, push outbox, demo controls | Co-sign a message it did not build byte for byte; rebuild a message after collecting a signature; send with `skipPreflight`; log face embeddings | §3.5, §3.8, §3.9, §3.11–§3.13 |
-| `apps/stage` | One screen per bet: photos, terms card + terms code, live transcript, frame strip with cited frames, ruling, panel votes, escrow ticker with Explorer links, Gemini chart + countdown. Stage audio (gavel SFX, stingers, appeal-vote TTS). Demo control panel. | Hold any key except a read-only stage token (plus the demo admin token on the control panel) | §3.11 (chart), DATA-MODEL §8.4 |
+| `apps/stage` | One screen per bet: photos, terms card + terms code, live transcript, frame strip with cited frames, ruling, panel votes, escrow ticker with Explorer links, Gemini chart + countdown. Stage audio: the judge's voice for rulings, payouts and appeal votes (ElevenLabs TTS clips, else the browser's speechSynthesis; a bet's ruling and payout are left to A's phone once its voice judge has spoken, API-CONTRACT §4.5), the cues (ElevenLabs Sound Effects, else synthesized stingers). Demo control panel. | Hold any key except a read-only stage token (plus the demo admin token on the control panel) | §3.11 (chart), DATA-MODEL §8.4 |
 | `programs/escrow` | Where and when money moves: Config, Bet PDA, PDA vault, 10 instructions, `emit_cpi!` events | Take a destination argument; give any authority a withdrawal path | ESCROW §1–§7, FINDINGS §3.6 |
 | `packages/shared` | Zod schemas (SCHEMAS), `hashJcs`, money math, `fairStakes`, the **device signing policy** (ESCROW §5.0.2, including the D3 `atomic_lock` kind), Codama client from the IDL, `chain-codec`, noble PDA helper, `AuthorizeRequest`/`PartyAuthorization` | Pull in web3.js or `@anchor-lang/core` | §3.4, §3.5 |
 
@@ -178,7 +178,7 @@ Paths match API-CONTRACT §2.0, which owns them (spike route names were moved un
 | `POST /el/tools/:name` | ElevenLabs | Secret header (`X-YO-Tool-Secret`) referencing an ElevenLabs workspace secret = `ELEVENLABS_TOOL_SECRET` | Responses < 300 B, handler < 5 ms, idempotent per `bet_id` |
 | `POST /webhooks/elevenlabs` | ElevenLabs | `ElevenLabs-Signature` HMAC, SDK-verified with `ELEVENLABS_WEBHOOK_SECRET` | Transcript archived as evidence (hashed) |
 | `POST /webhooks/quicknode` | QuickNode | `X-QN-Signature` HMAC-SHA256 + timestamp check; optional IP allowlist | Ack 2xx fast: delivery is sequential, and the Stream auto-pauses after 3 failed retries |
-| `GET /stage`, `POST /v1/stage/session`, `GET /v1/stage/tts/:vote_id` | Stage laptop | `STAGE_KEY` → stage token | TTS is proxied, so the ElevenLabs key stays on the server |
+| `GET /stage`, `POST /v1/stage/session`, `GET /v1/stage/audio`, `GET /v1/stage/tts/:clip_id`, `GET /v1/stage/sfx/:kind` | Stage laptop | `STAGE_KEY` → stage token | TTS and Sound Effects are proxied, so the ElevenLabs key stays on the server (API-CONTRACT §2.17, §4.5) |
 | `/v1/demo/*` | Stage control panel | Stage token with `demo` scope + `X-YO-Demo-Key` (= `DEMO_ADMIN_TOKEN`); 404 unless `DEMO_MODE=true` | §7.2 toggles (API-CONTRACT §2.17) |
 | `GET /health` | Fly, smoke checks | none | Liveness only |
 
@@ -403,8 +403,8 @@ sequenceDiagram
   J->>J: "3-2-1, flip on GO", recordAsync avc1 720p, maxDuration 6 s
   J->>J: STOP tap about 0.5 s after the bottle rests
   S->>ST: judge stinger cue, played on the stage laptop
-  J->>J: generateThumbnailsAsync u4d4, 8 frames at 512 px, frame sha256s, clip sha256
-  J->>S: POST /v1/bets/:id/attempts/:n/frames (8 JPEG + CameraEvidence with clip_sha256)
+  J->>J: getThumbnailAsync: 12 frames at 512 px (8 in the last 1.2 s) + landing crop, frame sha256s, clip sha256
+  J->>S: POST /v1/bets/:id/attempts/:n/frames (12 JPEG + landing crop + CameraEvidence with clip_sha256)
   J-)O: presigned PUT of the clip, after the frames
   S->>ST: attempt.evidence (signed frame URLs)
   S->>C: streamed request: terms with cache_control + 8 labelled frames, VisionVerdict schema
@@ -803,12 +803,12 @@ Likelihoods and mitigations come from FINDINGS §4. This table adds what the sys
 
 | Toggle | Effect | Notes |
 |---|---|---|
-| Seeded accounts | 3–4 custodial demo accounts provisioned by one-time QR; `seed:chain` history (real devnet bets) or SQL `is_seed` rows | FINDINGS §3.4, DATA-MODEL §11; the stage labels seeded rows "demo history" |
+| Seeded accounts | 3–4 custodial demo accounts provisioned by one-time QR; `seed:chain` history (real devnet bets) or SQL `is_seed` rows | FINDINGS §3.4, DATA-MODEL §11; the stage labels seeded rows "demo history". Built: the two demo accounts (demo-a / demo-b) and `POST /v1/demo/seed-h2h` (the SQL fallback, 4-7) |
 | Short timers | Onchain: Config demo values (appeal 10 s, accept 300 s / quote 60 s, resolve 3600 s, appeal-resolve 300 s). Offchain: draft idle 5 min, hearing turn 10 s, panel 8 s | Onchain values change only via `update_config` and only for new bets (I11) |
 | `force_hearing` | Next ruling opens a hearing (`trigger: 'demo'`) | SCHEMAS §6, keeps Beat 5 deterministic; `POST /v1/demo/bets/:bet_id/force-hearing` |
 | `lock_mode` | `atomic` (default) or `sequential` | FINDINGS §3.7; `POST /v1/demo/lock-mode` |
 | `replay_beat_N` (1–6, h2h) | Stage plays the pre-recorded video of that beat, labelled REPLAY | Record the take at Thursday's rehearsal; `POST /v1/demo/fallback` |
-| `cached_ruling` | Beat 4 uses a pre-recorded clip and its cached ruling | FINDINGS §4 |
+| `cached_ruling` | Beat 4 uses a pre-recorded clip and its cached ruling | FINDINGS §4. Built as the stored verdict for the frames actually uploaded (`Ruling.model = 'cache/demo-bottle@1'`), switched at runtime by `POST /v1/demo/toggles` (no restart; env `CACHED_RULING` is the boot default) |
 | `replay_streams` | Recorded webhook payloads feed the stage ticker, labelled | FINDINGS §4 "All"; `POST /v1/demo/stream/replay` |
 | `gemini_fallback` | `next_contract_5050` or `index_model_odds` (labelled) | FINDINGS §4 Beat 6 |
 | `voice_fallback` | Speech Engine, or pre-generated TTS lines | FINDINGS §3.10 |
@@ -846,14 +846,14 @@ README paragraph:
 | Client tools | `request_attempt`, `show_terms_card`, gavel cue | A's phone |
 | Scribe realtime ASR | Both parties' speech in the session; A's hearing turn | Inside the agent |
 | Speech-to-Text (batch) | B's hearing turn | Server |
-| Text-to-Speech (`eleven_v4_turbo`, A/B `eleven_flash_v2`) | Stage announcements and the three appeal-panel votes in distinct voices | Server → stage |
+| Text-to-Speech (`eleven_v4_turbo`, A/B `eleven_flash_v2`) | The projector speaks the ruling and payout of a bet no voice judge hosts in the judge's voice, and the three appeal-panel votes in distinct voices (API-CONTRACT §4.5; the browser's voice when no clip comes; one judge at a time, so a voice-judged bet's ruling is A's phone's) | Server → stage |
 | Voice Design | The judge's voice | Agent config |
-| Sound Effects | The gavel, generated at build time and played by the stage | Stage asset |
+| Sound Effects | The gavel, drumroll, buzzer and cheer cues, generated once at server boot (`SFX_PROVIDER=auto` with the key) and played by the stage | Server → stage |
 | Post-call webhooks | Transcripts archived and hashed as evidence | `apps/server` |
 
 README paragraph:
 
-> The AI judge is an ElevenLabs Agent. One conversation per bet runs on the challenger's iPhone over WebRTC (`@elevenlabs/react-native` with LiveKit), on speakerphone, from the challenge to the payout. Scribe transcribes both players. Claude Haiku 5.5, configured as the agent's LLM, asks the edge-case questions and calls our server tools (`propose_terms`, `confirm_terms`, `open_hearing`, `file_appeal`, `get_market_odds`) as webhooks, while client tools (`request_attempt`, `show_terms_card`, a gavel cue) run on the phone. The judge never moves money. Our server pushes each lock, ruling and payout to the phone, which injects it into the conversation so the judge announces it. ElevenLabs Speech-to-Text transcribes the opponent's hearing argument, ElevenLabs Text-to-Speech voices the stage announcements and the three appeal-panel votes, Voice Design made the judge's voice, Sound Effects made the gavel, and post-call webhooks archive every transcript (hashed) as evidence.
+> The AI judge is an ElevenLabs Agent. One conversation per bet runs on the challenger's iPhone over WebRTC (`@elevenlabs/react-native` with LiveKit), on speakerphone, from the challenge to the payout. Scribe transcribes both players. Claude Haiku 5.5, configured as the agent's LLM, asks the edge-case questions and calls our server tools (`propose_terms`, `confirm_terms`, `open_hearing`, `file_appeal`, `get_market_odds`) as webhooks, while client tools (`request_attempt`, `show_terms_card`, a gavel cue) run on the phone. The judge never moves money. Our server pushes each lock, ruling and payout to the phone, which injects it into the conversation so the judge announces it. ElevenLabs Speech-to-Text transcribes the opponent's hearing argument, ElevenLabs Text-to-Speech voices the rulings and payouts the phone judge is not there for and the three appeal-panel votes on the projector, Voice Design made the judge's voice, Sound Effects made the gavel, and post-call webhooks archive every transcript (hashed) as evidence.
 
 (PENDING-KEY: which LLM ElevenLabs actually serves, FINDINGS §4 Beat 2. Edit the paragraph if the fallback ships.)
 
@@ -970,3 +970,5 @@ Open items for the lead engineer (defaults in force until changed):
   - **§5.3, §6.4, §6.5, §7.2.** Authorization idempotency `(lock_request_id, party)`; kind name `atomic_lock`; ESCROW test IDs A13 + DP1–DP16; demo toggles mapped to API routes.
   - **§10.** C1–C7 and C9–C11 marked resolved, with where.
 - **2026-11-08, completeness pass** (`TRACEABILITY.md`): §9 item 15 now discloses the pre-window data artifacts (the eval clips, which stay out of git) and says the face model is regenerated in the window (timing rule; TASKS §3.2 rule 9, D0-M2).
+- **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`): summary, the §1 diagram and the `apps/mobile` row now say 12 frames + one landing crop (the shared sampler `packages/shared/src/judge/frames.ts`). The judge cam is optional: with two phones the non-performer's phone records with `recorder:'self'`, on A's phone too when B performs. That deviates from FINDINGS §4 Beat 4 ("recording never happens on A's phone"); the recording has no audio track, so the WebRTC mic is untouched.
+- **2026-11-18, the stage voice:** the stage routes row adds `GET /v1/stage/audio`, `/v1/stage/tts/:clip_id` (content-addressed, was `:vote_id`) and `/v1/stage/sfx/:kind`. §8.2: TTS voices the rulings and payouts on the projector as well as the appeal votes, with the browser's voice as the fallback; the Sound Effects cues are generated at server boot, not at build time (API-CONTRACT §4.5). One judge at a time: once A's phone has relayed a `judge.line` for a bet, its ruling and payout are the phone judge's, and the stage stays quiet for them.

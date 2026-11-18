@@ -113,7 +113,14 @@ export const LOCKED_FAMILY: readonly BetState[] = [
 /** Offchain states whose Bet may be Appealed onchain. */
 export const APPEAL_FAMILY: readonly BetState[] = ['RULED', 'APPEALED', 'APPEAL_RESOLVED'];
 /** Any of these 'sent' means a tx of the bet may still land: no refund is built meanwhile. */
-const BLOCKING_KINDS = ['resolve', 'concede', 'finalize', 'timeout_refund'] as const;
+const BLOCKING_KINDS = [
+  'resolve',
+  'concede',
+  'finalize',
+  'timeout_refund',
+  'appeal',
+  'resolve_appeal',
+] as const;
 
 const b58 = getBase58Decoder();
 /** The tx id (the fee payer's signature) of a built tx. */

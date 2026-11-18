@@ -194,6 +194,36 @@ Watch `fly logs -a youre-on`:
 
 The phones need no new build for this: they get the agent through `POST /v1/voice/tokens`.
 
+## 7b. The stage voice (no phone needed)
+
+The same key turns on the projector's ElevenLabs voice: the rulings, payouts and appeal votes as
+Text to Speech clips, and the stage cues as Sound Effects (`SFX_PROVIDER=auto`, the default). It
+needs `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true` and nothing else. The key needs the Text to
+Speech and Sound Effects permissions.
+
+- After the restart, the `server.listening` log line says `stage_tts: "on"` and `sfx: "live"`
+  (else `stage_tts` names what is missing: `no_key`, `spend_disabled` or `off`), and
+  `fly logs -a youre-on | grep stage_voice.sfx_ready` shows the four cues generated at boot (about
+  6.5 seconds of Sound Effects in total).
+- Open the stage and press a key. The bottom strip says `Voice ElevenLabs`.
+- With the stage open, rehearse one bet (`cp1-drive --through paid`). Each ruling and payout logs
+  `stage_voice.line` (the text and the clip id), then `stage_voice.tts` (characters, bytes, ms).
+  `stage_voice.tts_failed` gives `status` (401: the key; 429: the quota). A clip that is late or
+  fails is spoken by the browser instead, so the hall always hears it.
+- In a bet the voice judge hosts (A's phone has relayed its transcript), the ruling and payout log
+  `stage_voice.phone_judge` instead, and the projector stays quiet for them: the judge on A's phone
+  says them, so the hall hears one voice. That needs no switch (`V` and `STAGE_TTS=off` are not
+  for it), and the appeal votes are still voiced on the stage.
+- Cost: one TTS request per new line (at most 300 characters). A repeated line is served from
+  the cache, and nothing is generated while no stage is connected to the room.
+- Voices: the judge is `ELEVENLABS_JUDGE_VOICE_ID` (the Voice Design voice), else a premade voice;
+  the three appeal seats are `ELEVENLABS_PANEL_VOICE_IDS` (three comma-separated ids), else three
+  premade voices. `STAGE_TTS_MODEL` overrides `eleven_v4_turbo`. Each is a Fly secret or a
+  `fly.toml [env]` value, and changing one restarts the machine.
+- To switch the stage voice off (the browser voice takes over):
+  `fly secrets set STAGE_TTS=off -a youre-on`. That restarts the machine, so do it before the pitch.
+  Pressing `V` on the projector silences the voice for that page only.
+
 ## 8. Where the transcripts are
 
 There is no object store yet, so each transcript is one append-only `audit_log` row (action

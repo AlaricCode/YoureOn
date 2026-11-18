@@ -7,7 +7,7 @@ import type { RoomMember } from '@youre-on/shared/api';
 import type { BetState } from '@youre-on/shared/bet-state';
 import type { UserRef } from '@youre-on/shared/primitives';
 
-import type { BetModel } from '../bets/store';
+import { isAppealed, type BetModel } from '../bets/store';
 
 export type Route =
   | 'boot'
@@ -28,6 +28,8 @@ export type Route =
   | 'market'
   | 'judgeCam'
   | 'ruling'
+  /** Beat 5: the three-model panel voting live, then its result (SCHEMAS §7). */
+  | 'appeal'
   | 'redo'
   | 'payout';
 
@@ -51,6 +53,8 @@ export interface AppState {
   activeBetId: string | null;
   /** The locked card was acknowledged ("Continue", or its short auto-advance). */
   lockAcked: readonly string[];
+  /** The appeal result was acknowledged ("Continue"): the bet moves on to its payout screen. */
+  appealAcked: readonly string[];
   /** This device records attempts (devices.role = 'judge_cam'). */
   judgeCam: boolean;
   /** The server is unreachable / the socket is down. */
@@ -70,6 +74,7 @@ export type AppEvent =
   | { type: 'bet_opened'; bet_id: string; force?: boolean }
   | { type: 'bet_dismissed' }
   | { type: 'lock_ack'; bet_id: string }
+  | { type: 'appeal_ack'; bet_id: string }
   | { type: 'judge_cam'; on: boolean }
   | { type: 'offline'; offline: boolean };
 
@@ -82,6 +87,7 @@ export const initialApp: AppState = {
   members: [],
   activeBetId: null,
   lockAcked: [],
+  appealAcked: [],
   judgeCam: false,
   offline: false,
 };
@@ -138,6 +144,10 @@ export function appReducer(
       return { ...s, activeBetId: null };
     case 'lock_ack':
       return s.lockAcked.includes(e.bet_id) ? s : { ...s, lockAcked: [...s.lockAcked, e.bet_id] };
+    case 'appeal_ack':
+      return s.appealAcked.includes(e.bet_id)
+        ? s
+        : { ...s, appealAcked: [...s.appealAcked, e.bet_id] };
     case 'judge_cam':
       return { ...s, judgeCam: e.on };
     case 'offline':
@@ -174,19 +184,27 @@ export function routeForBet(app: AppState, b: BetModel): Route {
     case 'HEARING':
       return b.ruling?.ruling.outcome === 'REDO' ? 'redo' : 'live';
     case 'RULED':
-    case 'APPEALED':
-    case 'VOIDED':
       return 'ruling';
-    case 'CONCEDED':
-    case 'FINALIZED':
+    // The panel votes live; its result stays up (through the payout) until "Continue".
+    case 'APPEALED':
+      return 'appeal';
+    case 'VOIDED':
+      return appealOpen(app, b) ? 'appeal' : 'ruling';
     case 'APPEAL_RESOLVED':
     case 'PAID':
+      return appealOpen(app, b) ? 'appeal' : 'payout';
+    case 'CONCEDED':
+    case 'FINALIZED':
       return 'payout';
     case 'CANCELLED':
     case 'EXPIRED':
       return 'lockEnded';
   }
 }
+
+/** An appealed bet whose result this phone has not acknowledged yet. */
+const appealOpen = (app: AppState, b: BetModel): boolean =>
+  isAppealed(b) && !app.appealAcked.includes(b.bet_id);
 
 export function selectRoute(app: AppState, bet: BetModel | null | undefined): Route {
   if (app.auth === 'booting') return 'boot';

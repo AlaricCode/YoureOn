@@ -543,7 +543,8 @@ run('QuickNode Stream path on LiteSVM transactions (filter -> webhook -> project
         'chain.BetResolved',
         'bet.state',
         'tx.confirmed',
-        'tx.sign_request',
+        'tx.sign_request', // concede
+        'tx.sign_request', // appeal (API-CONTRACT §3.4)
       ]);
       expect((after[2]!.envelope as any).payload).toMatchObject({
         kind: 'resolve',

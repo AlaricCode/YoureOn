@@ -36,3 +36,11 @@ export {
   type StageStaticOptions,
 } from './stage/static';
 export { Keeper, createServerKeeper, expireIdleDrafts, type KeeperTask } from './keeper';
+export {
+  ClipCache,
+  DEFAULT_STAGE_VOICES,
+  StageTts,
+  stageAudioGate,
+  type StageClip,
+} from './voice/tts';
+export { createElevenLabsClient, type FetchLike as ElevenLabsFetch } from './voice/elevenlabs';

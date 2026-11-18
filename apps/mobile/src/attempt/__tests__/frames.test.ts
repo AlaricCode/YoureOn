@@ -3,42 +3,92 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { buildMultipart } from '../../net/multipart';
-import { buildEvidence, frameTimesMs, hashFrames, MAX_FRAME_BYTES, mimeForUri } from '../frames';
+import {
+  buildEvidence,
+  capturePlan,
+  DEFAULT_FRAMES,
+  FRAME_MAX_PX,
+  frameTimesMs,
+  hashFrames,
+  LANDING_CROP_MAX_PX,
+  MAX_FRAME_BYTES,
+  mimeForUri,
+  shotTransform,
+  type CapturedFrame,
+} from '../frames';
 
 const BET = '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f';
 const nodeSha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
+const increasing = (t: number[]) => t.every((x, i) => i === 0 || x > t[i - 1]!);
 
-describe('frame sampling (u4d4)', () => {
-  it('8 frames by default, strictly increasing, inside the clip, half in the last second', () => {
+describe('frame sampling (planning D10)', () => {
+  it('12 frames by default, strictly increasing, inside the clip, 8 in the last 1.2 s', () => {
     const t = frameTimesMs(6000);
-    expect(t).toHaveLength(8);
-    for (let i = 1; i < t.length; i++) expect(t[i]!).toBeGreaterThan(t[i - 1]!);
+    expect(DEFAULT_FRAMES).toBe(12);
+    expect(t).toHaveLength(12);
+    expect(increasing(t)).toBe(true);
     expect(t[0]).toBe(0);
     expect(t.at(-1)!).toBeLessThan(6000);
-    expect(t.filter((x) => x >= 6000 - 1100)).toHaveLength(4);
+    expect(t.filter((x) => x >= 6000 - 1200)).toHaveLength(8);
+    // the landing frames cluster at the end: 150 ms apart; the lead-in ~1.2 s apart
+    expect(t[11]! - t[10]!).toBe(150);
+    expect(t[1]! - t[0]!).toBeGreaterThan(1000);
   });
+
+  it('a 3 s clip (a quick Stop) still puts 8 frames in its last 1.2 s', () => {
+    const t = frameTimesMs(3000);
+    expect(t.filter((x) => x >= 3000 - 1200)).toHaveLength(8);
+    expect(t.filter((x) => x < 3000 - 1200)).toHaveLength(4);
+  });
+
   it('clamps the count to 8..12 and survives very short clips', () => {
     expect(frameTimesMs(6000, 3)).toHaveLength(8);
     expect(frameTimesMs(6000, 30)).toHaveLength(12);
     const short = frameTimesMs(120);
-    expect(short).toHaveLength(8);
-    for (let i = 1; i < short.length; i++) expect(short[i]!).toBeGreaterThan(short[i - 1]!);
+    expect(short).toHaveLength(12);
+    expect(increasing(short)).toBe(true);
+  });
+});
+
+describe('capture plan: 12 stills + the landing crop of the last one', () => {
+  it('one shot per frame time, then the crop at the last instant', () => {
+    const plan = capturePlan(6000);
+    expect(plan).toHaveLength(13);
+    expect(plan.slice(0, 12).map((s) => s.t_ms)).toEqual(frameTimesMs(6000));
+    expect(plan.slice(0, 12).every((s) => s.kind === 'frame')).toBe(true);
+    expect(plan[12]).toEqual({ t_ms: frameTimesMs(6000).at(-1), kind: 'landing_crop' });
+    expect(capturePlan(6000, 12, false)).toHaveLength(12);
+    expect(capturePlan(6000, 8)).toHaveLength(9);
+  });
+
+  it('frames are scaled to 512 px; the crop is the middle 80 % at native pixels (720p)', () => {
+    expect(shotTransform('frame', 1280, 720)).toEqual({
+      crop: null,
+      resize: { width: FRAME_MAX_PX, height: 288 },
+    });
+    expect(shotTransform('frame', 720, 1280).resize).toEqual({ width: 288, height: FRAME_MAX_PX });
+    expect(shotTransform('landing_crop', 1280, 720)).toEqual({
+      crop: { originX: 128, originY: 72, width: 1024, height: 576 },
+      resize: null,
+    });
+    // a 1080p still: cropped, then scaled to 1024
+    const big = shotTransform('landing_crop', 1920, 1080);
+    expect(big.crop).toEqual({ originX: 192, originY: 108, width: 1536, height: 864 });
+    expect(big.resize).toEqual({ width: LANDING_CROP_MAX_PX, height: 576 });
+    // small stills are never scaled up
+    expect(shotTransform('frame', 320, 240)).toEqual({ crop: null, resize: null });
   });
 });
 
 describe('evidence', () => {
   const jpeg = (n: number) => new Uint8Array(1000 + n).fill(n);
-  const frames = frameTimesMs(6000).map((t_ms, i) => ({ t_ms, jpeg: jpeg(i) }));
-
-  it('hashes each frame (sha256 hex, matching Node) in send order', () => {
-    const h = hashFrames(frames);
-    expect(h.map((f) => f.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    h.forEach((f, i) => expect(f.sha256).toBe(nodeSha(frames[i]!.jpeg)));
-  });
-
-  it('builds a valid CameraEvidence with the clip hash', () => {
-    const clip = new Uint8Array(5000).fill(7);
-    const e = buildEvidence({
+  const frames: CapturedFrame[] = frameTimesMs(6000).map((t_ms, i) => ({ t_ms, jpeg: jpeg(i) }));
+  const withCrop: CapturedFrame[] = [
+    ...frames,
+    { t_ms: frames.at(-1)!.t_ms, jpeg: jpeg(99), landing_crop: true },
+  ];
+  const evidenceOf = (f: readonly CapturedFrame[], clip = new Uint8Array(5000).fill(7)) =>
+    buildEvidence({
       bet_id: BET,
       attempt_no: 2,
       clip,
@@ -46,28 +96,37 @@ describe('evidence', () => {
       duration_ms: 5999.6,
       recorded_by: 'A',
       recorded_at: '2026-11-21T18:07:06.000Z',
-      frames,
+      frames: f,
     });
+
+  it('hashes each frame (sha256 hex, matching Node) in send order; the crop is flagged', () => {
+    const h = hashFrames(withCrop);
+    expect(h.map((f) => f.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    h.forEach((f, i) => expect(f.sha256).toBe(nodeSha(withCrop[i]!.jpeg)));
+    expect(h.slice(0, 12).every((f) => !('landing_crop' in f))).toBe(true);
+    expect(h[12]).toMatchObject({ index: 12, t_ms: 5920, landing_crop: true });
+  });
+
+  it('builds a valid CameraEvidence with the clip hash, 12 frames + the crop', () => {
+    const clip = new Uint8Array(5000).fill(7);
+    const e = evidenceOf(withCrop, clip);
     expect(e.clip_sha256).toBe(nodeSha(clip));
     expect(e.clip_bytes).toBe(5000);
     expect(e.duration_ms).toBe(6000);
-    expect(e.frames).toHaveLength(8);
+    expect(e.frames).toHaveLength(13);
+    expect(e.frames.at(-1)!.landing_crop).toBe(true);
+    // without the crop (it failed to render) the 12 frames still go
+    expect(evidenceOf(frames).frames).toHaveLength(12);
   });
 
-  it('rejects oversized or empty frames', () => {
-    const bad = [{ t_ms: 0, jpeg: new Uint8Array(MAX_FRAME_BYTES + 1) }];
-    expect(() =>
-      buildEvidence({
-        bet_id: BET,
-        attempt_no: 1,
-        clip: new Uint8Array(1),
-        mime: 'video/mp4',
-        duration_ms: 1,
-        recorded_by: 'A',
-        recorded_at: '2026-11-21T18:07:06.000Z',
-        frames: bad,
-      }),
-    ).toThrow();
+  it('refuses what the server would: oversized or empty JPEGs, bad counts, a crop not last', () => {
+    const big = [...frames.slice(0, 11), { t_ms: 5920, jpeg: new Uint8Array(MAX_FRAME_BYTES + 1) }];
+    expect(() => evidenceOf(big)).toThrow(/frame size/);
+    const empty = [...frames.slice(0, 11), { t_ms: 5920, jpeg: new Uint8Array(0) }];
+    expect(() => evidenceOf(empty)).toThrow(/frame size/);
+    expect(() => evidenceOf(frames.slice(0, 7))).toThrow(/send 8 to 12 frames/);
+    const early = [withCrop[12]!, ...frames];
+    expect(() => evidenceOf(early)).toThrow(/landing crop must be the last/);
   });
 
   it('mime from the file extension', () => {

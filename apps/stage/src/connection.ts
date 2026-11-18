@@ -12,7 +12,8 @@ import {
   WS_RECONNECT_BACKOFF_MS,
   type WsClientFrameInput,
 } from '@youre-on/shared/api';
-import { BetSnapshot } from '@youre-on/shared/api';
+import { BetSnapshot, StageAudioResponse } from '@youre-on/shared/api';
+import { STAGE_AUDIO_PATH } from '@youre-on/shared/stage-voice';
 import { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { SettlementEvidence, settlementPath } from '@youre-on/shared/settlement';
 import { z } from 'zod/v4';
@@ -80,6 +81,32 @@ export async function fetchFrame(
   });
   if (!res.ok) throw new Error(`frame ${idx}: HTTP ${res.status}`);
   return res.blob();
+}
+
+/**
+ * A stage audio clip (GET /v1/stage/tts/:clip_id, /v1/stage/sfx/:kind) with the stage bearer,
+ * which an <audio> element cannot send: the bytes, for StageAudio to decode.
+ */
+export async function fetchAudio(
+  serverUrl: string,
+  token: string,
+  path: string,
+  doFetch: typeof fetch = fetch,
+): Promise<ArrayBuffer> {
+  const res = await doFetch(new URL(path, serverUrl).toString(), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`audio ${path}: HTTP ${res.status}`);
+  return res.arrayBuffer();
+}
+
+/** GET /v1/stage/audio: does the server voice the stage (ElevenLabs TTS, Sound Effects)? */
+export async function fetchStageAudio(
+  serverUrl: string,
+  token: string,
+  doFetch: typeof fetch = fetch,
+): Promise<StageAudioResponse> {
+  return StageAudioResponse.parse(await getJson(serverUrl, STAGE_AUDIO_PATH, token, doFetch));
 }
 
 const MarketCurrentLite = z.object({ market: GeminiMarketSnapshot.nullable() });

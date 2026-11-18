@@ -238,6 +238,13 @@ function sequence(): Entry[] {
   let line = 0;
   const judge = (at: number, betId: string, text: string) =>
     frame(at, betId, 'judge.line', () => ({ utterance_id: uuid(++line), text, final: true }));
+  /** The judge.cue the payout service sends with PAID (the stage voices it, voice.ts). */
+  const paidCue = (at: number, betId: string, winner: string, toA: string, toB: string) =>
+    frame(at, betId, 'judge.cue', () => ({
+      cue: 'PAID',
+      text: `[EVENT] PAID winner=${winner} amount=${winner === NAMES.A ? toA : toB} to_a=${toA} to_b=${toB} :: Congratulate ${winner} in one line.`,
+      speak: true,
+    }));
   const meta = (signature: string, base: number, at: number) => ({
     signature,
     slot: 400_118_200 + Math.round(at / 400),
@@ -416,6 +423,7 @@ function sequence(): Entry[] {
   frame(48_800, BET_FLIP, 'tx.submitted', () => ({ kind: 'finalize', signature: SIG.pay }));
   stateTx(49_400, BET_FLIP, 'PAID', 'FINALIZED', 'Settled', { ...flipPay, confirmed: true });
   confirmed(49_400, BET_FLIP, 'finalize', SIG.pay);
+  paidCue(49_400, BET_FLIP, NAMES.B, '$0.00', '$10.00');
   frame(49_600, BET_FLIP, 'chain.BetFinalized', (b) => ({
     ...meta(SIG.pay, b, 49_600),
     bet_id: BET_FLIP,
@@ -546,6 +554,7 @@ function sequence(): Entry[] {
   frame(81_600, BET_BTC, 'tx.submitted', () => ({ kind: 'finalize', signature: SIG.pay2 }));
   stateTx(81_800, BET_BTC, 'PAID', 'FINALIZED', 'Settled', { ...btcPay, confirmed: true });
   confirmed(81_800, BET_BTC, 'finalize', SIG.pay2);
+  paidCue(81_800, BET_BTC, NAMES.A, '$10.00', '$0.00');
   frame(82_000, BET_BTC, 'chain.BetFinalized', (b) => ({
     ...meta(SIG.pay2, b, 82_000),
     bet_id: BET_BTC,

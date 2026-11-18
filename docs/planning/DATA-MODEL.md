@@ -598,7 +598,7 @@ The Stream filter must **drop failed transactions** (`meta.err != null`). A fail
 | client_clip_hash | text (hex32) | Y | | Hash computed on the phone at record end, so the ruling isn't blocked on upload (§9). = `CameraEvidence.clip_sha256` = the onchain `evidence_hash`. |
 | evidence_hash | text (hex32) | Y | | sha256(stored clip bytes), recomputed by the server. Must equal `client_clip_hash`. |
 | evidence_canonical | text | Y | | JCS of the SCHEMAS `CameraEvidence` record (frames, hashes, timings) |
-| frame_keys | text[] | N | '{}' | About 8 JPEGs per try (extracted on the phone, spike 02), including the final frames |
+| frame_keys | text[] | N | '{}' | 12 JPEGs per try plus one landing crop (planning D10; 8..12 accepted), extracted on the phone, 8 of them in the last ~1.2 s |
 | frame_ts_ms | integer[] | N | '{}' | `CHECK cardinality = cardinality(frame_keys) AND <= 24` (= SCHEMAS `CameraEvidence.frames` max) |
 | frame_hashes | text[] | N | '{}' | sha256 of each frame = `CameraEvidence.frames[i].sha256`. Committed in `ruling_hash` through the record's `frame_hashes` (SCHEMAS O3, adopted 2026-11-08). |
 | started_at / uploaded_at | timestamptz | Y | | |
@@ -703,6 +703,8 @@ Mapping to onchain (SCHEMAS §5.3): `A_WINS → party_a`, `B_WINS → party_b`, 
 | output_sha256 | text (hex32) | N | | Hash of the raw model JSON |
 | latency_ms | integer | Y | | |
 | created_at | timestamptz | N | now() | |
+
+Built by migration 0008 (`packages/db/src/schema/judge.ts`, 2026-11-18), with these CHECKs on top of the tables above: `appeals_decided` (`status = 'decided'` iff `decided_at`, `final_outcome`, `decided_by`, `flipped` and `result_ruling_id` are all set), `appeals_flipped` (`flipped = final_outcome <> original_outcome`), `appeal_votes_failed` (a vote that is not `ok` is `REDO`, confidence 0, reason `''`, `ABSTAIN`), seat 0..2, outcome never `VOID`, reason ≤ 280. `rulings.appeal_id` now references `appeals` (NO ACTION, so a bet delete cascades through both in one statement). A `failed` appeal (its tx never landed) is re-filed in place: `bet_id` stays UNIQUE and its votes are deleted. The stage='appeal' rulings row carries `onchain_ix = 'resolve_appeal'` from the decision on, `void_reason` = the appealed ruling's when a VOID is upheld.
 
 ### 5.16 `gemini_markets` and `market_snapshots`
 
@@ -1187,7 +1189,7 @@ The server's RPC result is real (`processed`, then `confirmed`). "Optimistic" on
 | Object | Bucket / key | Written by | Hash | Retention | Access |
 |---|---|---|---|---|---|
 | Attempt clip | `evidence` / `attempts/{bet_id}/{n}/clip.{mp4\|mov}` | Phone via presigned PUT (≤ 25 MB, URL TTL 60 s, content-type pinned) | `evidence_hash = sha256(exact stored bytes)` | **30 days** (lifecycle rule) | Server only. Signed GET (5 min) for the stage view and the two parties. |
-| Frames (~8 JPEG per try, ≤ 24) | `evidence` / `attempts/{bet_id}/{n}/frames/{00..23}.jpg` | Phone (confirmed: spike 02: expo-video `generateThumbnailsAsync`, 512 px; server ffmpeg is the fallback) | Per frame, in `attempts.frame_hashes` and `CameraEvidence.frames[]` | 30 days | Same. Models receive frames inline (base64) from the server, never as URLs. |
+| Frames (12 JPEG + 1 landing crop per try since D10, each ≤ 200 KB, ≤ 24) | `evidence` / `attempts/{bet_id}/{n}/frames/{00..23}.jpg` | Phone (confirmed: spike 02: expo-video `generateThumbnailsAsync`, 512 px; server ffmpeg is the fallback) | Per frame, in `attempts.frame_hashes` and `CameraEvidence.frames[]` | 30 days | Same. Models receive frames inline (base64) from the server, never as URLs. |
 | Transcripts | `evidence` / `transcripts/{bet_id}/{el_conversation_id}.json` | Server, when the session ends | `voice_sessions.transcript_sha256` | 30 days | Server |
 | Hearing audio | not stored by default | | | | |
 | Gemini settlement | DB: raw body in `gemini_markets.settlement_raw`; the per-bet `GeminiSettlementRecord` in `rulings.evidence_canonical` | Server | `rulings.evidence_hash` (= onchain `evidence_hash`) | Kept with the bet | Server |
@@ -1327,6 +1329,8 @@ FROM s;
 -- Expect: SELECT wins, losses, net FROM head_to_head WHERE user_a = logan AND user_b = jake  ->  4, 7, -7000000
 ```
 
+**Built: `POST /v1/demo/seed-h2h {a_wins?, b_wins?}`** (API-CONTRACT §2.17, `apps/server/src/demo/seed-h2h.ts`) is this fallback as a route, for the two demo accounts the server has (demo-a / demo-b, the users holding the demo wallets) instead of the three seeded users above: `a_wins + b_wins` rows (default 4-7, demo-a winning bets 2, 5, 7 and 10 with the stakes above, so −$7.00), `is_seed = true`, titles "Demo history: …", `room_id` NULL (the projector never shows them), random ids, the party wallets set, no `chain_txs` or events. Each call first deletes the pair's `is_seed` rows, so re-seeding replaces them. The face-match reply on demo-a's phone then reads 4-7 against demo-b.
+
 **Demo reset** (`npm run db:demo-reset`, npm workspaces per TASKS K-06): delete non-seed bets in the demo room (children cascade; `chain_events` stay, since they have no FK), close and recreate rooms, and write `audit_log 'demo.reset'`. It never touches `face_enrollments`.
 
 ---
@@ -1437,3 +1441,5 @@ The original proposals, kept for the record:
   - **§8.6.** `STALE_LOCK_REQUEST` naming; client idempotency is an in-process LRU in P0 and an `api_idempotency` table in P1 (was P2).
   - **§10.** Face KEK env name is `FACE_KEK_<KEY_ID in UPPER_SNAKE>` (e.g. `FACE_KEK_2026_11_A`) plus `FACE_KEK_ACTIVE`.
   - **§11.** Demo wallets are custodial and server-generated (no `DEMO_WALLET_*` env); `seed:chain` uses those seeds; `npm run db:demo-reset` (npm workspaces, not pnpm). §13 row updated.
+- **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): `frame_keys` and the §9 frames row say 12 frames + one landing crop per try. No schema change: the crop is one more `attempt_frames` row (idx 12, the 204800 B CHECK holds it), and which row is the crop is read back from `attempts.evidence_canonical` (`frames[i].landing_crop`). `attempts.recorder = 'self'` is now also the two-phone demo's fallback (API-CONTRACT §2.9).
+- **2026-11-18 (Beat 5 appeal built, migration 0008).** §5.15 `appeals` / `appeal_votes` created as specified, plus the CHECKs listed under §5.15 and the deferred FK `rulings.appeal_id → appeals`. No new enum (0000 has them).

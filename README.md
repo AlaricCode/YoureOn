@@ -7,8 +7,9 @@ Friends bet each other all the time, and it all runs on trust: who said what, wh
 counted, who still owes $5. You're On is an iPhone app that makes the bet enforceable. You point
 your phone at a friend to challenge them and say the bet out loud. A voice judge turns it into
 precise terms, and both of you confirm on your own phone with Face ID. Both stakes then move into
-an escrow on Solana in one transaction. A judge-cam iPhone films the attempt, Claude rules on the
-frames, and the loser says GG (or stays silent for 10 seconds) and the winner is paid. Nobody sees
+an escrow on Solana in one transaction. A judge-cam iPhone (or, with just two phones, the
+non-performer's own) films the attempt, Claude rules on the frames, and the loser says GG (or
+stays silent for 10 seconds) and the winner is paid. Nobody sees
 crypto: money shows in dollars, there are no seed phrases, and the server pays every fee. Built
 for UBC 2026 (Consumer Applications track, Best use of Solana; ElevenLabs, QuickNode Streams and
 Gemini Prediction Markets bounties).
@@ -27,27 +28,27 @@ Gemini Prediction Markets bounties).
 This README describes the code at the head of this branch. What is live, what is built but not yet
 run live, and what is not built:
 
-| Status                        | What                                                                                                                                                                                                                                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Live on devnet**            | The escrow program (12 instructions, deployed). The server on Fly with Neon Postgres. The atomic lock, the live Claude ruling, GG and finalize payouts, the timeout-refund keeper. 10/10 live soak runs on 2026-11-18 (5 finalize, 5 GG), see [measurements](docs/measurements.md).                       |
-| **Built, waiting on a key**   | The ElevenLabs voice judge (ElevenLabs key pending: the agent is defined as code but not yet created on ElevenLabs). The QuickNode Stream (QuickNode key pending: the filter, config and receiver are built; until the Stream exists the server runs on its `rpc_poll` fallback and a public devnet RPC). |
-| **Built, waiting on a build** | The iPhone app (Expo SDK 58). Its logic is unit-tested in Node (827 tests) and has Maestro flows for the iOS Simulator, but the signed iPhone build is pending (Apple developer account / EAS). So face scan, Face ID signing and the judge cam have not yet run on a real iPhone.                        |
-| **Built, not yet run live**   | The Gemini BTC 5-minute closer (Beat 6): tested offline against recorded real Gemini responses and a fake Gemini, plus a labelled REPLAY feed. The live run is still to be measured.                                                                                                                      |
-| **Not built**                 | The dispute flow of Beat 5 (spoken hearing and the three-model appeal panel). The escrow's `appeal` and `resolve_appeal` instructions are built and tested; the server-side hearing and panel are not.                                                                                                    |
+| Status                        | What                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Live on devnet**            | The escrow program (12 instructions, deployed). The server on Fly with Neon Postgres. The atomic lock, the live Claude ruling, GG and finalize payouts, the timeout-refund keeper. 10/10 live soak runs on 2026-11-18 (5 finalize, 5 GG). The Gemini BTC 5-minute closer (Beat 6), run end to end on a real Gemini round. The Beat 5 appeal (`appeal`, the panel, `resolve_appeal`), run end to end on devnet. See [measurements](docs/measurements.md). |
+| **Built, waiting on a key**   | The ElevenLabs voice judge (ElevenLabs key pending: the agent is defined as code but not yet created on ElevenLabs). The QuickNode Stream (QuickNode key pending: the filter, config and receiver are built; until the Stream exists the server runs on its `rpc_poll` fallback and a public devnet RPC).                                                                                                                                                |
+| **Built, waiting on a build** | The iPhone app (Expo SDK 58). Its logic is unit-tested in Node (904 tests) and has Maestro flows for the iOS Simulator, but the signed iPhone build is pending (Apple developer account / EAS). So face scan, Face ID signing and the judge cam have not yet run on a real iPhone.                                                                                                                                                                       |
+| **Built, not yet run live**   | The three-model appeal panel with all three vendors: on devnet only the Claude seat had a key, so the other two abstained and the ruling stood. A panel that can overturn needs `OPENAI_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` on the server.                                                                                                                                                                                                       |
+| **Not built**                 | The spoken hearing of Beat 5 (two 10 s turns, then a hearing ruling). The appeal itself is built and live (above); the panel votes are voiced on the stage once the ElevenLabs key is set.                                                                                                                                                                                                                                                               |
 
 ## The demo: six beats
 
 The demo runs on the team's own iPhones plus a laptop driving the stage view. Judges don't install
 anything.
 
-| #   | Beat                  | What happens                                                                                                                                                                                                                               | Status                                                                                                   |
-| --- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| 1   | **Challenge by face** | A points the camera at B. The phone computes a face embedding on the device; the server matches it only against opted-in members of the same room. "Challenge B?" B's phone shows the invite. A match only addresses the challenge.        | Built and tested; not yet on an iPhone. Fallback: challenge from the room list.                          |
-| 2   | **Terms by voice**    | A says "Bet you $5 you can't land a bottle flip." The ElevenLabs voice judge asks one or two edge-case questions and reads the terms back. The server composes the binding terms and their SHA-256; the terms card appears on both phones. | Built and tested against a fake ElevenLabs; key pending. Fallback: "Type it instead" (same server path). |
-| 3   | **Lock it in**        | Each person holds to confirm and passes Face ID on their own phone. Both signatures go into one durable-nonce transaction, so both stakes move into escrow together, or nothing moves. The stage shows the lock with an Explorer link.     | Live on devnet: confirm to LOCKED in 4.0–4.6 s. Phone signing pending the iPhone build.                  |
-| 4   | **The attempt**       | The judge cam films the flip. Claude Sonnet 5.5 rules on 8 frames plus two deterministic checks; if they disagree it's a REDO. The loser taps GG (`concede`, instant) or the 10 s appeal window closes (`finalize`). The winner is paid.   | Live on devnet: ruling 2.8–4.0 s, full bet 18–28 s.                                                      |
-| 5   | **Dispute**           | The loser appeals inside the 10 s window; the appeal key settles it with `resolve_appeal`.                                                                                                                                                 | Escrow side built and tested. Hearing and three-model panel not built; not in the live demo.             |
-| 6   | **The closer**        | "Bitcoin's up by the end of this pitch." The bet locks at the start of the pitch on Gemini's live 5-minute BTC contract, with stakes set from its odds. Gemini's settled result, hashed on chain as evidence, pays the winner at the end.  | Built and tested offline; live run pending.                                                              |
+| #   | Beat                  | What happens                                                                                                                                                                                                                                                    | Status                                                                                                          |
+| --- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| 1   | **Challenge by face** | A points the camera at B. The phone computes a face embedding on the device; the server matches it only against opted-in members of the same room. "Challenge B?" B's phone shows the invite. A match only addresses the challenge.                             | Built and tested; not yet on an iPhone. Fallback: challenge from the room list.                                 |
+| 2   | **Terms by voice**    | A says "Bet you $5 you can't land a bottle flip." The ElevenLabs voice judge asks one or two edge-case questions and reads the terms back. The server composes the binding terms and their SHA-256; the terms card appears on both phones.                      | Built and tested against a fake ElevenLabs; key pending. Fallback: "Type it instead" (same server path).        |
+| 3   | **Lock it in**        | Each person holds to confirm and passes Face ID on their own phone. Both signatures go into one durable-nonce transaction, so both stakes move into escrow together, or nothing moves. The stage shows the lock with an Explorer link.                          | Live on devnet: confirm to LOCKED in 4.0–4.6 s. Phone signing pending the iPhone build.                         |
+| 4   | **The attempt**       | The judge cam (or, with two phones, the non-performer's phone) films the flip. Claude rules on 12 frames, 8 of them on the landing, plus a sharp landing crop and two checks; disagree and it's a REDO. Loser taps GG, or `finalize`.                           | Live on devnet: ruling 2.8–4.0 s, full bet 18–28 s.                                                             |
+| 5   | **Dispute**           | The loser taps "I appeal!" (Face ID) inside the 10 s window. Claude, GPT and Gemini vote independently on the same frames, never seeing the ruling; two agreeing votes decide, anything else upholds the ruling. The appeal key pays out with `resolve_appeal`. | Live on devnet (2026-11-18): appeal, panel, `resolve_appeal`. A vendor with no key abstains. Hearing not built. |
+| 6   | **The closer**        | "Bitcoin's up by the end of this pitch." The bet locks at the start of the pitch on Gemini's live 5-minute BTC contract, with stakes set from its odds. Gemini's settled result, hashed on chain as evidence, pays the winner at the end.                       | Built and tested offline; live run pending.                                                                     |
 
 ## Architecture
 
@@ -56,7 +57,7 @@ flowchart LR
   subgraph Phones["Team iPhones (apps/mobile, Expo SDK 58)"]
     A["Phone A: challenger, hosts the voice judge, wallet"]
     B["Phone B: opponent, wallet"]
-    J["Judge cam: films the attempt"]
+    J["Judge cam (optional third phone; else the non-performer's phone): films the attempt"]
   end
   subgraph Fly["Fly.io app youre-on (one machine, dfw)"]
     S["Server (apps/server, Hono on Node)"]
@@ -74,7 +75,7 @@ flowchart LR
   EL -->|"webhook tools /el/tools/*"| S
   A <-->|"HTTPS + WebSocket"| S
   B <-->|"HTTPS + WebSocket"| S
-  J -->|"frames + hashes"| S
+  J -->|"12 frames + landing crop, hashes"| S
   S <--> DB
   S -->|"frames + terms"| AI
   S -->|"REST poll every 2 s"| G
@@ -211,14 +212,16 @@ The program keypair is not in the repo, so a fresh `anchor build` creates a rand
 
 ## ElevenLabs
 
-| Product                   | How we use it                                                                                                                                                                                                                                                | Status                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
-| **Agents Platform**       | The voice judge. One conversation per bet on A's phone over WebRTC (`@elevenlabs/react-native` 1.2.38 + LiveKit), on speakerphone. The agent's LLM (Claude Haiku 5.5, served by ElevenLabs) asks the edge-case questions; TTS model `eleven_v4_turbo`.       | Built; ElevenLabs key pending                |
-| Webhook (server) tools    | `propose_terms` and `confirm_terms` at `/el/tools/:name`, authenticated by a workspace secret sent as `X-YO-Tool-Secret`. `get_market_odds` (Beat 6) has a live handler and is registered with `el-agent --tools=…`.                                         | Built; tested end to end against a fake      |
-| Client tools              | `request_attempt` (arms the judge cam), `show_terms_card`, `cue` (gavel, drumroll, buzzer, cheer on the stage). They run on A's phone.                                                                                                                       | Built                                        |
-| Conversation tokens       | `POST /v1/voice/tokens` mints a token server-side (`GET /v1/convai/conversation/token`), so the API key never reaches a phone. Spend-guarded: it calls out only with `ALLOW_SPEND=true`.                                                                     | Built                                        |
-| Agent as code             | `npm run el-agent` creates or updates the workspace secret, the tools and the private agent, found by name and PATCHed only where they differ (a second run is a no-op). `--check-openapi` validates every body against ElevenLabs' public OpenAPI document. | Built; never run against ElevenLabs (no key) |
-| Scribe STT, Sound Effects | REST clients behind `STT_PROVIDER` / `SFX_PROVIDER` (default mock). Not in the demo path: the hearing they were for is not built, and the stage synthesizes its sounds.                                                                                      | Built, unused in the demo                    |
+| Product                | How we use it                                                                                                                                                                                                                                                                                                        | Status                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| **Agents Platform**    | The voice judge. One conversation per bet on A's phone over WebRTC (`@elevenlabs/react-native` 1.2.38 + LiveKit), on speakerphone. The agent's LLM (Claude Haiku 5.5, served by ElevenLabs) asks the edge-case questions; TTS model `eleven_v4_turbo`.                                                               | Built; ElevenLabs key pending                |
+| Webhook (server) tools | `propose_terms` and `confirm_terms` at `/el/tools/:name`, authenticated by a workspace secret sent as `X-YO-Tool-Secret`. `get_market_odds` (Beat 6) has a live handler and is registered with `el-agent --tools=…`.                                                                                                 | Built; tested end to end against a fake      |
+| Client tools           | `request_attempt` (arms the judge cam, or with two phones A's own camera), `show_terms_card`, `cue` (gavel, drumroll, buzzer, cheer on the stage). They run on A's phone.                                                                                                                                            | Built                                        |
+| Conversation tokens    | `POST /v1/voice/tokens` mints a token server-side (`GET /v1/convai/conversation/token`), so the API key never reaches a phone. Spend-guarded: it calls out only with `ALLOW_SPEND=true`.                                                                                                                             | Built                                        |
+| Agent as code          | `npm run el-agent` creates or updates the workspace secret, the tools and the private agent, found by name and PATCHed only where they differ (a second run is a no-op). `--check-openapi` validates every body against ElevenLabs' public OpenAPI document.                                                         | Built; never run against ElevenLabs (no key) |
+| Text to Speech (stage) | Rulings and payouts in the judge's voice (left to A's phone in a bet its voice judge hosts), each appeal-panel vote in its own voice (`POST /v1/text-to-speech/{voice_id}`, `eleven_v4_turbo`). The clip URL comes in a `stage.voice` frame; with none within 800 ms the stage says the line in the browser's voice. | Built; on once the key is set                |
+| Sound Effects          | The stage cues (gavel, drumroll, buzzer, cheer), generated once at boot and played by the projector. `SFX_PROVIDER=auto` (the default) turns them on with the key; without it the stage synthesizes its sounds.                                                                                                      | Built; on once the key is set                |
+| Scribe STT             | REST client behind `STT_PROVIDER` (default mock). Not in the demo path: the hearing it was for is not built.                                                                                                                                                                                                         | Built, unused in the demo                    |
 
 **How a session runs.** A's phone asks for the mic, gets a conversation token from our server and
 starts the session with the bet's dynamic variables. Every tool call is bound to its bet
@@ -234,6 +237,18 @@ the judge never moves money and never authorizes a lock.
 events, which the stage shows as live captions and B's phone shows as subtitles. The `cue` client
 tool goes through `POST /v1/bets/:bet_id/cues` to the stage laptop, because audio played on A's
 phone would stop its mic.
+
+**The judge on the projector.** After each ruling, payout and appeal vote, the server composes
+the line the stage speaks (`packages/shared/src/stage-voice.ts`), generates it with ElevenLabs Text
+to Speech and sends its URL to the room's stage only (`stage.voice`). The stage fetches the clip
+with its bearer (`GET /v1/stage/tts/:clip_id`) and plays it. Clips are cached by
+`sha256(voice, model, text)`, so a repeated line is free. Without the key (or with
+`STAGE_TTS=off`) no frame comes, and after 800 ms the stage speaks the same words with the
+browser's `speechSynthesis`: the ruling is heard in the hall either way. One judge at a time:
+once A's phone has relayed a `judge.line` for a bet, the voice judge is hosting it and says the
+ruling and payout itself, so for that bet the projector says neither (no clip, no browser voice)
+and voices only the appeal votes. Rulings from the stored `CACHED_RULING` verdict are labelled
+"replay ruling" on screen.
 
 **To switch it on** (needs the key): `npm run el-agent -- --check-openapi`, then set
 `ELEVENLABS_API_KEY`, `ELEVENLABS_TOOL_SECRET` and the printed `ELEVENLABS_AGENT_ID` as Fly
@@ -315,18 +330,36 @@ to Gemini's regulated market; this devnet demo uses our escrow with Gemini as th
 
 ## The AI judge
 
-- **Ruling (Beat 4).** The judge cam samples 8 frames (half spread over the clip, half packed into
-  its last second, ≤ 512 px JPEG) and uploads them with their SHA-256s. The server makes one
-  structured-output call to Claude Sonnet 5.5 (`JUDGE_MODEL`, 10 s deadline). Next to its verdict
-  the model reports two narrow observations (cap tape visible on top, bottle upright at rest); if
-  they disagree with the verdict, the ruling is REDO. Confidence below 0.8 is REDO, a model failure
-  is REDO, and a third REDO voids the bet and refunds both. The ruling's hash commits to the frame
-  hashes.
+- **Ruling (Beat 4).** The phone that films samples 12 frames (4 spread over the clip, 8 packed
+  into its last 1.2 s, where the bottle lands; ≤ 512 px JPEG) plus one landing crop: the last
+  frame again, the middle 80 % of the picture at full resolution (1024 × 576 from the 720p clip),
+  so the taped cap is readable from 1–2 m. It uploads them with their SHA-256s
+  (`packages/shared/src/judge/frames.ts` is the one sampler for the phone, the server's limits and
+  `npm run judge-eval`). The server makes one structured-output call to Claude Sonnet 5.5
+  (`JUDGE_MODEL`, 10 s deadline), with the landing frames and the crop labelled. Next to its
+  verdict the model reports two narrow observations (cap tape visible on top, bottle upright at
+  rest); if they disagree with the verdict, the ruling is REDO. Confidence below 0.8 is REDO, a
+  model failure is REDO, and a third REDO voids the bet and refunds both. The ruling's hash
+  commits to the frame hashes. The server still takes 8–12 frames with no crop (older builds,
+  `cp1-drive --frames`).
+- **Who films.** The room's judge cam, a third iPhone signed in as a second device of the
+  non-performer with Profile → Judge cam on. With only two phones, leave it off: the
+  non-performer's own phone films (`recorder: 'self'`). Start sits on the non-performer's phone,
+  and the voice judge's `request_attempt` arms A's phone when B performs. The performer's phone
+  never films its own attempt, and the recording has no audio track, so it never touches the mic
+  the voice judge holds.
 - **Terms (Beat 2).** The voice judge's persona, guardrails and `propose_terms` schema live in
   `packages/shared/src/judge`. Guardrails: 18+ at signup, the $20 on-chain stake cap, and a keyword
   prefilter that refuses dangerous, illegal, alcohol/drug, self-harm or minor-related challenges.
 - **`CACHED_RULING=true`** rules from a stored verdict with no model call (model
-  `cache/demo-bottle@1`); it still commits to the hashes of the frames actually uploaded.
+  `cache/demo-bottle@1`); it still commits to the hashes of the frames actually uploaded. On the
+  demo server it is also a runtime switch, `POST /v1/demo/toggles {"cached_ruling": true}`, read
+  per ruling (no restart); the env value is the boot default.
+- **Demo-day valves** (admin key, `docs/runbook.md`): `POST /v1/demo/warmup` makes one live judge
+  call on a stored JPEG and checks the RPC, the Gemini relay and voice readiness (no bet, no money,
+  one per 10 s); `GET /v1/demo/health` reports the judge's last success and failure and its
+  latency; `POST /v1/demo/seed-h2h` seeds the 4-7 head-to-head history the face match shows
+  (labelled `is_seed`, kept by the demo reset).
 - **Spend guard.** Every paid provider refuses to start without `ALLOW_SPEND=true`, and under
   `NODE_ENV=production` the mock LLM refuses every call, so a misconfigured deploy cannot issue fake
   rulings.
@@ -363,8 +396,10 @@ npm run dev -w @youre-on/stage               # Vite dev server for the stage pag
 cd apps/mobile && npx expo run:ios --device  # local Xcode dev build
 ```
 
-Without keys the server runs on offline mocks (`LLM_PROVIDER`, `STT_PROVIDER`, `SFX_PROVIDER`
-default to `mock`); any `live` mode needs `ALLOW_SPEND=true`. Without `SOLANA_DEVNET_RPC` and
+Without keys the server runs on offline mocks (`LLM_PROVIDER` and `STT_PROVIDER` default to
+`mock`; `SFX_PROVIDER=auto` is the mock until `ELEVENLABS_API_KEY` is set); any `live` mode needs
+`ALLOW_SPEND=true`. The stage's ElevenLabs voice is on exactly when the key and `ALLOW_SPEND=true`
+are set (`STAGE_TTS=off` turns it off). Without `SOLANA_DEVNET_RPC` and
 `FEE_PAYER_SECRET_KEY` there is no chain, and the health report says so. Every env var name is in
 [`.env.example`](.env.example); values never go in git.
 
@@ -385,13 +420,13 @@ npm run e2e:local                            # deploy scripts + smoke against a 
 
 | Suite                         | Command                                   | Count                                                                 |
 | ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
-| Server                        | `npm test -w @youre-on/server`            | 658                                                                   |
-| Mobile                        | `npm test -w @youre-on/mobile`            | 827, 1 skipped (the face-model test also skips without the `.tflite`) |
-| Shared                        | `npm test -w @youre-on/shared`            | 259                                                                   |
-| Database                      | `npm test -w @youre-on/db`                | 26                                                                    |
+| Server                        | `npm test -w @youre-on/server`            | 779 (with `DATABASE_URL`)                                             |
+| Mobile                        | `npm test -w @youre-on/mobile`            | 904, 1 skipped (the face-model test also skips without the `.tflite`) |
+| Shared                        | `npm test -w @youre-on/shared`            | 288                                                                   |
+| Database                      | `npm test -w @youre-on/db`                | 30                                                                    |
 | Escrow, TS client (LiteSVM)   | `npm run test:escrow -w @youre-on/shared` | 23, 1 skipped (the E3 mimic test needs `build-mimic.sh`)              |
 | Escrow, Rust matrix (LiteSVM) | `cargo test` in `programs/escrow`         | 167                                                                   |
-| Stage                         | `npm test -w @youre-on/stage`             | TBD (the stage is being merged)                                       |
+| Stage                         | `npm test -w @youre-on/stage`             | 164 (8 need `DATABASE_URL`)                                           |
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint, format, migrations and every workspace's
 tests on Postgres, gitleaks, then `anchor build`, the Codama check, the TS LiteSVM suite and

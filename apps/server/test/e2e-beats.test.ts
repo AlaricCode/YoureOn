@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ed from '@noble/ed25519';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   getAddressEncoder,
@@ -42,9 +42,12 @@ import {
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
 import {
+  appeals,
+  appealVotes,
   attempts,
   betEvents,
   bets,
+  chainTxs,
   createDb,
   devices,
   noncePool,
@@ -77,7 +80,8 @@ import {
 import { hashJcs } from '@youre-on/shared/jcs';
 import { betIdToBytes, sha256Hex } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
-import { Ruling } from '@youre-on/shared/ruling';
+import { CACHED_RULING_MODEL, isCachedRuling, Ruling } from '@youre-on/shared/ruling';
+import { AppealResult, type PanelProvider } from '@youre-on/shared/appeal';
 import { renderSignCard } from '@youre-on/shared/sign-card';
 import {
   createPoolNonce,
@@ -93,6 +97,8 @@ import type { ChainRuntime } from '../src/chain/tx';
 import { judgeRoutes } from '../src/judge/routes';
 import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
 import { MockLlm, type MockReply } from '../src/providers/mock/llm';
+import { APPEAL_BUCKET } from '../src/appeal/service';
+import { RateLimiter } from '../src/http/rate-limit';
 import { liteSvmClient } from './litesvm-client';
 import {
   b64,
@@ -188,6 +194,8 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
   let CAM: SignedUp; // A's second device, the judge cam
   let roomId: string;
   let replies: MockReply[] = [];
+  /** The appeal panel's scripted vote per vendor (a function = an answer it awaits; unset = error). */
+  let panel: Partial<Record<PanelProvider, MockReply | (() => Promise<MockReply>)>> = {};
   let llm: MockLlm;
   const sockets: WsClient[] = [];
   let wsA: WsClient;
@@ -205,9 +213,12 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
         signer,
         send: { pollMs: 5, resendMs: 50, timeoutMs: 2_000 },
         timers: false,
+        appealVoteTimeoutMs: voteTimeoutMs,
       }),
     );
   };
+  /** The panel's per-vote budget (8 s in production); a hanging vendor abstains after this. */
+  let voteTimeoutMs = 300;
 
   /** Moves the server clock and the SVM clock together. */
   const advance = (ms: number) => {
@@ -233,7 +244,16 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
         CACHED_RULING: 'false',
       },
     });
-    llm = new MockLlm(() => replies.shift() ?? { fail: 'error', message: 'no scripted verdict' });
+    llm = new MockLlm((req) => {
+      // The three panel seats (src/appeal/panel.ts) by vendor; the judge's calls in order.
+      if (req.output.name === 'appeal_vote') {
+        const p = panel[req.vendor];
+        return typeof p === 'function'
+          ? p()
+          : (p ?? { fail: 'error', message: 'no scripted vote' });
+      }
+      return replies.shift() ?? { fail: 'error', message: 'no scripted verdict' };
+    });
     ctx.deps.providers.llm = llm;
     svm = await newEnv();
     setNow(svm.svm, BigInt(Math.floor(now() / 1000)));
@@ -775,7 +795,12 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
       expect(post.status).toBe(202);
     } else {
       // The loser's phone got the GG prompt pushed (tx.sign_request) right after RULED.
-      const pushed = await ws.next((f) => f.type === 'tx.sign_request' && f.bet_id === betId);
+      const pushed = await ws.next(
+        (f) =>
+          f.type === 'tx.sign_request' &&
+          f.bet_id === betId &&
+          f.payload.request.kind === 'concede',
+      );
       const g = await get(u, `/v1/bets/${betId}/concede`);
       expect(g.status).toBe(200);
       // Same bytes as the push (only issued_at is re-stamped per read).
@@ -857,11 +882,14 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     'ruling.issued',
     `judge.cue:${cue}`,
   ];
-  /** deps.onRuling -> resolve confirmed -> RULED (+ the loser's GG prompt with phones). */
+  /**
+   * deps.onRuling -> resolve confirmed -> RULED (+ the loser's GG and appeal prompts with phones:
+   * concede first, then appeal, API-CONTRACT §3.4).
+   */
   const RULED = (signer: 'phones' | 'server') => [
     'bet.state:RULED',
     'tx.confirmed',
-    ...(signer === 'phones' ? ['tx.sign_request'] : []),
+    ...(signer === 'phones' ? ['tx.sign_request', 'tx.sign_request'] : []),
   ];
   const PAID_BY = (via: 'FINALIZED' | 'CONCEDED') => [
     `bet.state:${via}`,
@@ -995,6 +1023,609 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     }
   });
 
+  it('POST /v1/demo/toggles cached_ruling: the next ruling is the stored verdict (marked cached), no restart; off -> the model again', async () => {
+    install('server');
+    try {
+      // The server booted with CACHED_RULING=false; flip it at runtime.
+      const on = await admin('/v1/demo/toggles', { cached_ruling: true });
+      expect(on.json!.toggles).toMatchObject({
+        cached_ruling: true,
+        cached_ruling_source: 'runtime',
+        cached_ruling_env: false,
+      });
+      const b0 = await usdc(signerB.address);
+      const betId = await lockedBet();
+      await startAttempt(betId, 1);
+      replies = [NOT_MET]; // the model would say A wins: it must not be asked
+      const calls0 = llm.calls.length;
+      const up = await uploadFrames(betId, 1, 12);
+      await settle();
+      expect(llm.calls.length).toBe(calls0);
+      // Every surface carries the marker: the phones' and the stage's ruling.issued, the row.
+      const issued = await wsA.next((f) => f.type === 'ruling.issued' && f.bet_id === betId);
+      const ruling = Ruling.parse(issued.payload.ruling);
+      expect(ruling).toMatchObject({
+        outcome: 'B_WINS',
+        model: CACHED_RULING_MODEL,
+        cited_frames: [9, 10, 11],
+        frame_hashes: up.frames.map((f) => sha256Hex(f)),
+        evidence_hash: up.evidence.clip_sha256,
+      });
+      expect(isCachedRuling(ruling)).toBe(true);
+      const staged = await wsStage.next((f) => f.type === 'ruling.issued' && f.bet_id === betId);
+      expect(isCachedRuling(staged.payload.ruling)).toBe(true);
+      // ...and it pays out on chain like any ruling.
+      await expectRuled(betId, { ruling, ruling_hash: issued.payload.ruling_hash });
+      await finalizeAfterWindow(betId);
+      expect(await usdc(signerB.address)).toBe(b0 + 1n * USDC);
+      replies = [];
+
+      // Off again at runtime: the next bet's ruling is the model's.
+      expect(
+        (await admin('/v1/demo/toggles', { cached_ruling: false })).json!.toggles,
+      ).toMatchObject({ cached_ruling: false });
+      const bet2 = await lockedBet();
+      const r = await judged(bet2, 1, NOT_MET, 8); // asserts exactly one model call
+      expect(r.ruling).toMatchObject({
+        outcome: 'A_WINS',
+        model: 'anthropic/mock/claude-sonnet-5-5',
+      });
+      expect(isCachedRuling(r.ruling)).toBe(false);
+      await expectRuled(bet2, r);
+      await finalizeAfterWindow(bet2);
+    } finally {
+      replies = [];
+      // back to the env default, so the env-driven tests below still flip CACHED_RULING
+      await admin('/v1/demo/toggles', { cached_ruling: null });
+      install('phones');
+    }
+  });
+
+  // ---- Beat 5: the appeal (API-CONTRACT §2.12, §7.2) -------------------------------------
+
+  /** A panel vote (the voter's VisionVerdict). */
+  const vote = (claim: 'MET' | 'NOT_MET' | 'UNCLEAR', confidence = 0.9): MockReply => ({
+    value: {
+      claim_result: claim,
+      confidence,
+      reason: claim === 'MET' ? 'Upright on its base in frame 7.' : 'On its side in frame 6.',
+      cited_frames: [6, 7],
+      contested: false,
+    },
+  });
+
+  /** The appeal window is SVM-clock based: bring the SVM clock up to the server's before a ruling. */
+  const syncClock = () => advance(0);
+
+  /** The appellant's phone: GET /appeal -> the shared device policy ('appeal' screen) -> sign. */
+  async function appealBody(
+    betId: string,
+    who: 'A' | 'B',
+    r: { ruling: Ruling; ruling_hash: string },
+  ) {
+    const [u, key] = who === 'A' ? [A, keyA] : [B, keyB];
+    const g = await get(u, `/v1/bets/${betId}/appeal`);
+    expect(g.status, JSON.stringify(g.json)).toBe(200);
+    const req = SignRequest.parse(g.json);
+    expect(req).toMatchObject({ kind: 'appeal', for_parties: [who] });
+    const msg = new Uint8Array(Buffer.from(req.message_b64, 'base64'));
+    const row = await betRow(betId);
+    const v = checkDevicePolicy(msg, {
+      screen: 'appeal',
+      request: g.json,
+      renderedCard: renderSignCard({
+        kind: 'appeal',
+        terms: req.envelope.terms,
+        terms_hash: req.envelope.terms_hash,
+        me: who,
+        appeal_deadline: Math.floor(row.appeal_deadline!.getTime() / 1000),
+      }),
+      verifiedRulingHash: r.ruling_hash,
+      verifiedRulingOutcome: r.ruling.outcome,
+      devicePubkey: u.wallet.pubkey,
+      nowSecs: Math.floor(now() / 1000),
+      derive: await derivations(betId),
+      pins: pins(),
+    });
+    expect(v, `appeal device policy: ${JSON.stringify(v)}`).toMatchObject({
+      ok: true,
+      kind: 'appeal',
+      party: who,
+    });
+    return {
+      req,
+      msg,
+      body: {
+        bet_id: betId,
+        kind: 'appeal',
+        party: who,
+        message_sha256: req.message_sha256,
+        party_signature: b58.decode(ed.sign(msg, key.secret)),
+        method: 'faceid_hold',
+        signed_at: new Date(now()).toISOString(),
+      },
+    };
+  }
+
+  /** The AppealResult on the bet's log (and its hash = the onchain appeal_ruling_hash). */
+  async function appealResultOf(betId: string) {
+    const ev = (await dbEvents(betId)).find((e) => e.type === 'appeal.result');
+    const p = (ev!.envelope as any).payload;
+    const result = AppealResult.parse(p.result);
+    expect(p.ruling_hash).toBe(hashJcs(result));
+    return { result, ruling_hash: p.ruling_hash as string };
+  }
+
+  /** The bet's appeal tail on the log: filed -> APPEALED -> 3 votes -> result -> resolve_appeal -> paid. */
+  const APPEAL_TO = (end: 'PAID' | 'VOIDED') => [
+    'tx.submitted',
+    'judge.cue:APPEAL_FILED',
+    'bet.state:APPEALED',
+    'tx.confirmed',
+    'appeal.vote',
+    'judge.cue:APPEAL_VOTE',
+    'appeal.vote',
+    'judge.cue:APPEAL_VOTE',
+    'appeal.vote',
+    'judge.cue:APPEAL_VOTE',
+    'appeal.result',
+    'judge.cue:APPEAL_RESULT',
+    'bet.state:APPEAL_RESOLVED',
+    'tx.submitted',
+    `bet.state:${end}`,
+    'tx.confirmed',
+    `judge.cue:${end}`,
+  ];
+
+  it('phones: B_WINS -> A appeals (pushed request, device policy) -> panel 2-1 -> resolve_appeal pays A', async () => {
+    const a0 = await usdc(signerA.address);
+    const b0 = await usdc(signerB.address);
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8);
+    expect(r.ruling.outcome).toBe('B_WINS');
+    await expectRuled(betId, r);
+    // The appeal request was pushed beside the GG one (the loser's two prompts).
+    const pushed = await wsA.next(
+      (f) =>
+        f.type === 'tx.sign_request' && f.bet_id === betId && f.payload.request.kind === 'appeal',
+    );
+    // Claude and Gemini say it ended on its side (NOT_MET -> A wins); GPT agrees with the judge.
+    panel = {
+      anthropic: vote('NOT_MET', 0.86),
+      openai: vote('MET', 0.9),
+      google: vote('NOT_MET', 0.72),
+    };
+    const { req, body } = await appealBody(betId, 'A', r);
+    expect({ ...req, issued_at: null }).toEqual({ ...pushed.payload.request, issued_at: null });
+    const post = await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body);
+    expect(post.status, JSON.stringify(post.json)).toBe(202);
+    expect(post.json).toMatchObject({ status: 'submitted' });
+    // the same POST again (a lost 202): the filed appeal, nothing new
+    const again = await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body);
+    expect(again.json).toEqual(post.json);
+    await lc.idle();
+
+    const row = await betRow(betId);
+    expect(row).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    expect(await onchainBet(betId)).toBeNull(); // close_bet closed it
+    expect(await usdc(signerA.address)).toBe(a0 + 1n * USDC); // the appeal flipped it: A is paid
+    expect(await usdc(signerB.address)).toBe(b0 - 1n * USDC);
+
+    const { result, ruling_hash } = await appealResultOf(betId);
+    expect(result).toMatchObject({
+      appeal_id: post.json!.appeal_id,
+      appellant: 'A',
+      original_outcome: 'B_WINS',
+      original_ruling_hash: r.ruling_hash,
+      tally: { A_WINS: 2, B_WINS: 1, ABSTAIN: 0 },
+      final_outcome: 'A_WINS',
+      decided_by: 'majority',
+      flipped: true,
+      evidence_hash: r.ruling.evidence_hash,
+      frame_hashes: r.ruling.frame_hashes,
+    });
+    expect(result.votes.map((v) => [v.provider, v.counted_as])).toEqual([
+      ['anthropic', 'A_WINS'],
+      ['openai', 'B_WINS'],
+      ['google', 'A_WINS'],
+    ]);
+    const [ap] = await ctx.deps.db.select().from(appeals).where(eq(appeals.bet_id, betId));
+    expect(ap).toMatchObject({ status: 'decided', final_outcome: 'A_WINS', flipped: true });
+    const [stored] = await ctx.deps.db
+      .select()
+      .from(rulings)
+      .where(eq(rulings.id, ap!.result_ruling_id!));
+    expect(stored).toMatchObject({ stage: 'appeal', ruling_hash, onchain_ix: 'resolve_appeal' });
+    const txs = await ctx.deps.db.select().from(chainTxs).where(eq(chainTxs.bet_id, betId));
+    expect(txs.filter((t) => t.status === 'confirmed').map((t) => t.kind)).toEqual(
+      expect.arrayContaining(['appeal', 'resolve', 'resolve_appeal']),
+    );
+    // the panel never saw the judge's ruling (no anchoring): only terms + frames
+    const seen = llm.calls.filter((c) => c.output.name === 'appeal_vote').slice(-3);
+    expect(seen.map((c) => c.vendor).sort()).toEqual(['anthropic', 'google', 'openai']);
+    expect(JSON.stringify(seen[0]!.parts.filter((p) => p.kind === 'text'))).not.toContain(
+      r.ruling.reason,
+    );
+    // the snapshot carries the result (cold start / resync)
+    expect((await get(B, `/v1/bets/${betId}`)).json!.appeal).toMatchObject({
+      final_outcome: 'A_WINS',
+    });
+
+    await expectFanout(betId, [
+      ...TO_LOCKED('phones'),
+      ...ATTEMPT_TO_RULING('RULING'),
+      ...RULED('phones'),
+      ...APPEAL_TO('PAID'),
+    ]);
+  });
+
+  it('appeal errors: NOT_A_PARTY, NOT_LOSER, MESSAGE_MISMATCH, SIGNATURE_INVALID, SIGN_REQUEST_EXPIRED, RATE_LIMITED; all abstain upholds', async () => {
+    const b0 = await usdc(signerB.address);
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8); // B_WINS: only A may appeal
+    await expectRuled(betId, r);
+    const code = (x: { json: Record<string, any> | null }) => x.json?.error?.code;
+    expect(code(await get(C, `/v1/bets/${betId}/appeal`))).toBe('NOT_A_PARTY');
+    expect(code(await get(B, `/v1/bets/${betId}/appeal`))).toBe('NOT_LOSER');
+    const { body, msg } = await appealBody(betId, 'A', r);
+    // the winner posting the loser's signed body is still the winner
+    expect(code(await signed(B, 'POST', `/v1/bets/${betId}/appeal`, { ...body, party: 'B' }))).toBe(
+      'NOT_LOSER',
+    );
+    expect(
+      code(
+        await signed(A, 'POST', `/v1/bets/${betId}/appeal`, {
+          ...body,
+          message_sha256: sha256Hex('another message'),
+        }),
+      ),
+    ).toBe('MESSAGE_MISMATCH');
+    expect(
+      code(
+        await signed(A, 'POST', `/v1/bets/${betId}/appeal`, {
+          ...body,
+          party_signature: b58.decode(ed.sign(msg, keyB.secret)), // B's key signed A's slot
+        }),
+      ),
+    ).toBe('SIGNATURE_INVALID');
+    // 3/h per user: a fourth filing in the hour is refused before anything is sent
+    const limiter = new RateLimiter(now);
+    for (let i = 0; i < APPEAL_BUCKET.limit; i++)
+      limiter.take('appeal', A.session.user.user_id, APPEAL_BUCKET);
+    ctx.deps.rateLimit = limiter;
+    try {
+      const limited = await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body);
+      expect(limited.status).toBe(429);
+      expect(code(limited)).toBe('RATE_LIMITED');
+    } finally {
+      ctx.deps.rateLimit = null;
+    }
+    expect((await betRow(betId)).state).toBe('RULED');
+    // the stored message is gone (e.g. rebuilt for another tap): the old signature is refused
+    await ctx.deps.db
+      .update(chainTxs)
+      .set({ status: 'expired' })
+      .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'appeal')));
+    expect(code(await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body))).toBe(
+      'SIGN_REQUEST_EXPIRED',
+    );
+
+    // A real filing, and every vendor fails (no key, errors): all abstain -> the ruling stands.
+    panel = {};
+    const fresh = await appealBody(betId, 'A', r);
+    expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, fresh.body)).status).toBe(202);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    expect(await usdc(signerB.address)).toBe(b0 + 1n * USDC); // B's win stands
+    const { result } = await appealResultOf(betId);
+    expect(result).toMatchObject({
+      final_outcome: 'B_WINS',
+      decided_by: 'upheld_no_majority',
+      flipped: false,
+      tally: { A_WINS: 0, B_WINS: 0, ABSTAIN: 3 },
+    });
+    expect(result.votes.every((v) => v.status === 'error' && v.counted_as === 'ABSTAIN')).toBe(
+      true,
+    );
+  });
+
+  it('APPEAL_WINDOW_CLOSED at appeal_deadline − 1 s: GET and POST refused, then finalize pays', async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, NOT_MET, 8); // A_WINS: B is the loser
+    await expectRuled(betId, r);
+    const { body } = await appealBody(betId, 'B', r); // built and signed in time ...
+    advance(9_100); // ... but posted 9.1 s after the ruling: inside the last second
+    const late = await signed(B, 'POST', `/v1/bets/${betId}/appeal`, body);
+    expect(late.status).toBe(409);
+    expect(late.json!.error).toMatchObject({ code: 'APPEAL_WINDOW_CLOSED' });
+    expect(late.json!.error.details.appeal_deadline).toBe(
+      Math.floor((await betRow(betId)).appeal_deadline!.getTime() / 1000),
+    );
+    expect((await get(B, `/v1/bets/${betId}/appeal`)).json!.error.code).toBe(
+      'APPEAL_WINDOW_CLOSED',
+    );
+    expect((await ctx.deps.db.select().from(appeals).where(eq(appeals.bet_id, betId))).length).toBe(
+      0,
+    );
+    await finalizeAfterWindow(betId);
+  });
+
+  it("the program's own window (6024) when the chain clock is ahead: APPEAL_WINDOW_CLOSED, appeal failed, finalize pays", async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, NOT_MET, 8); // A_WINS: B is the loser
+    await expectRuled(betId, r);
+    const { body } = await appealBody(betId, 'B', r);
+    // The server's clock says the window is open; the chain's is already at appeal_deadline.
+    const deadline = (await onchainBet(betId))!.appealDeadline;
+    setNow(svm.svm, deadline);
+    const refused = await signed(B, 'POST', `/v1/bets/${betId}/appeal`, body);
+    expect(refused.status).toBe(409);
+    expect(refused.json!.error).toMatchObject({
+      code: 'APPEAL_WINDOW_CLOSED',
+      details: { program_error: { code: 6024, name: 'AppealWindowClosed' } },
+    });
+    const [ap] = await ctx.deps.db.select().from(appeals).where(eq(appeals.bet_id, betId));
+    expect(ap).toMatchObject({ status: 'failed', appellant_party: 'B' });
+    const txs = await ctx.deps.db
+      .select()
+      .from(chainTxs)
+      .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'appeal')));
+    expect(txs.map((t) => t.status)).toEqual(['failed']);
+    expect((await betRow(betId)).state).toBe('RULED');
+    await finalizeAfterWindow(betId);
+  });
+
+  it('one vendor times out at its 8 s budget (shortened here): the other two decide', async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, NOT_MET, 8); // A_WINS: B appeals
+    await expectRuled(betId, r);
+    const b0 = await usdc(signerB.address);
+    panel = {
+      anthropic: vote('MET', 0.93),
+      openai: () => new Promise<MockReply>(() => undefined), // never answers
+      google: vote('MET', 0.81),
+    };
+    const t0 = Date.now();
+    const { body } = await appealBody(betId, 'B', r);
+    expect((await signed(B, 'POST', `/v1/bets/${betId}/appeal`, body)).status).toBe(202);
+    await lc.idle();
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    const { result } = await appealResultOf(betId);
+    expect(result.votes[1]).toMatchObject({
+      provider: 'openai',
+      status: 'timeout',
+      counted_as: 'ABSTAIN',
+    });
+    expect(result).toMatchObject({
+      tally: { A_WINS: 0, B_WINS: 2, ABSTAIN: 1 },
+      final_outcome: 'B_WINS',
+      flipped: true,
+    });
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    expect(await usdc(signerB.address)).toBe(b0 + 2n * USDC); // B gets the whole $2 pot back
+  });
+
+  it('finalize skips a bet whose appeal is out, and an APPEALED one: only resolve_appeal pays', async () => {
+    // (1) RULED with an appeal tx in flight ('sent'), past the window: finalize waits for it.
+    const first = await lockedBet();
+    syncClock();
+    const r1 = await judged(first, 1, MET, 8);
+    await expectRuled(first, r1);
+    // The loser's pushed appeal message, as if signed and sent (it never reaches the chain).
+    const [fake] = await ctx.deps.db
+      .update(chainTxs)
+      .set({ status: 'sent', signature: b58.decode(randomBytes(64)), sent_at: new Date(now()) })
+      .where(
+        and(eq(chainTxs.bet_id, first), eq(chainTxs.kind, 'appeal'), eq(chainTxs.status, 'built')),
+      )
+      .returning();
+    expect(fake).toBeDefined();
+    advance(12_000);
+    expect(await lc.payout.finalizeDue(now())).not.toContain(first);
+    expect(await lc.payout.finalize(first)).toBe('skipped');
+    expect((await betRow(first)).state).toBe('RULED');
+    // it never landed: the appeal is dead, finalize pays the ruling as usual
+    await ctx.deps.db.update(chainTxs).set({ status: 'failed' }).where(eq(chainTxs.id, fake!.id));
+    expect(await lc.payout.finalizeDue(now())).toContain(first);
+    await lc.idle();
+    expect(await betRow(first)).toMatchObject({ state: 'PAID', payout_via: 'finalize' });
+
+    // (2) APPEALED while the panel deliberates (votes held back): finalize never touches it.
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8);
+    await expectRuled(betId, r);
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const held = (reply: MockReply) => () => gate.then(() => reply);
+    voteTimeoutMs = 10_000;
+    install('phones');
+    try {
+      panel = {
+        anthropic: held(vote('MET')),
+        openai: held(vote('MET')),
+        google: held(vote('NOT_MET')),
+      };
+      const { body } = await appealBody(betId, 'A', r);
+      expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body)).status).toBe(202);
+      await expect.poll(async () => (await betRow(betId)).state).toBe('APPEALED');
+      advance(12_000); // well past appeal_deadline + 1 s
+      expect(await lc.payout.finalizeDue(now())).not.toContain(betId);
+      expect(await lc.payout.finalize(betId)).toBe('skipped');
+      expect((await onchainBet(betId))!.status).toBe(BetStatus.Appealed);
+      const kinds = (
+        await ctx.deps.db.select().from(chainTxs).where(eq(chainTxs.bet_id, betId))
+      ).map((t) => t.kind);
+      expect(kinds).not.toContain('finalize');
+      expect(
+        await ctx.deps.db
+          .select()
+          .from(appealVotes)
+          .innerJoin(appeals, eq(appeals.id, appealVotes.appeal_id))
+          .where(eq(appeals.bet_id, betId)),
+      ).toEqual([]);
+      release();
+      await lc.idle();
+    } finally {
+      release();
+      voteTimeoutMs = 300;
+      install('phones');
+    }
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    expect((await appealResultOf(betId)).result).toMatchObject({
+      final_outcome: 'B_WINS',
+      decided_by: 'majority',
+    });
+  });
+
+  it('a restart mid-panel: the keeper sweep re-runs the panel and pays by resolve_appeal once', async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8); // B_WINS: A appeals
+    await expectRuled(betId, r);
+    const a0 = await usdc(signerA.address);
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    voteTimeoutMs = 10_000;
+    install('phones');
+    const before = lc;
+    try {
+      // The first process files the appeal; its panel never answers (it "dies" mid-panel).
+      panel = {
+        anthropic: () => gate.then(() => vote('MET')),
+        openai: () => gate.then(() => vote('MET')),
+        google: () => gate.then(() => vote('MET')),
+      };
+      const { body } = await appealBody(betId, 'A', r);
+      expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body)).status).toBe(202);
+      await expect.poll(async () => (await betRow(betId)).state).toBe('APPEALED');
+      // The restarted process: no job in memory; the sweep finds the APPEALED bet.
+      voteTimeoutMs = 300;
+      install('phones');
+      panel = { anthropic: vote('NOT_MET'), openai: vote('NOT_MET', 0.75), google: vote('MET') };
+      expect((await lc.appeal.sweep(now())).resolving).toContain(betId);
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+      expect(await usdc(signerA.address)).toBe(a0 + 2n * USDC); // flipped: A takes the $2 pot
+      // the old process's late votes change nothing, and nothing is paid twice
+      release();
+      await before.idle();
+      expect(await lc.appeal.sweep(now())).toMatchObject({ resolving: [] });
+      const kinds = (
+        await ctx.deps.db.select().from(chainTxs).where(eq(chainTxs.bet_id, betId))
+      ).map((t) => `${t.kind}:${t.status}`);
+      expect(kinds.filter((k) => k.startsWith('resolve_appeal'))).toEqual([
+        'resolve_appeal:confirmed',
+      ]);
+      const { result } = await appealResultOf(betId);
+      expect(result).toMatchObject({ final_outcome: 'A_WINS', tally: { A_WINS: 2, B_WINS: 1 } });
+    } finally {
+      release();
+      voteTimeoutMs = 300;
+      install('phones');
+    }
+  });
+
+  it("the chain's BetAppealed before our confirm: votes stored while RULED reach the log before the result", async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8);
+    await expectRuled(betId, r);
+    panel = { anthropic: vote('NOT_MET'), openai: vote('MET'), google: vote('NOT_MET') };
+    // Our status poll never sees the appeal tx (its confirm times out; the row stays 'sent').
+    const real = rt.client.signatureStatus.bind(rt.client);
+    const appealTx = async (sig: string) =>
+      (
+        await ctx.deps.db
+          .select({ kind: chainTxs.kind })
+          .from(chainTxs)
+          .where(eq(chainTxs.signature, sig))
+      )[0]?.kind === 'appeal';
+    rt.client.signatureStatus = async (sig, o) => ((await appealTx(sig)) ? null : real(sig, o));
+    try {
+      const { body } = await appealBody(betId, 'A', r);
+      expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body)).status).toBe(202);
+      await lc.idle(); // the panel's votes are stored while the bet is still RULED
+      expect((await betRow(betId)).state).toBe('RULED');
+      expect((await dbEvents(betId)).filter((e) => e.type === 'appeal.vote')).toHaveLength(0);
+      // The projector applies the chain's BetAppealed (chain wins): APPEALED, our confirm unseen.
+      await ctx.deps.db.update(bets).set({ state: 'APPEALED' }).where(eq(bets.id, betId));
+      await lc.appeal.sweep(now());
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    } finally {
+      rt.client.signatureStatus = real;
+    }
+    const types = (await dbEvents(betId)).map((e) => e.type);
+    const result = types.indexOf('appeal.result');
+    expect(types.filter((t) => t === 'appeal.vote')).toHaveLength(3);
+    expect(types.lastIndexOf('appeal.vote')).toBeLessThan(result);
+    // Our confirm turns up late (the sweep finds the tx): nothing is streamed or paid twice.
+    await lc.appeal.sweep(now());
+    await lc.idle();
+    const after = (await dbEvents(betId)).map((e) => e.type);
+    expect(after.filter((t) => t === 'appeal.vote')).toHaveLength(3);
+    expect(after.filter((t) => t === 'appeal.result')).toHaveLength(1);
+    const [tx] = await ctx.deps.db
+      .select()
+      .from(chainTxs)
+      .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'appeal')));
+    expect(tx!.status).toBe('confirmed');
+  });
+
+  it('LOCK_SIGNER=server: POST /v1/demo/bets/:id/appeal signs the losing demo party custodially', async () => {
+    // phones mode: no custodial appeal
+    const phonesBet = await lockedBet();
+    syncClock();
+    const pr = await judged(phonesBet, 1, MET, 8);
+    await expectRuled(phonesBet, pr);
+    const refused = await admin(`/v1/demo/bets/${phonesBet}/appeal`);
+    expect(refused.status).toBe(409);
+    expect(refused.json!.error.details).toMatchObject({ reason: 'lock_signer_phones' });
+    await finalizeAfterWindow(phonesBet);
+
+    install('server');
+    try {
+      const a0 = await usdc(signerA.address);
+      const betId = await lockedBet();
+      syncClock();
+      const r = await judged(betId, 1, MET, 8); // B_WINS: demo-a is the loser
+      await expectRuled(betId, r);
+      // the admin key gates it (404 without, as every demo route)
+      expect((await postJson(ctx.base, `/v1/demo/bets/${betId}/appeal`, {})).status).toBe(404);
+      // naming the winner is refused
+      expect((await admin(`/v1/demo/bets/${betId}/appeal`, { party: 'B' })).json!.error.code).toBe(
+        'NOT_LOSER',
+      );
+      panel = { anthropic: vote('MET'), openai: vote('MET', 0.95), google: vote('NOT_MET', 0.7) };
+      const res = await admin(`/v1/demo/bets/${betId}/appeal`);
+      expect(res.status, JSON.stringify(res.json)).toBe(202);
+      expect(res.json).toMatchObject({ status: 'submitted' });
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+      expect((await appealResultOf(betId)).result).toMatchObject({
+        appellant: 'A',
+        final_outcome: 'B_WINS',
+        decided_by: 'majority',
+        flipped: false,
+      });
+      expect(await usdc(signerA.address)).toBe(a0 - 1n * USDC); // upheld: A's stake went to B
+      await expectFanout(betId, [
+        ...TO_LOCKED('server'),
+        ...ATTEMPT_TO_RULING('RULING'),
+        ...RULED('server'),
+        ...APPEAL_TO('PAID'),
+      ]);
+    } finally {
+      install('phones');
+    }
+  });
+
   // ---- the live driver, against this local server (never the live one) -------------------
 
   async function drive(args: string[], wallets: [TestKey, KeyPairSigner][]) {
@@ -1016,7 +1647,9 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
           .select({ id: bets.id })
           .from(bets)
           .where(eq(bets.state, 'RULED'));
-        if (ruled.length && args.includes('--gg') === false) {
+        if (args.includes('--appeal')) {
+          advance(0); // the appeal window is SVM-clock based: keep it on the server's clock
+        } else if (ruled.length && args.includes('--gg') === false) {
           advance(12_000);
           await lc.payout.finalizeDue(now());
         }
@@ -1111,5 +1744,24 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
       ctx.deps.env.CACHED_RULING = false;
     }
     expect(await usdc(w[0]![1].address)).toBe(before - 1n * USDC); // A (the loser) paid B
+  }, 90_000);
+
+  it('scripts/cp1-drive.ts --through paid --appeal: the loser appeals in the window -> panel -> PAID', async () => {
+    const w = await freshWallets();
+    const before = await usdc(w[0]![1].address);
+    // CACHED_RULING: B_WINS, so A appeals; two of three vendors say NOT_MET -> flipped to A.
+    panel = { anthropic: vote('NOT_MET'), openai: vote('NOT_MET', 0.8), google: vote('MET') };
+    ctx.deps.env.CACHED_RULING = true;
+    try {
+      const { code, out } = await drive(['--through', 'paid', '--appeal'], w);
+      expect(out).toMatch(/appeal by A/);
+      expect(out).toContain('APPEALED');
+      expect(out).toMatch(/panel: A_WINS by majority \(2-1-0\), flipped/);
+      expect(out).toMatch(/PAID via resolve_appeal/);
+      expect(code, out).toBe(0);
+    } finally {
+      ctx.deps.env.CACHED_RULING = false;
+    }
+    expect(await usdc(w[0]![1].address)).toBe(before + 1n * USDC); // A won on appeal
   }, 90_000);
 });

@@ -6,7 +6,7 @@
 //
 //   npm run cp1-drive -- [--base-url http://127.0.0.1:8080] [--admin-token <DEMO_ADMIN_TOKEN>]
 //        [--keys-dir ~/.config/solana/youre-on] [--state-file <path>] [--reset] [--timeout 60]
-//        [--name-a Logan] [--name-b Jake] [--through locked|paid] [--gg] [--frames 8]
+//        [--name-a Logan] [--name-b Jake] [--through locked|paid] [--gg | --appeal] [--frames 8]
 //        [--market up|down] [--amount 2] [--via-tools]
 //
 // Steps: sign up (or log in) two users whose wallet keys are demo-a / demo-b -> A creates a room,
@@ -33,6 +33,12 @@
 // the loser concedes (GET /v1/bets/:id/concede, signs the stored message with its wallet key,
 // POST /v1/bets/:id/concede). Each chain tx is printed with its Explorer link on devnet.
 // The verdict is the server's: CACHED_RULING=true (no LLM call) rules B_WINS from the frames.
+// --appeal (Beat 5, instead of --gg): right after RULED the loser (A for a VOID) appeals inside
+// the 10 s window (GET /v1/bets/:id/appeal, signs the stored message with its wallet key, POST
+// /v1/bets/:id/appeal), then the script waits for APPEALED, prints the three panel votes and the
+// result (GET /v1/bets/:id appeal), and waits for APPEAL_RESOLVED -> PAID / VOIDED (the server's
+// resolve_appeal, signed by APPEAL_AUTHORITY_SECRET_KEY). The panel calls the live vendors when
+// the server runs LLM_PROVIDER=live (a vendor with no key abstains; all abstain = the ruling stands).
 //
 // --market up|down (Beat 6, the Gemini closer) replaces the fixture terms: A bets UP or DOWN on
 // Gemini's current BTC 5-minute contract with --amount dollars a side (default 2). The script
@@ -76,6 +82,7 @@ import {
   walletBindMessage,
   type Session,
 } from '@youre-on/shared/api';
+import { MAX_JUDGE_FRAMES, MIN_JUDGE_FRAMES } from '@youre-on/shared/judge/frames';
 
 import { expandPath, keysDirFrom, parseCli, run } from './lib/cli';
 import { assertNotCommittable, loadRole } from './lib/keys';
@@ -86,12 +93,13 @@ const MAX_429_RETRIES = 8;
 
 const USAGE = `usage: npm run cp1-drive -- [--base-url <url>] [--admin-token <token>] [--keys-dir <dir>]
           [--state-file <path>] [--reset] [--timeout 60] [--name-a Logan] [--name-b Jake]
-          [--through locked|paid] [--gg] [--frames 8] [--market up|down] [--amount 2]
+          [--through locked|paid] [--gg | --appeal] [--frames 8] [--market up|down] [--amount 2]
           [--via-tools]
 Drives challenge -> terms -> confirm -> LOCKED against a running server (DEMO_MODE=true);
 --via-tools sends the terms + confirm as the ElevenLabs webhook tools (needs ELEVENLABS_TOOL_SECRET);
 --through paid goes on: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID
-(finalize after the appeal window, or the loser's GG with --gg).
+(finalize after the appeal window, or the loser's GG with --gg; with --appeal the loser appeals
+in the window -> the three-model panel -> resolve_appeal -> PAID / VOIDED).
 --market up|down (Beat 6): Gemini BTC 5-minute terms at Gemini's odds instead of the fixture;
 --through paid then waits for Gemini to settle (up to ~6 min) instead of the judge cam.`;
 
@@ -451,6 +459,7 @@ run(async () => {
     'name-b': { type: 'string' },
     through: { type: 'string' },
     gg: { type: 'boolean' },
+    appeal: { type: 'boolean' },
     frames: { type: 'string' },
     market: { type: 'string' },
     amount: { type: 'string' },
@@ -476,14 +485,20 @@ run(async () => {
     console.error(`--amount must be dollars like 2 or 2.50\n\n${USAGE}`);
     process.exit(2);
   }
+  if (values.gg && values.appeal) {
+    console.error(`--gg and --appeal are two ways to answer the ruling (pick one)\n\n${USAGE}`);
+    process.exit(2);
+  }
   const through = values.through ?? 'locked';
   if (through !== 'locked' && through !== 'paid') {
     console.error(`--through must be locked or paid\n\n${USAGE}`);
     process.exit(2);
   }
-  const nFrames = Number(values.frames ?? 8);
-  if (!Number.isInteger(nFrames) || nFrames < 8 || nFrames > 12) {
-    console.error(`--frames must be 8..12 (the server's MIN_FRAMES..MAX_FRAMES)\n\n${USAGE}`);
+  const nFrames = Number(values.frames ?? MIN_JUDGE_FRAMES);
+  if (!Number.isInteger(nFrames) || nFrames < MIN_JUDGE_FRAMES || nFrames > MAX_JUDGE_FRAMES) {
+    console.error(
+      `--frames must be ${MIN_JUDGE_FRAMES}..${MAX_JUDGE_FRAMES} (the server's limits; the phone sends 12 + a landing crop)\n\n${USAGE}`,
+    );
     process.exit(2);
   }
   const base = (
@@ -734,6 +749,15 @@ run(async () => {
   });
   console.log(`\nRULED (resolve confirmed): appeal window until ${ruled.appeal_deadline}`);
   tx('resolve', lastTx(ruled.chain_txs, 'resolve')?.signature);
+
+  if (values.appeal) {
+    const via = await appealRuling(api, players, betId, timeoutMs, tx);
+    const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
+    if (snap.payout)
+      console.log(`  payout: A ${snap.payout.to_a}, B ${snap.payout.to_b} (micro-USDC)`);
+    if (via !== 'resolve_appeal') throw new Error(`the appeal did not decide the bet (${via})`);
+    return;
+  }
 
   if (values.gg && ruling.ruling.outcome !== 'VOID') {
     const loser = await ggLoser(api, players, betId);
@@ -992,6 +1016,95 @@ async function uploadFrames(api: Api, cam: Signer, betId: string, n: number, cou
   if (JSON.stringify(r.frame_hashes) !== JSON.stringify(want))
     throw new Error('the server hashed the frames differently');
   return { clip, bytes: body.length };
+}
+
+/**
+ * Beat 5: the loser appeals inside the window (A for a VOID: either may), then the panel's votes
+ * and result are printed and the payout awaited. Returns how the bet was paid out.
+ */
+async function appealRuling(
+  api: Api,
+  players: Record<'A' | 'B', Player>,
+  betId: string,
+  timeoutMs: number,
+  tx: (what: string, sig: string | null | undefined) => void,
+): Promise<string> {
+  let who: Player | null = null;
+  let req: any = null; // eslint-disable-line @typescript-eslint/no-explicit-any -- loose JSON
+  for (const p of [players.A, players.B]) {
+    const r = await api.get(p, `/v1/bets/${betId}/appeal`);
+    if (r.status === 200) {
+      who = p;
+      req = r.json;
+      break;
+    }
+    if (r.json?.error?.code !== 'NOT_LOSER')
+      throw new Error(`appeal request: HTTP ${r.status} ${JSON.stringify(r.json)}`);
+  }
+  if (!who) throw new Error('nobody can appeal this ruling');
+  const msg = new Uint8Array(Buffer.from(req.message_b64, 'base64'));
+  if (sha256Hex(msg) !== req.message_sha256) throw new Error('appeal message_sha256 mismatch');
+  const sig = await signBytes(who.wallet.keyPair.privateKey, msg);
+  const r = must(
+    await api.signed(who, 'POST', `/v1/bets/${betId}/appeal`, {
+      bet_id: betId,
+      kind: 'appeal',
+      party: who.party,
+      message_sha256: req.message_sha256,
+      party_signature: b58.decode(new Uint8Array(sig)),
+      method: 'faceid_hold',
+      signed_at: new Date().toISOString(),
+    }),
+    [202],
+    'appeal',
+  );
+  console.log(
+    `appeal by ${who.party} (${who.name}): "${req.card.prompt_message}" -> ${r.status} (appeal ${r.appeal_id}, window until ${req.lifetime.valid_until})`,
+  );
+  tx('appeal', r.signature);
+
+  const appealed = await until(timeoutMs, 'APPEALED', async () => {
+    const st = must(await api.demo('GET', `/v1/demo/bets/${betId}`), [200], 'bet status');
+    const failed = (st.chain_txs as ChainTxRow[]).find(
+      (t) => t.kind === 'appeal' && t.signature === r.signature && t.status === 'failed',
+    );
+    if (failed) throw new Error(`the appeal tx failed: ${JSON.stringify(failed)}`);
+    return ['APPEALED', 'APPEAL_RESOLVED', 'PAID', 'VOIDED'].includes(st.state) ? st : null;
+  });
+  console.log(`
+APPEALED (appeal confirmed, state ${appealed.state}): the panel is voting`);
+
+  // The panel: three vendors, 8 s each at most, then the AppealResult (BetSnapshot.appeal).
+  const result = await until(
+    timeoutMs,
+    'the panel result',
+    async () => {
+      const snap = must(await api.get(who, `/v1/bets/${betId}`), [200], 'bet snapshot');
+      return snap.appeal ?? null;
+    },
+    1_000, // a session GET: 120/min
+  );
+  for (const v of result.votes as Array<Record<string, unknown>>)
+    console.log(
+      `  seat ${v.seat} ${v.model}: ${v.counted_as} (${v.status}, ${v.outcome}, ${v.confidence}, ${v.latency_ms} ms)${v.reason ? ` "${v.reason}"` : ''}`,
+    );
+  const t = result.tally;
+  console.log(
+    `panel: ${result.final_outcome} by ${result.decided_by === 'majority' ? 'majority' : 'no majority, upheld'} (${t.A_WINS}-${t.B_WINS}-${t.ABSTAIN}), ${result.flipped ? 'flipped' : 'the ruling stands'}`,
+  );
+
+  const paid = await until(timeoutMs, 'PAID', async () => {
+    const st = must(await api.demo('GET', `/v1/demo/bets/${betId}`), [200], 'bet status');
+    if (['CANCELLED', 'EXPIRED'].includes(st.state))
+      throw new Error(`bet ended ${st.state} (${st.end_reason})`);
+    return ['PAID', 'VOIDED'].includes(st.state) ? st : null;
+  });
+  const payoutTx = lastTx(paid.chain_txs, 'resolve_appeal');
+  const via = payoutTx?.status === 'confirmed' ? 'resolve_appeal' : 'other';
+  console.log(`
+${paid.state} via ${via} (${result.final_outcome})`);
+  tx('resolve_appeal', payoutTx?.signature);
+  return via;
 }
 
 /** The party whose GET /concede answers (the loser of a decisive ruling); the winner's is NOT_LOSER. */

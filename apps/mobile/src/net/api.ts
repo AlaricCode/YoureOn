@@ -3,6 +3,7 @@
 // define yet (balance, attempts, frames, concede) are declared here, tolerant z.object, exactly
 // as the contract prints them. Some of these routes are still being built server-side.
 import {
+  AppealSubmitted,
   AuthorizationResult,
   BET_EVENTS_LIMIT,
   betEventsPath,
@@ -45,6 +46,7 @@ import {
 } from '@youre-on/shared/realtime';
 import { z } from 'zod/v4';
 
+import type { Recorder } from '../attempt/recorder';
 import { boundaryFor, buildMultipart } from './multipart';
 import type { ApiClient } from './signedFetch';
 
@@ -254,10 +256,11 @@ export function createYoApi(c: ApiClient) {
     declineLock: (d: PartyDecline) =>
       c.request('POST', `${bet(d.bet_id)}/lock/decline`, { json: d }),
 
-    // §2.9 attempts and evidence
-    startAttempt: (betId: string, attemptNo: number) =>
+    // §2.9 attempts and evidence. 'self' = this phone films (two phones, never the performer's);
+    // ../attempt/recorder picks it.
+    startAttempt: (betId: string, attemptNo: number, recorder: Recorder = 'judge_cam') =>
       c.request('POST', `${bet(betId)}/attempts`, {
-        json: { attempt_no: attemptNo, recorder: 'judge_cam' },
+        json: { attempt_no: attemptNo, recorder },
         schema: AttemptStartedResponse,
       }),
     uploadFrames: (
@@ -292,6 +295,15 @@ export function createYoApi(c: ApiClient) {
       c.request('POST', `${bet(s.bet_id)}/concede`, {
         json: s,
         schema: SubmittedResponse,
+        idempotencyKey,
+      }),
+
+    // §2.12 appeal (Beat 5)
+    getAppeal: (betId: string) => c.request('GET', `${bet(betId)}/appeal`, { schema: SignRequest }),
+    appeal: (s: PartySignature, idempotencyKey: string) =>
+      c.request('POST', `${bet(s.bet_id)}/appeal`, {
+        json: s,
+        schema: AppealSubmitted,
         idempotencyKey,
       }),
 

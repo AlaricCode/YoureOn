@@ -163,12 +163,23 @@ d('stage client <-> server /v1/ws (DB)', () => {
     await expect.poll(() => c.get().status, { timeout: 3000 }).toBe('open');
     c.conn.stop();
 
-    // the stage's schema reads the server's real /v1/demo/health (no chain configured in tests)
-    const h = await fetchDemoHealth(base, DEMO_ADMIN_TOKEN);
+    // the stage's schema reads the server's real /v1/demo/health (no chain configured in tests),
+    // with the stage session's own bearer: no admin key in the projector URL
+    const h = await fetchDemoHealth(base, { token: s.token });
     expect(h.chain_configured).toBe(false);
     expect(typeof h.db_ms).toBe('number');
     expect(healthItems(h)[0]).toMatchObject({ key: 'sol', value: 'no chain', level: 'bad' });
-    await expect(fetchDemoHealth(base, 'wrong-key')).rejects.toThrow(/demo key or DEMO_MODE/);
+    // the admin key still works on its own, and wins over a bad bearer
+    expect((await fetchDemoHealth(base, { demoKey: DEMO_ADMIN_TOKEN })).chain_configured).toBe(
+      false,
+    );
+    await fetchDemoHealth(base, { token: 'yo_s_bogus', demoKey: DEMO_ADMIN_TOKEN });
+    await expect(fetchDemoHealth(base, { demoKey: 'wrong-key' })).rejects.toThrow(
+      /demo key or DEMO_MODE/,
+    );
+    await expect(fetchDemoHealth(base, { token: 'yo_s_bogus' })).rejects.toThrow(/404/);
+    // a stage token without the demo scope (DEMO_MODE off when it was issued) is refused
+    await expect(fetchDemoHealth(base, { token: await stageToken(id) })).rejects.toThrow(/404/);
   });
 
   it("the evidence JPEGs come through the server's frame route with the stage token", async () => {

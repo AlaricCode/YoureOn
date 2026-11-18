@@ -454,13 +454,20 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     expect(policy.verdict(req, msg)).toMatchObject({ ok: true, kind: 'concede', party: 'B' });
     expect(req.card).toEqual(policy.renderedCard);
     expect(req.ruling_ref.ruling_hash).toBe(hashJcs(verified));
-    // The tx.sign_request pushed after resolve carries the same card and passes too.
-    const pushed = (
+    // The tx.sign_request pushed after resolve carries the same card and passes too. The loser
+    // gets the appeal request beside it (API-CONTRACT §3.4), concede first.
+    const all = (
       await ctx.deps.db
         .select()
         .from(betEvents)
         .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'tx.sign_request')))
+        .orderBy(betEvents.seq)
     ).map((e) => SignRequest.parse((e.envelope as any).payload.request));
+    expect(all.map((r) => [r.kind, r.for_parties[0]])).toEqual([
+      ['concede', 'B'],
+      ['appeal', 'B'],
+    ]);
+    const pushed = all.filter((r) => r.kind === 'concede');
     expect(pushed).toHaveLength(1);
     expect(pushed[0]!.card).toEqual(policy.renderedCard);
     expect(

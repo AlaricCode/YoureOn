@@ -13,14 +13,15 @@ import { MAX_REDOS } from '@youre-on/shared/constants';
 import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { normText, type Party } from '@youre-on/shared/primitives';
 import {
+  CACHED_RULING_MODEL,
   Ruling,
   toOutcome,
   type ClaimResult,
   type RedoReason,
   type VisionVerdict,
 } from '@youre-on/shared/ruling';
-import type { Terms } from '@youre-on/shared/terms';
 import type { AppDeps } from '../context';
+import { cachedRulingOn } from '../demo/toggles';
 import { compareChecks, isBottleFlip, type JudgeVerdict } from './checks';
 import {
   buildJudgeParts,
@@ -28,11 +29,17 @@ import {
   JUDGE_OUTPUT,
   JUDGE_SYSTEM_PROMPT,
   JUDGE_TIMEOUT_MS,
+  type JudgeTerms,
   type PromptFrame,
 } from './prompt';
+import { judgeStatsOf, type JudgeCallSource } from './stats';
 
-/** `Ruling.model` of a CACHED_RULING ruling (labelled REPLAY on stage, API-CONTRACT §2.17). */
-export const CACHED_RULING_MODEL = 'cache/demo-bottle@1';
+/**
+ * `Ruling.model` of a cached ruling (env CACHED_RULING or the runtime toggle POST
+ * /v1/demo/toggles, demo/toggles.ts): the marker the stage labels "replay ruling" (shared
+ * isCachedRuling / isCachedRulingModel).
+ */
+export { CACHED_RULING_MODEL };
 
 /** What the vision step produced for one attempt. */
 export type Judged =
@@ -151,33 +158,60 @@ export function cachedVerdict(frameCount: number): JudgeVerdict {
 }
 
 export interface JudgeInput {
-  terms: Terms;
+  terms: JudgeTerms;
   performer_name: string;
+  /** In send order; the landing crop (if any) last (planning D10). */
   frames: PromptFrame[];
+  /** CameraEvidence.duration_ms: where the landing window sits (the prompt's LANDING labels). */
+  duration_ms?: number | undefined;
 }
 
-/** One structured vision call through deps.providers.llm (or the cached verdict). Never throws. */
-export async function judgeFrames(
-  deps: Pick<AppDeps, 'env' | 'providers' | 'log'>,
+type JudgeDeps = Pick<AppDeps, 'env' | 'providers' | 'log'>;
+
+function withChecks(terms: JudgeTerms, model: string, v: JudgeVerdict): Judged {
+  const c = compareChecks(v.claim_result, v.checks, isBottleFlip(terms));
+  const { checks: _checks, ...verdict } = v;
+  return { kind: 'verdict', model, verdict, disagreement: c.agree ? null : c.why };
+}
+
+/**
+ * The attempt ruling's vision step: the stored verdict while cached_ruling is on (the runtime
+ * toggle POST /v1/demo/toggles, else env CACHED_RULING; read at call time, so no restart), else
+ * one structured vision call through deps.providers.llm. Never throws.
+ */
+export async function judgeFrames(deps: JudgeDeps, input: JudgeInput): Promise<Judged> {
+  if (cachedRulingOn(deps))
+    return withChecks(input.terms, CACHED_RULING_MODEL, cachedVerdict(input.frames.length));
+  return callJudge(deps, input, 'ruling');
+}
+
+/**
+ * One live vision call (the real provider, prompt and output schema; never the cached verdict),
+ * recorded in the judge stats (judge/stats.ts) as `source`. POST /v1/demo/warmup calls it
+ * directly. Never throws.
+ */
+export async function callJudge(
+  deps: JudgeDeps,
   input: JudgeInput,
+  source: JudgeCallSource,
 ): Promise<Judged> {
-  const applies = isBottleFlip(input.terms);
-  const withChecks = (model: string, v: JudgeVerdict): Judged => {
-    const c = compareChecks(v.claim_result, v.checks, applies);
-    const { checks: _checks, ...verdict } = v;
-    return { kind: 'verdict', model, verdict, disagreement: c.agree ? null : c.why };
-  };
-
-  if (deps.env.CACHED_RULING)
-    return withChecks(CACHED_RULING_MODEL, cachedVerdict(input.frames.length));
-
   const model = deps.env.JUDGE_MODEL;
+  const t0 = performance.now();
+  const record = (ok: boolean, served: string, fail?: { status: string; message: string }) =>
+    judgeStatsOf(deps).record({
+      at: Date.now(),
+      ms: Math.round(performance.now() - t0),
+      ok,
+      model: served,
+      source,
+      ...(fail ? { status: fail.status, error: fail.message } : {}),
+    });
   try {
     const res = await deps.providers.llm.chat({
       vendor: 'anthropic',
       model,
       system: JUDGE_SYSTEM_PROMPT,
-      parts: buildJudgeParts(input.terms, input.performer_name, input.frames),
+      parts: buildJudgeParts(input.terms, input.performer_name, input.frames, input.duration_ms),
       output: JUDGE_OUTPUT,
       effort: 'low',
       maxOutputTokens: JUDGE_MAX_OUTPUT_TOKENS,
@@ -185,16 +219,20 @@ export async function judgeFrames(
     });
     const served = `anthropic/${res.model}`;
     if (!res.ok) {
+      record(false, served, res);
       deps.log.warn('judge.llm_failed', {
         status: res.status,
         message: res.message,
         model: served,
+        source,
       });
       return { kind: 'failure', model: served, status: res.status, message: res.message };
     }
-    return withChecks(served, res.value);
+    record(true, served);
+    return withChecks(input.terms, served, res.value);
   } catch (e) {
-    deps.log.error('judge.llm_threw', { err: String(e) });
+    record(false, `anthropic/${model}`, { status: 'error', message: String(e) });
+    deps.log.error('judge.llm_threw', { err: String(e), source });
     return { kind: 'failure', model: `anthropic/${model}`, status: 'error', message: String(e) };
   }
 }
