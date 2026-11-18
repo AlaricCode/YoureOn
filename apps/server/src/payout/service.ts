@@ -9,7 +9,9 @@
 //                            waits for `confirmed`, sets RULED, pushes bet.state (reason carries
 //                            appeal_deadline) and the loser's concede tx.sign_request, and arms the
 //                            finalize fast path (setTimeout at appeal_deadline + 1 s). REDO throws.
-//   finalizeDue(now)         keeper sweep (DB-first): every RULED bet past appeal_deadline + 1 s.
+//   finalizeDue(now)         keeper sweep (DB-first): reconcile() first (settles 'sent' resolve /
+//                            concede / finalize rows whose confirm timed out or died with a
+//                            restart), then every RULED bet past appeal_deadline + 1 s.
 //   concedeRequest / concede GET / POST /v1/bets/:id/concede (the loser signs on the phone;
 //                            LOCK_SIGNER=server signs as the demo key).
 //
@@ -84,9 +86,11 @@ import {
 import {
   fanout,
   hexBytes,
+  hexOf,
   iso,
   Inflight,
   lockBet,
+  readBetAccount,
   statePayload,
   type LifecycleDeps,
   type Tx,
@@ -147,6 +151,8 @@ export interface RuledResult {
 export class PayoutService {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly finalizing = new Set<string>();
+  /** chain_txs ids whose in-process confirm loop is running (reconcile() skips them). */
+  private readonly confirming = new Set<string>();
   constructor(private readonly o: PayoutServiceOptions) {}
 
   private get deps() {
@@ -187,11 +193,24 @@ export class PayoutService {
         appeal_deadline: Math.floor(bet.appeal_deadline.getTime() / 1000),
         already: true,
       };
+
+    // An earlier resolve may have landed after its confirm timed out (or across a restart):
+    // when the Bet is already Resolved with THIS ruling, adopt it instead of rebuilding (a
+    // rebuild would fail simulation: the bet is no longer Locked).
+    const idBytes = betIdToBytes(betId);
+    const [betPda] = await findBetPda({ betId: idBytes });
+    const before = await this.fetchBet(rt, betPda);
+    if (before && before.status !== BetStatus.Locked) {
+      if (before.status === BetStatus.Resolved && hexOf(before.rulingHash) === rulingHash)
+        return this.adoptResolved(rt, betId, before, prior);
+      throw new HttpError('INVALID_STATE', 'The bet is no longer Locked onchain.', {
+        state: bet.state,
+        onchain: BetStatus[before.status],
+      });
+    }
     if (!RESOLVABLE_STATES.includes(bet.state))
       throw new HttpError('INVALID_STATE', undefined, { state: bet.state });
 
-    const idBytes = betIdToBytes(betId);
-    const [betPda] = await findBetPda({ betId: idBytes });
     const ix = await getResolveInstructionAsync({
       payer: rt.keys.feePayer,
       judgeAuthority: judge,
@@ -228,43 +247,141 @@ export class PayoutService {
       return row!.id;
     });
     let landed: Landed;
+    this.confirming.add(rowId);
     try {
-      await rt.client.send(wireOf(built.tx), false);
+      try {
+        await rt.client.send(wireOf(built.tx), false);
+      } catch (err) {
+        if (err instanceof PreflightError) throw err;
+        // Transport trouble: confirmSent re-broadcasts the same bytes.
+        this.deps.log.warn('payout.resolve_send_retry', { bet_id: betId, err });
+      }
       landed = await confirmSent(rt.client, built.tx, {
         ...this.o.send,
         lastValidBlockHeight: built.lastValidBlockHeight,
       });
     } catch (err) {
+      if (err instanceof TxFailedError && err.kind === 'timeout') {
+        // The blockhash is still valid, so it may yet land: the row stays 'sent' and reconcile()
+        // settles it; if it already landed, adopt it now.
+        const after = await this.fetchBet(rt, betPda);
+        if (after?.status === BetStatus.Resolved && hexOf(after.rulingHash) === rulingHash)
+          return this.adoptResolved(rt, betId, after, { id: rowId, signature, status: 'sent' });
+        throw err;
+      }
       await this.deps.db
         .update(chainTxs)
-        .set({ status: 'failed', err: String((err as Error).message ?? err).slice(0, 200) })
+        .set({
+          status: err instanceof TxFailedError && err.kind === 'expired' ? 'expired' : 'failed',
+          err: String((err as Error).message ?? err).slice(0, 200),
+        })
         .where(eq(chainTxs.id, rowId));
       throw err;
+    } finally {
+      this.confirming.delete(rowId);
     }
 
     const onchain = await this.fetchBet(rt, betPda);
-    const appealDeadline = Number(onchain?.appealDeadline ?? 0n);
+    return this.markRuled(
+      rt,
+      betId,
+      rowId,
+      {
+        outcome,
+        evidenceHash: ruling.evidence_hash,
+        rulingHash,
+        appealDeadline: Number(onchain?.appealDeadline ?? 0n),
+        resolveDeadline: onchain ? Number(onchain.resolveDeadline) : null,
+      },
+      signature,
+      now,
+      landed,
+    );
+  }
+
+  /** Adopts a resolve found onchain (values from the Bet account): -> RULED as if we confirmed it. */
+  private async adoptResolved(
+    rt: ChainRuntime,
+    betId: string,
+    onchain: Bet,
+    row: Pick<typeof chainTxs.$inferSelect, 'id' | 'signature' | 'status'> | null,
+  ): Promise<RuledResult> {
+    const now = this.deps.now();
+    let rowId: string | null = null;
+    let slot: bigint | null = null;
+    if (row?.signature && row.status !== 'confirmed') {
+      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
+      if (st && !st.err && st.confirmationStatus !== 'processed') {
+        rowId = row.id;
+        slot = st.slot;
+      }
+    }
+    const opt = onchain.outcome as { __option: 'Some'; value: Outcome } | { __option: 'None' };
+    if (opt.__option !== 'Some') throw new Error(`bet ${betId} is Resolved without an outcome`);
+    this.deps.log.warn('payout.resolve_adopted', { bet_id: betId, signature: row?.signature });
+    return this.markRuled(
+      rt,
+      betId,
+      rowId,
+      {
+        outcome: Outcome[opt.value] as OnchainOutcome,
+        evidenceHash: hexOf(onchain.evidenceHash),
+        rulingHash: hexOf(onchain.rulingHash),
+        appealDeadline: Number(onchain.appealDeadline),
+        resolveDeadline: Number(onchain.resolveDeadline),
+      },
+      row?.signature ?? '',
+      now,
+      { signature: row?.signature ?? '', processedAt: now, confirmedAt: now, slot },
+      true,
+    );
+  }
+
+  /**
+   * The confirmed resolve -> RULED (reason carries appeal_deadline), then the loser's GG prompt
+   * and the finalize fast path. No state change when the bet is no longer resolvable (e.g. a
+   * concurrent adopt already ruled it).
+   */
+  private async markRuled(
+    rt: ChainRuntime,
+    betId: string,
+    rowId: string | null,
+    r: {
+      outcome: OnchainOutcome;
+      evidenceHash: string;
+      rulingHash: string;
+      appealDeadline: number;
+      resolveDeadline: number | null;
+    },
+    signature: string,
+    submittedAt: number,
+    landed: Landed,
+    already = false,
+  ): Promise<RuledResult> {
+    const { outcome, appealDeadline } = r;
     const out = await this.deps.db.transaction(async (tx) => {
       const b = await lockBet(tx, betId);
       if (!b) return null;
-      await tx
-        .update(chainTxs)
-        .set({
-          status: 'confirmed',
-          rpc_processed_at: new Date(landed.processedAt),
-          rpc_confirmed_at: new Date(landed.confirmedAt),
-        })
-        .where(eq(chainTxs.id, rowId));
+      if (rowId)
+        await tx
+          .update(chainTxs)
+          .set({
+            status: 'confirmed',
+            rpc_processed_at: new Date(landed.processedAt),
+            rpc_confirmed_at: new Date(landed.confirmedAt),
+          })
+          .where(eq(chainTxs.id, rowId));
+      if (!RESOLVABLE_STATES.includes(b.state)) return { b, envs: [], moved: false };
       const [row] = await tx
         .update(bets)
         .set({
           state: 'RULED',
           outcome: ONCHAIN[outcome].pg,
-          evidence_hash: ruling.evidence_hash,
-          ruling_hash: rulingHash,
+          evidence_hash: r.evidenceHash,
+          ruling_hash: r.rulingHash,
           appeal_deadline: new Date(appealDeadline * 1000),
-          ...(onchain
-            ? { resolve_deadline: new Date(Number(onchain.resolveDeadline) * 1000) }
+          ...(r.resolveDeadline !== null
+            ? { resolve_deadline: new Date(r.resolveDeadline * 1000) }
             : {}),
         })
         .where(eq(bets.id, betId))
@@ -273,25 +390,37 @@ export class PayoutService {
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(row!, b.state, `appeal_deadline=${appealDeadline}`, {
-            kind: 'resolve',
-            signature,
-            submitted_at: iso(now),
-            rpc_processed_at: iso(landed.processedAt),
-            rpc_confirmed_at: iso(landed.confirmedAt),
-          }),
+          payload: statePayload(
+            row!,
+            b.state,
+            `appeal_deadline=${appealDeadline}`,
+            signature
+              ? {
+                  kind: 'resolve',
+                  signature,
+                  submitted_at: iso(submittedAt),
+                  rpc_processed_at: iso(landed.processedAt),
+                  rpc_confirmed_at: iso(landed.confirmedAt),
+                }
+              : null,
+          ),
           now: this.deps.now(),
         }),
-        await appendBetEvent(tx, {
-          bet_id: betId,
-          type: 'tx.confirmed',
-          payload: { kind: 'resolve', signature, slot: Number(landed.slot ?? 0n) },
-          now: this.deps.now(),
-        }),
+        ...(signature
+          ? [
+              await appendBetEvent(tx, {
+                bet_id: betId,
+                type: 'tx.confirmed',
+                payload: { kind: 'resolve', signature, slot: Number(landed.slot ?? 0n) },
+                now: this.deps.now(),
+              }),
+            ]
+          : []),
       ];
-      return { b, envs };
+      return { b, envs, moved: true };
     });
     if (out) fanout(this.deps, out.b, out.envs);
+    if (!out?.moved) return { signature, appeal_deadline: appealDeadline, already: true };
     this.deps.log.info('payout.ruled', {
       bet_id: betId,
       signature,
@@ -317,7 +446,7 @@ export class PayoutService {
       });
     }
     this.armFinalize(betId, appealDeadline * 1000 + FINALIZE_DELAY_MS);
-    return { signature, appeal_deadline: appealDeadline, already: false };
+    return { signature, appeal_deadline: appealDeadline, already };
   }
 
   // ---- finalize ---------------------------------------------------------------------------
@@ -338,7 +467,14 @@ export class PayoutService {
 
   /** Keeper: every RULED bet past appeal_deadline + 1 s. */
   async finalizeDue(nowMs: number): Promise<string[]> {
-    if (!(await this.o.runtime())) return [];
+    const rt = await this.o.runtime();
+    if (!rt) return [];
+    const out: string[] = [];
+    try {
+      out.push(...(await this.reconcile(rt, nowMs)));
+    } catch (err) {
+      this.deps.log.warn('payout.reconcile_failed', { err });
+    }
     const due = await this.deps.db
       .select({ id: bets.id })
       .from(bets)
@@ -349,7 +485,6 @@ export class PayoutService {
         ),
       )
       .limit(25);
-    const out: string[] = [];
     for (const d of due) {
       const r = await this.finalize(d.id).catch((err: unknown) => {
         this.deps.log.warn('payout.finalize_failed', { bet_id: d.id, err });
@@ -361,7 +496,7 @@ export class PayoutService {
   }
 
   /** [ComputeBudget, (ATA creates), finalize, close_bet], fee payer only. Retries on AppealWindowOpen. */
-  async finalize(betId: string): Promise<'paid' | 'not_due' | 'skipped' | 'failed'> {
+  async finalize(betId: string): Promise<'paid' | 'not_due' | 'skipped' | 'failed' | 'pending'> {
     if (this.finalizing.has(betId)) return 'skipped';
     this.finalizing.add(betId);
     try {
@@ -371,7 +506,11 @@ export class PayoutService {
       const idBytes = betIdToBytes(betId);
       const [betPda] = await findBetPda({ betId: idBytes });
       const onchain = await this.fetchBet(rt, betPda);
-      if (!onchain || onchain.status !== BetStatus.Resolved) return 'skipped';
+      if (!onchain || onchain.status === BetStatus.Settled)
+        // Paid out already (our bundled close_bet closes the PDA), e.g. a payout whose confirm
+        // timed out and was reverted to RULED, then landed: settle from its chain_txs row.
+        return (await this.recoverPayout(rt, betId)) ? 'paid' : 'skipped';
+      if (onchain.status !== BetStatus.Resolved) return 'skipped';
       if ((await chainNow(rt.client)) < onchain.appealDeadline) {
         this.armFinalize(betId, this.deps.now() + 1_000);
         return 'not_due';
@@ -671,7 +810,9 @@ export class PayoutService {
 
   /**
    * state -> CONCEDED / FINALIZED (pending_tx), send once with preflight, then (async for concede)
-   * confirm -> PAID / VOIDED. A preflight rejection returns the bet to RULED.
+   * confirm -> PAID / VOIDED. A preflight rejection, an onchain failure or a blockhash expiry
+   * returns the bet to RULED; a confirm timeout (blockhash still valid) leaves it CONCEDED /
+   * FINALIZED with the row 'sent' for reconcile().
    */
   private async submitPayout(
     rt: ChainRuntime,
@@ -681,7 +822,7 @@ export class PayoutService {
     lastValidBlockHeight: bigint | null,
     existingRowId: string | null,
     background = false,
-  ): Promise<'paid' | 'failed'> {
+  ): Promise<'paid' | 'failed' | 'pending'> {
     const signature = sigString(full.signatures[rt.keys.feePayer.address]!);
     const now = this.deps.now();
     const target: BetState = kind === 'concede' ? 'CONCEDED' : 'FINALIZED';
@@ -745,41 +886,19 @@ export class PayoutService {
     });
     fanout(this.deps, out.b, out.envs);
 
-    const revert = async (err: unknown) => {
-      await this.deps.db.transaction(async (tx) => {
-        await tx
-          .update(chainTxs)
-          .set({ status: 'failed', err: String((err as Error)?.message ?? err).slice(0, 200) })
-          .where(eq(chainTxs.id, out.rowId));
-        const b = await lockBet(tx, betId);
-        if (b?.state !== target) return;
-        const [row] = await tx
-          .update(bets)
-          .set({ state: 'RULED' })
-          .where(eq(bets.id, betId))
-          .returning();
-        const e = await appendBetEvent(tx, {
-          bet_id: betId,
-          type: 'bet.state',
-          payload: statePayload(row!, target, `${kind}_failed`),
-          now: this.deps.now(),
-        });
-        fanout(this.deps, b, [e]);
-      });
-    };
-
     try {
       await rt.client.send(wireOf(full), false);
     } catch (err) {
       if (err instanceof PreflightError) {
-        await revert(err);
+        await this.revertPayout(betId, out.rowId, kind, 'failed', err);
         if (kind === 'concede')
           throw new HttpError('STATE_MOVED_ON', "Couldn't pay out. Try again.");
         return 'failed';
       }
       this.deps.log.warn('payout.send_retry', { bet_id: betId, err });
     }
-    const confirm = async (): Promise<'paid' | 'failed'> => {
+    const confirm = async (): Promise<'paid' | 'failed' | 'pending'> => {
+      this.confirming.add(out.rowId);
       try {
         const landed = await confirmSent(rt.client, full, {
           ...this.o.send,
@@ -792,12 +911,27 @@ export class PayoutService {
         await this.settle(betId, out.rowId, kind, signature, now, landed);
         return 'paid';
       } catch (err) {
+        if (err instanceof TxFailedError && err.kind === 'timeout') {
+          // Not seen yet but the blockhash is still valid: it may land. Leave the bet
+          // CONCEDED / FINALIZED and the row 'sent'; reconcile() settles or reverts it.
+          this.deps.log.warn('payout.confirm_pending', { bet_id: betId, kind, signature });
+          return 'pending';
+        }
         if (err instanceof TxFailedError) {
-          await revert(err);
+          // 'onchain' (it failed) or 'expired' (block height past lastValidBlockHeight).
+          await this.revertPayout(
+            betId,
+            out.rowId,
+            kind,
+            err.kind === 'expired' ? 'expired' : 'failed',
+            err,
+          );
           if (kind === 'finalize') this.armFinalize(betId, this.deps.now() + 1_000);
           return 'failed';
         }
         throw err;
+      } finally {
+        this.confirming.delete(out.rowId);
       }
     };
     if (background) {
@@ -805,6 +939,161 @@ export class PayoutService {
       return 'paid';
     }
     return confirm();
+  }
+
+  /** The payout tx did not land (and never will): row failed / expired, bet back to RULED. */
+  private async revertPayout(
+    betId: string,
+    rowId: string,
+    kind: 'finalize' | 'concede',
+    status: 'failed' | 'expired',
+    err: unknown,
+  ) {
+    const target: BetState = kind === 'concede' ? 'CONCEDED' : 'FINALIZED';
+    const out = await this.deps.db.transaction(async (tx) => {
+      await tx
+        .update(chainTxs)
+        .set({ status, err: String((err as Error)?.message ?? err).slice(0, 200) })
+        .where(eq(chainTxs.id, rowId));
+      const b = await lockBet(tx, betId);
+      if (b?.state !== target) return null;
+      const [row] = await tx
+        .update(bets)
+        .set({ state: 'RULED' })
+        .where(eq(bets.id, betId))
+        .returning();
+      const e = await appendBetEvent(tx, {
+        bet_id: betId,
+        type: 'bet.state',
+        payload: statePayload(row!, target, `${kind}_failed`),
+        now: this.deps.now(),
+      });
+      return { b, e };
+    });
+    if (out) fanout(this.deps, out.b, [out.e]);
+  }
+
+  /**
+   * Keeper (runs first in finalizeDue): settles every 'sent' resolve / concede / finalize row
+   * whose in-process confirm loop is gone (a timeout, a restart). searchTransactionHistory, so an
+   * older landed tx is still found. Landed -> RULED / PAID; failed or past lastValidBlockHeight ->
+   * failed / expired (a payout goes back to RULED, unless its close_bet already closed the PDA).
+   */
+  async reconcile(rt: ChainRuntime, nowMs: number): Promise<string[]> {
+    const rows = await this.deps.db
+      .select()
+      .from(chainTxs)
+      .where(
+        and(
+          inArray(chainTxs.kind, ['resolve', 'concede', 'finalize']),
+          eq(chainTxs.status, 'sent'),
+        ),
+      )
+      .orderBy(chainTxs.sent_at)
+      .limit(25);
+    const paid: string[] = [];
+    let height: bigint | null = null;
+    for (const row of rows) {
+      if (this.confirming.has(row.id) || !row.signature) continue;
+      const kind = row.kind as 'resolve' | 'concede' | 'finalize';
+      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
+      const landed =
+        st &&
+        !st.err &&
+        (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized');
+      let dead: 'failed' | 'expired' | null = st?.err ? 'failed' : null;
+      if (!st) {
+        height ??= await rt.client.blockHeight();
+        const lvbh = row.last_valid_block_height;
+        const old = row.sent_at ? nowMs - row.sent_at.getTime() > 10 * 60_000 : true;
+        if (lvbh != null ? height > lvbh : old) dead = 'expired';
+      }
+      if (!landed && !dead) continue; // still in flight
+      const onchain = await readBetAccount(rt, row.bet_id);
+      if (kind === 'resolve') {
+        // Only judge_authority can resolve: a Resolved Bet is our ruling (this row or an earlier one).
+        if (onchain?.status === BetStatus.Resolved)
+          await this.adoptResolved(rt, row.bet_id, onchain, row);
+        await this.deps.db
+          .update(chainTxs)
+          .set(
+            landed
+              ? { status: 'confirmed', rpc_confirmed_at: new Date(nowMs) }
+              : { status: dead!, err: st?.err ? JSON.stringify(st.err).slice(0, 200) : 'expired' },
+          )
+          .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
+        continue;
+      }
+      if (landed) {
+        await this.settle(
+          row.bet_id,
+          row.id,
+          kind,
+          row.signature,
+          row.sent_at?.getTime() ?? nowMs,
+          {
+            signature: row.signature,
+            processedAt: row.rpc_processed_at?.getTime() ?? nowMs,
+            confirmedAt: nowMs,
+            slot: st?.slot ?? null,
+          },
+        );
+        paid.push(row.bet_id);
+        continue;
+      }
+      await this.revertPayout(
+        row.bet_id,
+        row.id,
+        kind,
+        dead!,
+        st?.err ? JSON.stringify(st.err) : 'expired unconfirmed',
+      );
+      // concede / finalize bundle close_bet: a closed PDA means some payout of this bet landed.
+      if (!onchain && (await this.recoverPayout(rt, row.bet_id))) paid.push(row.bet_id);
+    }
+    return paid;
+  }
+
+  /** RULED but the PDA is closed: find the payout row that landed and settle from it. */
+  private async recoverPayout(rt: ChainRuntime, betId: string): Promise<boolean> {
+    const rows = await this.deps.db
+      .select()
+      .from(chainTxs)
+      .where(
+        and(
+          eq(chainTxs.bet_id, betId),
+          inArray(chainTxs.kind, ['concede', 'finalize']),
+          inArray(chainTxs.status, ['sent', 'failed', 'expired', 'confirmed']),
+        ),
+      )
+      .orderBy(desc(chainTxs.sent_at))
+      .limit(5);
+    for (const row of rows) {
+      if (!row.signature) continue;
+      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
+      if (!st || st.err || st.confirmationStatus === 'processed') continue;
+      this.deps.log.warn('payout.recovered', {
+        bet_id: betId,
+        kind: row.kind,
+        signature: row.signature,
+      });
+      await this.settle(
+        betId,
+        row.id,
+        row.kind as 'concede' | 'finalize',
+        row.signature,
+        row.sent_at?.getTime() ?? this.deps.now(),
+        {
+          signature: row.signature,
+          processedAt: row.rpc_processed_at?.getTime() ?? this.deps.now(),
+          confirmedAt: this.deps.now(),
+          slot: st.slot,
+        },
+      );
+      return true;
+    }
+    this.deps.log.warn('payout.pda_closed_unexplained', { bet_id: betId });
+    return false;
   }
 
   /** Processed: the winner's phone plays the payout animation on this bet.state frame. */
@@ -860,7 +1149,8 @@ export class PayoutService {
           rpc_confirmed_at: new Date(landed.confirmedAt),
         })
         .where(eq(chainTxs.id, rowId));
-      if (b.state !== 'CONCEDED' && b.state !== 'FINALIZED')
+      // RULED too: a payout found landed after it was reverted (recoverPayout).
+      if (b.state !== 'CONCEDED' && b.state !== 'FINALIZED' && b.state !== 'RULED')
         return { b, envs: [] as BetEventEnvelope[] };
       const outcome = FROM_PG[(b.outcome ?? 'refund') as keyof typeof FROM_PG];
       const stakeA = b.stake_a ?? 0n;
