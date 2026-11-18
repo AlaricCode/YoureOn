@@ -17,6 +17,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
+import { recordedSpan } from '../attempt/span';
 import { hasCameraLens } from '../device/camera';
 import { feel } from '../device/feedback';
 import {
@@ -139,7 +140,10 @@ export interface CamArm {
   maxMs: number;
 }
 
-/** What a finished recording hands back: the clip file and how long it ran. */
+/**
+ * What a finished recording hands back: the clip file, how long it really ran (from the camera's
+ * first progress event to Stop: ../attempt/span), and when it ended.
+ */
 export interface Clip {
   uri: string;
   durationMs: number;
@@ -180,6 +184,9 @@ export function JudgeCamScreen({
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
   const startedAt = useRef(0);
+  /** The camera's first progress event (when the file began) and when recordAsync resolved. */
+  const firstProgress = useRef<{ atMs: number; durationS: number } | null>(null);
+  const finishedAt = useRef<number | null>(null);
   const armedFor = useRef<number | null>(null);
   /** The last recorded clip of this arm, kept so "Try again" can resend it after a failed upload. */
   const lastClip = useRef<Clip | null>(null);
@@ -224,10 +231,21 @@ export function JudgeCamScreen({
       const pending = recording.current;
       recording.current = null;
       if (pending) {
+        // The clip ends now, not when the file is finalized (../attempt/span).
+        const stopAtMs = Date.now();
         cam.current?.stopRecording();
         const out = await pending;
-        const endedAtMs = Date.now();
-        if (out?.uri) clip = { uri: out.uri, durationMs: endedAtMs - startedAt.current, endedAtMs };
+        if (out?.uri)
+          clip = {
+            uri: out.uri,
+            ...recordedSpan({
+              requestedAtMs: startedAt.current,
+              firstProgress: firstProgress.current,
+              stopAtMs,
+              finishedAtMs: finishedAt.current,
+              maxMs: MAX_RECORD_MS,
+            }),
+          };
       }
       lastClip.current = clip;
       await onSend(clip);
@@ -268,7 +286,19 @@ export function JudgeCamScreen({
     const camera = cam.current;
     if (camera && ready && !recording.current) {
       startedAt.current = Date.now();
-      recording.current = camera.recordAsync({ codec: 'avc1', maxDuration: MAX_RECORD_MS / 1000 });
+      firstProgress.current = null;
+      finishedAt.current = null;
+      recording.current = camera
+        .recordAsync({
+          codec: 'avc1',
+          maxDuration: MAX_RECORD_MS / 1000,
+          // the first event (~100 ms in) dates the start of the file
+          progressUpdateInterval: 0.1,
+        })
+        .then((out) => {
+          finishedAt.current ??= Date.now();
+          return out;
+        });
     }
     const limit = Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS);
     stopTimer.current = setTimeout(() => void stop(), limit);
@@ -314,6 +344,10 @@ export function JudgeCamScreen({
                 void hasCameraLens(cam.current).then((ok) => setNoCamera(!ok));
               }}
               onMountError={() => setNoCamera(true)}
+              onRecordingProgress={(e) => {
+                if (!firstProgress.current && e.duration > 0)
+                  firstProgress.current = { atMs: Date.now(), durationS: e.duration };
+              }}
             />
             <StageBubble prompt={bubble} recording={phase === 'recording' && !noCamera} />
             {phase === 'recording' ? (
