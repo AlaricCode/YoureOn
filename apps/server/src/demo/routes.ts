@@ -86,6 +86,8 @@ function geminiHealth(deps: AppDeps) {
     real_world_enabled: realWorldEnabled(deps),
     last_ok_at: m?.lastOkAt ? new Date(m.lastOkAt).toISOString() : null,
     last_error: m?.lastError ?? null,
+    failures: m?.failures ?? 0,
+    feed_mode: m?.feed ?? null,
     rollovers: m?.rollovers ?? 0,
     current: cur?.market
       ? {

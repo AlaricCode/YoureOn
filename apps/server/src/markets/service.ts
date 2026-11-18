@@ -26,6 +26,8 @@ import {
 } from './gemini';
 
 export const MARKET_POLL_MS = 2_000;
+/** While Gemini keeps failing, the poll backs off (doubling from pollMs) up to this. */
+export const MARKET_BACKOFF_MAX_MS = 16_000;
 export const MARKET_DISCOVERY_MS = 60_000;
 /** §2.13 recommended_lock_by = window start + 90 s. */
 export const RECOMMENDED_LOCK_AFTER_START_MS = 90_000;
@@ -87,6 +89,8 @@ export class MarketService {
   lastOkAt: number | null = null;
   lastError: string | null = null;
   rollovers = 0;
+  /** Polls failed in a row (0 after a success): drives the backoff and the log volume. */
+  failures = 0;
 
   readonly pollMs: number;
   readonly discoveryMs: number;
@@ -151,7 +155,7 @@ export class MarketService {
       if (!this.started) return;
       void this.refresh().finally(() => {
         if (!this.started) return;
-        this.timer = setTimeout(loop, this.pollMs);
+        this.timer = setTimeout(loop, this.nextPollMs());
         this.timer.unref?.();
       });
     };
@@ -165,12 +169,30 @@ export class MarketService {
     await this.inFlight?.catch(() => null);
   }
 
+  /**
+   * The delay before the next timer poll: pollMs, doubled per failure in a row up to
+   * MARKET_BACKOFF_MAX_MS (an outage is not hammered at 0.5 Hz with a warn line each time).
+   */
+  nextPollMs(): number {
+    if (this.failures === 0) return this.pollMs;
+    return Math.min(MARKET_BACKOFF_MAX_MS, this.pollMs * 2 ** Math.min(this.failures, 8));
+  }
+
   /** One poll; concurrent callers share it. Never throws (errors land in lastError). */
   refresh(): Promise<GeminiMarketSnapshot | null> {
     this.inFlight ??= this.doRefresh()
+      .then((snap) => {
+        if (this.failures > 0)
+          this.o.log.info('markets.recovered', { after_failures: this.failures });
+        this.failures = 0;
+        return snap;
+      })
       .catch((err: unknown) => {
         this.lastError = err instanceof Error ? err.message : String(err);
-        this.o.log.warn('markets.refresh_failed', { err });
+        this.failures++;
+        // the first failure and then every 10th: an outage logs a line a minute or so
+        if (this.failures === 1 || this.failures % 10 === 0)
+          this.o.log.warn('markets.refresh_failed', { err, failures: this.failures });
         return this.snap;
       })
       .finally(() => {

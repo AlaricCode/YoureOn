@@ -267,6 +267,23 @@ describe('MarketService relay', () => {
     expect(q.result).toEqual({ ok: false, reason: 'QUOTE_STALE' });
   });
 
+  it('a Gemini outage backs the poll off (2 s doubling to 16 s), one success resets it', async () => {
+    const h = harness({ [EVENTS_PATH]: 500, [TICKER_PATH]: F.btcusd }, T0237);
+    expect(h.svc.nextPollMs()).toBe(2_000);
+    const waits: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      await h.svc.refresh();
+      waits.push(h.svc.nextPollMs());
+    }
+    expect(h.svc.failures).toBe(5);
+    expect(waits).toEqual([4_000, 8_000, 16_000, 16_000, 16_000]);
+    h.g.routes.set(EVENTS_PATH, F.events_0237);
+    h.g.routes.set(eventPath('BTC05M2611180240'), F.event_0240_active);
+    expect((await h.svc.refresh())?.eventTicker).toBe('BTC05M2611180240');
+    expect(h.svc.failures).toBe(0);
+    expect(h.svc.nextPollMs()).toBe(2_000);
+  });
+
   it('no live contract: MarketCurrent says MARKET_NOT_OPEN; concurrent refreshes share one poll', async () => {
     const h = harness({ [EVENTS_PATH]: { data: [] }, [TICKER_PATH]: F.btcusd }, T0237);
     await Promise.all([h.svc.refresh(), h.svc.refresh(), h.svc.refresh()]);

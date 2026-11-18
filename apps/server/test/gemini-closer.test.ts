@@ -720,6 +720,8 @@ describeDb(
         real_world_enabled: true,
         last_ok_at: new Date(T0237).toISOString(),
         last_error: null,
+        failures: 0,
+        feed_mode: null,
         rollovers: 0,
         current: {
           event_ticker: TICKER,
