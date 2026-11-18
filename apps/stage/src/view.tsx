@@ -755,6 +755,7 @@ export const KEYS: Array<[string, string]> = [
   ['Esc', 'Close any overlay'],
   ['F', 'Full screen on / off'],
   ['Q', 'Big QR of the latest transaction'],
+  ['M', 'Sound on / off (any key unlocks it)'],
   ['H or ?', 'This help'],
 ];
 
@@ -1024,6 +1025,7 @@ export function StageView({
   showHealth = false,
   replays = null,
   roomLabel = null,
+  sound = null,
 }: {
   state: TickerState;
   now: number;
@@ -1035,6 +1037,8 @@ export function StageView({
   showHealth?: boolean;
   replays?: ReplayStatus | null;
   roomLabel?: string | null;
+  /** 'locked' until a key press unlocks audio; 'off' when muted (M). */
+  sound?: 'locked' | 'on' | 'off' | null;
 }) {
   const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
   const mv = useMemo(
@@ -1061,6 +1065,11 @@ export function StageView({
             {roomLabel ? `room ${roomLabel}` : ''}
             {state.presence ? ` · ${state.presence.online}/${state.presence.members} online` : ''}
           </span>
+          {sound && sound !== 'on' && (
+            <span className="sound muted small">
+              {sound === 'off' ? 'sound off · M' : 'press a key for sound'}
+            </span>
+          )}
           {onDisconnect && (
             <button type="button" className="ghost" onClick={onDisconnect}>
               disconnect

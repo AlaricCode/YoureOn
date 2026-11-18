@@ -41,6 +41,7 @@ import {
 } from './config';
 import { fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
+import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import {
   initialReplays,
   preloadReplays,
@@ -397,14 +398,43 @@ export function App() {
     for (const [id, seq] of Object.entries(state.lastSeq)) conn.current?.noteSeq(id, seq);
   }, [state.lastSeq]);
 
-  // Stage cues (gavel, drumroll, …): a flash on the projector.
+  // Sound: unlocked by the first key press / click (browsers require a gesture); M mutes.
+  const audio = useRef<StageAudio | null>(null);
+  audio.current ??= new StageAudio();
+  const [sound, setSound] = useState<'locked' | 'on' | 'off'>('locked');
+  const heard = useRef(new Set<string>());
+  useEffect(() => {
+    const fresh: Sfx[] = [];
+    for (const id of Object.keys(shown.bets))
+      fresh.push(...freshSounds(shown, id, heard.current, shownNow));
+    // one sound per update: the newest moment wins
+    if (fresh.length) audio.current?.play(fresh[fresh.length - 1]!);
+  }, [shown, shownNow]);
+
+  // Stage cues (gavel, drumroll, …): a flash on the projector, and the sound.
   const [flash, setFlash] = useState<string | null>(null);
   useEffect(() => {
     if (!shown.cueCount || !shown.lastCue) return;
     setFlash(shown.lastCue.kind);
+    if (isSfx(shown.lastCue.kind)) audio.current?.play(shown.lastCue.kind);
     const t = setTimeout(() => setFlash(null), 900);
     return () => clearTimeout(t);
   }, [shown.cueCount, shown.lastCue]);
+
+  useEffect(() => {
+    const unlock = () => {
+      const a = audio.current!;
+      a.unlock();
+      // resume() settles asynchronously; read the state on the next frame
+      setTimeout(() => setSound(a.muted ? 'off' : a.ready ? 'on' : 'locked'), 50);
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -416,7 +446,11 @@ export function App() {
       else if (k === 'q') setOverlay((o) => (o?.kind === 'qr' ? null : { kind: 'qr' }));
       else if (k === 'h' || k === '?')
         setOverlay((o) => (o?.kind === 'help' ? null : { kind: 'help' }));
-      else {
+      else if (k === 'm') {
+        const a = audio.current!;
+        a.muted = !a.muted;
+        if (!a.muted) a.play('lock');
+      } else {
         const n = Number(e.key);
         if ((REPLAY_BEATS as readonly number[]).includes(n))
           setOverlay({ kind: 'replay', beat: n });
@@ -462,6 +496,7 @@ export function App() {
           showHealth={pv ? true : !!live?.demoKey}
           replays={replays}
           roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
+          sound={sound}
         />
       ) : (
         <div className="stage connect">
