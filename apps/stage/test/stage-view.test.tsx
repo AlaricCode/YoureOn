@@ -661,6 +661,47 @@ describe('bet card state', () => {
     expect(html).toContain('<b>Logan:</b> “It wobbled!”');
   });
 
+  it('edge moments: declined, offline, lock failed, cancelled, refund', () => {
+    const base = { ...emptyBet(BET), names: { A: 'Logan', B: 'Jake' } };
+    const t = (b: typeof base, presence: Record<string, boolean> | null = null) =>
+      renderToString(<BetCard bet={b} now={0} presence={presence} />).replace(/<!-- -->/g, '');
+    expect(t({ ...base, invite: 'declined' })).toContain('Jake declined.');
+    const ids = {
+      A: '00000000-0000-4000-8000-0000000000a1',
+      B: '00000000-0000-4000-8000-0000000000b1',
+    };
+    const offline = t({ ...base, user_ids: ids }, { [ids.A]: true, [ids.B]: false });
+    expect(offline).toContain('<span class="status bad">offline</span>');
+    expect(offline).toContain('<span class="status muted">online</span>');
+    const failed = t({
+      ...base,
+      state: 'AWAITING_LOCK',
+      lock: {
+        kind: 'atomic_lock',
+        signature: '',
+        signers: 3,
+        status: 'failed',
+        onchain: false,
+        slot: null,
+        error: 'BlockhashNotFound',
+        sent_at: null,
+        onchain_at: null,
+      },
+    });
+    expect(failed).toContain('The lock didn&#x27;t go through');
+    expect(failed).toContain('Couldn&#x27;t lock it. Nothing moved.');
+    expect(failed).toContain('failed: BlockhashNotFound');
+    const cancelled = t({ ...base, state: 'CANCELLED', auth_count: 1 });
+    expect(cancelled).toContain('<p class="big bad">Cancelled</p>');
+    const refund = t({
+      ...base,
+      state: 'VOIDED',
+      payout: { to_a: '5000000', to_b: '5000000', event: 'BetRefunded', signature: '3'.repeat(88) },
+    });
+    expect(refund).toContain('REFUNDED');
+    expect(refund).toContain('Logan</span><span class="amt">+$5');
+  });
+
   it('captions: the judge (partial, then final) and the players (party.line)', () => {
     seq = 0;
     const u = '00000000-0000-4000-8000-0000000000c1';
