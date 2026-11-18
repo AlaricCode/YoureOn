@@ -35,6 +35,8 @@ async function main() {
     node_env: env.NODE_ENV,
     lock_mode: env.LOCK_MODE,
     providers: providerModes(deps.providers),
+    // the projector's ElevenLabs voice: 'on', or why not (no_key / spend_disabled / off)
+    stage_tts: deps.stageVoice ? (deps.stageVoice.status().tts_off ?? 'on') : 'off',
   });
 
   const shutdown = (signal: string) => {

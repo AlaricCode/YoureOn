@@ -201,8 +201,10 @@ Text to Speech clips, and the stage cues as Sound Effects (`SFX_PROVIDER=auto`, 
 needs `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true` and nothing else. The key needs the Text to
 Speech and Sound Effects permissions.
 
-- After the restart, `fly logs -a youre-on | grep stage_voice.sfx_ready` shows the four cues
-  generated at boot (about 6.5 seconds of Sound Effects in total).
+- After the restart, the `server.listening` log line says `stage_tts: "on"` and `sfx: "live"`
+  (else `stage_tts` names what is missing: `no_key`, `spend_disabled` or `off`), and
+  `fly logs -a youre-on | grep stage_voice.sfx_ready` shows the four cues generated at boot (about
+  6.5 seconds of Sound Effects in total).
 - Open the stage and press a key. The bottom strip says `Voice ElevenLabs`.
 - With the stage open, rehearse one bet (`cp1-drive --through paid`). Each ruling and payout logs
   `stage_voice.line` (the text and the clip id), then `stage_voice.tts` (characters, bytes, ms).
