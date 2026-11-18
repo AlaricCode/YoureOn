@@ -642,10 +642,13 @@ run('demo valves: toggles, warmup, judge health, seeded head-to-head (HTTP + Lit
     });
     expect(`${m.json!.match.head_to_head.wins}-${m.json!.match.head_to_head.losses}`).toBe('4-7');
 
-    // The phones' history lists them, flagged is_seed (API-CONTRACT §2.14 BetSummary).
+    // The phones' history lists them, flagged is_seed (API-CONTRACT §2.14 BetSummary), and
+    // labelled by their own title: a seed row has no terms envelope to take one from.
     const hist = await get('/v1/me/bets?status=settled&limit=20', bearer(a));
     expect(hist.status).toBe(200);
-    expect(hist.json!.items.filter((x: any) => x.is_seed)).toHaveLength(11);
+    const seeded = hist.json!.items.filter((x: any) => x.is_seed);
+    expect(seeded).toHaveLength(11);
+    for (const x of seeded) expect(x.title).toMatch(/^Demo history: /);
   });
 
   it('demo reset keeps the seed rows (and the 4-7) while it refunds and deletes a rehearsal bet', async () => {
