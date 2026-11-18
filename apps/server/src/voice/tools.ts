@@ -448,7 +448,8 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
       }
       const r = await confirmAndLock(deps, betId, { heard, requestId });
-      opts.state.store(dedupeKey, now, r);
+      // Only a success is replayed: NOT_PROPOSED may turn into a success a second later.
+      if (r.ok) opts.state.store(dedupeKey, now, r);
       deps.log.info('el_tool.call', { tool: name, bet_id: betId, ok: r.ok, request_id: requestId });
       return reply(c, r);
     } catch (e) {

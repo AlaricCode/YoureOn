@@ -3,8 +3,9 @@
 // expiry with the nonce advance, `timeout_refund`, the nonce-pool sweep, the outbox drain)
 // register here.
 import type { AppDeps } from '../context';
+import { lifecycleOf } from '../lock/runtime';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
-import { Keeper, type KeeperOptions } from './keeper';
+import { Keeper, type KeeperOptions, type KeeperTask } from './keeper';
 
 export { Keeper, KEEPER_INTERVAL_MS, KEEPER_JITTER_MS, type KeeperTask } from './keeper';
 export {
@@ -17,11 +18,27 @@ export {
   type DraftIdleResult,
 } from './draft-idle';
 
+/**
+ * Chain lifecycle sweeps (src/lock, src/payout); both no-op while the chain is not configured.
+ *  - lock-sweep: lock windows past expires_at -> EXPIRED + nonce revoke; sent locks re-checked;
+ *    nonce advances finished / retried (DATA-MODEL §5.20 "Boot reconcile and sweep").
+ *  - finalize-due: RULED bets past appeal_deadline + 1 s -> [finalize, close_bet] (the durable
+ *    backstop of the PayoutService setTimeout fast path).
+ */
+export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask[] {
+  return [
+    { name: 'lock-sweep', run: (now) => lifecycleOf(deps).lock.sweep(now) },
+    { name: 'finalize-due', run: (now) => lifecycleOf(deps).payout.finalizeDue(now) },
+  ];
+}
+
 export function createServerKeeper(
-  deps: SweepDeps & Pick<AppDeps, 'now' | 'log'>,
+  deps: SweepDeps & Pick<AppDeps, 'now' | 'log'> & Partial<Pick<AppDeps, 'env'>>,
   opts: Omit<KeeperOptions, 'now' | 'log'> = {},
 ): Keeper {
   const keeper = new Keeper({ now: deps.now, log: deps.log, ...opts });
   keeper.register(draftIdleTask(deps));
+  const env = deps.env;
+  if (env) for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
   return keeper;
 }
