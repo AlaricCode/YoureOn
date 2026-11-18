@@ -202,12 +202,25 @@ export function createRetryingSolanaRpc(url: string, o?: RetryOptions): Rpc<Sola
   return createSolanaRpcFromTransport(withRpcRetry(createDefaultRpcTransport({ url }), o));
 }
 
+/** An RPC that does not accept maxSupportedTransactionVersion 1 (JSON-RPC invalid params). */
+export function isTxVersionParamError(e: unknown): boolean {
+  for (let x: unknown = e, i = 0; x && typeof x === 'object' && i < 4; i++) {
+    const ctx = (x as { context?: { __code?: unknown } }).context;
+    const msg = String((x as { message?: unknown }).message ?? '');
+    if (ctx?.__code === -32602 || /-32602|invalid params|maxSupportedTransactionVersion/i.test(msg))
+      return true;
+    x = (x as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /** The real client over a kit RPC (QuickNode devnet in production, a local validator in e2e). */
 export function rpcChainClient(
   url: string,
   rpc: Rpc<SolanaRpcApi> = createRetryingSolanaRpc(url),
 ): ChainClient {
   let cluster: Promise<'devnet' | 'localnet'> | null = null;
+  let maxTxVersion: 0 | 1 = 1;
   return {
     label: redactUrl(url),
     assertSafeCluster() {
@@ -298,14 +311,25 @@ export function rpcChainClient(
       return value;
     },
     async transaction(sig) {
-      // Devnet carries v1 transactions: version 0 would fail with -32015 (DATA-MODEL §8.3).
-      const tx = await rpc
-        .getTransaction(sig as Signature, {
-          commitment: 'confirmed',
-          encoding: 'json',
-          maxSupportedTransactionVersion: 1,
-        })
-        .send();
+      // Devnet carries v1 transactions: version 0 would fail with -32015 on those (DATA-MODEL
+      // §8.3). Our own txs are v0, so an RPC that rejects the `1` parameter is retried with 0
+      // (and remembered).
+      const get = (v: 0 | 1) =>
+        rpc
+          .getTransaction(sig as Signature, {
+            commitment: 'confirmed',
+            encoding: 'json',
+            maxSupportedTransactionVersion: v,
+          })
+          .send();
+      let tx: Awaited<ReturnType<typeof get>>;
+      try {
+        tx = await get(maxTxVersion);
+      } catch (e) {
+        if (maxTxVersion !== 1 || !isTxVersionParamError(e)) throw e;
+        maxTxVersion = 0;
+        tx = await get(0);
+      }
       if (!tx || !tx.meta) return null;
       const loaded = tx.meta.loadedAddresses;
       return {

@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
 import { eventAuthorityAddress } from '../src/chain/filter-config';
+import { isTxVersionParamError, rpcChainClient } from '../src/chain/tx';
 import {
   eventsFromRpcTransaction,
   parseStreamDelivery,
@@ -34,7 +35,14 @@ function asRpc(tx: ReturnType<typeof jsonTx>, slot = 519_807_091): RpcTransactio
       ...tx.meta.loadedAddresses.writable,
       ...tx.meta.loadedAddresses.readonly,
     ],
-    innerInstructions: tx.meta.innerInstructions,
+    innerInstructions: tx.meta.innerInstructions.map((g) => ({
+      index: g.index,
+      instructions: g.instructions.map(({ programIdIndex, accounts, data }) => ({
+        programIdIndex,
+        accounts,
+        data,
+      })),
+    })),
   };
 }
 
@@ -114,6 +122,56 @@ describe('eventsFromRpcTransaction = filter.js + parseStreamDelivery', () => {
       untagged: 0,
       topLevelOnly: 0,
     });
+  });
+
+  it('rpcChainClient.transaction: normalizes getTransaction, falls back to version 0 once', async () => {
+    const ea = await eventAuthorityAddress();
+    const tx = jsonTx({
+      eventAuthority: ea,
+      events: [{ outer: 2, bytes: encodeEvent('BetResolved', samplePayload('BetResolved')) }],
+      viaLookupTable: true,
+    });
+    const asked: unknown[] = [];
+    let reject1 = true;
+    const rpc = {
+      getTransaction: (_sig: string, cfg: { maxSupportedTransactionVersion: number }) => ({
+        send: async () => {
+          asked.push(cfg.maxSupportedTransactionVersion);
+          if (cfg.maxSupportedTransactionVersion === 1 && reject1)
+            throw Object.assign(new Error('Invalid params: maxSupportedTransactionVersion'), {
+              context: { __code: -32602 },
+            });
+          return {
+            slot: 519_807_091n,
+            blockTime: 1_795_284_425n,
+            meta: tx.meta,
+            transaction: tx.transaction,
+          };
+        },
+      }),
+    };
+    const client = rpcChainClient('https://rpc.example', rpc as never);
+    const got = (await client.transaction!(tx.transaction.signatures[0]!))!;
+    expect(asked).toEqual([1, 0]);
+    expect(got).toEqual(asRpc(tx));
+    expect(eventsFromRpcTransaction(got, ea).events.map((e) => e.event_name)).toEqual([
+      'BetResolved',
+    ]);
+    // remembered: the next call goes straight to 0
+    reject1 = false;
+    await client.transaction!(tx.transaction.signatures[0]!);
+    expect(asked).toEqual([1, 0, 0]);
+    // any other RPC error is not swallowed
+    const failing = rpcChainClient('https://rpc.example', {
+      getTransaction: () => ({
+        send: async () => {
+          throw new Error('fetch failed');
+        },
+      }),
+    } as never);
+    await expect(failing.transaction!(randomSig())).rejects.toThrow(/fetch failed/);
+    expect(isTxVersionParamError(new Error('Invalid params: bad'))).toBe(true);
+    expect(isTxVersionParamError(new Error('429 Too Many Requests'))).toBe(false);
   });
 
   it('skips undecodable base58 data instead of throwing', async () => {
