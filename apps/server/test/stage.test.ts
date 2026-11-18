@@ -209,12 +209,31 @@ describeDb('stage over Postgres', () => {
     const r = await session(roomId);
     expect(r.status).toBe(201);
     expect(r.res.headers.get('Access-Control-Allow-Origin')).toBe(ORIGIN);
-    expect(r.json).toMatchObject({ room_id: roomId, scopes: ['stage'] });
+    expect(r.json).toMatchObject({ room_id: roomId, scopes: ['stage'], lock_signer: 'phones' });
     expect(r.json!.token).toMatch(/^yo_s_/);
     const ttl = Date.parse(r.json!.expires_at) - Date.now();
     expect(ttl).toBeGreaterThan(11.9 * 3600_000);
     const missing = await session('00000000-0000-4000-8000-00000000abcd');
     expect(missing.status).toBe(404);
+  });
+
+  it('says who signs the lock: LOCK_SIGNER=server (custodial demo keys) reaches the projector', async () => {
+    const A = await signUp(base, 'Logan');
+    const roomId = await room(A);
+    const env = testEnv({ STAGE_KEY: KEY, LOCK_SIGNER: 'server' });
+    const dbHandle = createDb({ url: env.DATABASE_URL, max: 1 });
+    try {
+      const a = buildApp(createDeps({ env, dbHandle, rateLimit: false }).deps, routeModules);
+      const r = await a.request('/v1/stage/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage_key: KEY, room_id: roomId }),
+      });
+      expect(r.status).toBe(201);
+      expect(((await r.json()) as { lock_signer: string }).lock_signer).toBe('server');
+    } finally {
+      await dbHandle.close();
+    }
   });
 
   it('room_code: the typed code (any case) or the QR payload finds the same room', async () => {
