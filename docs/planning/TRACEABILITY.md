@@ -229,7 +229,7 @@ Every requirement in BRIEF.md (as amended, plus D1–D7) mapped to the spec sect
 |---|---|---|---|---|---|
 | V1 | The judge is an ElevenLabs Agent whose server tools call our backend | 5d | API §4; ARCH §3.2, §8.2 | D0-J2, D1-J1, D2-J1, D4-J1, D4-J3 | covered (5 webhook tools + 3 client tools, D6) |
 | V2 | Tools `ask_clarification`, `lock_bet`, `issue_ruling` as LLM-callable tools | 5d | API §4 (D6) | — | **deliberately-out-of-scope**: D6 replaces them. Clarifications are spoken; the lock and the ruling are server-driven and voiced through `judge.cue` → `[EVENT]`; `request_attempt` is a client tool. |
-| V3 | ElevenLabs voices the rulings and announcements and handles the parties' speech | 5d | API §4.5; ARCH §3.2, §8.2 | D2-M3, D3-J1, D4-J2 (stage TTS) | covered |
+| V3 | ElevenLabs voices the rulings and announcements and handles the parties' speech | 5d | API §4.5; ARCH §3.2, §8.2 | D2-M3, D3-J1, D4-J2 (stage TTS) | covered (feat/stage-voice: the projector speaks each ruling, payout and appeal vote as an ElevenLabs TTS clip, else in the browser's voice; tests `apps/server/test/stage-voice.test.ts`, `apps/stage/test/voice.test.ts`) |
 | V4 | First judge audio < 1.5 s after a party stops talking | 5d, §6 | ARCH §4 | D1-J2, D2-J2, §6.5 | covered (PENDING-KEY; the post-tool read-back is 1.25–2.2 s, E) |
 | V5 | Verify ElevenLabs React Native/Expo support and tool-call latency early | 5d | FND §3.10, §6 steps 1, 9 | P-05, P-12, D1-J2 | covered (PENDING-KEY/PHONE) |
 

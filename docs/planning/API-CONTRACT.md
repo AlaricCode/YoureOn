@@ -373,7 +373,7 @@ Flows are in §1.3.
 
 - Request: `{kind: 'gavel'|'drumroll'|'buzzer'|'cheer'}`.
 - Response: 202.
-- Sent by the `cue` client tool (§4.4). The server relays a `stage.cue` control frame. The stage laptop plays the Sound Effects asset; A's phone does not, because that would stop mic capture (FINDINGS §4, LiveKit #286).
+- Sent by the `cue` client tool (§4.4). The server relays a `stage.cue` control frame. The stage laptop plays the Sound Effects clip; A's phone does not, because that would stop mic capture (FINDINGS §4, LiveKit #286). When the server's Sound Effects are live (`SFX_PROVIDER=live`, or the default `auto` with the ElevenLabs key, §4.5) the frame carries `audio_url` (`GET /v1/stage/sfx/:kind`); without it the stage synthesizes the cue.
 
 ### 2.7 Terms
 
@@ -550,7 +550,15 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `POST /v1/demo/toggles {cached_ruling?, gemini_fallback?, voice_fallback?, face_pick_list?}` | The remaining ARCHITECTURE §7.2 toggles; every replay is labelled REPLAY on stage |
 | `POST /v1/demo/timers {draft_idle_s, hearing_turn_s, finalize_delay_s}` | Offchain timers only. Onchain windows are snapshotted from `Config` and can't change per bet (ESCROW I11). |
 | `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch (FINDINGS §3.8). |
-| `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}` |
+| `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}`. The projector polls it with its own stage token (scope `demo` under `DEMO_MODE`), so `#demo=` is optional in the stage URL. |
+
+**Stage audio** (stage token only; a phone session or no stage scope gets `404`; §4.5). The ElevenLabs key stays on the server; the stage fetches the bytes with its bearer and plays them through its own AudioContext.
+
+| Route | Effect |
+|---|---|
+| `GET /v1/stage/audio` | API-owned `StageAudioResponse` `{tts: boolean, tts_off: 'no_key'\|'off'\|'spend_disabled'\|null, model: string\|null, sfx: {gavel, drumroll, buzzer, cheer}\|null}`: is the stage voiced, and the cue clip URLs when the Sound Effects are live |
+| `GET /v1/stage/tts/:clip_id` | One stage line's MP3 (`audio/mpeg`). `clip_id` = sha256 hex of `voice_id \n model \n text`, so the response is `Cache-Control: private, max-age=31536000, immutable` with `ETag` (304 on a match). It waits for a generation in flight. `404` when the TTS is off or the id unknown; `502 UPSTREAM_ERROR` / `504 UPSTREAM_TIMEOUT` when ElevenLabs fails |
+| `GET /v1/stage/sfx/:kind` | One cue's ElevenLabs Sound Effects clip, generated once (at boot) and cached; `404` unless they are live |
 
 ### 2.18 API-owned types
 
@@ -640,7 +648,8 @@ Server control frames carry an `op` and are **not** `RealtimeEvent`s and not seq
 - `welcome`, `subscribed {bet_id, last_seq, replayed}`, `ping {t, server_time}`, `error {code, message}`;
 - `room.presence {room_id, members: RoomMember[]}`;
 - `stage.market {snapshot: GeminiMarketSnapshot}` (≤ 2/s; the chart ring buffer, FINDINGS §3.11);
-- `stage.cue {bet_id, kind}`.
+- `stage.cue {bet_id, kind, audio_url?}` (`audio_url`: the ElevenLabs Sound Effects clip, §2.6);
+- `stage.voice {bet_id, seq, type, voice, text, clip_id, audio_url}`, to the room's **stage sessions only**: the ElevenLabs TTS clip of the stage line for bet event `(bet_id, seq)` (§4.5). Sent right after that event, before the clip exists; `GET audio_url` waits for it.
 
 **Event frames are bare SCHEMAS `RealtimeEvent` envelopes** (they have `v` and `type`, and no `op`). The client branches on whether `op` is present, then runs `RealtimeEvent.safeParse` and drops failures with a log line (SCHEMAS §10.1).
 
@@ -870,7 +879,7 @@ Responses (≤ 300 B):
 |---|---|---|---|
 | `request_attempt` | `{attempt_no: integer "1 for the first try; +1 after Run it back"}` | true / 5 s | `POST /v1/bets/:id/attempts {attempt_no, recorder:'judge_cam'}` (§2.9). Returns `"armed: judge cam counting down"`, or `"error: <code>"`. Allowed only after `[EVENT] LOCKED` or `[EVENT] REDO`. |
 | `show_terms_card` | none | false | Brings A's terms card to the front and re-sends the stage's card focus. The card appears anyway on `terms.authorize_request`. |
-| `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip. A light haptic on A's phone may be silent while the mic is live (FINDINGS §4). |
+| `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip (its synthesized cue when the server has none, §2.6). A light haptic on A's phone may be silent while the mic is live (FINDINGS §4). |
 
 Pass `clientTools` to `useConversation`, because `useConversationClientTool` isn't exported (FINDINGS §7).
 
@@ -906,7 +915,19 @@ Grammar:
 | `MARKET_SETTLED` | `[EVENT] MARKET_SETTLED side=yes line=97250.03 settle=97301.12 winner=Logan gg_secs=10 :: Announce Gemini settled UP and Logan wins.` |
 | `PAID` / `VOIDED` | `[EVENT] PAID winner=Jake amount=$10 :: Congratulate Jake in one line.` |
 
-**Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:vote_id`. This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
+**Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:clip_id` (§2.17). This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
+
+**The stage voice** (`apps/server/src/stage/voice.ts`, `apps/stage/src/voice.ts`). The projector also speaks the judge's other spoken moments, so the ruling is heard in the hall even when A's phone is not, and with no ElevenLabs key at all:
+
+| Event | Voice | Line (`packages/shared/src/stage-voice.ts`, the same words on server and stage) |
+|---|---|---|
+| `ruling.issued` | judge | `Jake wins. <reason>`; REDO `Run it back. <reason>`; VOID why, then `It's void: both stakes go back.`; a Gemini settlement starts `Gemini settles it.` |
+| `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
+| `appeal.vote` | `seat_1` … `seat_3` | `Judge 2, GPT, votes Logan. <reason>` / `Judge 3, Gemini, abstains.` |
+
+- **Server.** After each bet event goes out, the line becomes a clip: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128` with `{text, model_id}`, model `STAGE_TTS_MODEL` (default `eleven_v4_turbo`, §4.1). Voices: `ELEVENLABS_JUDGE_VOICE_ID` (else a premade voice) and `ELEVENLABS_PANEL_VOICE_IDS` (three ids, else three premade voices). Then a `stage.voice` frame (§3.1). The clip is cached (memory LRU, plus the OS tmp dir), so a repeated line costs nothing. On only with `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true`; `STAGE_TTS=off` is the kill switch. Nothing is generated with no stage socket on the room, or for a stale event. Lines are capped at 300 characters.
+- **Stage.** For a fresh voiced event it waits up to **800 ms** for the `stage.voice` frame. With one, it fetches the clip with its bearer and plays it (an announced clip may take up to 4 s to arrive while it is generated); with none, or when the clip fails, it speaks the same line with the browser's `speechSynthesis`. Lines take turns. `V` turns the voice off, `M` mutes everything.
+- **Sound Effects.** `SFX_PROVIDER` defaults to `auto`: live exactly when the stage voice is on. The four cue clips are generated at boot and served by `GET /v1/stage/sfx/:kind`; the stage plays them for `stage.cue`, and for its own gavel (ruling), buzzer (REDO) and cheer (payout).
 
 ### 4.6 Post-call webhook
 
@@ -1372,3 +1393,4 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
   - **Lock build timing:** the nonce lease, build and simulation happen at `confirm_terms` (ESCROW §5.0.1), not speculatively at `propose_terms`. The skill `accept_deadline` is build time + 300 s; the trace now uses 1795284618 (18:10:18) and `expires_at` 18:10:13.
   - **D7:** `evidence_record_hash` replaced by `frame_hashes` (§2.9, §7.1, §8); the trace uses the recomputed SCHEMAS ruling hash `997ce278…5daa`.
   - `tx.*` payloads carry `kind: TxKind` (was `ix`). Nonce pool is created by `scripts/nonce-pool.ts` at deploy, not at boot (§6.1). `/v1/config` serves `nonce_seed_max`. Pins come from committed `packages/shared` constants, not EAS env. CU floor cites ESCROW N11. Added `GET /health` to §2.0, `POST /v1/demo/toggles` to §2.17, and a status note for every §9.1 conflict.
+- **2026-11-18, the stage voice (feat/stage-voice):** §2.17 gains the stage audio routes (`GET /v1/stage/audio`, `/v1/stage/tts/:clip_id`, `/v1/stage/sfx/:kind`) and says `GET /v1/demo/health` takes the stage token alone. §3.1 gains the `stage.voice` control frame (stage sessions only) and `stage.cue.audio_url`. §4.5: the TTS route is `/v1/stage/tts/:clip_id` (content-addressed: sha256 of voice, model and text), not `:vote_id`, because the same route also voices the rulings and payouts; the stage voice table and the browser fallback after 800 ms are new. §2.6 / §4.4: the cue clips are live with the key (`SFX_PROVIDER=auto`).
