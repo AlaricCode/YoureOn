@@ -303,8 +303,9 @@ export const sparkline = {
 } as const;
 
 // ---------------------------------------------------------------------------------------
-// Motion: functional only, ease-out, no springs, no bounce. One reveal on a moment (fade and a
-// slight rise, <= 300 ms); every other transition <= 200 ms.
+// Motion: functional only, ease-out, no bounce. One reveal on a moment (fade and a slight rise,
+// <= 300 ms); every other transition <= 200 ms. One spring, and only to settle a released gesture
+// (it has to carry the finger's velocity): critically damped and clamped, so it never overshoots.
 // ---------------------------------------------------------------------------------------
 
 export const MAX_TRANSITION_MS = 200;
@@ -320,9 +321,101 @@ export const motion = {
   momentFromScale: 0.98,
   /** Flutter Curves.easeOut = cubic-bezier(0, 0, 0.58, 1). Reanimated: Easing.bezier(...). */
   easing: [0, 0, 0.58, 1] as const,
-  /** Springs are banned (spec §6.2); a component must not use withSpring. */
-  spring: false,
+  /**
+   * Springs are banned (spec §6.2) except to settle a released gesture (SwipeToConfirm), and then
+   * only `settle` below. ui/__tests__/motionAudit enforces both.
+   */
+  spring: 'gesture-settle',
+  /**
+   * The gesture settle: damping ratio 36 / (2 * sqrt(300)) = 1.04 (critically damped) and
+   * clamped, so a released pill glides home with the finger's velocity and never bounces.
+   */
+  settle: { damping: 36, stiffness: 300, mass: 1, overshootClamping: true },
+  /** Press feedback: scale down on press-in, back on release. */
+  pressInMs: 90,
+  pressOutMs: 150,
+  /** Buttons. */
+  pressScale: 0.97,
+  /** Stake chips (smaller targets, a touch deeper). */
+  chipPressScale: 0.95,
 } as const;
+
+// ---------------------------------------------------------------------------------------
+// Swipe to confirm (SwipeToConfirm): the deliberate intent before Face ID (replaces the hold)
+// ---------------------------------------------------------------------------------------
+
+export const swipe = {
+  /** Lift that arms the control: the pill follows the finger 1:1 up to here. */
+  travel: 72,
+  /** Rubber band past `travel`: at most this many extra points... */
+  maxOverdrag: 16,
+  /** ...at this fraction of the finger's extra travel. */
+  overdragFactor: 0.25,
+  /** The pan activates after this much upward travel. */
+  activateOffset: 8,
+  /** Sideways travel (either way) before activation fails the pan: it was not a swipe up. */
+  failOffsetX: 40,
+  /** Downward travel before activation fails the pan. */
+  failOffsetDown: 16,
+  /** A release at least this fast upward (pt/s)... */
+  flingVelocity: 900,
+  /** ...and at least this far along commits without reaching `travel`. */
+  flingMinProgress: 0.6,
+  /** Selection ticks on the way up. */
+  ticks: [0.25, 0.5, 0.75] as readonly number[],
+  /** A tap does not commit: the pill lifts this far and settles, and the hint shows. */
+  nudgeLift: 14,
+  nudgeMs: 180,
+  hintMs: 1200,
+  /** Idle: the chevron bobs up `bobRise` pt (`bobMs` up, `bobMs` down) every `bobEveryMs`. */
+  bobRise: 3,
+  bobMs: 300,
+  bobEveryMs: 2400,
+  /** The tick stays this long after a commit. */
+  successHoldMs: 400,
+  /** The chevron / tick glyph box, in points. */
+  chevron: 10,
+  /** The chevron -> tick crossfade when the control arms. */
+  armMs: 120,
+  /** Press feedback on touch down (a lighter press than a button: the finger is about to move). */
+  pressScale: 0.98,
+  pressInMs: 90,
+  pressOutMs: 150,
+} as const;
+
+// ---------------------------------------------------------------------------------------
+// Sparkline scrub (Home): the finger on the balance line
+// ---------------------------------------------------------------------------------------
+
+export const scrub = {
+  /** Horizontal travel (pt) that starts a scrub. */
+  activeOffsetX: 6,
+  /** Vertical travel (pt) first that gives the touch back (to a scroll, the operator hold). */
+  failOffsetY: 14,
+  /** Extra touch area above and below the line. */
+  hitSlopY: 16,
+  /** The hairline and dot gliding to the next point. */
+  glideMs: 70,
+  /** The scrub overlays fading in and out. */
+  fadeMs: 100,
+  /** The black wash over the line right of the hairline (the "future" greys out). */
+  dimOpacity: 0.6,
+  /** Hairline width (pt). */
+  hairline: 1,
+  /** The scrub dot's radius, and its halo's. */
+  dot: 4,
+  halo: 8,
+  haloOpacity: 0.2,
+  /** At most one tick haptic per this long (JS side). */
+  tickMinGapMs: 35,
+} as const;
+
+// ---------------------------------------------------------------------------------------
+// Loading skeleton (History)
+// ---------------------------------------------------------------------------------------
+
+/** Rows pulse together in opacity (no gradient shimmer: gradients are banned). */
+export const skeleton = { pulseMs: 1100, low: 0.45, bar: 14 } as const;
 
 // ---------------------------------------------------------------------------------------
 // Hold to confirm (TASKS D1-M5)
@@ -356,6 +449,20 @@ export const payout = {
   settledColor: color.text,
   /** The "+$" delta beside the balance. */
   deltaColor: color.positive,
+} as const;
+
+/** The rolling-number ticker (balance, payout, market price). */
+export const ticker = {
+  /** A money roll is the payout count-up, same 600 ms. */
+  rollMs: payout.countUpMs,
+  /** A text-mode tick (each changed digit of a live price). */
+  tickMs: 250,
+  /** Pending grey -> settled white crossfade. */
+  colorMs: 150,
+  /** A leading column opening (or closing) as it carries in ($9.99 -> $10.00). */
+  leadMs: 150,
+  /** The smallest the figure shrinks to fit its box. */
+  minScale: 0.6,
 } as const;
 
 // ---------------------------------------------------------------------------------------
@@ -393,6 +500,14 @@ export const haptics = {
   payout: once({ kind: 'notification', type: 'success' }),
   /** A policy rejection, failed lock, or reverted payout. */
   failed: once({ kind: 'notification', type: 'error' }),
+  /** A swipe crosses 25 / 50 / 75 % on the way up. */
+  swipeTick: once({ kind: 'selection' }),
+  /** The swipe reaches the top: a release now commits. */
+  swipeArmed: once({ kind: 'impact', style: 'rigid' }),
+  /** The sparkline scrub lands on a new point. */
+  scrubTick: once({ kind: 'selection' }),
+  /** A chip / stake selection changed. */
+  select: once({ kind: 'selection' }),
 } as const satisfies Record<string, HapticPattern>;
 
 export type HapticMoment = keyof typeof haptics;

@@ -19,8 +19,12 @@ import {
   palette,
   payout,
   radius,
+  scrub,
+  skeleton,
   space,
   swatch,
+  swipe,
+  ticker,
   type,
   typeScale,
 } from '../tokens';
@@ -233,7 +237,7 @@ describe('space and shape', () => {
 });
 
 describe('motion and timing', () => {
-  it('transitions are <= 200 ms, ease-out, no springs; the one moment reveal is <= 300 ms', () => {
+  it('transitions are <= 200 ms, ease-out; the one moment reveal is <= 300 ms', () => {
     expect(motion.fastMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
     expect(hold.releaseMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
     expect(payout.revealMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
@@ -243,8 +247,58 @@ describe('motion and timing', () => {
     expect(motion.momentFromScale).toBeLessThan(1);
     expect(motion.momentRise).toBeGreaterThan(0);
     expect(motion.momentRise).toBeLessThanOrEqual(16);
-    expect(motion.spring).toBe(false);
     expect(motion.easing).toEqual([0, 0, 0.58, 1]);
+  });
+
+  it('the one spring settles a released gesture: critically damped and clamped (no bounce)', () => {
+    expect(motion.spring).toBe('gesture-settle');
+    const { damping, stiffness, mass, overshootClamping } = motion.settle;
+    expect(damping / (2 * Math.sqrt(stiffness * mass))).toBeGreaterThanOrEqual(1);
+    expect(overshootClamping).toBe(true);
+  });
+
+  it('gesture and polish transitions stay inside the motion budget', () => {
+    for (const ms of [
+      motion.pressInMs,
+      motion.pressOutMs,
+      swipe.nudgeMs,
+      swipe.armMs,
+      swipe.pressInMs,
+      swipe.pressOutMs,
+      scrub.glideMs,
+      scrub.fadeMs,
+      ticker.colorMs,
+      ticker.leadMs,
+    ]) {
+      expect(ms).toBeGreaterThan(0);
+      expect(ms).toBeLessThanOrEqual(MAX_TRANSITION_MS);
+    }
+    expect(swipe.bobMs).toBeLessThanOrEqual(MAX_MOMENT_MS);
+    for (const s of [motion.pressScale, motion.chipPressScale, swipe.pressScale]) {
+      expect(s).toBeGreaterThanOrEqual(0.9);
+      expect(s).toBeLessThan(1);
+    }
+  });
+
+  it('a money roll is the payout count-up; a price tick is one moment at most', () => {
+    expect(ticker.rollMs).toBe(payout.countUpMs);
+    expect(ticker.tickMs).toBeLessThanOrEqual(MAX_MOMENT_MS);
+    expect(ticker.minScale).toBeGreaterThan(0);
+    expect(ticker.minScale).toBeLessThan(1);
+  });
+
+  it('the swipe arms after a deliberate thumb travel, not a twitch', () => {
+    expect(swipe.travel).toBeGreaterThanOrEqual(56);
+    expect(swipe.travel).toBeLessThanOrEqual(96);
+    expect(swipe.activateOffset).toBeLessThan(swipe.travel);
+    expect(swipe.flingMinProgress).toBeGreaterThanOrEqual(0.5);
+    expect([...swipe.ticks].sort()).toEqual(swipe.ticks);
+    for (const t of swipe.ticks) expect(t > 0 && t < 1).toBe(true);
+  });
+
+  it('skeleton pulses in opacity only, never fully out', () => {
+    expect(skeleton.low).toBeGreaterThan(0.3);
+    expect(skeleton.low).toBeLessThan(1);
   });
 
   it('pins the contract timings: hold 800 ms / 24 pt, payout reverts after 5 s', () => {

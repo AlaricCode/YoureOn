@@ -63,7 +63,6 @@ import {
   Avatar,
   Card,
   Chip,
-  ChoiceChip,
   DataText,
   DotsLabel,
   InfoRow,
@@ -76,6 +75,7 @@ import {
   useNow,
   useReduceMotion,
 } from '../ui/parts';
+import { StakePicker } from '../ui/StakePicker';
 import { avatarSize, border, color, half, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, SCAN_MISS_COPY, t } from './copy';
 
@@ -509,17 +509,12 @@ export function NegotiateScreen({
               <Label variant="small" style={styles.fieldLabel}>
                 {t(COPY.negotiate.stake)}
               </Label>
-              <View style={styles.stakes} accessibilityRole="radiogroup">
-                {typed.stakes.map((usd) => (
-                  <ChoiceChip
-                    key={usd}
-                    testID={`typed-stake-${usd}`}
-                    label={`$${usd}`}
-                    selected={usd === typed.stakeUsd}
-                    onPress={() => typed.onStake(usd)}
-                  />
-                ))}
-              </View>
+              <StakePicker
+                options={typed.stakes}
+                value={typed.stakeUsd}
+                onChange={typed.onStake}
+                testIDPrefix="typed-stake-"
+              />
               {typed.note ? <DataText muted>{typed.note}</DataText> : null}
               {draftCard}
               {market ? (
@@ -738,18 +733,13 @@ function MarketPanel({
           <Label variant="small" style={styles.fieldLabel}>
             {t(COPY.market.stake)}
           </Label>
-          <View style={styles.stakes} accessibilityRole="radiogroup">
-            {market.stakes.map((usd) => (
-              <ChoiceChip
-                key={usd}
-                testID={`market-stake-${usd}`}
-                label={`$${usd}`}
-                selected={usd === market.stakeUsd}
-                disabled={frozen}
-                onPress={() => market.onStake(usd)}
-              />
-            ))}
-          </View>
+          <StakePicker
+            options={market.stakes}
+            value={market.stakeUsd}
+            onChange={market.onStake}
+            testIDPrefix="market-stake-"
+            disabled={frozen}
+          />
           <Card style={styles.marketCard}>
             <Hairline />
             {q === null ? (
@@ -948,7 +938,6 @@ const styles = StyleSheet.create({
     paddingBottom: space.x2,
     textAlignVertical: 'top',
   },
-  stakes: { flexDirection: 'row', flexWrap: 'wrap', gap: space.x1 },
   offText: { color: palette.textSecondary },
   onPct: { color: color.selected },
   frozen: { opacity: 0.35 },

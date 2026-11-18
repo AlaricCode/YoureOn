@@ -23,6 +23,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
+import { PressScale } from './press';
 import { border, color, half, palette, radius, space, type, type TypeToken } from './tokens';
 
 // ---------------------------------------------------------------------------------------
@@ -115,20 +116,16 @@ function BaseButton({
 }) {
   const enabled = !disabled && !busy && onPress !== undefined;
   const off = !enabled && !busy && offBox !== undefined;
+  // PressScale: the pill gives a touch under the finger (0.97, UI thread); off buttons stay still.
   return (
-    <Pressable
+    <PressScale
       testID={testID}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ disabled: !enabled, busy: Boolean(busy) }}
       onPress={enabled ? onPress : undefined}
       hitSlop={hitSlop}
-      style={({ pressed }) => [
-        styles.button,
-        off ? offBox : box,
-        !enabled && !busy && !off && styles.dimmed,
-        pressed && enabled && styles.pressed,
-      ]}
+      style={[styles.button, off ? offBox : box, !enabled && !busy && !off && styles.dimmed]}
     >
       {busy ? (
         <ActivityIndicator color={ink} />
@@ -137,7 +134,7 @@ function BaseButton({
           {label}
         </Text>
       )}
-    </Pressable>
+    </PressScale>
   );
 }
 

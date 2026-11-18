@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -26,6 +27,9 @@ import {
   StatusHero,
   TopBar,
 } from '../ui/parts';
+import { historyMode, press } from '../ui/polish';
+import { PressScale } from '../ui/press';
+import { SkeletonRows } from '../ui/Skeleton';
 import {
   TABULAR,
   avatarSize,
@@ -117,16 +121,16 @@ export function HomeScreen({
           change={change ?? null}
           series={series ?? null}
           trailing={
-            <Pressable
+            <PressScale
               testID="home-profile"
               accessibilityRole="button"
               accessibilityLabel={t(COPY.home.profile)}
               onPress={onProfile}
               hitSlop={8}
-              style={({ pressed }) => pressed && styles.pressed}
+              scaleTo={press.avatarScale}
             >
               <Avatar name={name} size={avatarSize.sm} />
-            </Pressable>
+            </PressScale>
           }
         />
       </OperatorHold>
@@ -267,22 +271,23 @@ export function HistoryScreen({
     lost: t(COPY.history.lost),
     void: t(COPY.history.voided),
   } as const;
+  // First load: skeleton rows. A reload with rows already shown is pull-to-refresh's spinner,
+  // so the list never blanks.
+  const { mode, refreshing } = historyMode(status, items.length);
   return (
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.history.title)} />
       <Page>
-        {status === 'loading' ? (
-          <View style={styles.centre}>
-            <StatusHero mark="ring" title={t(COPY.app.loading)} />
-          </View>
-        ) : status === 'failed' ? (
+        {mode === 'skeleton' ? (
+          <SkeletonRows />
+        ) : mode === 'error' ? (
           <>
             <View style={styles.centre}>
               <StatusHero mark="cross" title={t(COPY.app.offline)} />
             </View>
             <PrimaryButton testID="history-retry" label={t(COPY.app.failed)} onPress={onRetry} />
           </>
-        ) : items.length === 0 ? (
+        ) : mode === 'empty' ? (
           <>
             <View style={styles.centre}>
               <StatusHero mark="ring" title={t(COPY.history.empty)} />
@@ -290,7 +295,19 @@ export function HistoryScreen({
             <PrimaryButton label={t(COPY.ruling.backHome)} onPress={onBack} />
           </>
         ) : (
-          <ScrollView style={styles.flex} contentContainerStyle={styles.historyList}>
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={styles.historyList}
+            refreshControl={
+              onRetry ? (
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRetry}
+                  tintColor={palette.textSecondary}
+                />
+              ) : undefined
+            }
+          >
             {/* Hairline rows: who and what on the left; the amount (tabular, green / red) over
                 the outcome on the right. */}
             {items.map((it) => (
@@ -388,7 +405,6 @@ const rowDivider = {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  pressed: { opacity: 0.6 },
   centre: { flex: 1, justifyContent: 'center' },
   /** The profile name in Geist Light 34, like the big numerals. */
   profileName: { textAlign: 'center', letterSpacing: -0.6, fontVariant: [] },

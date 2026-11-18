@@ -1,7 +1,7 @@
 // Beat 3: the terms card and the lock (TASKS D2-M1, D2-M2, D2-M4; SCHEMAS §9.4; ARCHITECTURE
-// §5.2). Both phones show the same card, rendered from the Terms alone. The hold stays off until
-// the device policy passes; a full hold opens Face ID; "Decline" needs no Face ID and works until
-// the second signature. The lock state lives in bets/lock.ts.
+// §5.2). Both phones show the same card, rendered from the Terms alone. The swipe stays off until
+// the device policy passes; a full swipe up (released) opens Face ID; "Decline" needs no Face ID
+// and works until the second signature. The lock state lives in bets/lock.ts.
 import { useRef } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
@@ -13,10 +13,8 @@ import {
   Appear,
   Avatar,
   Bullets,
-  CountdownBar,
   DataText,
   DotsLabel,
-  HoldToConfirm,
   InfoRow,
   MomentGroup,
   MomentHeadline,
@@ -29,6 +27,8 @@ import {
   TopBar,
   useNow,
 } from '../ui/parts';
+import { DrainBar } from '../ui/DrainBar';
+import { SwipeToConfirm } from '../ui/SwipeToConfirm';
 import { avatarSize, color, half, palette, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
@@ -188,13 +188,14 @@ export function TermsCardScreen({
           </Svg>
         </View>
         <InfoRow label={t(COPY.terms.timeLeft)} value={countdownLabel(expiresAtMs - now)} />
-        <CountdownBar fraction={(expiresAtMs - now) / windowMs} />
+        <DrainBar endsAtMs={expiresAtMs} windowMs={windowMs} />
         <View style={styles.status}>{status}</View>
         <AlertLine message={alert} testID="terms-alert" />
         {lock.phase === 'signed' || lock.phase === 'locking' ? null : (
-          <HoldToConfirm
+          <SwipeToConfirm
             testID="terms-hold"
-            label={fill.holdToLock(view.myStakeUsd)}
+            label={fill.swipeToLock(view.myStakeUsd)}
+            hint={t(COPY.terms.swipeHint)}
             disabled={!holdEnabled(lock)}
             onStart={onHoldStart}
             onComplete={onHoldComplete}

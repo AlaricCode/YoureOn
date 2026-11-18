@@ -33,7 +33,6 @@ import {
   glow,
   half,
   hold,
-  moneyColor,
   motion,
   palette,
   payout,
@@ -590,109 +589,11 @@ export function Sparkline({
 }
 
 /**
- * The balance header (TASKS D3-M2), the Home signature: "Balance" in grey 15, the figure in Geist
- * Light 56 with tabular numerals, then one line under it and an optional sparkline.
- * - While a payout is processed but not yet confirmed the figure is grey (pending), then white.
- * - `delta` ("+$5" at a payout) shows on the line under the figure in green, fading in over
- *   `payout.revealMs`.
- * - Otherwise `change` shows there: the signed amount in green / red, plus an optional grey
- *   `caption` (screen copy; it must pass ui/copyRule). Omit it when there is no real data.
- * - `series` (balance points, oldest first; app/history balanceSeries) draws the Sparkline
- *   under it; hidden under two points.
+ * The balance header, the payout's balance line and the moment's money figure now roll
+ * (odometer numerals) and the header's sparkline scrubs: they live in ./figures. Re-exported
+ * here under the same names and props, so screens (and src/gg) import them from ./parts as before.
  */
-export function BalanceHeader({
-  cents,
-  pending = false,
-  inBetsUsd,
-  delta,
-  change,
-  series,
-  trailing,
-}: {
-  cents: number;
-  pending?: boolean;
-  inBetsUsd?: string | null;
-  /** Right-aligned on the "Balance" label row, centred on it (Home: your avatar). */
-  trailing?: ReactNode;
-  /** "+$5" under the number at a payout; fades in over `payout.revealMs`. */
-  delta?: string | null;
-  /** The net change to show under the figure when there is no payout delta. */
-  change?: { readonly cents: number; readonly caption?: string } | null;
-  /** Balance points for the sparkline, oldest first. */
-  series?: readonly number[] | null;
-}) {
-  const shown = useCountUp(cents);
-  const reveal = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(reveal, {
-      toValue: delta ? 1 : 0,
-      duration: payout.revealMs,
-      easing: Easing.bezier(...motion.easing),
-      useNativeDriver: true,
-    }).start();
-  }, [delta, reveal]);
-  return (
-    <View style={styles.balance} testID="balance-header">
-      {trailing ? (
-        <View style={styles.balanceLabelRow}>
-          <Label variant="value">Balance</Label>
-          {trailing}
-        </View>
-      ) : (
-        <Label variant="value">Balance</Label>
-      )}
-      <MoneyText
-        cents={shown}
-        tint={pending ? payout.pendingColor : payout.settledColor}
-        accessibilityLabel={centsToUsd(cents)}
-      />
-      {delta ? (
-        <Animated.Text style={[type.labelMedium, styles.delta, { opacity: reveal }]}>
-          {delta}
-        </Animated.Text>
-      ) : change ? (
-        <View style={styles.changeRow}>
-          <Text style={[type.labelMedium, styles.tabular, { color: moneyColor(change.cents) }]}>
-            {signedCentsToUsd(change.cents)}
-          </Text>
-          {change.caption ? <Label variant="value">{change.caption}</Label> : null}
-        </View>
-      ) : null}
-      {inBetsUsd ? (
-        <View style={styles.inBets}>
-          <Label variant="small">In bets</Label>
-          <DataText variant="smallStrong" style={styles.tabular}>
-            {inBetsUsd}
-          </DataText>
-        </View>
-      ) : null}
-      {series && series.length >= SPARK_MIN_POINTS ? (
-        <View style={styles.spark}>
-          <Sparkline points={series} />
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-/**
- * The balance on a moment (the payout): one quiet grey 15/400 tabular line, "Balance $47.50",
- * under the hero amount, so the hero stays the only large figure. It counts up like the Home
- * figure; while the payout is processed but not confirmed it is dim (pending), then grey.
- */
-export function BalanceLine({ cents, pending = false }: { cents: number; pending?: boolean }) {
-  const shown = useCountUp(cents);
-  return (
-    <View style={styles.balanceLine} testID="balance-header" accessible>
-      <Text
-        style={[type.value, styles.tabular, pending && { color: palette.textTertiary }]}
-        accessibilityLabel={`Balance ${centsToUsd(cents)}`}
-      >
-        {`Balance ${centsToUsd(shown)}`}
-      </Text>
-    </View>
-  );
-}
+export { BalanceHeader, BalanceLine, MomentMoney } from './figures';
 
 // ---------------------------------------------------------------------------------------
 // Time
@@ -1333,55 +1234,12 @@ export function MomentGroup({
   );
 }
 
-/**
- * The money on a moment: a giant Geist Light 56 figure, green with "+" for money in, red with
- * "−" for money out. Its glow is drawn by the enclosing MomentGroup (behind the headline too).
- * - `cents`: the figure counts up from $0.00 over `payout.countUpMs` (Reduce Motion: static) and
- *   reads "+$5.00".
- * - `text`: a ready string (e.g. "+$5" from BetView) shown as is, no count.
- */
-export function MomentMoney({
-  direction,
-  cents,
-  text,
-  testID,
-}: {
-  direction: 'in' | 'out';
-  cents?: number;
-  text?: string;
-  testID?: string;
-}) {
-  const reduced = useReduceMotion();
-  const target = cents ?? 0;
-  // Holds at $0.00 until Reduce Motion answers (a few ms), then counts; with it on, static.
-  const counting = useCountUp(reduced === false ? target : 0, 0);
-  const shown = reduced === true ? target : counting;
-  const tint = direction === 'in' ? color.positive : color.negative;
-  const sign = direction === 'in' ? '+' : '−';
-  const label = text ?? `${sign}${centsToUsd(target)}`;
-  return (
-    <View style={styles.money}>
-      <Text
-        testID={testID}
-        style={[type.money, styles.center, { color: tint }]}
-        accessibilityLabel={label}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.5}
-      >
-        {text ?? `${sign}${centsToUsd(shown)}`}
-      </Text>
-    </View>
-  );
-}
-
 // ---------------------------------------------------------------------------------------
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: palette.background },
   flex: { flex: 1 },
   center: { textAlign: 'center' },
-  tabular: { fontVariant: ['tabular-nums'] },
   rowPressed: { opacity: 0.6 },
   pressedDim: { opacity: 0.7 },
   choiceDisabled: { opacity: 0.4 },
@@ -1450,17 +1308,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  balance: { paddingVertical: space.x2, gap: half.x05 },
-  balanceLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  delta: { color: payout.deltaColor, fontVariant: ['tabular-nums'] },
-  changeRow: { flexDirection: 'row', alignItems: 'baseline', gap: space.x1 },
-  inBets: { flexDirection: 'row', gap: space.x1, marginTop: half.x05 },
-  spark: { marginTop: space.x3 },
-  balanceLine: { alignSelf: 'stretch', alignItems: 'center' },
   dotsRow: { flexDirection: 'row', alignItems: 'center' },
   dotsOverflow: { position: 'absolute', left: '100%' },
   hold: {
@@ -1522,6 +1369,5 @@ const styles = StyleSheet.create({
   momentFooter: { paddingHorizontal: space.page, paddingBottom: space.x2, gap: half.x15 },
   headline: { alignSelf: 'stretch' },
   momentGroup: { alignSelf: 'stretch', alignItems: 'center', gap: space.x2 },
-  money: { alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   glow: { position: 'absolute', left: '50%', top: '50%' },
 });
