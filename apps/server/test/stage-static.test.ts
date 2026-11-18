@@ -125,6 +125,35 @@ describe('GET /stage (the built projector page)', () => {
     expect(past.status).toBe(416);
   });
 
+  it('a conditional GET of an unchanged file is a 304 with the same caching headers', async () => {
+    const first = await app.request('/stage/replay/beat1.mp4');
+    const lastModified = first.headers.get('Last-Modified')!;
+    expect(lastModified).toBeTruthy();
+    const again = await app.request('/stage/replay/beat1.mp4', {
+      headers: { 'If-Modified-Since': lastModified },
+    });
+    expect(again.status).toBe(304);
+    expect(again.headers.get('Cache-Control')).toBe(STAGE_CACHE.file);
+    expect(again.headers.get('Content-Length')).toBeNull();
+    expect(await again.text()).toBe('');
+    const page = await app.request('/stage/', { headers: { 'If-Modified-Since': lastModified } });
+    expect(page.status).toBe(304);
+    expect(page.headers.get('Cache-Control')).toBe(STAGE_CACHE.html);
+    // older than the file: the full body
+    const stale = await app.request('/stage/replay/beat1.mp4', {
+      headers: { 'If-Modified-Since': 'Thu, 01 Jan 2015 00:00:00 GMT' },
+    });
+    expect(stale.status).toBe(200);
+    expect(Buffer.from(await stale.arrayBuffer())).toEqual(CLIP);
+    // junk dates are ignored; byte ranges are never turned into a 304
+    const junk = await app.request('/stage/', { headers: { 'If-Modified-Since': 'yesterday' } });
+    expect(junk.status).toBe(200);
+    const ranged = await app.request('/stage/replay/beat1.mp4', {
+      headers: { 'If-Modified-Since': lastModified, Range: 'bytes=0-9' },
+    });
+    expect(ranged.status).toBe(206);
+  });
+
   it('HEAD answers with headers only', async () => {
     const res = await app.request('/stage/', { method: 'HEAD' });
     expect(res.status).toBe(200);
