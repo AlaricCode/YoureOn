@@ -20,6 +20,8 @@ RUN npm ci --include=dev --include-workspace-root -w apps/server -w packages/db 
 # Dockerfile.dockerignore (it is BuildKit-specific), a local apps/server/.env (secrets, read
 # by `npm run dev`) or a host node_modules would be baked into the image (TASKS K-08).
 COPY packages/shared/src packages/shared/src
+# The escrow IDL (imported by the chain decoder) lives outside src/.
+COPY packages/shared/idl packages/shared/idl
 COPY packages/db/src packages/db/src
 COPY packages/db/migrations packages/db/migrations
 COPY apps/server/src apps/server/src
