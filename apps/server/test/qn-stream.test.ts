@@ -324,6 +324,52 @@ describe('webhook probe + flows against the real webhook route and a fake Stream
     expect(out).toContain('the server verifies this token');
   });
 
+  it('--fly-app never restarts a server that already verifies the token (create re-run, resume)', async () => {
+    reset();
+    const file = join(tmp(), 'qn.env');
+    const token = resolveToken({}, file)!.token;
+    setServerToken(token); // e.g. a re-run after a partial failure: the secret is already set
+    const r = await createStream(io(), {
+      baseUrl: BASE,
+      tokenFile: file,
+      flyApp: 'youre-on',
+      paused: true,
+      filterJs: FILTER_JS,
+    });
+    expect(flyCalls).toEqual([]); // probed first: verified, so no `fly secrets import`
+    expect(lines.join('\n')).toContain('Fly secret left as is (no restart)');
+    // resume <id> --fly-app before the demo: still no import while the server verifies it
+    const resumed = await resumeStream(io(), r.id, {
+      baseUrl: BASE,
+      tokenFile: file,
+      flyApp: 'youre-on',
+    });
+    expect(resumed['status']).toBe('active');
+    expect(flyCalls).toEqual([]);
+    // the server lost / changed its secret: resume sets it once, then verifies
+    await qnCall(fetchImpl, API_KEY, req.pause(r.id));
+    setServerToken(newSecurityToken());
+    await resumeStream(io(), r.id, { baseUrl: BASE, tokenFile: file, flyApp: 'youre-on' });
+    expect(flyCalls).toEqual([{ app: 'youre-on', token }]);
+    expect(deps.env.QN_STREAM_SECURITY_TOKEN).toBe(token);
+  });
+
+  it('--fly-app does not import a secret for a failure a secret cannot fix (unreachable)', async () => {
+    reset();
+    const file = join(tmp(), 'qn.env');
+    await expect(
+      createStream(io(), {
+        baseUrl: 'https://nowhere.test',
+        tokenFile: file,
+        flyApp: 'youre-on',
+        filterJs: FILTER_JS,
+      }),
+    ).rejects.toThrow(/does not verify this token/);
+    expect(flyCalls).toEqual([]);
+    expect(fake.calls).toEqual([]);
+    expect(lines.join('\n')).toContain('unreachable');
+  });
+
   it('without --fly-app, a server that does not hold the token stops create before anything exists', async () => {
     reset();
     const file = join(tmp(), 'qn.env');

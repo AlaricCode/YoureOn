@@ -434,6 +434,48 @@ export async function probeUntil(
   }
 }
 
+/**
+ * Makes the deployed server verify `token`, touching the Fly secret only when it must: a Fly
+ * secret change restarts the machines (drops the WebSocket / LiveKit sessions and the in-memory
+ * finalize timers), so a server that already verifies the token is left alone. Probes once; only
+ * on token_unset / token_mismatch, and with `flyApp`, imports the secret and then probes until it
+ * verifies (probeWaitSecs, default 120 s while the machines restart). Anything else (unreachable,
+ * clock skew, an unexpected answer) is not fixed by a secret, so nothing is imported. With
+ * skipProbe the secret is imported blind (with flyApp) and true is returned.
+ */
+export async function ensureServerToken(
+  io: StreamIo,
+  token: string,
+  o: Pick<CreateOptions, 'baseUrl' | 'tokenFile' | 'flyApp' | 'skipProbe' | 'probeWaitSecs'>,
+): Promise<boolean> {
+  const flyApp = o.flyApp ?? DEFAULT_FLY_APP;
+  const importSecret = async (app: string) => {
+    if (!io.flyImport) throw new Error('--fly-app needs the fly CLI');
+    await io.flyImport(app, token);
+  };
+  if (o.skipProbe) {
+    if (o.flyApp) await importSecret(o.flyApp);
+    return true;
+  }
+  const now = io.now ?? Date.now;
+  let p = await probeWebhook(io.fetch, o.baseUrl, token, now());
+  if (p.ok && o.flyApp) {
+    io.log(
+      `webhook probe: ${probeAdvice(p, flyApp, o.tokenFile)}; Fly secret left as is (no restart)`,
+    );
+    return true;
+  }
+  if (!p.ok && o.flyApp && (p.meaning === 'token_unset' || p.meaning === 'token_mismatch')) {
+    io.log(`  webhook: ${p.meaning} (HTTP ${p.status ?? '-'})`);
+    await importSecret(o.flyApp);
+    p = await probeUntil(io, o.baseUrl, token, o.probeWaitSecs ?? 120);
+  } else if (!p.ok && o.probeWaitSecs) {
+    p = await probeUntil(io, o.baseUrl, token, o.probeWaitSecs);
+  }
+  io.log(`webhook probe: ${probeAdvice(p, flyApp, o.tokenFile)}`);
+  return p.ok;
+}
+
 export const tokenLine = (source: TokenSource, token: string, file: string): string =>
   `security token: sha256:${fingerprint(token)} (${source === 'env' ? `from $${TOKEN_ENV}` : `${source}, in ${file}`})`;
 
@@ -445,7 +487,7 @@ export interface CreateOptions {
   paused?: boolean;
   replace?: boolean;
   skipProbe?: boolean;
-  /** default 0; 120 when flyApp is set (the machines restart after a secret change). */
+  /** default 0; 120 after setting the Fly secret (the machines restart after a secret change). */
   probeWaitSecs?: number;
   /**
    * Let QuickNode generate the token (send none), then save the returned one, set the Fly secret
@@ -458,10 +500,11 @@ export interface CreateOptions {
 }
 
 /**
- * The activation flow: token -> (Fly secret) -> webhook probe -> no duplicate name -> create
- * PAUSED with our token -> the returned token must equal ours -> activate (unless paused).
- * Throws, leaving nothing half-active, whenever a step would make the Stream deliver to a server
- * that rejects it.
+ * The activation flow: token -> webhook probe (-> Fly secret, only if the server does not verify
+ * it yet) -> no duplicate name -> create PAUSED with our token -> the returned token must equal
+ * ours -> activate (unless paused). Throws, leaving nothing half-active, whenever a step would make
+ * the Stream deliver to a server that rejects it. Re-running it after a partial failure never
+ * restarts a server that already holds the token (ensureServerToken).
  */
 export async function createStream(
   io: StreamIo,
@@ -469,25 +512,13 @@ export async function createStream(
 ): Promise<{ id: string; stream: Record<string, unknown>; tokenFingerprint: string }> {
   const call = (r: QnRequest) => qnCall(io.fetch, io.apiKey, r);
   const flyApp = o.flyApp ?? DEFAULT_FLY_APP;
-  const setSecret = async (token: string) => {
-    if (!o.flyApp) return;
-    if (!io.flyImport) throw new Error('--fly-app needs the fly CLI');
-    await io.flyImport(o.flyApp, token);
-  };
-  const verified = async (token: string): Promise<boolean> => {
-    if (o.skipProbe) return true;
-    const p = await probeUntil(io, o.baseUrl, token, o.probeWaitSecs ?? (o.flyApp ? 120 : 0));
-    io.log(`webhook probe: ${probeAdvice(p, flyApp, o.tokenFile)}`);
-    return p.ok;
-  };
 
   // 1. our token on the server first (so nothing the Stream sends is ever rejected)
   let ours: string | null = null;
   if (!o.quicknodeToken) {
     const tok = resolveToken(io.env, o.tokenFile)!;
     io.log(tokenLine(tok.source, tok.token, o.tokenFile));
-    await setSecret(tok.token);
-    if (!(await verified(tok.token)) && !o.paused)
+    if (!(await ensureServerToken(io, tok.token, o)) && !o.paused)
       throw new Error(
         'the server does not verify this token yet: fix that first (or create it --paused, or --skip-probe)',
       );
@@ -542,9 +573,8 @@ export async function createStream(
       throw new Error(`QuickNode returned no security_token for ${id}; it stays paused`);
     writeTokenFile(o.tokenFile, returned);
     io.log(tokenLine('quicknode', returned, o.tokenFile));
-    await setSecret(returned);
     token = returned;
-    if (!(await verified(returned)) && !o.paused)
+    if (!(await ensureServerToken(io, returned, o)) && !o.paused)
       throw new Error(
         `the server does not verify the Stream's token yet; ${id} stays paused. ` +
           `Set it (fly secrets import -a ${flyApp} < ${o.tokenFile}), then: npm run qn-stream -- resume ${id}`,
@@ -568,7 +598,11 @@ export async function createStream(
   return { id, stream, tokenFingerprint: fingerprint(token!) };
 }
 
-/** Activates `id` after proving the server verifies its token (unless skipProbe). */
+/**
+ * Activates `id` after proving the server verifies its token (unless skipProbe). With flyApp the
+ * Fly secret is set only when the server does not verify the token yet (ensureServerToken), so
+ * `resume <id> --fly-app <app>` before the demo never restarts a server that already holds it.
+ */
 export async function resumeStream(
   io: StreamIo,
   id: string,
@@ -577,18 +611,11 @@ export async function resumeStream(
   const call = (r: QnRequest) => qnCall(io.fetch, io.apiKey, r);
   const stream = (await call(req.get(id))) as Record<string, unknown>;
   const token = tokenOf(stream) ?? resolveToken(io.env, o.tokenFile, { generate: false })?.token;
-  if (token && o.flyApp) {
-    if (!io.flyImport) throw new Error('--fly-app needs the fly CLI');
-    await io.flyImport(o.flyApp, token);
-  }
-  if (!o.skipProbe) {
-    if (!token) io.log('webhook probe skipped: no token known (pass --token-file or set the env)');
-    else {
-      const p = await probeUntil(io, o.baseUrl, token, o.probeWaitSecs ?? (o.flyApp ? 120 : 0));
-      io.log(`webhook probe: ${probeAdvice(p, o.flyApp ?? DEFAULT_FLY_APP, o.tokenFile)}`);
-      if (!p.ok) throw new Error('not resuming: the server would reject the deliveries');
-    }
-  }
+  if (!token) {
+    if (!o.skipProbe)
+      io.log('webhook probe skipped: no token known (pass --token-file or set the env)');
+  } else if (!(await ensureServerToken(io, token, o)))
+    throw new Error('not resuming: the server would reject the deliveries');
   await call(req.activate(id));
   return (await call(req.get(id))) as Record<string, unknown>;
 }
