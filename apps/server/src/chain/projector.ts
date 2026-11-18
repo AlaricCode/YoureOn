@@ -487,6 +487,7 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
   }
   let after: BetRow = bet;
   let rejected: ReturnType<typeof dbErrorSummary> | null = null;
+  let seen: { kind: string; sent_at: Date | null; rpc_confirmed_at: Date | null }[] = [];
   if (Object.keys(set).length || streamSigs.length)
     try {
       after = await tx.transaction(async (sp) => {
@@ -496,7 +497,7 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
           row = r ?? bet;
         }
         if (streamSigs.length)
-          await sp
+          seen = await sp
             .update(chainTxs)
             .set({ stream_seen_at: new Date(nowMs) })
             .where(
@@ -505,10 +506,25 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
                 inArray(chainTxs.signature, streamSigs),
                 isNull(chainTxs.stream_seen_at),
               ),
-            );
+            )
+            .returning({
+              kind: chainTxs.kind,
+              sent_at: chainTxs.sent_at,
+              rpc_confirmed_at: chainTxs.rpc_confirmed_at,
+            });
         await queuePushes(sp, bet, row, fold, nowMs);
         return row;
       });
+      // The Streams lane latency (ARCHITECTURE §6 "Streams: send -> webhook", PENDING-KEY).
+      for (const s of seen)
+        log.info('chain.stream_seen', {
+          bet_id: bet.id,
+          kind: s.kind,
+          send_to_stream_ms: s.sent_at ? nowMs - s.sent_at.getTime() : null,
+          rpc_confirm_to_stream_ms: s.rpc_confirmed_at
+            ? nowMs - s.rpc_confirmed_at.getTime()
+            : null,
+        });
     } catch (e) {
       if (isTransientDbError(e)) throw e;
       rejected = dbErrorSummary(e);

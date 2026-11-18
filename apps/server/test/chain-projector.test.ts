@@ -135,6 +135,7 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
   describe('confirming what the RPC path already wrote (idempotent: no state move, no cue)', () => {
     it('atomic lock on an RPC-LOCKED bet: columns, pending cleared, stream_seen_at, outbox bet_locked', async () => {
       const b = await bet('LOCKED', { pending: true });
+      const info = vi.spyOn(deps.log, 'info');
       const r = await post(delivery([lockTx(b)]));
       expect(r.json).toMatchObject({ ok: true, inserted: 2, published: 2 });
       const row = await betRow(db(), b.id);
@@ -153,6 +154,20 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
       });
       expect(types(await logOf(db(), b.id))).toEqual(['chain.BetCreated', 'chain.BetAccepted']);
       expect((await lockTxOf(db(), b.lockTx)).stream_seen_at).toEqual(new Date(NOW));
+      // the Streams lane latency is logged once, when the lock is first seen
+      expect(info).toHaveBeenCalledWith(
+        'chain.stream_seen',
+        expect.objectContaining({
+          bet_id: b.id,
+          kind: 'atomic_lock',
+          send_to_stream_ms: expect.any(Number),
+        }),
+      );
+      expect(info).toHaveBeenCalledWith(
+        'chain.delivery',
+        expect.objectContaining({ block_to_webhook_ms: NOW - 1_795_284_425_000 }),
+      );
+      info.mockRestore();
       // the lock row's status is the LockService's (its sweep releases the nonce from it)
       expect((await lockTxOf(db(), b.lockTx)).status).toBe('confirmed');
       const pushes = await outboxOf(db(), b.id);
