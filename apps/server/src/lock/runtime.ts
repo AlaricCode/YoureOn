@@ -19,6 +19,10 @@ export interface Lifecycle {
   refund: RefundService;
   /** Resolves once every background send/confirm started so far has settled (tests). */
   idle(): Promise<void>;
+  /** The send / confirm options of every tx this lifecycle sends (tests shorten them). */
+  readonly sendOptions: SendOptions | undefined;
+  /** Fire-and-forget work tracked like the lifecycle's own (idle() waits for it). */
+  run(name: string, fn: () => Promise<unknown>): void;
   stop(): void;
 }
 
@@ -64,14 +68,19 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
     send: o.send,
     timers: o.timers,
   });
-  const refund = new RefundService({ deps, runtime, inflight, send: o.send });
+  const refund = new RefundService({ deps, runtime, inflight, send: o.send, timers: o.timers });
   return {
     runtime,
     lock,
     payout,
     refund,
     idle: () => inflight.idle(),
-    stop: () => payout.stop(),
+    sendOptions: o.send,
+    run: (name, fn) => inflight.run(name, fn),
+    stop: () => {
+      payout.stop();
+      refund.stop();
+    },
   };
 }
 
