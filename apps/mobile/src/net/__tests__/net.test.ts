@@ -11,6 +11,9 @@ import { ed } from '../../wallet/noble';
 import { createWallet } from '../../wallet/wallet';
 import { DEVICE_SEED_KEY, deviceKeyFromSeed, loadDeviceKey, type DeviceKey } from '../deviceKey';
 import { base64ToBytes, bytesToBase64, bytesToBase64Url, uuidV4 } from '../encoding';
+import { CameraEvidence } from '@youre-on/shared/evidence';
+
+import { createYoApi } from '../api';
 import { buildMultipart } from '../multipart';
 import { createSessionManager, demoSeedFrom, secureSessionStore, SESSION_KEY } from '../session';
 import {
@@ -222,6 +225,36 @@ describe('session + signed client against the fake server', () => {
     expect(w.server.calls.at(-1)!.headers['Content-Type']).toMatch(
       /^multipart\/form-data; boundary=yo-/,
     );
+  });
+
+  it('frames upload: the same parts under the same key are the same bytes (a resend matches)', async () => {
+    const { mgr } = await w.init();
+    await mgr.signup(fields);
+    const api = createYoApi(w.api);
+    const key = '77777777-7777-4777-8777-777777777777';
+    const evidence = CameraEvidence.parse({
+      schema_version: 1,
+      kind: 'camera',
+      bet_id: '11111111-1111-4111-8111-111111111111',
+      attempt_no: 1,
+      clip_sha256: 'ab'.repeat(32),
+      clip_bytes: 10,
+      mime: 'video/quicktime',
+      duration_ms: 5000,
+      recorded_by: 'A',
+      recorded_at: new Date(NOW).toISOString(),
+      frames: Array.from({ length: 8 }, (_, i) => ({
+        index: i,
+        t_ms: i * 100,
+        sha256: sha256Hex(new Uint8Array([i])),
+      })),
+    });
+    const jpegs = Array.from({ length: 8 }, (_, i) => new Uint8Array([i]));
+    for (let i = 0; i < 2; i++) await api.uploadFrames(evidence, jpegs, key).catch(() => undefined);
+    const [a, b] = w.server.calls.filter((c) => c.path.endsWith('/frames'));
+    expect(a!.headers[HDR.idempotencyKey]).toBe(key);
+    expect(b!.headers['Content-Type']).toBe(a!.headers['Content-Type']);
+    expect(sha256Hex(b!.body as Uint8Array)).toBe(sha256Hex(a!.body as Uint8Array));
   });
 
   it('CLOCK_SKEW: re-syncs the clock and resends with the same Idempotency-Key', async () => {

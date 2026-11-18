@@ -56,7 +56,13 @@ import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { palette } from '../ui/tokens';
 import { WalletError } from '../wallet/wallet';
-import { authorizeLock, checkLockPolicy, concede, sendAttempt } from './actions';
+import {
+  authorizeLock,
+  checkLockPolicy,
+  concede,
+  sendAttempt,
+  type PreparedAttempt,
+} from './actions';
 import {
   appReducer,
   initialApp,
@@ -463,6 +469,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   };
 
+  /** Built uploads by Idempotency-Key: the judge cam's retry resends the exact same body. */
+  const preparedUploads = useRef(new Map<string, PreparedAttempt>());
   const sendClip = useCallback(
     async (clip: Clip | null) => {
       const b = appRef.current.activeBetId ? rt.hub.get(appRef.current.activeBetId) : undefined;
@@ -481,6 +489,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           clip,
           idempotencyKey: keyFor(`frames:${b.bet_id}:${b.attempt.attempt_no}`),
         },
+        preparedUploads.current,
       );
     },
     [rt, keyFor],

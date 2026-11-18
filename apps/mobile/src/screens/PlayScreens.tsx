@@ -14,6 +14,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { camRetryAction } from '../attempt/retry';
 import {
   canAppeal,
   canConcede,
@@ -166,6 +167,10 @@ export function JudgeCamScreen({
   const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
   const startedAt = useRef(0);
   const armedFor = useRef<number | null>(null);
+  /** The last recorded clip of this arm, kept so "Try again" can resend it after a failed upload. */
+  const lastClip = useRef<Clip | null>(null);
+  /** A retake counts down on its own clock (go_at is already past). */
+  const manualCountdown = useRef(false);
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) void requestPermission();
@@ -175,6 +180,8 @@ export function JudgeCamScreen({
   useEffect(() => {
     if (!arm || armedFor.current === arm.attemptNo) return;
     armedFor.current = arm.attemptNo;
+    lastClip.current = null;
+    manualCountdown.current = false;
     setFailed(false);
     setCount(Math.min(3, Math.max(0, Math.ceil((arm.goAtMs - Date.now()) / 1000))));
     setPhase('countdown');
@@ -186,9 +193,10 @@ export function JudgeCamScreen({
       setPhase('recording');
       return;
     }
-    const wait = arm
-      ? Math.max(0, Math.min(1000, arm.goAtMs - (count - 1) * 1000 - Date.now()))
-      : 800;
+    const wait =
+      arm && !manualCountdown.current
+        ? Math.max(0, Math.min(1000, arm.goAtMs - (count - 1) * 1000 - Date.now()))
+        : 800;
     const tm = setTimeout(() => setCount((c) => c - 1), wait);
     return () => clearTimeout(tm);
   }, [phase, count, arm]);
@@ -207,6 +215,7 @@ export function JudgeCamScreen({
         const endedAtMs = Date.now();
         if (out?.uri) clip = { uri: out.uri, durationMs: endedAtMs - startedAt.current, endedAtMs };
       }
+      lastClip.current = clip;
       await onSend(clip);
       setPhase('sent');
     } catch {
@@ -214,6 +223,30 @@ export function JudgeCamScreen({
       setPhase('sent');
     }
   }, [onSend]);
+
+  // "Try again": resend the same clip, retake it, or back to standby (../attempt/retry).
+  const retry = useCallback(async () => {
+    const action = camRetryAction({ armed: !!arm, hasClip: lastClip.current !== null });
+    setFailed(false);
+    if (action === 'standby') {
+      setPhase('standby');
+      return;
+    }
+    if (action === 'retake') {
+      manualCountdown.current = true;
+      setCount(3);
+      setPhase('countdown');
+      return;
+    }
+    setPhase('sending');
+    try {
+      await onSend(lastClip.current);
+      setPhase('sent');
+    } catch {
+      setFailed(true);
+      setPhase('sent');
+    }
+  }, [arm, onSend]);
 
   // Start the camera recording on GO; Stop (or max_ms, at most 6 s) ends it.
   useEffect(() => {
@@ -292,7 +325,11 @@ export function JudgeCamScreen({
             }}
           />
         ) : phase === 'sent' && (arm === undefined || failed) ? (
-          <QuietButton label={t(COPY.judgeCam.start)} onPress={() => setPhase('standby')} />
+          <QuietButton
+            testID="cam-retry"
+            label={t(failed && arm ? COPY.ruling.retry : COPY.judgeCam.start)}
+            onPress={() => void retry()}
+          />
         ) : null}
       </Page>
     </Screen>

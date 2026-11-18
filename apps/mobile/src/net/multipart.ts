@@ -35,6 +35,15 @@ export function buildMultipart(
   };
 }
 
+/**
+ * A boundary fixed by a seed (the request's Idempotency-Key), so rebuilding the same parts for a
+ * resend gives the same bytes and body hash. Only [0-9a-z] from the seed; never in a JSON part.
+ */
+export function boundaryFor(seed: string): string {
+  const s = seed.toLowerCase().replace(/[^0-9a-z]/g, '');
+  return s ? `yo-${s}` : defaultBoundary();
+}
+
 function defaultBoundary(): string {
   let s = '';
   for (let i = 0; i < 24; i++) s += Math.floor(Math.random() * 36).toString(36);
