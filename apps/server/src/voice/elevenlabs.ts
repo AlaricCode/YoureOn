@@ -1,6 +1,7 @@
 // Minimal ElevenLabs REST client for the server (FINDINGS §3.10: "Server: plain fetch or
-// @elevenlabs/elevenlabs-js"). Only what the running server needs: the conversation token, and
-// (for src/providers, behind STT_PROVIDER / SFX_PROVIDER) Scribe speech-to-text and Sound Effects.
+// @elevenlabs/elevenlabs-js"). Only what the running server needs: the conversation token,
+// (for src/providers, behind STT_PROVIDER / SFX_PROVIDER) Scribe speech-to-text and Sound Effects,
+// and text-to-speech for the stage's voice (src/voice/tts.ts).
 // `fetch` is injectable so tests mock the HTTP call (no key exists yet: PENDING-KEY).
 //
 // speechToText / soundGeneration are ported from Verdict
@@ -16,6 +17,13 @@ export const EL_TOKEN_TIMEOUT_MS = 3_000;
 export const EL_STT_TIMEOUT_MS = 6_000;
 /** Sound Effects are generated once per cue and cached, off any latency path. */
 export const EL_SFX_TIMEOUT_MS = 30_000;
+/**
+ * Stage TTS clips are generated as their event goes out. The stage waits for the clip and speaks
+ * with the browser's voice once it gives up, so this only bounds a stuck request.
+ */
+export const EL_TTS_TIMEOUT_MS = 10_000;
+/** MP3 every browser decodes (`output_format` query of POST /v1/text-to-speech/{voice_id}). */
+export const EL_TTS_OUTPUT_FORMAT = 'mp3_44100_128';
 /** API-CONTRACT §2.11 (FINDINGS §4 Verification). */
 export const SCRIBE_MODEL_ID = 'scribe_v2';
 
@@ -73,6 +81,17 @@ export interface ElevenLabsMediaClient {
     promptInfluence?: number;
     signal?: AbortSignal;
   }): Promise<Uint8Array>;
+  /**
+   * `POST /v1/text-to-speech/{voice_id}?output_format=…` `{text, model_id}` -> MP3 bytes.
+   * Deadline EL_TTS_TIMEOUT_MS.
+   */
+  textToSpeech(req: {
+    voiceId: string;
+    text: string;
+    modelId: string;
+    outputFormat?: string;
+    signal?: AbortSignal;
+  }): Promise<Uint8Array>;
 }
 
 export function createElevenLabsClient(o: {
@@ -82,6 +101,7 @@ export function createElevenLabsClient(o: {
   timeoutMs?: number;
   sttTimeoutMs?: number;
   sfxTimeoutMs?: number;
+  ttsTimeoutMs?: number;
 }): ElevenLabsClient & ElevenLabsMediaClient {
   const doFetch: FetchLike = o.fetch ?? ((u, i) => fetch(u, i));
   const base = (o.baseUrl ?? ELEVENLABS_API).replace(/\/+$/, '');
@@ -187,6 +207,25 @@ export function createElevenLabsClient(o: {
       const bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.length === 0)
         throw new UpstreamError('error', 'ElevenLabs SFX returned no audio', res.status);
+      return bytes;
+    },
+
+    async textToSpeech(req) {
+      const format = encodeURIComponent(req.outputFormat ?? EL_TTS_OUTPUT_FORMAT);
+      const res = await send(
+        'ElevenLabs TTS',
+        `${base}/v1/text-to-speech/${encodeURIComponent(req.voiceId)}?output_format=${format}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'audio/mpeg' },
+          body: JSON.stringify({ text: req.text, model_id: req.modelId }),
+        },
+        o.ttsTimeoutMs ?? EL_TTS_TIMEOUT_MS,
+        req.signal,
+      );
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.length === 0)
+        throw new UpstreamError('error', 'ElevenLabs TTS returned no audio', res.status);
       return bytes;
     },
   };
