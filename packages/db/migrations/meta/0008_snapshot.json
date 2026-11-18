@@ -1,0 +1,5122 @@
+{
+  "id": "dd4b34f7-e8bf-47fc-8f99-b9330ed89ae2",
+  "prevId": "6c494bc2-2460-4f13-bb7e-6f10e6cf0283",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.api_sessions": {
+      "name": "api_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "token_sha256": {
+          "name": "token_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "room_id": {
+          "name": "room_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{app}'::text[]"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now() + interval '7 days'"
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "api_sessions_device_idx": {
+          "name": "api_sessions_device_idx",
+          "columns": [
+            {
+              "expression": "device_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "revoked_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "api_sessions_user_id_users_id_fk": {
+          "name": "api_sessions_user_id_users_id_fk",
+          "tableFrom": "api_sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "api_sessions_device_id_devices_id_fk": {
+          "name": "api_sessions_device_id_devices_id_fk",
+          "tableFrom": "api_sessions",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "api_sessions_room_id_rooms_id_fk": {
+          "name": "api_sessions_room_id_rooms_id_fk",
+          "tableFrom": "api_sessions",
+          "tableTo": "rooms",
+          "columnsFrom": [
+            "room_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "api_sessions_token_sha256_uq": {
+          "name": "api_sessions_token_sha256_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "token_sha256"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "api_sessions_token_sha256_fmt": {
+          "name": "api_sessions_token_sha256_fmt",
+          "value": "token_sha256 ~ '^[0-9a-f]{64}$'"
+        },
+        "api_sessions_scopes_known": {
+          "name": "api_sessions_scopes_known",
+          "value": "scopes <@ ARRAY['app','stage','demo']::text[]"
+        },
+        "api_sessions_app_scope": {
+          "name": "api_sessions_app_scope",
+          "value": "('app' = ANY(scopes)) = (user_id IS NOT NULL AND device_id IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.devices": {
+      "name": "devices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "platform",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ios'"
+        },
+        "push_provider": {
+          "name": "push_provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'expo'"
+        },
+        "push_token": {
+          "name": "push_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "device_pubkey": {
+          "name": "device_pubkey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "role": {
+          "name": "role",
+          "type": "device_role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'phone'"
+        },
+        "judge_room_id": {
+          "name": "judge_room_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "app_version": {
+          "name": "app_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "devices_push_token_uq": {
+          "name": "devices_push_token_uq",
+          "columns": [
+            {
+              "expression": "push_token",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "push_token IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "devices_device_pubkey_uq": {
+          "name": "devices_device_pubkey_uq",
+          "columns": [
+            {
+              "expression": "device_pubkey",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "device_pubkey IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "devices_user_idx": {
+          "name": "devices_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "revoked_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "devices_user_id_users_id_fk": {
+          "name": "devices_user_id_users_id_fk",
+          "tableFrom": "devices",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "devices_judge_room_id_rooms_id_fk": {
+          "name": "devices_judge_room_id_rooms_id_fk",
+          "tableFrom": "devices",
+          "tableTo": "rooms",
+          "columnsFrom": [
+            "judge_room_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "devices_push_provider": {
+          "name": "devices_push_provider",
+          "value": "push_provider IN ('expo','apns')"
+        },
+        "devices_judge_room_role": {
+          "name": "devices_judge_room_role",
+          "value": "judge_room_id IS NULL OR role = 'judge_cam'"
+        },
+        "devices_device_pubkey_fmt": {
+          "name": "devices_device_pubkey_fmt",
+          "value": "device_pubkey ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "avatar_key": {
+          "name": "avatar_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wallet_pubkey": {
+          "name": "wallet_pubkey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "wallet_kind": {
+          "name": "wallet_kind",
+          "type": "wallet_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'device_keypair'"
+        },
+        "age_attested_18plus": {
+          "name": "age_attested_18plus",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "attested_at": {
+          "name": "attested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_demo": {
+          "name": "is_demo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "demo_seed_ciphertext": {
+          "name": "demo_seed_ciphertext",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "demo_seed_nonce": {
+          "name": "demo_seed_nonce",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "users_wallet_pubkey_uq": {
+          "name": "users_wallet_pubkey_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "wallet_pubkey"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "users_display_name_len": {
+          "name": "users_display_name_len",
+          "value": "char_length(display_name) BETWEEN 1 AND 32"
+        },
+        "users_wallet_pubkey_fmt": {
+          "name": "users_wallet_pubkey_fmt",
+          "value": "wallet_pubkey ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "users_attested_at": {
+          "name": "users_attested_at",
+          "value": "NOT age_attested_18plus OR attested_at IS NOT NULL"
+        },
+        "users_wallet_required": {
+          "name": "users_wallet_required",
+          "value": "is_demo OR deleted_at IS NOT NULL OR wallet_pubkey IS NOT NULL"
+        },
+        "users_demo_seed_demo_only": {
+          "name": "users_demo_seed_demo_only",
+          "value": "is_demo OR demo_seed_ciphertext IS NULL"
+        },
+        "users_demo_seed_pair": {
+          "name": "users_demo_seed_pair",
+          "value": "(demo_seed_ciphertext IS NULL) = (demo_seed_nonce IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.room_members": {
+      "name": "room_members",
+      "schema": "",
+      "columns": {
+        "room_id": {
+          "name": "room_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "joined_via": {
+          "name": "joined_via",
+          "type": "join_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "joined_at": {
+          "name": "joined_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "last_seen_at": {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "left_at": {
+          "name": "left_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "room_members_user_idx": {
+          "name": "room_members_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "left_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "room_members_room_id_rooms_id_fk": {
+          "name": "room_members_room_id_rooms_id_fk",
+          "tableFrom": "room_members",
+          "tableTo": "rooms",
+          "columnsFrom": [
+            "room_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "room_members_user_id_users_id_fk": {
+          "name": "room_members_user_id_users_id_fk",
+          "tableFrom": "room_members",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "room_members_pk": {
+          "name": "room_members_pk",
+          "columns": [
+            "room_id",
+            "user_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.rooms": {
+      "name": "rooms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "room_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'session'"
+        },
+        "join_method": {
+          "name": "join_method",
+          "type": "join_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'code'"
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_demo": {
+          "name": "is_demo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now() + interval '12 hours'"
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "rooms_active_idx": {
+          "name": "rooms_active_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "closed_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "rooms_created_by_users_id_fk": {
+          "name": "rooms_created_by_users_id_fk",
+          "tableFrom": "rooms",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "rooms_code_uq": {
+          "name": "rooms_code_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "rooms_code_fmt": {
+          "name": "rooms_code_fmt",
+          "value": "code ~ '^[A-HJ-NP-Z2-9]{6}$'"
+        },
+        "rooms_expiry": {
+          "name": "rooms_expiry",
+          "value": "expires_at > created_at AND expires_at <= created_at + interval '14 days'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.bet_events": {
+      "name": "bet_events",
+      "schema": "",
+      "columns": {
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seq": {
+          "name": "seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "envelope": {
+          "name": "envelope",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chain_event_id": {
+          "name": "chain_event_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "bet_events_chain_uq": {
+          "name": "bet_events_chain_uq",
+          "columns": [
+            {
+              "expression": "chain_event_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "chain_event_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "bet_events_bet_id_bets_id_fk": {
+          "name": "bet_events_bet_id_bets_id_fk",
+          "tableFrom": "bet_events",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "bet_events_chain_event_id_chain_events_id_fk": {
+          "name": "bet_events_chain_event_id_chain_events_id_fk",
+          "tableFrom": "bet_events",
+          "tableTo": "chain_events",
+          "columnsFrom": [
+            "chain_event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "bet_events_pk": {
+          "name": "bet_events_pk",
+          "columns": [
+            "bet_id",
+            "seq"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "bet_events_source": {
+          "name": "bet_events_source",
+          "value": "source IN ('server','chain')"
+        },
+        "bet_events_source_type": {
+          "name": "bet_events_source_type",
+          "value": "(type LIKE 'chain.%') = (source = 'chain')"
+        },
+        "bet_events_seq_positive": {
+          "name": "bet_events_seq_positive",
+          "value": "seq >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.bets": {
+      "name": "bets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "room_id": {
+          "name": "room_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "party_a_id": {
+          "name": "party_a_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "party_b_id": {
+          "name": "party_b_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "party_a_wallet": {
+          "name": "party_a_wallet",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "party_b_wallet": {
+          "name": "party_b_wallet",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lock_mode": {
+          "name": "lock_mode",
+          "type": "lock_mode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'atomic'"
+        },
+        "challenge_method": {
+          "name": "challenge_method",
+          "type": "challenge_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'face'"
+        },
+        "supersedes_bet_id": {
+          "name": "supersedes_bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_source": {
+          "name": "evidence_source",
+          "type": "evidence_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "bet_state",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'DRAFTING'"
+        },
+        "end_reason": {
+          "name": "end_reason",
+          "type": "bet_end_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refusal_category": {
+          "name": "refusal_category",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "onchain_status": {
+          "name": "onchain_status",
+          "type": "onchain_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'none'"
+        },
+        "onchain_pending": {
+          "name": "onchain_pending",
+          "type": "onchain_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pending_sig": {
+          "name": "pending_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "mint": {
+          "name": "mint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stake_a": {
+          "name": "stake_a",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stake_b": {
+          "name": "stake_b",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terms_hash": {
+          "name": "terms_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bet_pda": {
+          "name": "bet_pda",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vault": {
+          "name": "vault",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "gemini_market_id": {
+          "name": "gemini_market_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "a_position": {
+          "name": "a_position",
+          "type": "market_side",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odds_p": {
+          "name": "odds_p",
+          "type": "numeric(3, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "odds_source": {
+          "name": "odds_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quoted_at": {
+          "name": "quoted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pricing_snapshot_id": {
+          "name": "pricing_snapshot_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "a_authorized_at": {
+          "name": "a_authorized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "b_authorized_at": {
+          "name": "b_authorized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "a_authorization_method": {
+          "name": "a_authorization_method",
+          "type": "authorization_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "b_authorization_method": {
+          "name": "b_authorization_method",
+          "type": "authorization_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "a_authorized_device_at": {
+          "name": "a_authorized_device_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "b_authorized_device_at": {
+          "name": "b_authorized_device_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "redo_count": {
+          "name": "redo_count",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "accept_deadline": {
+          "name": "accept_deadline",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolve_deadline": {
+          "name": "resolve_deadline",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appeal_deadline": {
+          "name": "appeal_deadline",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appeal_resolve_deadline": {
+          "name": "appeal_resolve_deadline",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appealed_at": {
+          "name": "appealed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ruling_hash": {
+          "name": "ruling_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appeal_ruling_hash": {
+          "name": "appeal_ruling_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "onchain_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payout_a": {
+          "name": "payout_a",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payout_b": {
+          "name": "payout_b",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payout_via": {
+          "name": "payout_via",
+          "type": "payout_via",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "create_sig": {
+          "name": "create_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accept_sig": {
+          "name": "accept_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolve_sig": {
+          "name": "resolve_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appeal_sig": {
+          "name": "appeal_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payout_sig": {
+          "name": "payout_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "close_sig": {
+          "name": "close_sig",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "terms_final_at": {
+          "name": "terms_final_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "locked_at": {
+          "name": "locked_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_seq": {
+          "name": "last_seq",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "is_seed": {
+          "name": "is_seed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        }
+      },
+      "indexes": {
+        "bets_a_idx": {
+          "name": "bets_a_idx",
+          "columns": [
+            {
+              "expression": "party_a_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_b_idx": {
+          "name": "bets_b_idx",
+          "columns": [
+            {
+              "expression": "party_b_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_room_idx": {
+          "name": "bets_room_idx",
+          "columns": [
+            {
+              "expression": "room_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_active_idx": {
+          "name": "bets_active_idx",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state < 'PAID'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_pending_idx": {
+          "name": "bets_pending_idx",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "onchain_pending IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_market_idx": {
+          "name": "bets_market_idx",
+          "columns": [
+            {
+              "expression": "gemini_market_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "gemini_market_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_h2h_idx": {
+          "name": "bets_h2h_idx",
+          "columns": [
+            {
+              "expression": "party_a_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "party_b_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "onchain_status = 'settled'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bets_h2h_rev_idx": {
+          "name": "bets_h2h_rev_idx",
+          "columns": [
+            {
+              "expression": "party_b_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "party_a_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "onchain_status = 'settled'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "bets_room_id_rooms_id_fk": {
+          "name": "bets_room_id_rooms_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "rooms",
+          "columnsFrom": [
+            "room_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "bets_party_a_id_users_id_fk": {
+          "name": "bets_party_a_id_users_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "party_a_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "bets_party_b_id_users_id_fk": {
+          "name": "bets_party_b_id_users_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "party_b_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "bets_supersedes_bet_id_bets_id_fk": {
+          "name": "bets_supersedes_bet_id_bets_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "supersedes_bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "bets_gemini_market_id_gemini_markets_id_fk": {
+          "name": "bets_gemini_market_id_gemini_markets_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "gemini_markets",
+          "columnsFrom": [
+            "gemini_market_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "bets_pricing_snapshot_id_market_snapshots_id_fk": {
+          "name": "bets_pricing_snapshot_id_market_snapshots_id_fk",
+          "tableFrom": "bets",
+          "tableTo": "market_snapshots",
+          "columnsFrom": [
+            "pricing_snapshot_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "bets_bet_pda_uq": {
+          "name": "bets_bet_pda_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "bet_pda"
+          ]
+        },
+        "bets_vault_uq": {
+          "name": "bets_vault_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "vault"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "bets_distinct_parties": {
+          "name": "bets_distinct_parties",
+          "value": "party_a_id <> party_b_id"
+        },
+        "bets_stake_a_cap": {
+          "name": "bets_stake_a_cap",
+          "value": "stake_a IS NULL OR stake_a BETWEEN 1 AND 20000000"
+        },
+        "bets_stake_b_cap": {
+          "name": "bets_stake_b_cap",
+          "value": "stake_b IS NULL OR stake_b BETWEEN 1 AND 20000000"
+        },
+        "bets_binding_set": {
+          "name": "bets_binding_set",
+          "value": "state < 'AWAITING_AUTHORIZATIONS' OR state IN ('CANCELLED','EXPIRED')\n        OR (terms_hash IS NOT NULL AND stake_a IS NOT NULL AND stake_b IS NOT NULL AND evidence_source IS NOT NULL)"
+        },
+        "bets_onchain_binding": {
+          "name": "bets_onchain_binding",
+          "value": "onchain_status = 'none'\n        OR (terms_hash IS NOT NULL AND stake_a IS NOT NULL AND stake_b IS NOT NULL)"
+        },
+        "bets_wallet_snapshot": {
+          "name": "bets_wallet_snapshot",
+          "value": "is_seed OR onchain_status = 'none' OR party_a_wallet IS NOT NULL"
+        },
+        "bets_auth_pairs": {
+          "name": "bets_auth_pairs",
+          "value": "(a_authorized_at IS NULL) = (a_authorization_method IS NULL)\n        AND (b_authorized_at IS NULL) = (b_authorization_method IS NULL)"
+        },
+        "bets_locked_authorized": {
+          "name": "bets_locked_authorized",
+          "value": "is_seed OR onchain_status IN ('none','open','cancelled')\n        OR (onchain_status = 'refunded' AND accept_sig IS NULL)\n        OR (a_authorized_at IS NOT NULL AND b_authorized_at IS NOT NULL)"
+        },
+        "bets_end_reason": {
+          "name": "bets_end_reason",
+          "value": "(state IN ('CANCELLED','EXPIRED')) = (end_reason IS NOT NULL)"
+        },
+        "bets_refusal": {
+          "name": "bets_refusal",
+          "value": "(end_reason IS NOT DISTINCT FROM 'refused') = (refusal_category IS NOT NULL)"
+        },
+        "bets_pending_pair": {
+          "name": "bets_pending_pair",
+          "value": "(onchain_pending IS NULL) = (pending_sig IS NULL)"
+        },
+        "bets_terminal_sig": {
+          "name": "bets_terminal_sig",
+          "value": "is_seed OR onchain_status < 'settled' OR payout_sig IS NOT NULL"
+        },
+        "bets_payout_rule": {
+          "name": "bets_payout_rule",
+          "value": "onchain_status < 'settled' OR (\n        outcome IS NOT NULL AND payout_a IS NOT NULL AND payout_b IS NOT NULL\n        AND CASE onchain_status\n          WHEN 'cancelled' THEN payout_b = 0 AND payout_a >= stake_a\n          WHEN 'refunded'  THEN (payout_b = 0 AND payout_a >= stake_a)\n                             OR (payout_a = stake_a AND payout_b >= stake_b)\n          ELSE payout_a + payout_b >= stake_a + stake_b AND CASE outcome\n            WHEN 'party_a' THEN payout_b = 0\n            WHEN 'party_b' THEN payout_a = 0\n            WHEN 'refund'  THEN payout_a = stake_a\n            WHEN 'split'   THEN payout_a = (payout_a + payout_b) / 2\n          END\n        END)"
+        },
+        "bets_gemini_market": {
+          "name": "bets_gemini_market",
+          "value": "evidence_source IS DISTINCT FROM 'gemini'\n        OR (gemini_market_id IS NOT NULL AND a_position IS NOT NULL\n            AND outcome IS DISTINCT FROM 'split')"
+        },
+        "bets_redo_cap": {
+          "name": "bets_redo_cap",
+          "value": "redo_count BETWEEN 0 AND 3"
+        },
+        "bets_odds_source": {
+          "name": "bets_odds_source",
+          "value": "odds_source IS NULL OR odds_source IN ('mid','last_in_spread')"
+        },
+        "bets_odds_p_range": {
+          "name": "bets_odds_p_range",
+          "value": "odds_p IS NULL OR odds_p BETWEEN 0 AND 1"
+        },
+        "bets_payout_nonneg": {
+          "name": "bets_payout_nonneg",
+          "value": "(payout_a IS NULL OR payout_a >= 0) AND (payout_b IS NULL OR payout_b >= 0)"
+        },
+        "bets_party_a_wallet_fmt": {
+          "name": "bets_party_a_wallet_fmt",
+          "value": "party_a_wallet ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "bets_party_b_wallet_fmt": {
+          "name": "bets_party_b_wallet_fmt",
+          "value": "party_b_wallet ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "bets_mint_fmt": {
+          "name": "bets_mint_fmt",
+          "value": "mint ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "bets_bet_pda_fmt": {
+          "name": "bets_bet_pda_fmt",
+          "value": "bet_pda ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "bets_vault_fmt": {
+          "name": "bets_vault_fmt",
+          "value": "vault ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "bets_terms_hash_fmt": {
+          "name": "bets_terms_hash_fmt",
+          "value": "terms_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "bets_evidence_hash_fmt": {
+          "name": "bets_evidence_hash_fmt",
+          "value": "evidence_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "bets_ruling_hash_fmt": {
+          "name": "bets_ruling_hash_fmt",
+          "value": "ruling_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "bets_appeal_ruling_hash_fmt": {
+          "name": "bets_appeal_ruling_hash_fmt",
+          "value": "appeal_ruling_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "bets_pending_sig_fmt": {
+          "name": "bets_pending_sig_fmt",
+          "value": "pending_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "bets_create_sig_fmt": {
+          "name": "bets_create_sig_fmt",
+          "value": "create_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "bets_accept_sig_fmt": {
+          "name": "bets_accept_sig_fmt",
+          "value": "accept_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "bets_resolve_sig_fmt": {
+          "name": "bets_resolve_sig_fmt",
+          "value": "resolve_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "bets_appeal_sig_fmt": {
+          "name": "bets_appeal_sig_fmt",
+          "value": "appeal_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "bets_payout_sig_fmt": {
+          "name": "bets_payout_sig_fmt",
+          "value": "payout_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "bets_close_sig_fmt": {
+          "name": "bets_close_sig_fmt",
+          "value": "close_sig ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.audit_log": {
+      "name": "audit_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "audit_log_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "at": {
+          "name": "at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "actor_kind": {
+          "name": "actor_kind",
+          "type": "actor_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_user_id": {
+          "name": "actor_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject_user_id": {
+          "name": "subject_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "details": {
+          "name": "details",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        }
+      },
+      "indexes": {
+        "audit_bet_idx": {
+          "name": "audit_bet_idx",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "bet_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "audit_subject_idx": {
+          "name": "audit_subject_idx",
+          "columns": [
+            {
+              "expression": "subject_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "subject_user_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.voice_sessions": {
+      "name": "voice_sessions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "purpose": {
+          "name": "purpose",
+          "type": "voice_purpose",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "el_agent_id": {
+          "name": "el_agent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "el_conversation_id": {
+          "name": "el_conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "session_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_audio_ms": {
+          "name": "first_audio_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "transcript_key": {
+          "name": "transcript_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "transcript_sha256": {
+          "name": "transcript_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "voice_sessions_bet_idx": {
+          "name": "voice_sessions_bet_idx",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "voice_sessions_bet_id_bets_id_fk": {
+          "name": "voice_sessions_bet_id_bets_id_fk",
+          "tableFrom": "voice_sessions",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "voice_sessions_user_id_users_id_fk": {
+          "name": "voice_sessions_user_id_users_id_fk",
+          "tableFrom": "voice_sessions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "voice_sessions_device_id_devices_id_fk": {
+          "name": "voice_sessions_device_id_devices_id_fk",
+          "tableFrom": "voice_sessions",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "voice_sessions_el_conversation_id_uq": {
+          "name": "voice_sessions_el_conversation_id_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "el_conversation_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "voice_sessions_bet_bound": {
+          "name": "voice_sessions_bet_bound",
+          "value": "bet_id IS NOT NULL OR status = 'active'"
+        },
+        "voice_sessions_transcript_sha256_fmt": {
+          "name": "voice_sessions_transcript_sha256_fmt",
+          "value": "transcript_sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.outbox": {
+      "name": "outbox",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "outbox_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "recipient_user_id": {
+          "name": "recipient_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "outbox_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "provider_ticket_id": {
+          "name": "provider_ticket_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error": {
+          "name": "last_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "outbox_due_idx": {
+          "name": "outbox_due_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status = 'pending'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "outbox_recipient_user_id_users_id_fk": {
+          "name": "outbox_recipient_user_id_users_id_fk",
+          "tableFrom": "outbox",
+          "tableTo": "users",
+          "columnsFrom": [
+            "recipient_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "outbox_bet_id_bets_id_fk": {
+          "name": "outbox_bet_id_bets_id_fk",
+          "tableFrom": "outbox",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "outbox_dedupe_key_uq": {
+          "name": "outbox_dedupe_key_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "dedupe_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.chain_events": {
+      "name": "chain_events",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "chain_events_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "signature": {
+          "name": "signature",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outer_ix": {
+          "name": "outer_ix",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "inner_ix": {
+          "name": "inner_ix",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slot": {
+          "name": "slot",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "block_height": {
+          "name": "block_height",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tx_index": {
+          "name": "tx_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "block_time": {
+          "name": "block_time",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "commitment": {
+          "name": "commitment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'confirmed'"
+        },
+        "program_id": {
+          "name": "program_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_name": {
+          "name": "event_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "raw_b64": {
+          "name": "raw_b64",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "chain_event_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'stream'"
+        },
+        "delivery_id": {
+          "name": "delivery_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "applied_at": {
+          "name": "applied_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "apply_error": {
+          "name": "apply_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finalized_at": {
+          "name": "finalized_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "chain_events_dedupe_uq": {
+          "name": "chain_events_dedupe_uq",
+          "columns": [
+            {
+              "expression": "signature",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "outer_ix",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "inner_ix",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chain_events_bet_idx": {
+          "name": "chain_events_bet_idx",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "received_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chain_events_unapplied": {
+          "name": "chain_events_unapplied",
+          "columns": [
+            {
+              "expression": "received_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "applied_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chain_events_recent": {
+          "name": "chain_events_recent",
+          "columns": [
+            {
+              "expression": "received_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "chain_events_commitment": {
+          "name": "chain_events_commitment",
+          "value": "commitment IN ('confirmed','finalized')"
+        },
+        "chain_events_ix_nonneg": {
+          "name": "chain_events_ix_nonneg",
+          "value": "outer_ix >= 0 AND inner_ix >= 0"
+        },
+        "chain_events_signature_fmt": {
+          "name": "chain_events_signature_fmt",
+          "value": "signature ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "chain_events_program_id_fmt": {
+          "name": "chain_events_program_id_fmt",
+          "value": "program_id ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.bet_terms_versions": {
+      "name": "bet_terms_versions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "drafted_by": {
+          "name": "drafted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'judge'"
+        },
+        "source_tool": {
+          "name": "source_tool",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "canonical_json": {
+          "name": "canonical_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "terms": {
+          "name": "terms",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "generated": {
+            "as": "canonical_json::jsonb",
+            "type": "stored"
+          }
+        },
+        "terms_hash": {
+          "name": "terms_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_final": {
+          "name": "is_final",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "bet_terms_versions_bet_version_uq": {
+          "name": "bet_terms_versions_bet_version_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bet_terms_versions_final_uq": {
+          "name": "bet_terms_versions_final_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "is_final",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "bet_terms_versions_bet_id_bets_id_fk": {
+          "name": "bet_terms_versions_bet_id_bets_id_fk",
+          "tableFrom": "bet_terms_versions",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "bet_terms_versions_version_pos": {
+          "name": "bet_terms_versions_version_pos",
+          "value": "version >= 1"
+        },
+        "bet_terms_versions_drafted_by": {
+          "name": "bet_terms_versions_drafted_by",
+          "value": "drafted_by IN ('judge','party_a','party_b')"
+        },
+        "bet_terms_versions_hash": {
+          "name": "bet_terms_versions_hash",
+          "value": "terms_hash = encode(sha256(convert_to(canonical_json, 'UTF8')), 'hex')"
+        },
+        "bet_terms_versions_terms_hash_fmt": {
+          "name": "bet_terms_versions_terms_hash_fmt",
+          "value": "terms_hash ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.chain_txs": {
+      "name": "chain_txs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "tx_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bundled_close": {
+          "name": "bundled_close",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "signer_role": {
+          "name": "signer_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_b64": {
+          "name": "message_b64",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "message_sha256": {
+          "name": "message_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nonce_account": {
+          "name": "nonce_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "nonce_value": {
+          "name": "nonce_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "a_signature": {
+          "name": "a_signature",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "b_signature": {
+          "name": "b_signature",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "a_signed_at": {
+          "name": "a_signed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "b_signed_at": {
+          "name": "b_signed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_signer": {
+          "name": "first_signer",
+          "type": "party",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_by_tx_id": {
+          "name": "revoked_by_tx_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "simulated_cu": {
+          "name": "simulated_cu",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cu_limit": {
+          "name": "cu_limit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "signature": {
+          "name": "signature",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expected_status": {
+          "name": "expected_status",
+          "type": "onchain_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "tx_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'built'"
+        },
+        "last_valid_block_height": {
+          "name": "last_valid_block_height",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "err": {
+          "name": "err",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "built_at": {
+          "name": "built_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rpc_processed_at": {
+          "name": "rpc_processed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rpc_confirmed_at": {
+          "name": "rpc_confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stream_seen_at": {
+          "name": "stream_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "chain_txs_bet_idx": {
+          "name": "chain_txs_bet_idx",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "built_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chain_txs_inflight_uq": {
+          "name": "chain_txs_inflight_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status IN ('built','signed','sent')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chain_txs_lock_nonce_uq": {
+          "name": "chain_txs_lock_nonce_uq",
+          "columns": [
+            {
+              "expression": "nonce_account",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "nonce_value",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "kind = 'atomic_lock'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "chain_txs_open_idx": {
+          "name": "chain_txs_open_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status IN ('built','signed','sent')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "chain_txs_bet_id_bets_id_fk": {
+          "name": "chain_txs_bet_id_bets_id_fk",
+          "tableFrom": "chain_txs",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "chain_txs_revoked_by_tx_id_chain_txs_id_fk": {
+          "name": "chain_txs_revoked_by_tx_id_chain_txs_id_fk",
+          "tableFrom": "chain_txs",
+          "tableTo": "chain_txs",
+          "columnsFrom": [
+            "revoked_by_tx_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "chain_txs_signature_uq": {
+          "name": "chain_txs_signature_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "signature"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "chain_txs_signer_role": {
+          "name": "chain_txs_signer_role",
+          "value": "signer_role IN ('party_a','party_b','both_parties','judge','appeal','fee_payer','crank')"
+        },
+        "chain_txs_message_sha": {
+          "name": "chain_txs_message_sha",
+          "value": "message_b64 IS NULL OR message_sha256 = encode(sha256(decode(message_b64, 'base64')), 'hex')"
+        },
+        "chain_txs_lock_shape": {
+          "name": "chain_txs_lock_shape",
+          "value": "kind <> 'atomic_lock' OR (message_b64 IS NOT NULL AND nonce_account IS NOT NULL\n        AND nonce_value IS NOT NULL AND expires_at IS NOT NULL AND signer_role = 'both_parties')"
+        },
+        "chain_txs_lock_fully_signed": {
+          "name": "chain_txs_lock_fully_signed",
+          "value": "kind <> 'atomic_lock' OR status NOT IN ('sent','confirmed')\n        OR (a_signature IS NOT NULL AND b_signature IS NOT NULL)"
+        },
+        "chain_txs_nonce_advance_shape": {
+          "name": "chain_txs_nonce_advance_shape",
+          "value": "kind <> 'nonce_advance' OR (nonce_account IS NOT NULL AND signer_role = 'fee_payer')"
+        },
+        "chain_txs_revoked_kind": {
+          "name": "chain_txs_revoked_kind",
+          "value": "status <> 'revoked' OR kind = 'atomic_lock'"
+        },
+        "chain_txs_revoked_by": {
+          "name": "chain_txs_revoked_by",
+          "value": "(status = 'revoked') = (revoked_by_tx_id IS NOT NULL)"
+        },
+        "chain_txs_first_signer": {
+          "name": "chain_txs_first_signer",
+          "value": "(first_signer IS NULL) = (a_signature IS NULL AND b_signature IS NULL)"
+        },
+        "chain_txs_cu": {
+          "name": "chain_txs_cu",
+          "value": "cu_limit IS NULL OR simulated_cu IS NULL OR cu_limit >= simulated_cu"
+        },
+        "chain_txs_message_sha256_fmt": {
+          "name": "chain_txs_message_sha256_fmt",
+          "value": "message_sha256 ~ '^[0-9a-f]{64}$'"
+        },
+        "chain_txs_nonce_account_fmt": {
+          "name": "chain_txs_nonce_account_fmt",
+          "value": "nonce_account ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "chain_txs_a_signature_fmt": {
+          "name": "chain_txs_a_signature_fmt",
+          "value": "a_signature ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "chain_txs_b_signature_fmt": {
+          "name": "chain_txs_b_signature_fmt",
+          "value": "b_signature ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        },
+        "chain_txs_signature_fmt": {
+          "name": "chain_txs_signature_fmt",
+          "value": "signature ~ '^[1-9A-HJ-NP-Za-km-z]{64,88}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.nonce_pool": {
+      "name": "nonce_pool",
+      "schema": "",
+      "columns": {
+        "seed_index": {
+          "name": "seed_index",
+          "type": "smallint",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "nonce_account": {
+          "name": "nonce_account",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "authority": {
+          "name": "authority",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "nonce_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'free'"
+        },
+        "nonce_value": {
+          "name": "nonce_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "value_read_at": {
+          "name": "value_read_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "leased_bet_id": {
+          "name": "leased_bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "leased_tx_id": {
+          "name": "leased_tx_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "leased_at": {
+          "name": "leased_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "advance_tx_id": {
+          "name": "advance_tx_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_advanced_at": {
+          "name": "last_advanced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "uses": {
+          "name": "uses",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "failures": {
+          "name": "failures",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "nonce_pool_leased_bet_uq": {
+          "name": "nonce_pool_leased_bet_uq",
+          "columns": [
+            {
+              "expression": "leased_bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "leased_bet_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "nonce_pool_leased_bet_id_bets_id_fk": {
+          "name": "nonce_pool_leased_bet_id_bets_id_fk",
+          "tableFrom": "nonce_pool",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "leased_bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "nonce_pool_leased_tx_id_chain_txs_id_fk": {
+          "name": "nonce_pool_leased_tx_id_chain_txs_id_fk",
+          "tableFrom": "nonce_pool",
+          "tableTo": "chain_txs",
+          "columnsFrom": [
+            "leased_tx_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "nonce_pool_advance_tx_id_chain_txs_id_fk": {
+          "name": "nonce_pool_advance_tx_id_chain_txs_id_fk",
+          "tableFrom": "nonce_pool",
+          "tableTo": "chain_txs",
+          "columnsFrom": [
+            "advance_tx_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "nonce_pool_nonce_account_uq": {
+          "name": "nonce_pool_nonce_account_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "nonce_account"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "nonce_pool_seed_range": {
+          "name": "nonce_pool_seed_range",
+          "value": "seed_index BETWEEN 0 AND 15"
+        },
+        "nonce_pool_leased": {
+          "name": "nonce_pool_leased",
+          "value": "(status = 'leased') = (leased_bet_id IS NOT NULL AND leased_tx_id IS NOT NULL)"
+        },
+        "nonce_pool_advancing": {
+          "name": "nonce_pool_advancing",
+          "value": "(status = 'advancing') = (advance_tx_id IS NOT NULL)"
+        },
+        "nonce_pool_retired": {
+          "name": "nonce_pool_retired",
+          "value": "(status = 'retired') = (retired_at IS NOT NULL)"
+        },
+        "nonce_pool_free_value": {
+          "name": "nonce_pool_free_value",
+          "value": "status <> 'free' OR nonce_value IS NOT NULL"
+        },
+        "nonce_pool_nonce_account_fmt": {
+          "name": "nonce_pool_nonce_account_fmt",
+          "value": "nonce_account ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        },
+        "nonce_pool_authority_fmt": {
+          "name": "nonce_pool_authority_fmt",
+          "value": "authority ~ '^[1-9A-HJ-NP-Za-km-z]{32,44}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.appeal_votes": {
+      "name": "appeal_votes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "appeal_id": {
+          "name": "appeal_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "seat": {
+          "name": "seat",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider": {
+          "name": "provider",
+          "type": "panel_provider",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "vote_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "ruling_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "counted_as": {
+          "name": "counted_as",
+          "type": "vote_counted_as",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "numeric(3, 2)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "output_sha256": {
+          "name": "output_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "appeal_votes_seat_uq": {
+          "name": "appeal_votes_seat_uq",
+          "columns": [
+            {
+              "expression": "appeal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seat",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "appeal_votes_provider_uq": {
+          "name": "appeal_votes_provider_uq",
+          "columns": [
+            {
+              "expression": "appeal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "appeal_votes_appeal_id_appeals_id_fk": {
+          "name": "appeal_votes_appeal_id_appeals_id_fk",
+          "tableFrom": "appeal_votes",
+          "tableTo": "appeals",
+          "columnsFrom": [
+            "appeal_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "appeal_votes_seat": {
+          "name": "appeal_votes_seat",
+          "value": "seat BETWEEN 0 AND 2"
+        },
+        "appeal_votes_outcome": {
+          "name": "appeal_votes_outcome",
+          "value": "outcome IN ('A_WINS','B_WINS','REDO')"
+        },
+        "appeal_votes_confidence": {
+          "name": "appeal_votes_confidence",
+          "value": "confidence BETWEEN 0 AND 1"
+        },
+        "appeal_votes_reason_len": {
+          "name": "appeal_votes_reason_len",
+          "value": "char_length(reason) <= 280"
+        },
+        "appeal_votes_failed": {
+          "name": "appeal_votes_failed",
+          "value": "status = 'ok' OR (outcome = 'REDO' AND confidence = 0 AND reason = ''\n        AND counted_as = 'ABSTAIN')"
+        },
+        "appeal_votes_latency": {
+          "name": "appeal_votes_latency",
+          "value": "latency_ms IS NULL OR latency_ms >= 0"
+        },
+        "appeal_votes_output_sha256_fmt": {
+          "name": "appeal_votes_output_sha256_fmt",
+          "value": "output_sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.appeals": {
+      "name": "appeals",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "appellant_user_id": {
+          "name": "appellant_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "appellant_party": {
+          "name": "appellant_party",
+          "type": "party",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "appealed_ruling_id": {
+          "name": "appealed_ruling_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "original_outcome": {
+          "name": "original_outcome",
+          "type": "ruling_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "appeal_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'filing'"
+        },
+        "filed_at": {
+          "name": "filed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "decided_at": {
+          "name": "decided_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "final_outcome": {
+          "name": "final_outcome",
+          "type": "ruling_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "decided_by": {
+          "name": "decided_by",
+          "type": "appeal_decided_by",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "flipped": {
+          "name": "flipped",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "result_ruling_id": {
+          "name": "result_ruling_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "appeals_bet_uq": {
+          "name": "appeals_bet_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "appeals_bet_id_bets_id_fk": {
+          "name": "appeals_bet_id_bets_id_fk",
+          "tableFrom": "appeals",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "appeals_appellant_user_id_users_id_fk": {
+          "name": "appeals_appellant_user_id_users_id_fk",
+          "tableFrom": "appeals",
+          "tableTo": "users",
+          "columnsFrom": [
+            "appellant_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "appeals_appealed_ruling_id_rulings_id_fk": {
+          "name": "appeals_appealed_ruling_id_rulings_id_fk",
+          "tableFrom": "appeals",
+          "tableTo": "rulings",
+          "columnsFrom": [
+            "appealed_ruling_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "appeals_result_ruling_id_rulings_id_fk": {
+          "name": "appeals_result_ruling_id_rulings_id_fk",
+          "tableFrom": "appeals",
+          "tableTo": "rulings",
+          "columnsFrom": [
+            "result_ruling_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "appeals_original_outcome": {
+          "name": "appeals_original_outcome",
+          "value": "original_outcome IN ('A_WINS','B_WINS','VOID')"
+        },
+        "appeals_final_outcome": {
+          "name": "appeals_final_outcome",
+          "value": "final_outcome IS NULL OR final_outcome IN ('A_WINS','B_WINS','VOID')"
+        },
+        "appeals_decided": {
+          "name": "appeals_decided",
+          "value": "(status = 'decided') = (decided_at IS NOT NULL AND final_outcome IS NOT NULL\n        AND decided_by IS NOT NULL AND flipped IS NOT NULL AND result_ruling_id IS NOT NULL)"
+        },
+        "appeals_flipped": {
+          "name": "appeals_flipped",
+          "value": "flipped IS NULL OR flipped = (final_outcome IS DISTINCT FROM original_outcome)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.attempt_frames": {
+      "name": "attempt_frames",
+      "schema": "",
+      "columns": {
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idx": {
+          "name": "idx",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "t_ms": {
+          "name": "t_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime": {
+          "name": "mime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'image/jpeg'"
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "attempt_frames_attempt_id_attempts_id_fk": {
+          "name": "attempt_frames_attempt_id_attempts_id_fk",
+          "tableFrom": "attempt_frames",
+          "tableTo": "attempts",
+          "columnsFrom": [
+            "attempt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "attempt_frames_pk": {
+          "name": "attempt_frames_pk",
+          "columns": [
+            "attempt_id",
+            "idx"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "attempt_frames_idx": {
+          "name": "attempt_frames_idx",
+          "value": "idx BETWEEN 0 AND 23"
+        },
+        "attempt_frames_t_ms": {
+          "name": "attempt_frames_t_ms",
+          "value": "t_ms >= 0"
+        },
+        "attempt_frames_mime": {
+          "name": "attempt_frames_mime",
+          "value": "mime = 'image/jpeg'"
+        },
+        "attempt_frames_size": {
+          "name": "attempt_frames_size",
+          "value": "octet_length(bytes) BETWEEN 1 AND 204800"
+        },
+        "attempt_frames_hash": {
+          "name": "attempt_frames_hash",
+          "value": "sha256 = encode(sha256(bytes), 'hex')"
+        },
+        "attempt_frames_sha256_fmt": {
+          "name": "attempt_frames_sha256_fmt",
+          "value": "sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.attempts": {
+      "name": "attempts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_no": {
+          "name": "attempt_no",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_device_id": {
+          "name": "recorded_by_device_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recorder": {
+          "name": "recorder",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'judge_cam'"
+        },
+        "status": {
+          "name": "status",
+          "type": "attempt_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'recording'"
+        },
+        "max_ms": {
+          "name": "max_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "go_at": {
+          "name": "go_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "clip_key": {
+          "name": "clip_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "clip_mime": {
+          "name": "clip_mime",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "clip_bytes": {
+          "name": "clip_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "client_clip_hash": {
+          "name": "client_clip_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "evidence_canonical": {
+          "name": "evidence_canonical",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "frame_keys": {
+          "name": "frame_keys",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "frame_ts_ms": {
+          "name": "frame_ts_ms",
+          "type": "integer[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::integer[]"
+        },
+        "frame_hashes": {
+          "name": "frame_hashes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "uploaded_at": {
+          "name": "uploaded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "purged_at": {
+          "name": "purged_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "attempts_bet_no_uq": {
+          "name": "attempts_bet_no_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "attempt_no",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "attempts_bet_id_bets_id_fk": {
+          "name": "attempts_bet_id_bets_id_fk",
+          "tableFrom": "attempts",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "attempts_recorded_by_user_id_users_id_fk": {
+          "name": "attempts_recorded_by_user_id_users_id_fk",
+          "tableFrom": "attempts",
+          "tableTo": "users",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "attempts_recorded_by_device_id_devices_id_fk": {
+          "name": "attempts_recorded_by_device_id_devices_id_fk",
+          "tableFrom": "attempts",
+          "tableTo": "devices",
+          "columnsFrom": [
+            "recorded_by_device_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "attempts_no_positive": {
+          "name": "attempts_no_positive",
+          "value": "attempt_no >= 1"
+        },
+        "attempts_recorder": {
+          "name": "attempts_recorder",
+          "value": "recorder IN ('judge_cam','self')"
+        },
+        "attempts_max_ms": {
+          "name": "attempts_max_ms",
+          "value": "max_ms > 0"
+        },
+        "attempts_clip_mime": {
+          "name": "attempts_clip_mime",
+          "value": "clip_mime IS NULL OR clip_mime IN ('video/mp4','video/quicktime')"
+        },
+        "attempts_clip_bytes": {
+          "name": "attempts_clip_bytes",
+          "value": "clip_bytes IS NULL OR clip_bytes BETWEEN 1 AND 26214400"
+        },
+        "attempts_duration": {
+          "name": "attempts_duration",
+          "value": "duration_ms IS NULL OR duration_ms BETWEEN 1 AND 30000"
+        },
+        "attempts_frames": {
+          "name": "attempts_frames",
+          "value": "cardinality(frame_ts_ms) = cardinality(frame_hashes) AND cardinality(frame_hashes) <= 24\n        AND (cardinality(frame_keys) = 0 OR cardinality(frame_keys) = cardinality(frame_hashes))"
+        },
+        "attempts_frame_hashes_fmt": {
+          "name": "attempts_frame_hashes_fmt",
+          "value": "array_to_string(frame_hashes, ',') ~ '^([0-9a-f]{64}(,[0-9a-f]{64})*)?$'"
+        },
+        "attempts_client_clip_hash_fmt": {
+          "name": "attempts_client_clip_hash_fmt",
+          "value": "client_clip_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "attempts_evidence_hash_fmt": {
+          "name": "attempts_evidence_hash_fmt",
+          "value": "evidence_hash ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.rulings": {
+      "name": "rulings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "bet_id": {
+          "name": "bet_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stage": {
+          "name": "stage",
+          "type": "ruling_stage",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt_id": {
+          "name": "attempt_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "hearing_id": {
+          "name": "hearing_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "appeal_id": {
+          "name": "appeal_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "ruling_outcome",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claim_result": {
+          "name": "claim_result",
+          "type": "claim_result",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "redo_reason": {
+          "name": "redo_reason",
+          "type": "redo_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "void_reason": {
+          "name": "void_reason",
+          "type": "ruling_void_reason",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "confidence": {
+          "name": "confidence",
+          "type": "numeric(3, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cited_frames": {
+          "name": "cited_frames",
+          "type": "smallint[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::smallint[]"
+        },
+        "frame_hashes": {
+          "name": "frame_hashes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "evidence_kind": {
+          "name": "evidence_kind",
+          "type": "evidence_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_hash": {
+          "name": "evidence_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "evidence_canonical": {
+          "name": "evidence_canonical",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "record_canonical": {
+          "name": "record_canonical",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ruling_hash": {
+          "name": "ruling_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "onchain_ix": {
+          "name": "onchain_ix",
+          "type": "chain_ix",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "rulings_ruling_hash_uq": {
+          "name": "rulings_ruling_hash_uq",
+          "columns": [
+            {
+              "expression": "ruling_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rulings_attempt_uq": {
+          "name": "rulings_attempt_uq",
+          "columns": [
+            {
+              "expression": "attempt_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "attempt_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rulings_hearing_uq": {
+          "name": "rulings_hearing_uq",
+          "columns": [
+            {
+              "expression": "hearing_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "hearing_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rulings_appeal_uq": {
+          "name": "rulings_appeal_uq",
+          "columns": [
+            {
+              "expression": "appeal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "appeal_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rulings_settlement_uq": {
+          "name": "rulings_settlement_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "stage = 'settlement'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rulings_bet_onchain_ix_uq": {
+          "name": "rulings_bet_onchain_ix_uq",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "onchain_ix",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "onchain_ix IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rulings_bet_idx": {
+          "name": "rulings_bet_idx",
+          "columns": [
+            {
+              "expression": "bet_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "rulings_bet_id_bets_id_fk": {
+          "name": "rulings_bet_id_bets_id_fk",
+          "tableFrom": "rulings",
+          "tableTo": "bets",
+          "columnsFrom": [
+            "bet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "rulings_attempt_id_attempts_id_fk": {
+          "name": "rulings_attempt_id_attempts_id_fk",
+          "tableFrom": "rulings",
+          "tableTo": "attempts",
+          "columnsFrom": [
+            "attempt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "rulings_appeal_id_appeals_id_fk": {
+          "name": "rulings_appeal_id_appeals_id_fk",
+          "tableFrom": "rulings",
+          "tableTo": "appeals",
+          "columnsFrom": [
+            "appeal_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "rulings_attempt_stage": {
+          "name": "rulings_attempt_stage",
+          "value": "(stage = 'attempt') = (attempt_id IS NOT NULL)"
+        },
+        "rulings_hearing_stage": {
+          "name": "rulings_hearing_stage",
+          "value": "(stage = 'hearing') = (hearing_id IS NOT NULL)"
+        },
+        "rulings_appeal_stage": {
+          "name": "rulings_appeal_stage",
+          "value": "(stage = 'appeal') = (appeal_id IS NOT NULL)"
+        },
+        "rulings_redo_reason": {
+          "name": "rulings_redo_reason",
+          "value": "(outcome = 'REDO') = (redo_reason IS NOT NULL)"
+        },
+        "rulings_void_reason": {
+          "name": "rulings_void_reason",
+          "value": "(outcome = 'VOID') = (void_reason IS NOT NULL)"
+        },
+        "rulings_confidence": {
+          "name": "rulings_confidence",
+          "value": "confidence IS NULL OR confidence BETWEEN 0 AND 1"
+        },
+        "rulings_reason_len": {
+          "name": "rulings_reason_len",
+          "value": "reason IS NULL OR char_length(reason) <= 280"
+        },
+        "rulings_frames_max": {
+          "name": "rulings_frames_max",
+          "value": "cardinality(frame_hashes) <= 24"
+        },
+        "rulings_cited_max": {
+          "name": "rulings_cited_max",
+          "value": "cardinality(cited_frames) <= 8"
+        },
+        "rulings_ruling_hash": {
+          "name": "rulings_ruling_hash",
+          "value": "ruling_hash = encode(sha256(convert_to(record_canonical, 'UTF8')), 'hex')"
+        },
+        "rulings_evidence_canonical": {
+          "name": "rulings_evidence_canonical",
+          "value": "evidence_canonical IS NULL\n        OR evidence_hash = encode(sha256(convert_to(evidence_canonical, 'UTF8')), 'hex')"
+        },
+        "rulings_onchain_ix": {
+          "name": "rulings_onchain_ix",
+          "value": "onchain_ix IS NULL OR (onchain_ix IN ('resolve','resolve_appeal') AND outcome <> 'REDO')"
+        },
+        "rulings_evidence_hash_fmt": {
+          "name": "rulings_evidence_hash_fmt",
+          "value": "evidence_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "rulings_ruling_hash_fmt": {
+          "name": "rulings_ruling_hash_fmt",
+          "value": "ruling_hash ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.gemini_markets": {
+      "name": "gemini_markets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "event_ticker": {
+          "name": "event_ticker",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "instrument_symbol": {
+          "name": "instrument_symbol",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contract_ticker": {
+          "name": "contract_ticker",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "series": {
+          "name": "series",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "strike": {
+          "name": "strike",
+          "type": "numeric(20, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "window_start": {
+          "name": "window_start",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "market_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "resolution_side": {
+          "name": "resolution_side",
+          "type": "market_side",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settlement_value": {
+          "name": "settlement_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settlement_raw": {
+          "name": "settlement_raw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settlement_response_sha256": {
+          "name": "settlement_response_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "event_raw": {
+          "name": "event_raw",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "gemini_markets_symbol_uq": {
+          "name": "gemini_markets_symbol_uq",
+          "columns": [
+            {
+              "expression": "instrument_symbol",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "gemini_markets_open_idx": {
+          "name": "gemini_markets_open_idx",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status IN ('active','closed')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "gemini_markets_settlement_pair": {
+          "name": "gemini_markets_settlement_pair",
+          "value": "(settlement_raw IS NULL) = (settlement_response_sha256 IS NULL)"
+        },
+        "gemini_markets_settlement_hash": {
+          "name": "gemini_markets_settlement_hash",
+          "value": "settlement_raw IS NULL\n        OR settlement_response_sha256 = encode(sha256(convert_to(settlement_raw, 'UTF8')), 'hex')"
+        },
+        "gemini_markets_resolution": {
+          "name": "gemini_markets_resolution",
+          "value": "resolution_side IS NULL OR status = 'settled'"
+        },
+        "gemini_markets_settlement_response_sha256_fmt": {
+          "name": "gemini_markets_settlement_response_sha256_fmt",
+          "value": "settlement_response_sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.market_snapshots": {
+      "name": "market_snapshots",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "type": "always",
+            "name": "market_snapshots_id_seq",
+            "schema": "public",
+            "increment": "1",
+            "startWith": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "cache": "1",
+            "cycle": false
+          }
+        },
+        "market_id": {
+          "name": "market_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "captured_at": {
+          "name": "captured_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "exchange_ts": {
+          "name": "exchange_ts",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "best_bid": {
+          "name": "best_bid",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "best_ask": {
+          "name": "best_ask",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_price": {
+          "name": "last_price",
+          "type": "numeric(5, 4)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "index_price": {
+          "name": "index_price",
+          "type": "numeric(20, 8)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "snapshot_canonical": {
+          "name": "snapshot_canonical",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "snapshot_sha256": {
+          "name": "snapshot_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "market_snapshots_idx": {
+          "name": "market_snapshots_idx",
+          "columns": [
+            {
+              "expression": "market_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "captured_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "market_snapshots_market_id_gemini_markets_id_fk": {
+          "name": "market_snapshots_market_id_gemini_markets_id_fk",
+          "tableFrom": "market_snapshots",
+          "tableTo": "gemini_markets",
+          "columnsFrom": [
+            "market_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "market_snapshots_source": {
+          "name": "market_snapshots_source",
+          "value": "source IN ('ws_book_ticker','rest_event')"
+        },
+        "market_snapshots_hash": {
+          "name": "market_snapshots_hash",
+          "value": "(snapshot_canonical IS NULL) = (snapshot_sha256 IS NULL)\n        AND (snapshot_canonical IS NULL\n          OR snapshot_sha256 = encode(sha256(convert_to(snapshot_canonical, 'UTF8')), 'hex'))"
+        },
+        "market_snapshots_snapshot_sha256_fmt": {
+          "name": "market_snapshots_snapshot_sha256_fmt",
+          "value": "snapshot_sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.face_enrollments": {
+      "name": "face_enrollments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "enrollment_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "embedding_ciphertext": {
+          "name": "embedding_ciphertext",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_nonce": {
+          "name": "embedding_nonce",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_dim": {
+          "name": "embedding_dim",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model_name": {
+          "name": "model_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model_version": {
+          "name": "model_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_version": {
+          "name": "consent_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_text_sha256": {
+          "name": "consent_text_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_at": {
+          "name": "consent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "liveness_method": {
+          "name": "liveness_method",
+          "type": "liveness_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "liveness_passed_at": {
+          "name": "liveness_passed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_used_at": {
+          "name": "last_used_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "disabled_at": {
+          "name": "disabled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "face_enrollments_active_model_idx": {
+          "name": "face_enrollments_active_model_idx",
+          "columns": [
+            {
+              "expression": "model_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "model_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status = 'active'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "face_enrollments_user_id_users_id_fk": {
+          "name": "face_enrollments_user_id_users_id_fk",
+          "tableFrom": "face_enrollments",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "face_enrollments_user_id_uq": {
+          "name": "face_enrollments_user_id_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "face_enrollments_nonce_len": {
+          "name": "face_enrollments_nonce_len",
+          "value": "octet_length(embedding_nonce) = 12"
+        },
+        "face_enrollments_dim": {
+          "name": "face_enrollments_dim",
+          "value": "embedding_dim BETWEEN 64 AND 1024"
+        },
+        "face_enrollments_ciphertext_len": {
+          "name": "face_enrollments_ciphertext_len",
+          "value": "octet_length(embedding_ciphertext) = embedding_dim * 4 + 16"
+        },
+        "face_enrollments_consent_before_capture": {
+          "name": "face_enrollments_consent_before_capture",
+          "value": "consent_at <= created_at"
+        },
+        "face_enrollments_disabled_at": {
+          "name": "face_enrollments_disabled_at",
+          "value": "(status = 'disabled') = (disabled_at IS NOT NULL)"
+        },
+        "face_enrollments_consent_text_sha256_fmt": {
+          "name": "face_enrollments_consent_text_sha256_fmt",
+          "value": "consent_text_sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.actor_kind": {
+      "name": "actor_kind",
+      "schema": "public",
+      "values": [
+        "user",
+        "server",
+        "judge",
+        "panel",
+        "system"
+      ]
+    },
+    "public.appeal_decided_by": {
+      "name": "appeal_decided_by",
+      "schema": "public",
+      "values": [
+        "majority",
+        "upheld_no_majority"
+      ]
+    },
+    "public.appeal_status": {
+      "name": "appeal_status",
+      "schema": "public",
+      "values": [
+        "filing",
+        "panel_voting",
+        "decided",
+        "failed"
+      ]
+    },
+    "public.attempt_status": {
+      "name": "attempt_status",
+      "schema": "public",
+      "values": [
+        "recording",
+        "uploaded",
+        "judging",
+        "ruled",
+        "redo",
+        "failed"
+      ]
+    },
+    "public.authorization_method": {
+      "name": "authorization_method",
+      "schema": "public",
+      "values": [
+        "faceid_hold",
+        "passcode_hold"
+      ]
+    },
+    "public.bet_end_reason": {
+      "name": "bet_end_reason",
+      "schema": "public",
+      "values": [
+        "refused",
+        "declined",
+        "terms_changed",
+        "cancelled",
+        "draft_idle",
+        "quote_expired",
+        "accept_timeout",
+        "resolve_timeout",
+        "appeal_timeout",
+        "lock_failed"
+      ]
+    },
+    "public.bet_state": {
+      "name": "bet_state",
+      "schema": "public",
+      "values": [
+        "DRAFTING",
+        "TERMS_PROPOSED",
+        "AWAITING_AUTHORIZATIONS",
+        "AWAITING_LOCK",
+        "LOCKED",
+        "ATTEMPT",
+        "JUDGING",
+        "HEARING",
+        "AWAITING_MARKET",
+        "RULED",
+        "CONCEDED",
+        "FINALIZED",
+        "APPEALED",
+        "APPEAL_RESOLVED",
+        "PAID",
+        "VOIDED",
+        "CANCELLED",
+        "EXPIRED"
+      ]
+    },
+    "public.chain_event_source": {
+      "name": "chain_event_source",
+      "schema": "public",
+      "values": [
+        "stream",
+        "rpc_poll"
+      ]
+    },
+    "public.chain_ix": {
+      "name": "chain_ix",
+      "schema": "public",
+      "values": [
+        "create_bet",
+        "accept_bet",
+        "cancel_open_bet",
+        "resolve",
+        "concede",
+        "appeal",
+        "resolve_appeal",
+        "finalize",
+        "timeout_refund",
+        "close_bet"
+      ]
+    },
+    "public.challenge_method": {
+      "name": "challenge_method",
+      "schema": "public",
+      "values": [
+        "face",
+        "list",
+        "link"
+      ]
+    },
+    "public.claim_result": {
+      "name": "claim_result",
+      "schema": "public",
+      "values": [
+        "MET",
+        "NOT_MET",
+        "UNCLEAR"
+      ]
+    },
+    "public.device_role": {
+      "name": "device_role",
+      "schema": "public",
+      "values": [
+        "phone",
+        "judge_cam"
+      ]
+    },
+    "public.enrollment_status": {
+      "name": "enrollment_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "disabled"
+      ]
+    },
+    "public.evidence_source": {
+      "name": "evidence_source",
+      "schema": "public",
+      "values": [
+        "camera",
+        "gemini"
+      ]
+    },
+    "public.hearing_status": {
+      "name": "hearing_status",
+      "schema": "public",
+      "values": [
+        "open",
+        "closed",
+        "aborted"
+      ]
+    },
+    "public.hearing_trigger": {
+      "name": "hearing_trigger",
+      "schema": "public",
+      "values": [
+        "contested",
+        "max_redos",
+        "demo"
+      ]
+    },
+    "public.join_method": {
+      "name": "join_method",
+      "schema": "public",
+      "values": [
+        "code",
+        "qr",
+        "nearby",
+        "link",
+        "demo_seed"
+      ]
+    },
+    "public.liveness_method": {
+      "name": "liveness_method",
+      "schema": "public",
+      "values": [
+        "blink",
+        "head_turn"
+      ]
+    },
+    "public.lock_mode": {
+      "name": "lock_mode",
+      "schema": "public",
+      "values": [
+        "atomic",
+        "sequential"
+      ]
+    },
+    "public.market_side": {
+      "name": "market_side",
+      "schema": "public",
+      "values": [
+        "yes",
+        "no"
+      ]
+    },
+    "public.market_status": {
+      "name": "market_status",
+      "schema": "public",
+      "values": [
+        "approved",
+        "active",
+        "closed",
+        "under_review",
+        "settled",
+        "invalid"
+      ]
+    },
+    "public.nonce_status": {
+      "name": "nonce_status",
+      "schema": "public",
+      "values": [
+        "free",
+        "leased",
+        "advancing",
+        "retired"
+      ]
+    },
+    "public.onchain_outcome": {
+      "name": "onchain_outcome",
+      "schema": "public",
+      "values": [
+        "party_a",
+        "party_b",
+        "split",
+        "refund"
+      ]
+    },
+    "public.onchain_status": {
+      "name": "onchain_status",
+      "schema": "public",
+      "values": [
+        "none",
+        "open",
+        "locked",
+        "resolved",
+        "appealed",
+        "settled",
+        "refunded",
+        "cancelled"
+      ]
+    },
+    "public.outbox_status": {
+      "name": "outbox_status",
+      "schema": "public",
+      "values": [
+        "pending",
+        "sent",
+        "failed",
+        "dead"
+      ]
+    },
+    "public.panel_provider": {
+      "name": "panel_provider",
+      "schema": "public",
+      "values": [
+        "anthropic",
+        "openai",
+        "google"
+      ]
+    },
+    "public.party": {
+      "name": "party",
+      "schema": "public",
+      "values": [
+        "A",
+        "B"
+      ]
+    },
+    "public.payout_via": {
+      "name": "payout_via",
+      "schema": "public",
+      "values": [
+        "concede",
+        "finalize",
+        "resolve_appeal",
+        "timeout_refund",
+        "cancel_open_bet"
+      ]
+    },
+    "public.platform": {
+      "name": "platform",
+      "schema": "public",
+      "values": [
+        "ios"
+      ]
+    },
+    "public.redo_reason": {
+      "name": "redo_reason",
+      "schema": "public",
+      "values": [
+        "unclear",
+        "low_confidence",
+        "contested"
+      ]
+    },
+    "public.room_kind": {
+      "name": "room_kind",
+      "schema": "public",
+      "values": [
+        "demo",
+        "nearby",
+        "session"
+      ]
+    },
+    "public.ruling_outcome": {
+      "name": "ruling_outcome",
+      "schema": "public",
+      "values": [
+        "A_WINS",
+        "B_WINS",
+        "REDO",
+        "VOID"
+      ]
+    },
+    "public.ruling_stage": {
+      "name": "ruling_stage",
+      "schema": "public",
+      "values": [
+        "attempt",
+        "settlement",
+        "hearing",
+        "appeal"
+      ]
+    },
+    "public.ruling_void_reason": {
+      "name": "ruling_void_reason",
+      "schema": "public",
+      "values": [
+        "undecidable",
+        "max_redos",
+        "market_invalid",
+        "safety_stop"
+      ]
+    },
+    "public.session_status": {
+      "name": "session_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "ended",
+        "failed"
+      ]
+    },
+    "public.tx_kind": {
+      "name": "tx_kind",
+      "schema": "public",
+      "values": [
+        "atomic_lock",
+        "create_bet",
+        "accept_bet",
+        "cancel_open_bet",
+        "resolve",
+        "concede",
+        "appeal",
+        "resolve_appeal",
+        "finalize",
+        "timeout_refund",
+        "close_bet",
+        "nonce_advance"
+      ]
+    },
+    "public.tx_status": {
+      "name": "tx_status",
+      "schema": "public",
+      "values": [
+        "built",
+        "signed",
+        "sent",
+        "confirmed",
+        "failed",
+        "expired",
+        "revoked"
+      ]
+    },
+    "public.voice_purpose": {
+      "name": "voice_purpose",
+      "schema": "public",
+      "values": [
+        "terms",
+        "hearing",
+        "announce"
+      ]
+    },
+    "public.vote_counted_as": {
+      "name": "vote_counted_as",
+      "schema": "public",
+      "values": [
+        "A_WINS",
+        "B_WINS",
+        "ABSTAIN"
+      ]
+    },
+    "public.vote_status": {
+      "name": "vote_status",
+      "schema": "public",
+      "values": [
+        "ok",
+        "error",
+        "timeout"
+      ]
+    },
+    "public.wallet_kind": {
+      "name": "wallet_kind",
+      "schema": "public",
+      "values": [
+        "device_keypair",
+        "embedded_provider"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
