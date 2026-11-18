@@ -56,7 +56,25 @@ describe('Terms (§2)', () => {
   it('enforces skill rules', () => {
     fails({ ...skillTerms(), performer: null }, 'performer');
     fails({ ...skillTerms(), evidence_source: 'gemini' }, 'evidence_source');
-    fails({ ...skillTerms(), stakes: { a: '5000000', b: '4000000', currency: 'USDC' } }, 'stakes');
+    // Odds (widened refinement, no version bump): unequal stakes up to 10:1 parse.
+    expect(
+      Terms.safeParse({ ...skillTerms(), stakes: { a: '5000000', b: '4000000', currency: 'USDC' } })
+        .success,
+    ).toBe(true);
+    expect(
+      Terms.safeParse({
+        ...skillTerms(),
+        stakes: { a: '15000000', b: '5000000', currency: 'USDC' },
+      }).success,
+    ).toBe(true);
+    expect(
+      Terms.safeParse({
+        ...skillTerms(),
+        stakes: { a: '1000000', b: '10000000', currency: 'USDC' },
+      }).success,
+    ).toBe(true);
+    fails({ ...skillTerms(), stakes: { a: '11000000', b: '1000000', currency: 'USDC' } }, 'stakes');
+    fails({ ...skillTerms(), stakes: { a: '100000', b: '1010000', currency: 'USDC' } }, 'stakes');
     fails({ ...skillTerms(), market: realWorldTerms().market }, 'market');
   });
 

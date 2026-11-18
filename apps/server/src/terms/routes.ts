@@ -172,6 +172,12 @@ export const termsRoutes: RouteModule = {
         requireInviteAccepted: true,
       });
       if (!r.ok && r.fix === 'INVITE_PENDING') throw invitePending();
+      // Odds: unequal stakes must be accepted on both phones first (odds/service.ts R7).
+      if (!r.ok && r.fix === 'ODDS_PENDING')
+        throw new HttpError('INVALID_STATE', 'Waiting on the odds.', {
+          state: bet.state,
+          reason: 'odds_pending',
+        });
       // Gemini bets: a quote too old to lock was re-quoted (new terms: review them again); when
       // the old round stopped pricing, the re-quote is the next round (new line and end).
       if (r.fix === 'REQUOTED') {

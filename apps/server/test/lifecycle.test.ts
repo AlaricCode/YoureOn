@@ -579,6 +579,215 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     }
   });
 
+  it('odds (LOCK_SIGNER=server): A types 15 vs 5, B accepts the odds -> LOCKED 15/5; A wins the 20 pot; a VOID refunds 15 and 5', async () => {
+    install('server');
+    try {
+      const typedBet = async () => {
+        const room = await signed(A, 'POST', '/v1/rooms', { name: 'Odds', kind: 'session' });
+        await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code });
+        const bet = await signed(A, 'POST', '/v1/bets', {
+          room_id: room.json!.room_id,
+          opponent_user_id: B.session.user.user_id,
+          challenge_method: 'list',
+        });
+        const betId = bet.json!.bet.bet_id as string;
+        expect((await signed(B, 'POST', `/v1/bets/${betId}/invite/accept`, {})).status).toBe(200);
+        const p = await signed(
+          A,
+          'POST',
+          typedTermsPath(betId),
+          typedTermsRequest({
+            claim: bottleFlipClaim('Jake'),
+            stakeUsd: 15,
+            stakeBUsd: 5,
+            bName: 'Jake',
+          }),
+        );
+        expect(p.json).toMatchObject({ ok: true, kind: 'proposed' });
+        // Not before B accepts the odds.
+        const early = await signed(A, 'POST', termsConfirmPath(betId), {
+          terms_hash: p.json!.terms_hash,
+        });
+        expect(early.status).toBe(409);
+        expect(early.json!.error.details.reason).toBe('odds_pending');
+        const offered = (
+          await ctx.deps.db
+            .select()
+            .from(betEvents)
+            .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'odds.offered')))
+        ).map((e) => (e.envelope as any).payload.offer);
+        expect(offered).toHaveLength(1);
+        const acc = await signed(
+          B,
+          'POST',
+          `/v1/bets/${betId}/odds/${offered[0].offer_id}/accept`,
+          {
+            n: offered[0].n,
+          },
+        );
+        expect(acc.json).toMatchObject({ agreed: true, terms_hash: p.json!.terms_hash });
+        const c = await signed(A, 'POST', termsConfirmPath(betId), {
+          terms_hash: p.json!.terms_hash,
+        });
+        expect(c.status).toBe(200);
+        await lc.idle();
+        const row = await betRow(betId);
+        expect(row).toMatchObject({ state: 'LOCKED', stake_a: 15n * USDC, stake_b: 5n * USDC });
+        const onchain = await onchainBet(betId);
+        expect(onchain).toMatchObject({ stakeA: 15n * USDC, stakeB: 5n * USDC });
+        return { betId, row };
+      };
+
+      // A wins: the whole 20 pot.
+      const won = await typedBet();
+      const aBefore = await tokenAmount(svm.svm, (await findAta(signerA)) as never);
+      await lc.payout.onRuling(won.betId, ruling(won.betId, won.row.terms_hash!, 'A_WINS'));
+      advance(12_000);
+      expect(await lc.payout.finalizeDue(now())).toEqual([won.betId]);
+      await lc.idle();
+      // (payout_a / payout_b are the chain projector's; here the wallets tell.)
+      expect(await betRow(won.betId)).toMatchObject({ state: 'PAID', outcome: 'party_a' });
+      expect((await tokenAmount(svm.svm, (await findAta(signerA)) as never)) - aBefore).toBe(
+        20n * USDC,
+      );
+
+      // VOID with unequal stakes: Refund, each side gets its own stake back (never Split).
+      const voided = await typedBet();
+      const bBefore = await tokenAmount(svm.svm, (await findAta(signerB)) as never);
+      const aBefore2 = await tokenAmount(svm.svm, (await findAta(signerA)) as never);
+      await lc.payout.onRuling(voided.betId, ruling(voided.betId, voided.row.terms_hash!, 'VOID'));
+      advance(12_000);
+      await lc.payout.finalizeDue(now());
+      await lc.idle();
+      expect(await betRow(voided.betId)).toMatchObject({ state: 'VOIDED', outcome: 'refund' });
+      expect((await tokenAmount(svm.svm, (await findAta(signerB)) as never)) - bBefore).toBe(
+        5n * USDC,
+      );
+      expect((await tokenAmount(svm.svm, (await findAta(signerA)) as never)) - aBefore2).toBe(
+        15n * USDC,
+      );
+    } finally {
+      install('phones');
+    }
+  });
+
+  it('odds negotiation e2e: A offers 3:1, B counters 2:1, A accepts -> recomposed card LOCKED 10/5 on chain; B wins the 15 pot', async () => {
+    install('server');
+    try {
+      const room = await signed(A, 'POST', '/v1/rooms', { name: 'Odds2', kind: 'session' });
+      await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code });
+      const bet = await signed(A, 'POST', '/v1/bets', {
+        room_id: room.json!.room_id,
+        opponent_user_id: B.session.user.user_id,
+        challenge_method: 'list',
+      });
+      const betId = bet.json!.bet.bet_id as string;
+      expect((await signed(B, 'POST', `/v1/bets/${betId}/invite/accept`, {})).status).toBe(200);
+      // An even $5 card first (no offer opens for even stakes).
+      const p = await signed(
+        A,
+        'POST',
+        typedTermsPath(betId),
+        typedTermsRequest({ claim: bottleFlipClaim('Jake'), stakeUsd: 5, bName: 'Jake' }),
+      );
+      expect(p.json).toMatchObject({ ok: true, kind: 'proposed' });
+      const evenHash = p.json!.terms_hash as string;
+      // A: "I'll give you three to one" -> A 15, B 5.
+      const o1 = await signed(A, 'POST', `/v1/bets/${betId}/odds/offer`, {
+        ratio: '3:1',
+        favored: 'A',
+        base_usd: '5',
+      });
+      expect(o1.status).toBe(200);
+      expect(o1.json!.offer).toMatchObject({
+        n: 1,
+        from: 'A',
+        ratio_label: '3 to 1',
+        stakes: { a: '15000000', b: '5000000' },
+      });
+      // A can't accept their own offer; B counters 2:1 (A 10, B 5).
+      const own = await signed(
+        A,
+        'POST',
+        `/v1/bets/${betId}/odds/${o1.json!.offer.offer_id}/accept`,
+        {
+          n: 1,
+        },
+      );
+      expect(own.json!.error.details.reason).toBe('own_offer');
+      const o2 = await signed(B, 'POST', `/v1/bets/${betId}/odds/offer`, {
+        stakes_usd: { a: '10', b: '5' },
+      });
+      expect(o2.json!.offer).toMatchObject({
+        n: 2,
+        from: 'B',
+        parent_id: o1.json!.offer.offer_id,
+        ratio_label: '2 to 1',
+      });
+      // B's stale tap on the countered offer is refused; confirm still waits on the odds.
+      const stale = await signed(
+        B,
+        'POST',
+        `/v1/bets/${betId}/odds/${o1.json!.offer.offer_id}/accept`,
+        {
+          n: 1,
+        },
+      );
+      expect(stale.json!.error.details.reason).toBe('not_open');
+      const early = await signed(A, 'POST', termsConfirmPath(betId), { terms_hash: evenHash });
+      expect(early.json!.error.details.reason).toBe('odds_pending');
+      // A accepts: the card is recomposed at 10/5 under a new hash.
+      const acc = await signed(
+        A,
+        'POST',
+        `/v1/bets/${betId}/odds/${o2.json!.offer.offer_id}/accept`,
+        {
+          n: 2,
+        },
+      );
+      expect(acc.json).toMatchObject({ agreed: true });
+      const newHash = acc.json!.terms_hash as string;
+      expect(newHash).not.toBe(evenHash);
+      const types = (
+        await ctx.deps.db.select().from(betEvents).where(eq(betEvents.bet_id, betId))
+      ).map((e) => e.type);
+      expect(types.filter((t) => t === 'terms.proposed')).toHaveLength(2);
+      expect(types).toContain('odds.agreed');
+      // The old card can no longer be confirmed; the new one can.
+      expect(
+        (await signed(A, 'POST', termsConfirmPath(betId), { terms_hash: evenHash })).status,
+      ).toBe(409);
+      const c = await signed(A, 'POST', termsConfirmPath(betId), { terms_hash: newHash });
+      expect(c.status).toBe(200);
+      await lc.idle();
+      const row = await betRow(betId);
+      expect(row).toMatchObject({
+        state: 'LOCKED',
+        terms_hash: newHash,
+        stake_a: 10n * USDC,
+        stake_b: 5n * USDC,
+      });
+      expect(await onchainBet(betId)).toMatchObject({ stakeA: 10n * USDC, stakeB: 5n * USDC });
+      // After the freeze every odds route answers 409.
+      const late = await signed(B, 'POST', `/v1/bets/${betId}/odds/offer`, {
+        stakes_usd: { a: '5', b: '5' },
+      });
+      expect(late.json!.error.details.reason).toBe('locked');
+      // Jake lands it: B takes the whole 15 pot.
+      const bBefore = await tokenAmount(svm.svm, (await findAta(signerB)) as never);
+      await lc.payout.onRuling(betId, ruling(betId, newHash, 'B_WINS'));
+      advance(12_000);
+      expect(await lc.payout.finalizeDue(now())).toEqual([betId]);
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', outcome: 'party_b' });
+      expect((await tokenAmount(svm.svm, (await findAta(signerB)) as never)) - bBefore).toBe(
+        15n * USDC,
+      );
+    } finally {
+      install('phones');
+    }
+  });
+
   it('voice path: propose_terms (real sink) -> terms.proposed; confirm_terms -> lock built', async () => {
     const room = await signed(A, 'POST', '/v1/rooms', { name: 'Voice', kind: 'session' });
     await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code });

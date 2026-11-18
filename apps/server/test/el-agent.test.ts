@@ -161,7 +161,7 @@ describe('el-agent bodies vs the ElevenLabs OpenAPI schema (fixture, offline)', 
 });
 
 describe('el-agent CLI (flags + env)', () => {
-  it('defaults: the Haiku 5.5 judge, effort low, the three live webhook tools, the Fly URLs', () => {
+  it('defaults: the Haiku 5.5 judge, effort low, the five live webhook tools, the Fly URLs', () => {
     const plan = planFor();
     const prompt = agentBodyOf(plan).conversation_config.agent.prompt;
     expect(prompt).toMatchObject({
@@ -183,6 +183,7 @@ describe('el-agent CLI (flags + env)', () => {
       `${BASE}/el/tools/confirm_terms`,
       `${BASE}/el/tools/get_market_odds`,
       `${BASE}/el/tools/request_review`,
+      `${BASE}/el/tools/suggest_odds`,
     ]);
     // The GG moment: the spoken review request, and the built-in skip_turn for room noise.
     expect(prompt.prompt).toContain('# After the ruling');

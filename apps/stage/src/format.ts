@@ -98,6 +98,18 @@ export function eventLabel(
       : `${who(p.party)} authorized${typeof p.method === 'string' ? ` · ${AUTH_METHOD[p.method] ?? p.method}` : ''}`;
   if (type === 'terms.declined') return `${who(p.party)} declined`;
   if (type === 'terms.proposed') return 'Terms proposed';
+  if (type === 'odds.offered') {
+    const o = (p.offer ?? {}) as Record<string, unknown>;
+    const ratio = typeof o.ratio_label === 'string' ? ` ${o.ratio_label}` : '';
+    if (o.from === 'judge') return `Judge suggests${ratio}`;
+    return o.parent_id ? `${who(o.from)} counters${ratio}` : `${who(o.from)} offers${ratio}`;
+  }
+  if (type === 'odds.answered')
+    return p.answer === 'countered'
+      ? 'Odds countered'
+      : `Odds ${String(p.answer ?? 'answered')}${p.answer === 'accepted' ? ` · ${who(p.party)}` : ''}`;
+  if (type === 'odds.agreed')
+    return `Odds agreed${typeof p.ratio_label === 'string' ? ` · ${p.ratio_label}` : ''}`;
   if (type === 'ruling.issued') {
     const o = String(((p.ruling ?? {}) as Record<string, unknown>).outcome ?? '?');
     return o === 'A_WINS' || o === 'B_WINS'

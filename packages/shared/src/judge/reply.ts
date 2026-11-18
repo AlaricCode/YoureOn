@@ -141,14 +141,14 @@ export function attemptsPhrase(a: TermsProposal['attempts']): string {
  * server template over Terms, so the spoken read-back matches the card word for word").
  * Drops edge cases from the end, then the deadline, to fit SAY_MAX_CHARS.
  */
-export function readbackSay(p: TermsProposal): string {
+export function readbackSay(p: TermsProposal, names?: PartyNames): string {
   const head = [sentence(p.claim)];
   if (p.type === 'skill') head.push(attemptsPhrase(p.attempts));
   const edges = p.edge_cases.map((e) => sentence(e.answer));
   const deadline = p.deadline_minutes ? [`${cap(numberWords(p.deadline_minutes))} minutes.`] : [];
   const stake =
     p.type === 'skill'
-      ? `${cap(spokenUsd(p.amount))} each.`
+      ? stakeSentence(p, names)
       : `${cap(spokenUsd(p.amount))} a side at even money, Gemini sets the odds.`;
   for (let keep = edges.length; keep >= 0; keep--) {
     for (const d of [deadline, []]) {
@@ -158,6 +158,36 @@ export function readbackSay(p: TermsProposal): string {
   }
   const s = [...head, stake].join(' ');
   return s.length <= SAY_MAX_CHARS ? s : `${s.slice(0, SAY_MAX_CHARS - 1)}…`;
+}
+
+/** Display names for the read-back ("Logan puts in fifteen, Jake puts in five"). */
+export interface PartyNames {
+  a: string;
+  b: string;
+}
+
+/** A skill proposal with unequal stakes (odds). */
+export const hasOdds = (p: Pick<TermsProposal, 'type' | 'amount' | 'amount_b'>): boolean =>
+  p.type === 'skill' && p.amount_b !== null && p.amount_b !== undefined && p.amount_b !== p.amount;
+
+/** Spoken dollars without the unit word when whole ("fifteen"), else "$7.50". */
+function spokenBare(micro: string): string {
+  const n = BigInt(micro);
+  if (n % MICRO_PER_USD === 0n && n / MICRO_PER_USD <= 99n)
+    return numberWords(Number(n / MICRO_PER_USD));
+  return spokenUsd(micro);
+}
+
+/**
+ * "Five dollars each." or, with odds, "Logan puts in fifteen, Jake puts in five; winner takes
+ * twenty." (names default to "The challenger" / "the other side").
+ */
+export function stakeSentence(p: TermsProposal, names?: PartyNames): string {
+  if (!hasOdds(p)) return `${cap(spokenUsd(p.amount))} each.`;
+  const a = names?.a.trim() || 'The challenger';
+  const b = names?.b.trim() || 'the other side';
+  const pot = (BigInt(p.amount) + BigInt(p.amount_b!)).toString();
+  return `${cap(a)} puts in ${spokenBare(p.amount)}, ${b} puts in ${spokenBare(p.amount_b!)}; winner takes ${spokenBare(pot)}.`;
 }
 
 export function issueSay(issue: DraftIssue, maxStake: bigint = MAX_STAKE): string {
@@ -174,6 +204,8 @@ export function issueSay(issue: DraftIssue, maxStake: bigint = MAX_STAKE): strin
       return "Those odds aren't fair. Pick another round.";
     case 'AMBIGUOUS':
       return 'How much each, in dollars?';
+    case 'ODDS_TOO_LONG':
+      return 'Ten to one, tops. Pick shorter odds.';
     default:
       return 'Fix the terms and try again.';
   }
@@ -206,6 +238,8 @@ export interface ReplyContext {
   /** terms_code once Terms are composed and hashed (D1-J1); omitted before that. */
   code?: string;
   maxStake?: bigint;
+  /** Party display names for an odds read-back (the handler loads them). */
+  names?: PartyNames;
 }
 
 /** API-CONTRACT §4.3 response shapes. */
@@ -231,7 +265,9 @@ export function proposeTermsReply(ev: ProposeEvaluation, ctx: ReplyContext = {})
       const base: ToolReply = { ok: true };
       if (ctx.rev !== undefined) base.rev = ctx.rev;
       if (ctx.code !== undefined) base.code = ctx.code;
-      base.say = readbackSay(ev.proposal);
+      base.say = readbackSay(ev.proposal, ctx.names);
+      // Odds are agreed on the phones (Accept), never by a spoken yes.
+      if (hasOdds(ev.proposal)) base.odds = 'tap_accept';
       if (ev.missing.length) {
         base.missing = ev.missing;
         base.next = 'ask';

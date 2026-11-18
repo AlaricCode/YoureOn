@@ -118,6 +118,18 @@ name: sim-preview
 - runFlow:
     file: preview-screen.yaml
     env:
+      KEY: oddsOffer
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: oddsJudge
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
       KEY: terms
 - assertVisible:
     id: terms-hold
@@ -133,6 +145,12 @@ name: sim-preview
     file: preview-screen.yaml
     env:
       KEY: termsLocked
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: termsOdds
 - tapOn:
     id: preview-menu
 - runFlow:

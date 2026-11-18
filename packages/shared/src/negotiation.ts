@@ -16,8 +16,17 @@ export const TermsProposal = z.strictObject({
   failure_criteria: z.array(NText(160)).max(5),
   edge_cases: z.array(EdgeCase).max(4),
   evidence_source: TermsV1.shape.evidence_source,
-  /** Spoken stake per side (parseUsd); real_world: pot = 2 × amount. */
+  /**
+   * Party A's stake (parseUsd). With amount_b null: the stake per side, as spoken ("five each");
+   * real_world: pot = 2 × amount.
+   */
   amount: MicroUsdc,
+  /**
+   * Party B's stake when the odds are not even ("my fifteen against your five": amount 15,
+   * amount_b 5); null = even. real_world: always null (Gemini sets the split). Not hashed:
+   * composeTerms copies it into Terms.stakes.b.
+   */
+  amount_b: MicroUsdc.nullable().default(null),
   /** real_world only; the server resolves it to a concrete contract. */
   market_query: z
     .strictObject({
@@ -93,6 +102,8 @@ export const DraftIssueCode = z.enum([
   'MARKET_UNFAIR',
   'DEADLINE_TOO_FAR',
   'AMBIGUOUS',
+  /** Skill odds longer than MAX_ODDS_RATIO : 1 (or an underdog stake below MIN_STAKE). */
+  'ODDS_TOO_LONG',
 ]);
 export const DraftIssue = z.strictObject({
   code: DraftIssueCode,

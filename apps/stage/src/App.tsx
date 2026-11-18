@@ -9,8 +9,9 @@
 // reads /v1/demo/health with the stage session's own bearer); ?preview plays a sample bet with
 // no server (preview.ts), ?preview=gemini walks one Gemini bet (Beat 6) through its clock to
 // Gemini's result (preview-market.ts), ?preview=gg / ?preview=review the GG moment and the spoken
-// review request (preview-gg.ts). A ruled Gemini bet's evidence chain is fetched and
-// re-checked here (verify.ts), and the projector says whether it verified. The judge is heard
+// review request (preview-gg.ts), ?preview=odds walks two players agreeing the odds
+// (preview-odds.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
+// (verify.ts), and the projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
 // Keys: 1-6 REPLAY clips, R slow-mo, Esc closes, F full screen, Q big Explorer QR, M mute, V voice,
@@ -64,6 +65,7 @@ import { isGgPreview, previewGgAt } from './preview-gg';
 import { ggCoversPayout, ggMomentOn } from './gg';
 import { GgMoment, useGgSounds } from './gg-moment';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
+import { isOddsPreview, previewOddsAt } from './preview-odds';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import { browserSpeech, cancelSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
 import { settlementFetches, verifyEvidence, type Verification } from './verify';
@@ -393,7 +395,9 @@ export function App() {
           ? { state: marketPv, now }
           : isGgPreview(launch.preview)
             ? previewGgAt(previewStart, now, launch.preview)
-            : previewAt(previewStart, now, launch.preview || null),
+            : isOddsPreview(launch.preview)
+              ? previewOddsAt(previewStart, now, launch.preview)
+              : previewAt(previewStart, now, launch.preview || null),
     [launch.preview, marketPv, previewStart, now],
   );
   const shown = pv ? pv.state : state;

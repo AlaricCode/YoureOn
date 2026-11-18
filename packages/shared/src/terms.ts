@@ -1,7 +1,7 @@
 // SCHEMAS §2 — Terms, the only binding record. terms_hash = sha256(JCS(Terms)) goes onchain.
 // Hashed records use z.strictObject (unknown keys are errors) and have no optional keys.
 import { z } from 'zod/v4';
-import { CENT, MAX_STAKE, MIN_STAKE } from './constants';
+import { CENT, MAX_ODDS_RATIO, MAX_STAKE, MIN_STAKE } from './constants';
 import { GeminiStrike, pctFromPrice, splitPot } from './gemini';
 import { jcs, hashJcs } from './jcs';
 import { fromMicro, isMicroUsdcString, MicroUsdc } from './money';
@@ -101,7 +101,15 @@ export const TermsV1 = z
       if (t.evidence_source !== 'camera') bad(['evidence_source'], "skill => 'camera'");
       if (t.market !== null) bad(['market'], 'skill => null');
       if (t.performer === null) bad(['performer'], 'skill => required');
-      if (t.stakes.a !== t.stakes.b) bad(['stakes'], 'skill => equal stakes (v1)');
+      // Odds (widened in place, no version bump, SCHEMAS §11): unequal stakes are allowed up to
+      // MAX_ODDS_RATIO : 1. Equal stakes hash exactly as before.
+      if (isMicroUsdcString(t.stakes.a) && isMicroUsdcString(t.stakes.b)) {
+        const a = BigInt(t.stakes.a);
+        const b = BigInt(t.stakes.b);
+        const hi = a > b ? a : b;
+        const lo = a > b ? b : a;
+        if (hi > MAX_ODDS_RATIO * lo) bad(['stakes'], 'skill => odds at most 10:1');
+      }
     } else {
       if (t.evidence_source !== 'gemini') bad(['evidence_source'], "real_world => 'gemini'");
       if (t.performer !== null) bad(['performer'], 'real_world => null');

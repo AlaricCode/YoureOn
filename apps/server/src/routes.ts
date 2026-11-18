@@ -14,6 +14,7 @@ import { voiceRoutes } from './voice/routes';
 import { chainRoutes } from './chain/routes';
 import { lockRoutes } from './lock/routes';
 import { termsRoutes } from './terms/routes';
+import { oddsRoutes } from './odds/routes';
 import { payoutRoutes } from './payout/routes';
 import { appealRoutes } from './appeal/routes';
 import { reviewRoutes } from './review/routes';
@@ -38,6 +39,7 @@ export const routeModules: RouteModule[] = [
   chainRoutes,
   lockRoutes,
   termsRoutes,
+  oddsRoutes,
   payoutRoutes,
   meRoutes,
   demoRoutes,

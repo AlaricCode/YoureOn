@@ -13,6 +13,7 @@ import {
   type ElObjectProperty,
 } from './propose-terms';
 import type { ElReasoningEffort, ElTtsModel } from './el-enums';
+import { SUGGEST_ODDS_BODY_SCHEMA, SUGGEST_ODDS_DESCRIPTION } from './suggest-odds';
 import {
   ASR_KEYWORDS,
   buildJudgePrompt,
@@ -48,7 +49,12 @@ export const TOOL_SECRET_NAME = 'yo-tool-secret';
 export const AGENT_TAGS = ['youre-on'];
 
 export type WebhookToolName =
-  'propose_terms' | 'confirm_terms' | 'open_hearing' | 'get_market_odds' | 'request_review';
+  | 'propose_terms'
+  | 'confirm_terms'
+  | 'open_hearing'
+  | 'get_market_odds'
+  | 'request_review'
+  | 'suggest_odds';
 export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
 
 /**
@@ -56,7 +62,8 @@ export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
  * otherwise a call would hit a 404 mid-conversation (apps/server test/el-agent.test.ts checks the
  * route table). propose_terms (D0-J2), confirm_terms (D1-J1), get_market_odds (Beat 6,
  * apps/server/src/markets/voice-tool.ts) and request_review (the spoken "check that again",
- * apps/server/src/review/tool.ts) are live; open_hearing later (FINDINGS §3.10). There is no
+ * apps/server/src/review/tool.ts) and suggest_odds (odds, apps/server/src/odds/voice-tool.ts) are
+ * live; open_hearing later (FINDINGS §3.10). There is no
  * file_appeal tool: the mic can't tell who spoke, so the judge only asks the loser's phone
  * (request_review) and the loser files the appeal there (tap + Face ID).
  */
@@ -65,6 +72,8 @@ export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = [
   'confirm_terms',
   'get_market_odds',
   'request_review',
+  // Odds (apps/server/src/odds/voice-tool.ts, POST /el/tools/suggest_odds).
+  'suggest_odds',
 ];
 export const CLIENT_TOOLS: readonly ClientToolName[] = [
   'request_attempt',
@@ -144,6 +153,11 @@ export const WEBHOOK_TOOL_SPECS: Record<WebhookToolName, WebhookSpec> = {
       },
       ['heard'],
     ),
+  },
+  suggest_odds: {
+    description: SUGGEST_ODDS_DESCRIPTION,
+    pre_tool_speech: 'force',
+    body: SUGGEST_ODDS_BODY_SCHEMA,
   },
 };
 

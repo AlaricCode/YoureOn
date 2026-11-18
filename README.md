@@ -359,7 +359,14 @@ to Gemini's regulated market; this devnet demo uses our escrow with Gemini as th
   call on a stored JPEG and checks the RPC, the Gemini relay and voice readiness (no bet, no money,
   one per 10 s); `GET /v1/demo/health` reports the judge's last success and failure and its
   latency; `POST /v1/demo/seed-h2h` seeds the 4-7 head-to-head history the face match shows
-  (labelled `is_seed`, kept by the demo reset).
+  (labelled `is_seed`, kept by the demo reset), plus optional category records (e.g. Jake 10–2
+  on bottle flips) for the judge's odds.
+- **Odds.** Friends can agree on odds: unequal stakes (at most 10:1, each within the max) in the
+  terms' `stakes.a` / `stakes.b`, no new hashed field. One side offers ("Jake offers 3 to 1: your
+  $5 to win $20"), the other accepts or counters; both still hold to lock the card. "Judge, what
+  odds are fair?" (or Suggest odds) proposes odds grounded in the performer's settled record on
+  that kind of bet and the head-to-head; the numbers are computed in code, a model only words
+  the sentence, and it is only an offer (`apps/server/src/odds`, API-CONTRACT §2.19).
 - **Spend guard.** Every paid provider refuses to start without `ALLOW_SPEND=true`, and under
   `NODE_ENV=production` the mock LLM refuses every call, so a misconfigured deploy cannot issue fake
   rulings.

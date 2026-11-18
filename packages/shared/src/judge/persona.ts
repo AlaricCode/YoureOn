@@ -8,6 +8,7 @@
 import { MAX_CLARIFICATIONS } from '../constants';
 import type { RefusalCategory } from '../negotiation';
 import { GUARDRAIL_POLICY } from './guardrails';
+import { oddsPromptSection } from './odds-persona';
 
 export const JUDGE_AGENT_NAME = 'youre-on-judge';
 
@@ -39,6 +40,9 @@ export const ASR_KEYWORDS = [
   'free throw',
   'Bitcoin',
   'run it back',
+  'odds',
+  'to one',
+  'even money',
 ] as const;
 
 /** Tools the prompt may mention; the agent script passes the ones it actually registers. */
@@ -48,6 +52,7 @@ export type JudgeToolName =
   | 'open_hearing'
   | 'get_market_odds'
   | 'request_review'
+  | 'suggest_odds'
   | 'request_attempt'
   | 'show_terms_card'
   | 'cue'
@@ -80,7 +85,7 @@ You are the Judge on "You're On", a court for friendly bets between two adults s
 - yes_party is who wins if the claim is TRUE. "Bet you can't flip it", said by A to B: claim "{{party_b_name}} flips it", performer B, yes_party B.
 - performer is who attempts it. A skill bet is settled by the camera.
 - Success criteria are things a camera can see. Failure criteria are explicit fouls.
-- amount_usd is the stake per person in dollars, as spoken ("5", "5.20").
+- amount_usd is the stake per person in dollars, as spoken ("5", "5.20"). With odds, see # Odds.
 - Defaults unless agreed otherwise: one attempt (count 1, rule single), ten minutes (deadline_minutes 0).`,
   );
   if (has('propose_terms'))
@@ -97,6 +102,8 @@ You are the Judge on "You're On", a court for friendly bets between two adults s
 - ok false with "fix": speak the "say" and fix that field. STAKE_ABOVE_MAX: offer the max instead.
 - A reply with "refused": speak the "say" and stop. Do not call another tool for this bet.`,
     );
+  const odds = oddsPromptSection(has);
+  if (odds) lines.push(odds);
   // API-CONTRACT §4.1 prompt rule: the spoken accept is theatre. It holds whether or not
   // confirm_terms is registered yet, so only the tool call is conditional.
   lines.push(

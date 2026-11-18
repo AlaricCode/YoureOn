@@ -558,6 +558,8 @@ export const MeBetItem = BetSnapshot.extend({
   title: z.string(),
   opponent: UserRef,
   my_stake: MicroUsdc.nullable(),
+  /** Additive (odds): the opponent's stake, so a history row can show "$5 vs $15". */
+  their_stake: MicroUsdc.nullable().optional(),
   my_payout: MicroUsdc.nullable(),
   outcome: OnchainOutcome.nullable(),
   settled_at: IsoUtc.nullable(),
@@ -624,6 +626,10 @@ export const JudgeCueName = z.enum([
   'INVITE_ACCEPTED',
   // Additive (./gg): the review the judge asked for closed unconfirmed / kept (speak:false).
   'REVIEW_CLOSED',
+  // Additive (odds, §2.19): an offer, a counter, both accepted.
+  'ODDS_OFFERED',
+  'ODDS_COUNTERED',
+  'ODDS_AGREED',
 ]);
 export type JudgeCueName = z.infer<typeof JudgeCueName>;
 

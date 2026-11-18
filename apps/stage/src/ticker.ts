@@ -33,6 +33,7 @@ import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtim
 import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
 import { foldGg, type GgView, type ReviewView } from './gg';
+import { foldOddsEvent, type OddsView } from './odds-state';
 
 export const MAX_EVENTS = 200;
 export const MAX_MARKET_POINTS = 150;
@@ -179,6 +180,8 @@ export interface BetView {
     utterance_id: string;
   } | null;
   last_cue: string | null;
+  /** Skill odds: the shared fold of odds.offered / answered / agreed (odds-state.ts). */
+  odds: OddsView | null;
   /** Other tx signatures by kind (resolve, payout, close …) for Explorer links. */
   txs: Record<string, string>;
   /** The loser's GG (bet.gg; gg.ts). */
@@ -347,6 +350,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     last_judge_line: null,
     caption: null,
     last_cue: null,
+    odds: null,
     txs: {},
     gg: null,
     review: null,
@@ -536,6 +540,10 @@ function foldCard(b: BetView, e: RealtimeEvent, at: number): BetView {
       };
     case 'terms.declined':
       return { ...v, declined: e.payload.party };
+    case 'odds.offered':
+    case 'odds.answered':
+    case 'odds.agreed':
+      return { ...v, odds: foldOddsEvent(v.odds, e) };
     case 'tx.submitted':
     case 'tx.confirmed':
     case 'tx.failed': {

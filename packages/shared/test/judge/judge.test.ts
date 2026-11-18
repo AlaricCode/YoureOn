@@ -137,10 +137,15 @@ describe('propose_terms projection (API-CONTRACT §4.3)', () => {
       'market_side',
       'deadline_minutes',
     ]);
+    // stake_b_usd (odds) is additive and optional: not in `required`, so an agent synced
+    // before it keeps working.
+    const req = [...PROPOSE_TERMS_BODY_SCHEMA.required] as string[];
     expect(Object.keys(PROPOSE_TERMS_BODY_SCHEMA.properties)).toEqual([
       'conversation_id',
       'bet_id',
-      ...PROPOSE_TERMS_BODY_SCHEMA.required,
+      ...req.slice(0, req.indexOf('amount_usd') + 1),
+      'stake_b_usd',
+      ...req.slice(req.indexOf('amount_usd') + 1),
     ]);
     expect(PROPOSE_TERMS_BODY_SCHEMA.properties.conversation_id).toEqual({
       type: 'string',
