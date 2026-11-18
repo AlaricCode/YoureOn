@@ -217,22 +217,24 @@ export function MarketPanel({
         </div>
       </div>
       {s ? (
-        <p className="market-result">
-          {s.contract.status === 'invalid' ? (
-            <span className="bad">Gemini voided the contract · both stakes back</span>
-          ) : (
-            <span className="good">
-              Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
-              {s.contract.resolutionSide === 'yes' ? up : down} wins
-            </span>
-          )}{' '}
-          <span className="muted">
+        <>
+          <p className="market-result">
+            {s.contract.status === 'invalid' ? (
+              <span className="bad">Gemini voided the contract · both stakes back</span>
+            ) : (
+              <span className="good">
+                Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
+                {s.contract.resolutionSide === 'yes' ? up : down} wins
+              </span>
+            )}
+          </p>
+          <p className="muted market-evidence">
             evidence <code>{bet.settlement!.evidence_hash.slice(0, 8)}</code> ·{' '}
             <a className="explorer" href={s.source_url} target="_blank" rel="noreferrer">
               Gemini ↗
             </a>
-          </span>
-        </p>
+          </p>
+        </>
       ) : left > 0 ? (
         ahead && <p className="muted">{ahead} is ahead</p>
       ) : (
@@ -287,6 +289,8 @@ export function BetCard({
         <p className="muted big">Negotiating terms…</p>
       )}
 
+      {t?.market && <MarketPanel bet={bet} tick={tick} now={now} />}
+
       <div className="grid2">
         <div>
           <h3>{bet.names.A ?? 'A'}</h3>
@@ -297,8 +301,6 @@ export function BetCard({
           {partyAuth(bet, 'B')}
         </div>
       </div>
-
-      {t?.market && <MarketPanel bet={bet} tick={tick} now={now} />}
 
       {bet.lock && (
         <div className="lock">

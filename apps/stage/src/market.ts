@@ -2,7 +2,12 @@
 // (API-CONTRACT §3.1) with the shared fairStakes (SCHEMAS §8.2): strike, BTC price and its side
 // of the line, time left, the implied Up %, and the fair split of a pot. When the focused bet is
 // a real-world bet on this contract, its locked terms stakes are shown instead of a preview.
-import { fairStakes, pctFromPrice, type GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import {
+  decimalToPpm,
+  divRoundHalfUp,
+  fairStakes,
+  type GeminiMarketSnapshot,
+} from '@youre-on/shared/gemini';
 import type { MicroUsdc } from '@youre-on/shared/money';
 import type { BetView } from './ticker';
 
@@ -25,10 +30,11 @@ export interface MarketView {
   split: SplitView;
 }
 
+/** The mid in percent, rounded exactly as fairStakes prices a bet (half-up to 0.01). */
 function midPct(s: GeminiMarketSnapshot): number | null {
   if (s.bestBid === null || s.bestAsk === null) return null;
   try {
-    const pct = Number((pctFromPrice(s.bestBid) + pctFromPrice(s.bestAsk)) / 2n);
+    const pct = Number(divRoundHalfUp(decimalToPpm(s.bestBid) + decimalToPpm(s.bestAsk), 20_000n));
     return pct > 0 && pct < 100 ? pct : null;
   } catch {
     return null;
