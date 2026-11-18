@@ -12,6 +12,12 @@ export const EvidenceFrame = z.strictObject({
   t_ms: z.number().int().nonnegative(),
   /** Of the JPEG bytes sent to the model. */
   sha256: Hex32,
+  /**
+   * Planning D10: this image is the landing crop (the last frame again, the middle of the
+   * full-resolution still, ≤ 1024 px), not a frame of its own. At most one, always last
+   * (./judge/frames judgeFramesProblem). Absent on every other frame.
+   */
+  landing_crop: z.literal(true).optional(),
 });
 export type EvidenceFrame = z.infer<typeof EvidenceFrame>;
 
@@ -30,7 +36,10 @@ export const CameraEvidence = z.strictObject({
   /** Whose device recorded; the judge-cam iPhone is a device of A. */
   recorded_by: Party,
   recorded_at: IsoUtc,
-  /** ~8 per try, always including the final frames. */
+  /**
+   * 12 per try (8..12 accepted), 8 of them in the last ~1.2 s, plus one landing crop
+   * (./judge/frames, planning D10).
+   */
   frames: z.array(EvidenceFrame).min(1).max(24),
 });
 export type CameraEvidence = z.infer<typeof CameraEvidence>;
