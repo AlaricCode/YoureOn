@@ -20,6 +20,8 @@ export type Route =
   | 'terms'
   | 'lockEnded'
   | 'live'
+  /** A Gemini bet waiting for Gemini to settle (Beat 6). */
+  | 'market'
   | 'judgeCam'
   | 'ruling'
   | 'redo'
@@ -141,10 +143,12 @@ export function routeForBet(app: AppState, b: BetModel): Route {
       return 'terms';
     case 'LOCKED':
       return app.lockAcked.includes(b.bet_id) ? 'live' : 'terms';
+    // A Gemini bet is locked straight into AWAITING_MARKET: the Locked card first, then the clock.
+    case 'AWAITING_MARKET':
+      return app.lockAcked.includes(b.bet_id) ? 'market' : 'terms';
     case 'ATTEMPT':
     case 'JUDGING':
     case 'HEARING':
-    case 'AWAITING_MARKET':
       return b.ruling?.ruling.outcome === 'REDO' ? 'redo' : 'live';
     case 'RULED':
     case 'APPEALED':

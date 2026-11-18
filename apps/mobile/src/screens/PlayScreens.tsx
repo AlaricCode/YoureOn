@@ -342,6 +342,7 @@ export function RulingScreen({
   view,
   result,
   reason,
+  judgeLabel,
   appealDeadlineMs,
   busy,
   alert,
@@ -352,6 +353,8 @@ export function RulingScreen({
   view: BetView;
   result: MyResult;
   reason: string;
+  /** Who ruled: "Judge" (default), "Gemini" for a market bet (Beat 6). */
+  judgeLabel?: string | undefined;
   /** BetResolved.appeal_deadline (10 s window). */
   appealDeadlineMs: number;
   busy: boolean;
@@ -371,7 +374,7 @@ export function RulingScreen({
         <StatusHero mark={mark} title={RESULT_TITLE[result]} detail={view.claim} />
         <Card>
           <Label variant="small" style={styles.cardLabel}>
-            {t(COPY.ruling.judge)}
+            {judgeLabel ?? t(COPY.ruling.judge)}
           </Label>
           <DataText>{reason}</DataText>
         </Card>

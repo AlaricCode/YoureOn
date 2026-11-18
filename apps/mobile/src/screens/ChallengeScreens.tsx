@@ -8,12 +8,14 @@
 //                    terms as they firm up (D2-M3; ARCHITECTURE §3.2). On A's phone, "Type it
 //                    instead" swaps the judge for a short form (claim + stake, app/typedTerms):
 //                    the card still arrives by the terms.proposed push; "Lock it in" confirms.
-import { useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+//                    "Bet on Bitcoin" (Beat 6, app/marketTerms) swaps in the market panel: Up or
+//                    Down, a stake, Gemini's live odds and the fair split, then the same card.
+import { useEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
 import { feel } from '../device/feedback';
-import { signedUsd, type BetView } from '../bets/view';
+import { countdownLabel, signedUsd, type BetView } from '../bets/view';
 import type { PreviewUser } from '../preview/data';
 import {
   AlertLine,
@@ -24,7 +26,18 @@ import {
   Stage,
   StageBubble,
 } from '../ui/kit';
-import { Avatar, Card, Chip, DataText, DotsLabel, Page, Screen, TopBar } from '../ui/parts';
+import {
+  Avatar,
+  Card,
+  Chip,
+  DataText,
+  DotsLabel,
+  InfoRow,
+  Page,
+  Screen,
+  TopBar,
+  useNow,
+} from '../ui/parts';
 import { color, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
@@ -187,6 +200,37 @@ export interface Caption {
   text: string;
 }
 
+/** A's "Bet on Bitcoin" panel (app/marketTerms MarketState, flattened for the screen). */
+export interface MarketTermsPanel {
+  open: boolean;
+  side: 'UP' | 'DOWN';
+  stakeUsd: number;
+  stakes: readonly number[];
+  /** null while the first quote is on its way. */
+  quote: {
+    ok: boolean;
+    refusal: string | null;
+    upPct: number | null;
+    strikeUsd: string | null;
+    priceUsd: string | null;
+    /** "$6.10 vs $3.90" (mine first) */
+    split: string | null;
+    lockableUntilMs: number | null;
+  } | null;
+  sending: boolean;
+  confirming: boolean;
+  canSubmit: boolean;
+  canConfirm: boolean;
+  waitingFor: string | null;
+  note: string | null;
+  onOpen: () => void;
+  onClose: () => void;
+  onSide: (side: 'UP' | 'DOWN') => void;
+  onStake: (usd: number) => void;
+  onSubmit: () => void;
+  onConfirm: () => void;
+}
+
 /** A's typed-terms form (app/typedTerms TypedState, flattened for the screen). */
 export interface TypedTermsPanel {
   mode: 'voice' | 'typed';
@@ -220,6 +264,7 @@ export function NegotiateScreen({
   micMuted,
   draft,
   typed,
+  market,
   onBack,
   onDecline,
   tag,
@@ -235,6 +280,8 @@ export function NegotiateScreen({
   draft: Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> | null;
   /** Only on A's phone (only A sets the terms). */
   typed?: TypedTermsPanel | undefined;
+  /** Only on A's phone, with the Gemini relay on: Beat 6. */
+  market?: MarketTermsPanel | undefined;
   onBack?: (() => void) | undefined;
   onDecline: () => void;
   tag?: string | undefined;
@@ -258,6 +305,9 @@ export function NegotiateScreen({
       <DataText muted>{`${draft.myStakeUsd} vs ${draft.theirStakeUsd}`}</DataText>
     </Card>
   ) : null;
+
+  if (market?.open)
+    return <MarketPanel market={market} draftCard={draftCard} onDecline={onDecline} tag={tag} />;
 
   if (typed && typing)
     return (
@@ -307,6 +357,13 @@ export function NegotiateScreen({
             </View>
             {typed.note ? <DataText muted>{typed.note}</DataText> : null}
             {draftCard}
+            {market ? (
+              <QuietButton
+                testID="market-open"
+                label={t(COPY.market.open)}
+                onPress={market.onOpen}
+              />
+            ) : null}
           </ScrollView>
           {typed.canConfirm ? (
             <PrimaryButton
@@ -387,6 +444,126 @@ export function NegotiateScreen({
             onPress={typed.onOpen}
           />
         ) : null}
+        {market ? (
+          <QuietButton testID="market-open" label={t(COPY.market.open)} onPress={market.onOpen} />
+        ) : null}
+        <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
+      </Page>
+    </Screen>
+  );
+}
+
+/** Beat 6: Up or Down on Gemini's Bitcoin 5-minute contract, at Gemini's live odds. */
+function MarketPanel({
+  market,
+  draftCard,
+  onDecline,
+  tag,
+}: {
+  market: MarketTermsPanel;
+  draftCard: ReactNode;
+  onDecline: () => void;
+  tag?: string | undefined;
+}) {
+  const now = useNow(500);
+  const q = market.quote;
+  const frozen = market.sending || market.confirming;
+  const upPct = q?.upPct ?? null;
+  return (
+    <Screen>
+      <TopBar onBack={market.onClose} title={t(COPY.market.panel)} tag={tag} />
+      <Page>
+        <ScrollView style={styles.flex} contentContainerStyle={styles.form}>
+          <View style={styles.sides} accessibilityRole="radiogroup">
+            {(['UP', 'DOWN'] as const).map((side) => {
+              const on = market.side === side;
+              const pct = upPct === null ? null : side === 'UP' ? upPct : 100 - upPct;
+              return (
+                <Pressable
+                  key={side}
+                  testID={`market-side-${side}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on, disabled: frozen }}
+                  disabled={frozen}
+                  onPress={() => market.onSide(side)}
+                  style={[styles.sideBox, on && styles.sideOn]}
+                >
+                  <Text style={[type.heading, !on && styles.stakeOff]}>
+                    {t(side === 'UP' ? COPY.market.up : COPY.market.down)}
+                  </Text>
+                  <Text style={[type.small, styles.stakeOff]}>
+                    {pct === null ? '—' : `${pct}%`}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Label variant="small" style={styles.fieldLabel}>
+            {t(COPY.market.stake)}
+          </Label>
+          <View style={styles.stakes} accessibilityRole="radiogroup">
+            {market.stakes.map((usd) => {
+              const on = usd === market.stakeUsd;
+              return (
+                <Pressable
+                  key={usd}
+                  testID={`market-stake-${usd}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on, disabled: frozen }}
+                  disabled={frozen}
+                  onPress={() => market.onStake(usd)}
+                  style={[styles.stake, on && styles.stakeOn]}
+                >
+                  <Text style={[type.labelStrong, !on && styles.stakeOff]}>{`$${usd}`}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Card style={styles.marketCard}>
+            {q === null ? (
+              <DotsLabel text={t(COPY.market.pricing)} variant="small" />
+            ) : q.ok ? (
+              <>
+                <InfoRow label={t(COPY.market.split)} value={q.split ?? '—'} />
+                <InfoRow label={t(COPY.market.line)} value={q.strikeUsd ?? '—'} />
+                <InfoRow label={t(COPY.market.price)} value={q.priceUsd ?? '—'} />
+                <InfoRow
+                  label={t(COPY.market.closesIn)}
+                  value={q.lockableUntilMs === null ? '—' : countdownLabel(q.lockableUntilMs - now)}
+                />
+              </>
+            ) : (
+              <DataText muted>{q.refusal ?? t(COPY.app.failed)}</DataText>
+            )}
+          </Card>
+          {market.note ? <DataText muted>{market.note}</DataText> : null}
+          {draftCard}
+        </ScrollView>
+        {market.canConfirm ? (
+          <PrimaryButton
+            testID="market-confirm"
+            label={t(COPY.negotiate.lockItIn)}
+            busy={market.confirming}
+            onPress={market.onConfirm}
+          />
+        ) : market.waitingFor !== null ? (
+          <PrimaryButton
+            testID="market-waiting"
+            label={fill.waitingFor(market.waitingFor)}
+            disabled
+            onPress={() => undefined}
+          />
+        ) : (
+          <PrimaryButton
+            testID="market-send"
+            label={t(COPY.market.propose)}
+            busy={market.sending}
+            disabled={!market.canSubmit}
+            onPress={market.onSubmit}
+          />
+        )}
+        <View style={styles.gap} />
+        <QuietButton label={t(COPY.market.back)} onPress={market.onClose} />
         <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
       </Page>
     </Screen>
@@ -445,4 +622,17 @@ const styles = StyleSheet.create({
   },
   stakeOn: { borderColor: palette.accent, backgroundColor: palette.surface },
   stakeOff: { color: palette.textSecondary },
+  sides: { flexDirection: 'row', gap: space.x1 },
+  sideBox: {
+    flex: 1,
+    height: space.control * 2,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: color.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  sideOn: { borderColor: palette.accent, backgroundColor: palette.surface },
+  marketCard: { marginTop: space.x2, gap: space.x1, borderRadius: radius.lg },
 });
