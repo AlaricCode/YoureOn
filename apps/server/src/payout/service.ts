@@ -13,7 +13,10 @@
 //                            concede / finalize rows whose confirm timed out or died with a
 //                            restart), then every RULED bet past appeal_deadline + 1 s.
 //   concedeRequest / concede GET / POST /v1/bets/:id/concede (the loser signs on the phone;
-//                            LOCK_SIGNER=server signs as the demo key).
+//                            LOCK_SIGNER=server signs as the demo key). GG and the appeal are
+//                            mutually exclusive: once the loser's appeal is signed / out, GET and
+//                            POST answer STATE_MOVED_ON {reason:'appeal_in_flight'} (checked under
+//                            the bet lock, as the appeal checks RULED under it).
 //
 // The program emits no BetPaid: money moves in BetFinalized / BetConceded (then BetClosed). Our own
 // RPC `confirmed` of the payout tx moves the bet to PAID / VOIDED and pushes judge.cue PAID with
@@ -669,18 +672,8 @@ export class PayoutService {
       const rt = await this.rt();
       const bet = await this.bet(betId);
       if (bet.state !== 'RULED') return 'skipped'; // APPEALED: the panel's resolve_appeal pays
-      const [appealing] = await this.deps.db
-        .select({ id: chainTxs.id })
-        .from(chainTxs)
-        .where(
-          and(
-            eq(chainTxs.bet_id, betId),
-            eq(chainTxs.kind, 'appeal'),
-            inArray(chainTxs.status, ['signed', 'sent']),
-          ),
-        )
-        .limit(1);
-      if (appealing) return 'skipped'; // the appeal service re-arms finalize if it never lands
+      // The appeal service re-arms finalize if the appeal never lands.
+      if (await appealOut(this.deps.db, betId)) return 'skipped';
       const idBytes = betIdToBytes(betId);
       const [betPda] = await findBetPda({ betId: idBytes });
       const onchain = await this.fetchBet(rt, betPda);
@@ -761,6 +754,7 @@ export class PayoutService {
     const rt = await this.rt();
     const bet = await this.bet(betId);
     const loser = this.loserOrThrow(bet, userId);
+    await noAppealOutOrThrow(this.deps.db, betId);
     return this.buildConcede(rt, bet, loser);
   }
 
@@ -911,6 +905,7 @@ export class PayoutService {
     const bet = await this.bet(betId);
     const loser = this.loserOrThrow(bet, userId);
     if (body.party && body.party !== loser) throw new HttpError('NOT_LOSER');
+    await noAppealOutOrThrow(this.deps.db, betId);
     const wallet = loser === 'A' ? bet.party_a_wallet! : bet.party_b_wallet!;
 
     let signature = body.party_signature;
@@ -931,6 +926,7 @@ export class PayoutService {
       const b = await lockBet(tx, betId);
       if (!b || b.state !== 'RULED')
         throw new HttpError('STATE_MOVED_ON', undefined, { state: b?.state });
+      await noAppealOutOrThrow(tx, betId); // the appeal's filing checks RULED under this lock
       const [row] = await tx
         .select()
         .from(chainTxs)
@@ -1012,6 +1008,8 @@ export class PayoutService {
       const b = await lockBet(tx, betId);
       if (!b || b.state !== 'RULED')
         throw new HttpError('STATE_MOVED_ON', undefined, { state: b?.state });
+      // An appeal filed since concede() signed (it raced in between the two transactions).
+      if (kind === 'concede') await noAppealOutOrThrow(tx, betId);
       let rowId = existingRowId;
       if (rowId) {
         await tx
@@ -1520,6 +1518,34 @@ export function payoutCue(
  */
 const appealInFlight = sql`EXISTS (SELECT 1 FROM ${chainTxs} t WHERE t.bet_id = ${bets.id}
   AND t.kind = 'appeal' AND t.status IN ('signed','sent'))`;
+
+/** Is the loser's `appeal` signed / out (src/appeal)? finalize waits for its fate; GG is refused. */
+async function appealOut(db: Pick<Tx, 'select'>, betId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: chainTxs.id })
+    .from(chainTxs)
+    .where(
+      and(
+        eq(chainTxs.bet_id, betId),
+        eq(chainTxs.kind, 'appeal'),
+        inArray(chainTxs.status, ['signed', 'sent']),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * GG once the appeal is out: refused. The bet stays RULED until the appeal confirms, and a GG
+ * then would show CONCEDED (the winner's payout screen, the projector) for a concede the chain
+ * refuses, or, landing first, leave the filed appeal stranded.
+ */
+async function noAppealOutOrThrow(db: Pick<Tx, 'select'>, betId: string): Promise<void> {
+  if (await appealOut(db, betId))
+    throw new HttpError('STATE_MOVED_ON', 'An appeal is on its way.', {
+      reason: 'appeal_in_flight',
+    });
+}
 
 /** One in-flight tx per (bet, kind) (chain_txs_inflight_uq): retire a stale one before a new build. */
 async function expireInflight(tx: Tx, betId: string, kind: 'resolve' | 'concede' | 'finalize') {

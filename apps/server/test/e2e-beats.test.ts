@@ -1464,6 +1464,74 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     expect(await usdc(signerB.address)).toBe(b0 + 2n * USDC); // B gets the whole $2 pot back
   });
 
+  /** Is `sig` a chain_txs row of this kind? (an RPC stub that slows or fails one tx) */
+  const txKindOf = async (sig: string) =>
+    (
+      await ctx.deps.db
+        .select({ kind: chainTxs.kind })
+        .from(chainTxs)
+        .where(eq(chainTxs.signature, sig))
+    )[0]?.kind ?? null;
+
+  it('GG after the appeal is filed, before it confirms: refused (appeal_in_flight), never CONCEDED; the appeal pays', async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8); // B_WINS: A is the loser
+    await expectRuled(betId, r);
+    // The GG request pushed at RULED: the phone holds it and signs it on the tap.
+    const pushed = await wsA.next(
+      (f) =>
+        f.type === 'tx.sign_request' && f.bet_id === betId && f.payload.request.kind === 'concede',
+    );
+    const gg = SignRequest.parse(pushed.payload.request);
+    const ggMsg = new Uint8Array(Buffer.from(gg.message_b64, 'base64'));
+    panel = { anthropic: vote('NOT_MET'), openai: vote('NOT_MET', 0.8), google: vote('MET') };
+    // The appeal's confirm takes a while (a devnet confirm): held until released.
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    const real = rt.client.signatureStatus.bind(rt.client);
+    rt.client.signatureStatus = async (sig, o) => {
+      if ((await txKindOf(sig)) === 'appeal') await gate;
+      return real(sig, o);
+    };
+    try {
+      const { body } = await appealBody(betId, 'A', r);
+      expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body)).status).toBe(202);
+      expect((await betRow(betId)).state).toBe('RULED'); // filed, not confirmed yet
+      const inFlight = { code: 'STATE_MOVED_ON', details: { reason: 'appeal_in_flight' } };
+      // The ruling screen still shows GG: its GET and its POST are both refused.
+      const g = await get(A, `/v1/bets/${betId}/concede`);
+      expect(g.status).toBe(409);
+      expect(g.json!.error).toMatchObject(inFlight);
+      const post = await signed(A, 'POST', `/v1/bets/${betId}/concede`, {
+        bet_id: betId,
+        kind: 'concede',
+        party: 'A',
+        message_sha256: gg.message_sha256,
+        party_signature: b58.decode(ed.sign(ggMsg, keyA.secret)),
+        method: 'faceid_hold',
+        signed_at: new Date(now()).toISOString(),
+      });
+      expect(post.status).toBe(409);
+      expect(post.json!.error).toMatchObject(inFlight);
+      // Nobody was told it was conceded, and no concede went out.
+      const seen = (await dbEvents(betId)).map((e) => label(e.envelope as any));
+      expect(seen).not.toContain('bet.state:CONCEDED');
+      const concedes = await ctx.deps.db
+        .select({ status: chainTxs.status })
+        .from(chainTxs)
+        .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'concede')));
+      expect(concedes.map((t) => t.status)).not.toContain('sent');
+      expect(concedes.map((t) => t.status)).not.toContain('signed');
+    } finally {
+      release();
+      rt.client.signatureStatus = real;
+    }
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    expect((await appealResultOf(betId)).result).toMatchObject({ final_outcome: 'A_WINS' });
+  });
+
   it('finalize skips a bet whose appeal is out, and an APPEALED one: only resolve_appeal pays', async () => {
     // (1) RULED with an appeal tx in flight ('sent'), past the window: finalize waits for it.
     const first = await lockedBet();
