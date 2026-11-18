@@ -70,6 +70,7 @@ describe('voice readiness', () => {
           'https://youre-on.fly.dev/el/tools/confirm_terms',
           'https://youre-on.fly.dev/el/tools/get_market_odds',
           'https://youre-on.fly.dev/el/tools/request_review',
+          'https://youre-on.fly.dev/el/tools/suggest_odds',
         ],
         webhook_url: 'https://youre-on.fly.dev/webhooks/elevenlabs',
         set: {

@@ -47,6 +47,8 @@ import {
 import { feel } from '../device/feedback';
 import { useVisionCameraPresence } from '../device/visionCamera';
 import { countdownLabel, signedUsd, type BetView } from '../bets/view';
+import { TypedOdds, type TypedOddsPanel } from '../odds/OddsControl';
+import { OfferCard, type OddsOfferPanel } from '../odds/OfferCard';
 import type { PreviewUser } from '../preview/data';
 import {
   AlertLine,
@@ -414,6 +416,8 @@ export interface TypedTermsPanel {
   onStake: (usd: number) => void;
   onSubmit: () => void;
   onConfirm: () => void;
+  /** The odds picker and "Suggest odds" (odds/useOdds useTypedOdds). */
+  odds?: TypedOddsPanel | undefined;
 }
 
 export function NegotiateScreen({
@@ -425,6 +429,7 @@ export function NegotiateScreen({
   draft,
   typed,
   market,
+  odds,
   onBack,
   onDecline,
   tag,
@@ -439,12 +444,15 @@ export function NegotiateScreen({
   micMuted: boolean;
   /** The proposed terms, once the judge reads them back; null while still negotiating. */
   draft:
-    | (Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> & Partial<Pick<BetView, 'mySide'>>)
+    | (Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> &
+        Partial<Pick<BetView, 'mySide' | 'ratio'>>)
     | null;
   /** Only on A's phone (only A sets the terms). */
   typed?: TypedTermsPanel | undefined;
   /** Only on A's phone, with the Gemini relay on: Beat 6. */
   market?: MarketTermsPanel | undefined;
+  /** Both phones: the odds offer / counter / judge's suggestion (odds/useOdds useOddsPanel). */
+  odds?: OddsOfferPanel | undefined;
   onBack?: (() => void) | undefined;
   onDecline: () => void;
   tag?: string | undefined;
@@ -463,6 +471,7 @@ export function NegotiateScreen({
         : view.theirName;
 
   const typing = typed?.mode === 'typed';
+  const offerCard = odds ? <OfferCard panel={odds} /> : null;
   const draftCard = draft ? (
     <Card style={styles.draft}>
       <Hairline />
@@ -473,7 +482,7 @@ export function NegotiateScreen({
       <DataText variant="heading">{draft.claim}</DataText>
       <Hairline style={styles.draftRule} />
       <DataText variant="amount">
-        {`${draft.myStakeUsd} vs ${draft.theirStakeUsd}${draft.mySide ? ` · you ${draft.mySide}` : ''}`}
+        {`${draft.myStakeUsd} vs ${draft.theirStakeUsd}${draft.ratio ? ` · ${draft.ratio}` : ''}${draft.mySide ? ` · you ${draft.mySide}` : ''}`}
       </DataText>
     </Card>
   ) : null;
@@ -515,7 +524,9 @@ export function NegotiateScreen({
                 onChange={typed.onStake}
                 testIDPrefix="typed-stake-"
               />
+              {typed.odds ? <TypedOdds panel={typed.odds} /> : null}
               {typed.note ? <DataText muted>{typed.note}</DataText> : null}
+              {offerCard}
               {draftCard}
               {market ? (
                 <QuietButton
@@ -607,6 +618,7 @@ export function NegotiateScreen({
             </View>
           ))}
         </ScrollView>
+        {offerCard}
         {draftCard}
         <View style={styles.actions}>
           {typed ? (

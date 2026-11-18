@@ -130,6 +130,24 @@ demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 4, "b_wins": 7}'   # the 
 demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 0, "b_wins": 0}'   # remove the history
 ```
 
+**Odds rehearsal ("Judge, what odds are fair?").** Give the performer a category record so the
+judge's suggestion quotes it. demo-b (Jake) 10 for 12 on bottle flips, inside a 4-12 head-to-head:
+
+```sh
+demo -X POST "$SERVER/v1/demo/seed-h2h" \
+  -d '{"a_wins": 4, "b_wins": 12, "records": [{"player": "b", "category": "bottle_flip", "made": 10, "missed": 2}]}' \
+  | jq '{inserted, head_to_head, performer_stats: [.performer_stats[] | {category, in_category, h2h: {wins: .h2h.wins, losses: .h2h.losses}}]}'
+```
+
+Then on a bottle-flip bet (Jake performs, $5 base) "Suggest odds" (or "Judge, what odds are fair?")
+offers **2 to 1**: "Jake is 10 for 12 on bottle flips, and 12-4 against Logan. I'd make it two to
+one: Logan puts in five, Jake puts in ten." For a **3 to 1** moment use Jake 12 for 13
+(`"made": 12, "missed": 1`, `b_wins` ≥ 12) or Logan 1 for 5 on paper-ball throws
+(`{"player": "a", "category": "throw", "made": 1, "missed": 4}`, with `a_wins` ≥ 1, `b_wins` ≥ 4,
+on a "Logan throws a paper ball into the bin" bet). The records count toward the head-to-head
+(422 if they don't fit). Every surface that shows these stats tags them "Demo history". Without
+`ALLOW_SPEND` + `LLM_PROVIDER=live` the sentence is the server template; the numbers are the same.
+
 - The rows are demo history, labelled `is_seed` (titles "Demo history: …"): 11 settled bets with
   no on-chain footprint, one a day in the past, so the record reads 4-7 and −$7.00 for demo-a.
   The phones' history lists them, flagged `is_seed`.

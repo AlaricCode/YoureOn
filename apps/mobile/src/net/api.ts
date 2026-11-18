@@ -38,6 +38,16 @@ import {
 } from '@youre-on/shared/judge/typed-terms';
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
+import {
+  oddsAcceptPath,
+  oddsOfferPath,
+  OddsOfferResponse,
+  oddsSuggestPath,
+  OddsSuggestResponse,
+  oddsWithdrawPath,
+  type OddsOfferRequest,
+  type OddsSuggestRequest,
+} from '@youre-on/shared/odds';
 import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
 import {
   BetEventsResponse,
@@ -231,6 +241,20 @@ export function createYoApi(c: ApiClient) {
         schema: TermsConfirmResponse,
         idempotencyKey,
       }),
+
+    // Odds (either party, TERMS_PROPOSED; app/odds): offer / counter, accept, withdraw, and
+    // the judge's suggestion.
+    offerOdds: (betId: string, body: OddsOfferRequest) =>
+      c.request('POST', oddsOfferPath(betId), { json: body, schema: OddsOfferResponse }),
+    acceptOdds: (betId: string, offerId: string, n: number) =>
+      c.request('POST', oddsAcceptPath(betId, offerId), {
+        json: { n },
+        schema: OddsOfferResponse,
+      }),
+    withdrawOdds: (betId: string, offerId: string) =>
+      c.request('POST', oddsWithdrawPath(betId, offerId), { json: {} }),
+    suggestOdds: (betId: string, body: OddsSuggestRequest) =>
+      c.request('POST', oddsSuggestPath(betId), { json: body, schema: OddsSuggestResponse }),
 
     // Beat 6: the Gemini BTC 5-minute closer (party A). The quote is a preview; the binding
     // one is taken by POST …/terms/market.

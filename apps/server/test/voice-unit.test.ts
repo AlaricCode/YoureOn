@@ -302,6 +302,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       'tool:confirm_terms:create',
       'tool:get_market_odds:create',
       'tool:request_review:create',
+      'tool:suggest_odds:create',
       'tool:request_attempt:create',
       'tool:show_terms_card:create',
       'tool:cue:create',
@@ -421,6 +422,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         `PATCH /v1/convai/tools/${r.tool_ids.confirm_terms}`,
         `PATCH /v1/convai/tools/${r.tool_ids.get_market_odds}`,
         `PATCH /v1/convai/tools/${r.tool_ids.request_review}`,
+        `PATCH /v1/convai/tools/${r.tool_ids.suggest_odds}`,
       ].sort(),
     );
     expect(store.secrets[0]._value).toBe('new');
@@ -456,9 +458,11 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         'conversation_config.agent.prompt.prompt',
       ]),
     );
+    // get_market_odds, request_review (the GG moment's spoken review) and (odds) suggest_odds
     expect(store.writes).toEqual([
       'POST /v1/convai/tools',
-      'POST /v1/convai/tools', // request_review too (the GG moment's spoken review)
+      'POST /v1/convai/tools',
+      'POST /v1/convai/tools',
       `PATCH /v1/convai/agents/${before.agent_id}`,
     ]);
     const tool = store.tools.find((t) => t.tool_config.name === 'get_market_odds').tool_config;
@@ -484,6 +488,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     const plan = dryRunPlan(OPTS);
     expect(plan.map((a) => `${a.method} ${a.path}`)).toEqual([
       'POST /v1/convai/secrets',
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',

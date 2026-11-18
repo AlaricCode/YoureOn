@@ -316,7 +316,7 @@ export function HistoryScreen({
                 {/* The title sits on the amount's first baseline, not centred on the two lines. */}
                 <View style={styles.historyText}>
                   <DataText variant="row" style={styles.flex} lines={1}>
-                    {`${it.title} · ${it.opponent}`}
+                    {`${it.title} · ${it.opponent}${it.stakes ? ` · ${it.stakes}` : ''}`}
                   </DataText>
                   <View style={styles.historyResult}>
                     <DataText
