@@ -46,9 +46,6 @@ export const FACE_MATCH_BUCKET = { limit: 30, windowMs: 60_000 } as const;
 export const FACE_ENROLL_BUCKET = { limit: 5, windowMs: 60 * 60_000 } as const;
 
 export function createFaceRoutes(): RouteModule {
-  /** §1.7 face-match "1 in flight" per user. */
-  const oneAtATime = oneInFlight();
-
   const consent = (): FaceConsentResponse => ({
     consent_version: FACE_CONSENT_VERSION,
     text: FACE_CONSENT_V1_TEXT,
@@ -69,6 +66,9 @@ export function createFaceRoutes(): RouteModule {
         deps.log.warn('face.config', { problem });
       // DATA-MODEL §10 retention schedule (hourly; see ./retention.ts).
       deps.keeper?.register(faceRetentionTask(deps));
+      const matchGate = faceMatchGate((userId) =>
+        deps.rateLimit?.take('face-match', userId, FACE_MATCH_BUCKET),
+      );
 
       app.get(FACE_CONSENT_PATH, requireAppSession, (c) => c.json(consent(), 200));
 
@@ -101,8 +101,7 @@ export function createFaceRoutes(): RouteModule {
 
       app.post('/v1/rooms/:room_id/face-match', requireSignedRequest, async (c) => {
         const me = appAuth(c);
-        deps.rateLimit?.take('face-match', me.user_id, FACE_MATCH_BUCKET);
-        return oneAtATime(me.user_id, async () => {
+        return matchGate(me.user_id, async () => {
           const body = await readBody(c, FaceMatchRequest);
           return c.json(await matchInRoom(deps, me.user_id, roomIdOf(c), body), 200);
         });
@@ -125,6 +124,20 @@ export function oneInFlight() {
       keys.delete(key);
     }
   };
+}
+
+/**
+ * §1.7 face-match: one in flight per user, then the 30/min bucket. The token is taken inside the
+ * guard, so a concurrent call refused with "One scan at a time" does not spend one; a call the
+ * bucket refuses frees the guard like any other failure.
+ */
+export function faceMatchGate(take: (userId: string) => void) {
+  const oneAtATime = oneInFlight();
+  return <T>(userId: string, f: () => Promise<T>): Promise<T> =>
+    oneAtATime(userId, async () => {
+      take(userId);
+      return f();
+    });
 }
 
 const busy = () =>
