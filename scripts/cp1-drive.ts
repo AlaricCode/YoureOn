@@ -6,12 +6,17 @@
 //
 //   npm run cp1-drive -- [--base-url http://127.0.0.1:8080] [--admin-token <DEMO_ADMIN_TOKEN>]
 //        [--keys-dir ~/.config/solana/youre-on] [--state-file <path>] [--reset] [--timeout 60]
-//        [--name-a Logan] [--name-b Jake] [--through locked|paid] [--gg] [--frames 8]
+//        [--name-a Logan] [--name-b Jake] [--through locked|paid] [--gg] [--frames 8] [--via-tools]
 //
 // Steps: sign up (or log in) two users whose wallet keys are demo-a / demo-b -> A creates a room,
 // B joins -> A challenges B from the list (POST /v1/bets) -> B accepts the invite -> fixture terms
 // (POST /v1/demo/bets/:id/terms, the same sink as propose_terms) -> confirm
 // (POST /v1/demo/bets/:id/confirm = confirm_terms) -> waits for LOCKED.
+// --via-tools: the terms and the confirm go through the ElevenLabs webhook tools instead, exactly
+// as the voice judge sends them (POST /el/tools/propose_terms then /el/tools/confirm_terms with
+// X-YO-Tool-Secret = ELEVENLABS_TOOL_SECRET from the env, the conversation bound by POST /v1/bets
+// voice_conversation_id). It proves the server half of the voice judge (secret, binding, sink,
+// lock) right after activation, with no phone and no ElevenLabs call.
 // With LOCK_SIGNER=phones on the server, this script plays both phones: GET /lock, sign the
 // stored message bytes with demo-a / demo-b, POST /lock/authorizations. With LOCK_SIGNER=server
 // the server signs custodially and the script only waits.
@@ -61,8 +66,9 @@ import { assertNotCommittable, loadRole } from './lib/keys';
 
 const USAGE = `usage: npm run cp1-drive -- [--base-url <url>] [--admin-token <token>] [--keys-dir <dir>]
           [--state-file <path>] [--reset] [--timeout 60] [--name-a Logan] [--name-b Jake]
-          [--through locked|paid] [--gg] [--frames 8]
+          [--through locked|paid] [--gg] [--frames 8] [--via-tools]
 Drives challenge -> terms -> confirm -> LOCKED against a running server (DEMO_MODE=true);
+--via-tools sends the terms + confirm as the ElevenLabs webhook tools (needs ELEVENLABS_TOOL_SECRET);
 --through paid goes on: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID
 (finalize after the appeal window, or the loser's GG with --gg).`;
 
@@ -317,6 +323,69 @@ async function session(
   return { device, session: must(r, [201], `signup ${party}`) as Session, fresh: true };
 }
 
+/**
+ * Beat 2 the way the ElevenLabs agent drives it: propose_terms with the judge's whole bet, wait
+ * for the sink (TERMS_PROPOSED), then confirm_terms. Business errors come back as HTTP 200
+ * {ok:false, fix, say}; a 401 means ELEVENLABS_TOOL_SECRET is not the server's value.
+ */
+async function termsViaTools(
+  api: Api,
+  betId: string,
+  conversationId: string,
+  secret: string,
+  bName: string,
+  timeoutMs: number,
+) {
+  const tool = async (name: string, args: Record<string, unknown>) => {
+    const r = await api.call('POST', `/el/tools/${name}`, {
+      body: { conversation_id: conversationId, bet_id: betId, ...args },
+      headers: { 'X-YO-Tool-Secret': secret },
+    });
+    if (r.status === 401)
+      throw new Error(`${name}: 401: ELEVENLABS_TOOL_SECRET is not the value the server has`);
+    const reply = must(r, [200], name);
+    console.log(`${name}: ${JSON.stringify(reply)}`);
+    if (!reply?.ok)
+      throw new Error(`${name} refused: ${reply?.fix ?? reply?.refused} "${reply?.say}"`);
+    return reply;
+  };
+  // What the judge sends once the one edge-case question is answered (API-CONTRACT §4.3).
+  const proposed = await tool('propose_terms', {
+    type: 'skill',
+    claim: `${bName} lands a water bottle flip upright on the table.`,
+    performer: 'B',
+    yes_party: 'B',
+    attempts: { count: 1, rule: 'single' },
+    success_criteria: [
+      'The bottle rotates at least once in the air.',
+      'The bottle comes to rest standing upright on its base.',
+    ],
+    failure_criteria: ['The bottle ends on its side, upside down, or off the table.'],
+    edge_cases: [
+      {
+        question: 'Does landing on the cap count?',
+        answer: 'No. Only upright on its base counts.',
+      },
+    ],
+    amount_usd: '1',
+    market_side: 'none',
+    deadline_minutes: 0,
+  });
+  if (proposed.next !== 'readback')
+    throw new Error(`propose_terms: expected next "readback", got ${JSON.stringify(proposed)}`);
+  // The sink composes + hashes after the reply (§4.2): wait for TERMS_PROPOSED.
+  const t0 = Date.now();
+  for (;;) {
+    const st = must(await api.demo('GET', `/v1/demo/bets/${betId}`), [200], 'bet status');
+    if (st.state === 'TERMS_PROPOSED') break;
+    if (st.state !== 'DRAFTING') throw new Error(`after propose_terms the bet is ${st.state}`);
+    if (Date.now() - t0 > timeoutMs) throw new Error('propose_terms: no TERMS_PROPOSED in time');
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const confirmed = await tool('confirm_terms', { heard: 'both' });
+  console.log(`terms ${confirmed.code} confirmed by the judge: "${confirmed.say}"`);
+}
+
 run(async () => {
   const { values } = parseCli(USAGE, {
     'base-url': { type: 'string' },
@@ -329,7 +398,14 @@ run(async () => {
     through: { type: 'string' },
     gg: { type: 'boolean' },
     frames: { type: 'string' },
+    'via-tools': { type: 'boolean' },
   });
+  const viaTools = values['via-tools'] === true;
+  const toolSecret = process.env['ELEVENLABS_TOOL_SECRET'];
+  if (viaTools && !toolSecret) {
+    console.error(`--via-tools needs ELEVENLABS_TOOL_SECRET (the server's value)\n\n${USAGE}`);
+    process.exit(2);
+  }
   const through = values.through ?? 'locked';
   if (through !== 'locked' && through !== 'paid') {
     console.error(`--through must be locked or paid\n\n${USAGE}`);
@@ -413,10 +489,14 @@ run(async () => {
   must(await api.signed(B, 'POST', '/v1/rooms/join', { code: room.code }), [200], 'join room');
   console.log(`room ${room.code} (${room.room_id})`);
 
+  // --via-tools: the conversation the webhook tools name, bound to the bet here (as A's phone
+  // does with the minted one; an unknown id is bound as-is until real minting is required).
+  const conversationId = viaTools ? `conv_cp1_${randomUUID().replace(/-/g, '')}` : null;
   const created = await api.signed(A, 'POST', '/v1/bets', {
     room_id: room.room_id,
     opponent_user_id: B.session.user.user_id,
     challenge_method: 'list',
+    ...(conversationId ? { voice_conversation_id: conversationId } : {}),
   });
   if (created.status === 409 && created.json?.error?.details?.reason === 'pair_busy')
     throw new Error(
@@ -426,14 +506,18 @@ run(async () => {
   console.log(`bet ${betId} DRAFTING`);
   must(await api.signed(B, 'POST', `/v1/bets/${betId}/invite/accept`), [200], 'accept invite');
 
-  const terms = must(
-    await api.demo('POST', `/v1/demo/bets/${betId}/terms`, {}),
-    [200],
-    'fixture terms',
-  );
-  console.log(`terms ${terms.code} (${terms.terms_hash}) TERMS_PROPOSED: "${terms.say}"`);
-  const conf = must(await api.demo('POST', `/v1/demo/bets/${betId}/confirm`), [200], 'confirm');
-  console.log(`confirm: ${conf.say}`);
+  if (viaTools) {
+    await termsViaTools(api, betId, conversationId!, toolSecret!, names.B, timeoutMs);
+  } else {
+    const terms = must(
+      await api.demo('POST', `/v1/demo/bets/${betId}/terms`, {}),
+      [200],
+      'fixture terms',
+    );
+    console.log(`terms ${terms.code} (${terms.terms_hash}) TERMS_PROPOSED: "${terms.say}"`);
+    const conf = must(await api.demo('POST', `/v1/demo/bets/${betId}/confirm`), [200], 'confirm');
+    console.log(`confirm: ${conf.say}`);
+  }
 
   const t0 = Date.now();
   let signedPhones = false;
