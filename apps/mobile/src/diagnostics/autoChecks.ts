@@ -118,6 +118,11 @@ const wallet: CheckBody = async () => {
   return `${key}; getRandomValues OK in ${fmt(t1 - t0)}; prewarm ${fmt(t2 - t1)}`;
 };
 
+const jcsVectors: CheckBody = async () => {
+  const { jcsVectorsCheck } = await import('./jcsVectors');
+  return jcsVectorsCheck();
+};
+
 export const AUTO_CHECKS: Partial<Record<CheckId, CheckBody>> = {
   'tflite-warmup': tfliteWarmup,
   'local-auth-hardware': localAuthHardware,
@@ -128,4 +133,5 @@ export const AUTO_CHECKS: Partial<Record<CheckId, CheckBody>> = {
   'gesture-handler': gestureHandler,
   notifications,
   wallet,
+  'jcs-vectors': jcsVectors,
 };
