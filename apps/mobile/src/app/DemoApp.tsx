@@ -1,7 +1,10 @@
 // The real app root (beats 1-4 on the phone), forked from PreviewApp's routes but driven by the
 // server: the route comes from ./machine selectRoute(app state, the active bet's server state).
 //   signup | demo claim (custodial demo seed -> wallet.importSeed, decision D-A)
+//   -> face enrollment offered right after signup (skippable; consent first) and in Profile
 //   -> home: rooms (create / join / presence) -> challenge from the list (POST /v1/bets 'list')
+//      or by face: "Scan a face" -> on-device embedding -> POST face-match -> "Challenge Jake?"
+//      -> POST /v1/bets 'face' + match_ticket (no match: "No match" and the room list)
 //   -> B: full-screen invite + haptic -> negotiate (captions, draft; on A's phone "Type it
 //      instead", automatic with EXPO_PUBLIC_VOICE=off or a failed voice session) -> terms card (hash checked,
 //      device policy, hold -> Face ID -> sign -> PartyAuthorization; or the server pushes LOCKED)
@@ -22,7 +25,7 @@ import {
 } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import type { RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
+import type { CreateBetResponse, RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 
 import { extractFrames, readClip } from '../attempt/capture';
@@ -31,9 +34,17 @@ import { emptyBet, endReasonOf, lockSignals, type BetModel } from '../bets/store
 import { betView, myResult, type BetView } from '../bets/view';
 import { feel } from '../device/feedback';
 import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
+import { createServerFaceApi, type FaceStatus } from '../enroll/api';
+import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
+import { getNativeEmbedder } from '../face/native';
 import type { Balance } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
-import { IncomingScreen, NegotiateScreen, type Caption } from '../screens/ChallengeScreens';
+import {
+  IncomingScreen,
+  NegotiateScreen,
+  ScanScreen,
+  type Caption,
+} from '../screens/ChallengeScreens';
 import { COPY, t } from '../screens/copy';
 import { DemoClaimScreen } from '../screens/DemoClaimScreen';
 import { HomeScreen, ProfileScreen } from '../screens/HomeScreens';
@@ -75,6 +86,13 @@ import {
 } from './machine';
 import { getRuntime, type Runtime } from './runtime';
 import {
+  challengeErrorResult,
+  runScan,
+  ticketFresh,
+  type ChallengeResult,
+  type ScanMatch,
+} from './scan';
+import {
   canConfirm,
   canSubmit,
   confirmTypedTerms,
@@ -89,6 +107,8 @@ import {
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
+/** EXPO_PUBLIC_FACE=off hides face enrollment and the face scan (the room list still works). */
+const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
 const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
@@ -165,12 +185,25 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [rt],
   );
   const signupApi = useMemo(() => createServerSignupApi(rt.sessions), [rt]);
+  const faceApi = useMemo(() => createServerFaceApi(rt.client), [rt]);
+  /** The on-device embedder (the model loads on first use; the scan screen warms it up). */
+  const embedder = useMemo(() => (FACE_ENABLED ? getNativeEmbedder() : null), []);
+  const [faceStatus, setFaceStatus] = useState<FaceStatus | null>(null);
+  /** Where enrollment returns to: home after the signup offer, else face settings. */
+  const enrollFrom = useRef<'signup' | 'settings'>('settings');
   /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
   const voiceVars = useRef(new Map<string, VoiceDynamicVariables>());
 
   const refreshBalance = useCallback(() => {
     rt.api.balance().then(setBalance, () => undefined);
   }, [rt]);
+
+  const refreshFace = useCallback(() => {
+    faceApi.getStatus().then(setFaceStatus, () => undefined);
+  }, [faceApi]);
+  useEffect(() => {
+    if (app.auth === 'signedIn' && app.overlay === 'profile') refreshFace();
+  }, [app.auth, app.overlay, refreshFace]);
 
   // ---- boot / session ---------------------------------------------------------------------
   const boot = useCallback(() => {
@@ -445,6 +478,39 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }, [rt, needDeadline, betId]);
 
   // ---- actions -----------------------------------------------------------------------------
+  /** A new challenge (list or face): A hosts the judge, follows the bet, and opens it. */
+  const openNewBet = (r: CreateBetResponse) => {
+    voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
+    rt.hub.adopt(r.bet);
+    rt.ws.subscribe(r.bet.bet_id);
+    dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
+  };
+
+  const challengeFromList = (u: PreviewUser) => {
+    const room = appRef.current.room;
+    if (!room) return;
+    rt.api.createBet(room.room_id, u.user_id).then(openNewBet, () => undefined);
+  };
+
+  /** "Challenge Jake?" after a face match: POST /v1/bets 'face' with the 60 s ticket. */
+  const challengeByFace = async (m: ScanMatch): Promise<ChallengeResult> => {
+    const room = appRef.current.room;
+    if (!room) return 'not_in_room';
+    if (!ticketFresh(m, rt.clock.now())) return 'expired';
+    try {
+      openNewBet(await rt.api.createFaceBet(room.room_id, m.user.user_id, m.ticket));
+      return 'ok';
+    } catch (e) {
+      return challengeErrorResult(e);
+    }
+  };
+
+  const leaveEnroll = () =>
+    dispatch({
+      type: 'overlay',
+      overlay: enrollFrom.current === 'signup' ? 'none' : 'faceSettings',
+    });
+
   async function joinRoom(code: string): Promise<boolean> {
     try {
       const r = await rt.api.joinRoom(code);
@@ -608,7 +674,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return (
           <SignupScreen
             api={signupApi}
-            onSignedUp={() => undefined /* the session listener moves on */}
+            onSignedUp={() => {
+              // The session listener moves on to home; enrollment is offered first (skippable).
+              if (!FACE_ENABLED) return;
+              enrollFrom.current = 'signup';
+              dispatch({ type: 'overlay', overlay: 'enroll' });
+            }}
             onDemo={() => dispatch({ type: 'overlay', overlay: 'demoClaim' })}
             onTitleLongPress={onOperator}
           />
@@ -657,19 +728,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 .catch(() => undefined);
               if (id) void rt.api.leaveRoom(id).catch(() => undefined);
             }}
-            onChallenge={(u) => {
-              const room = app.room;
-              if (!room) return;
-              rt.api.createBet(room.room_id, u.user_id).then(
-                (r) => {
-                  voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
-                  rt.hub.adopt(r.bet);
-                  rt.ws.subscribe(r.bet.bet_id);
-                  dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
-                },
-                () => undefined,
-              );
-            }}
+            onScan={
+              FACE_ENABLED && app.room
+                ? () => dispatch({ type: 'overlay', overlay: 'scan' })
+                : undefined
+            }
+            onChallenge={challengeFromList}
             onHistory={() => undefined}
             onProfile={() => dispatch({ type: 'overlay', overlay: 'profile' })}
             onTitleLongPress={onOperator}
@@ -679,9 +743,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return (
           <ProfileScreen
             name={app.me?.display_name ?? ''}
-            faceOn={false}
+            faceOn={faceStatus === 'active'}
             onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
-            onFace={() => undefined}
+            onFace={() => {
+              if (FACE_ENABLED) dispatch({ type: 'overlay', overlay: 'faceSettings' });
+            }}
             onHistory={() => undefined}
             onJudgeCam={() => {
               dispatch({ type: 'judge_cam', on: !app.judgeCam });
@@ -692,6 +758,61 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             }}
             onDemo={() => dispatch({ type: 'overlay', overlay: 'demoClaim' })}
           />
+        );
+      case 'scan': {
+        const room = app.room;
+        if (!room || !embedder) return waiting;
+        return (
+          <ScanScreen
+            onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
+            scan={(url) =>
+              runScan(
+                {
+                  embedder,
+                  faceMatch: (req) => rt.api.faceMatch(room.room_id, req),
+                  now: () => rt.clock.now(),
+                },
+                url,
+              )
+            }
+            onChallenge={challengeByFace}
+            members={app.members
+              .filter((m) => m.user.user_id !== app.me?.user_id && m.online)
+              .map(toPreviewUser)}
+            onPickMember={challengeFromList}
+            onPickList={() => dispatch({ type: 'overlay', overlay: 'none' })}
+            onOpen={() => void embedder.prewarm?.().catch(() => undefined)}
+          />
+        );
+      }
+      case 'faceSettings':
+        return (
+          <FaceSettings
+            api={faceApi}
+            onBack={() => {
+              refreshFace();
+              dispatch({ type: 'overlay', overlay: 'profile' });
+            }}
+            onSetUp={() => {
+              enrollFrom.current = 'settings';
+              dispatch({ type: 'overlay', overlay: 'enroll' });
+            }}
+          />
+        );
+      case 'enroll':
+        return embedder ? (
+          <FaceEnrollFlow
+            api={faceApi}
+            embedder={embedder}
+            onDone={() => {
+              refreshFace();
+              leaveEnroll();
+            }}
+            onSkip={leaveEnroll}
+            onExit={leaveEnroll}
+          />
+        ) : (
+          waiting
         );
       case 'incoming':
         return (
