@@ -31,7 +31,7 @@ import {
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
 import { FailedTransactionMetadata, type TransactionMetadata } from 'litesvm';
-import { chainTxs, noncePool } from '@youre-on/db';
+import { chainEvents, chainTxs, noncePool } from '@youre-on/db';
 import type { Session } from '@youre-on/shared/api';
 import { ESCROW_PROGRAM_ADDRESS } from '@youre-on/shared/escrow-client';
 import type { Ruling } from '@youre-on/shared/ruling';
@@ -45,6 +45,7 @@ import {
   type Env as SvmEnv,
 } from '../../../packages/shared/test/escrow/harness';
 import type { ChainClient, ChainRuntime } from '../src/chain/tx';
+import { StreamGapReconciler } from '../src/chain/reconciler';
 import { QUICKNODE_WEBHOOK_PATH } from '../src/chain/routes';
 import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
 import { liteSvmClient } from './litesvm-client';
@@ -491,5 +492,96 @@ run('QuickNode Stream path on LiteSVM transactions (filter -> webhook -> project
     } finally {
       install();
     }
+  });
+
+  describe('Stream-gap reconciler (rpc_poll, DATA-MODEL §8.3)', () => {
+    const eventsOf = (sig: string) =>
+      ctx.deps.db.select().from(chainEvents).where(eq(chainEvents.signature, sig));
+
+    it('fills what the Stream missed from getTransaction: same projection, observed_via rpc_poll', async () => {
+      const gaps = new StreamGapReconciler();
+      const betId = await confirmedBet();
+      const lockSig = (await txRow(betId, 'atomic_lock')).signature!;
+      // the Stream delivered the lock; then it went quiet (paused / out of credits)
+      await stream(lockSig);
+      await lc.payout.onRuling(betId, ruling(betId, (await betRow(betId)).terms_hash!, 'A_WINS'));
+      await lc.idle();
+      const resolveSig = (await txRow(betId, 'resolve')).signature!;
+      // within STREAM_FALLBACK_MS of the send nothing is polled (the Stream gets its chance)
+      expect((await gaps.run(ctx.deps, rt, now() + 1_000)).polled).toBe(0);
+      expect(await eventsOf(resolveSig)).toEqual([]);
+      advance(12_000);
+      expect(await lc.payout.finalizeDue(now())).toEqual([betId]);
+      await lc.idle();
+      const finSig = (await txRow(betId, 'finalize')).signature!;
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', onchain_status: 'locked' });
+
+      const r = await gaps.run(ctx.deps, rt, now() + 6_000);
+      expect(r).toMatchObject({ polled: 2, ingested: 3, missing: 0 });
+      expect((await eventsOf(lockSig)).map((e) => e.source)).toEqual(['stream', 'stream']);
+      const polled = [...(await eventsOf(resolveSig)), ...(await eventsOf(finSig))];
+      expect(polled.map((e) => [e.event_name, e.source, e.slot !== null, e.block_height])).toEqual(
+        expect.arrayContaining([
+          ['BetResolved', 'rpc_poll', true, null],
+          ['BetFinalized', 'rpc_poll', true, null],
+          ['BetClosed', 'rpc_poll', true, null],
+        ]),
+      );
+      expect(polled.every((e) => e.applied_at !== null && e.apply_error === null)).toBe(true);
+      expect(await betRow(betId)).toMatchObject({
+        state: 'PAID',
+        onchain_status: 'settled',
+        payout_a: 2n * USDC,
+        payout_sig: finSig,
+        close_sig: finSig,
+        resolve_sig: resolveSig,
+      });
+      const chainEnvs = (await log(betId))
+        .filter((e) => e.type.startsWith('chain.'))
+        .map((e) => [e.type, (e.envelope as any).payload.observed_via]);
+      expect(chainEnvs).toEqual([
+        ['chain.BetCreated', 'quicknode_stream'],
+        ['chain.BetAccepted', 'quicknode_stream'],
+        ['chain.BetResolved', 'rpc_poll'],
+        ['chain.BetFinalized', 'rpc_poll'],
+        ['chain.BetClosed', 'rpc_poll'],
+      ]);
+      // rpc_poll never claims to be the Stream
+      expect((await txRow(betId, 'finalize')).stream_seen_at).toBeNull();
+      // nothing left to poll; a late Stream copy is a pure duplicate
+      expect(await gaps.run(ctx.deps, rt, now() + 7_000)).toMatchObject({ polled: 0 });
+      expect((await stream(resolveSig, finSig)).json).toMatchObject({ inserted: 0, published: 0 });
+    });
+
+    it('no Stream at all and a missed lock confirm: the reconciler locks the bet', async () => {
+      const gaps = new StreamGapReconciler();
+      let hide = true;
+      install({ client: hiding(() => hide), timeoutMs: 30 });
+      try {
+        const betId = await confirmedBet();
+        expect((await betRow(betId)).state).toBe('AWAITING_LOCK');
+        const lockSig = (await txRow(betId, 'atomic_lock')).signature!;
+        const r = await gaps.run(ctx.deps, { ...rt, client: hiding(() => hide) }, now() + 6_000);
+        expect(r.ingested).toBeGreaterThanOrEqual(2);
+        expect((await eventsOf(lockSig)).map((e) => [e.event_name, e.source])).toEqual([
+          ['BetCreated', 'rpc_poll'],
+          ['BetAccepted', 'rpc_poll'],
+        ]);
+        expect(await betRow(betId)).toMatchObject({ state: 'LOCKED', onchain_status: 'locked' });
+        expect(await cues(betId)).toContain('LOCKED');
+        hide = false;
+      } finally {
+        install();
+      }
+    });
+
+    it('is a no-op without a chain runtime or a client that can getTransaction', async () => {
+      const gaps = new StreamGapReconciler();
+      expect(await gaps.run(ctx.deps, null, now())).toMatchObject({ polled: 0 });
+      const { transaction: _t, ...noTx } = rt.client;
+      expect(await gaps.run(ctx.deps, { ...rt, client: noTx }, now() + 6_000)).toMatchObject({
+        polled: 0,
+      });
+    });
   });
 });

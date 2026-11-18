@@ -436,6 +436,7 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
       'draft-idle',
       'lock-sweep',
       'finalize-due',
+      'stream-gaps',
       'resolve-due',
     ]);
     expect(deps.keeper?.isStarted).toBe(false);

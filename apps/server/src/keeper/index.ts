@@ -3,6 +3,7 @@
 // expiry with the nonce advance, `timeout_refund`, the nonce-pool sweep, the outbox drain)
 // register here.
 import type { AppDeps } from '../context';
+import { StreamGapReconciler } from '../chain/reconciler';
 import { lifecycleOf } from '../lock/runtime';
 import { resolveDueTask } from '../payout/resolve-due';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
@@ -25,11 +26,18 @@ export {
  *    nonce advances finished / retried (DATA-MODEL §5.20 "Boot reconcile and sweep").
  *  - finalize-due: RULED bets past appeal_deadline + 1 s -> [finalize, close_bet] (the durable
  *    backstop of the PayoutService setTimeout fast path).
+ *  - stream-gaps: server txs with no Stream event after STREAM_FALLBACK_MS -> getTransaction ->
+ *    chain_events (source rpc_poll) -> projector (src/chain/reconciler.ts, DATA-MODEL §8.3).
  */
 export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask[] {
+  const gaps = new StreamGapReconciler();
   return [
     { name: 'lock-sweep', run: (now) => lifecycleOf(deps).lock.sweep(now) },
     { name: 'finalize-due', run: (now) => lifecycleOf(deps).payout.finalizeDue(now) },
+    {
+      name: 'stream-gaps',
+      run: async (now) => gaps.run(deps, await lifecycleOf(deps).runtime(), now),
+    },
   ];
 }
 

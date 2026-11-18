@@ -53,6 +53,7 @@ import {
 } from '@youre-on/shared/chain/constants';
 import { cuLimitIx, cuPriceIx, MAX_TX_BYTES } from '@youre-on/shared/chain/lock-tx';
 import type { Env } from '../env';
+import type { RpcTransaction } from './streams';
 
 export const SYSTEM = address(SYSTEM_PROGRAM_ID);
 export const TOKEN_PROGRAM = address(TOKEN_PROGRAM_ID);
@@ -106,6 +107,11 @@ export interface ChainClient {
   /** Sum of every token account of `owner` for `mint` (API-CONTRACT §2.14). */
   tokenBalanceByOwner(owner: Address, mint: Address): Promise<bigint>;
   lamports(addr: Address): Promise<bigint>;
+  /**
+   * getTransaction(sig, confirmed, json, maxSupportedTransactionVersion 1), normalized; null when
+   * not found (yet). Optional: the Stream-gap reconciler (chain/reconciler.ts) skips without it.
+   */
+  transaction?(sig: string): Promise<RpcTransaction | null>;
 }
 
 /** The RPC rejected the tx at preflight (nothing landed, no fee). */
@@ -290,6 +296,37 @@ export function rpcChainClient(
     async lamports(addr) {
       const { value } = await rpc.getBalance(addr, { commitment: 'confirmed' }).send();
       return value;
+    },
+    async transaction(sig) {
+      // Devnet carries v1 transactions: version 0 would fail with -32015 (DATA-MODEL §8.3).
+      const tx = await rpc
+        .getTransaction(sig as Signature, {
+          commitment: 'confirmed',
+          encoding: 'json',
+          maxSupportedTransactionVersion: 1,
+        })
+        .send();
+      if (!tx || !tx.meta) return null;
+      const loaded = tx.meta.loadedAddresses;
+      return {
+        signature: sig,
+        slot: Number(tx.slot),
+        blockTime: tx.blockTime === null ? null : Number(tx.blockTime),
+        err: tx.meta.err,
+        accountKeys: [
+          ...tx.transaction.message.accountKeys,
+          ...(loaded?.writable ?? []),
+          ...(loaded?.readonly ?? []),
+        ],
+        innerInstructions: (tx.meta.innerInstructions ?? []).map((g) => ({
+          index: Number(g.index),
+          instructions: g.instructions.map((ix) => ({
+            programIdIndex: Number(ix.programIdIndex),
+            accounts: ix.accounts.map(Number),
+            data: ix.data,
+          })),
+        })),
+      };
     },
   };
 }
