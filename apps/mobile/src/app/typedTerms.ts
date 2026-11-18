@@ -115,15 +115,31 @@ export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
 export const canSubmit = (s: TypedState): boolean =>
   s.mode === 'typed' && s.phase === 'editing' && s.bet_id !== null && s.claim.trim().length > 0;
 
-/**
- * "Lock it in" shows once the card this form sent is on screen (the terms.proposed push), and
- * only for that card: a newer proposal (the judge, a second phone) needs a fresh look.
- */
-export const canConfirm = (s: TypedState, shownHash: string | null): boolean =>
+/** The card this form sent is on screen (the terms.proposed push), and only that card. */
+const ownCardShown = (s: TypedState, shownHash: string | null): boolean =>
   s.mode === 'typed' &&
   (s.phase === 'sent' || s.phase === 'confirming') &&
   shownHash !== null &&
   shownHash === s.proposedHash;
+
+/**
+ * "Lock it in" shows once the card this form sent is on screen, and only for that card: a newer
+ * proposal (the judge, a second phone) needs a fresh look. It also waits for B to accept the
+ * challenge (bet.invite_answered): the server answers 409 invite_pending before that, and with
+ * LOCK_SIGNER=server the accept is B's only consent to the lock.
+ */
+export const canConfirm = (
+  s: TypedState,
+  shownHash: string | null,
+  inviteAnswer: 'accepted' | 'declined' | null,
+): boolean => ownCardShown(s, shownHash) && inviteAnswer === 'accepted';
+
+/** The card is ready but B has not said yes yet: show "Waiting for <B>" in place of the button. */
+export const waitingForAccept = (
+  s: TypedState,
+  shownHash: string | null,
+  inviteAnswer: 'accepted' | 'declined' | null,
+): boolean => ownCardShown(s, shownHash) && inviteAnswer !== 'accepted';
 
 /** Server text on a party screen passes the copy rule, or a short fallback shows instead. */
 const noteOf = (say: string | null | undefined): string =>
@@ -145,15 +161,20 @@ export async function submitTypedTerms(
   }
 }
 
+/**
+ * `freshKey`: the server answered with a 4xx, which it replays for that Idempotency-Key for 24h,
+ * so the next tap must mint a new key (a network error or 5xx keeps the key: same write).
+ */
 export async function confirmTypedTerms(
   d: { api: Pick<YoApi, 'confirmTerms'> },
   i: { betId: string; termsHash: string; idempotencyKey: string },
-): Promise<{ ok: true } | { ok: false; note: string }> {
+): Promise<{ ok: true } | { ok: false; note: string; freshKey: boolean }> {
   try {
     await d.api.confirmTerms(i.betId, i.termsHash, i.idempotencyKey);
     return { ok: true };
   } catch (e) {
-    return { ok: false, note: errorNote(e) };
+    const answered = e instanceof ApiClientError && e.status >= 400 && e.status < 500;
+    return { ok: false, note: errorNote(e), freshKey: answered };
   }
 }
 
@@ -161,6 +182,8 @@ function errorNote(e: unknown): string {
   if (e instanceof ApiClientError) {
     if (e.code === 'TERMS_HASH_MISMATCH') return 'Terms changed, review again';
     if (e.code === 'VALIDATION_FAILED') return noteOf('That bet needs fixing. Try it shorter.');
+    if (e.code === 'INVALID_STATE' && e.details?.reason === 'invite_pending')
+      return noteOf('They have not accepted yet.');
   }
   return t(COPY.app.failed);
 }

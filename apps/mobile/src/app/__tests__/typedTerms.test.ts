@@ -14,6 +14,7 @@ import {
   submitTypedTerms,
   TYPED_STAKES_USD,
   typedReducer,
+  waitingForAccept,
   type TypedEvent,
   type TypedState,
 } from '../typedTerms';
@@ -75,9 +76,10 @@ describe('typed terms reducer', () => {
       outcome: { kind: 'proposed', terms_hash: HASH, code: 'abab·abab' },
     });
     expect(sent).toMatchObject({ phase: 'sent', proposedHash: HASH, note: null });
-    expect(canConfirm(sent, null)).toBe(false); // the push has not arrived yet
-    expect(canConfirm(sent, 'cd'.repeat(32))).toBe(false); // someone else's newer card
-    expect(canConfirm(sent, HASH)).toBe(true);
+    expect(canConfirm(sent, null, 'accepted')).toBe(false); // the push has not arrived yet
+    expect(canConfirm(sent, 'cd'.repeat(32), 'accepted')).toBe(false); // someone else's newer card
+    expect(canConfirm(sent, HASH, 'accepted')).toBe(true);
+    expect(waitingForAccept(sent, HASH, 'accepted')).toBe(false);
     const confirming = run(sent, { type: 'confirm' });
     expect(confirming.phase).toBe('confirming');
     expect(run(confirming, { type: 'confirmed' }).phase).toBe('confirmed');
@@ -99,7 +101,7 @@ describe('typed terms reducer', () => {
     } as TypedEvent);
     const edited = run(sent, { type: 'stake', usd: 20 });
     expect(edited.phase).toBe('editing');
-    expect(canConfirm(edited, HASH)).toBe(false);
+    expect(canConfirm(edited, HASH, 'accepted')).toBe(false);
     expect(canSubmit(edited)).toBe(true);
   });
 
@@ -236,11 +238,62 @@ describe('typed terms actions', () => {
       },
       { betId: BET, termsHash: HASH, idempotencyKey: 'k-2' },
     );
-    expect(stale).toEqual({ ok: false, note: 'Terms changed, review again' });
+    expect(stale).toEqual({ ok: false, note: 'Terms changed, review again', freshKey: true });
+    // B has not accepted: the server's 409 is replayed for k-3, so the next tap needs a new key.
+    const pending = await confirmTypedTerms(
+      {
+        api: {
+          async confirmTerms() {
+            throw new ApiClientError('INVALID_STATE', 409, 'pending', false, {
+              reason: 'invite_pending',
+            });
+          },
+        },
+      },
+      { betId: BET, termsHash: HASH, idempotencyKey: 'k-3' },
+    );
+    expect(pending).toEqual({ ok: false, note: 'They have not accepted yet.', freshKey: true });
+    // A lost response keeps the key: the resend is the same write.
+    const lost = await confirmTypedTerms(
+      {
+        api: {
+          async confirmTerms() {
+            throw new ApiClientError('NETWORK', 0, 'offline', true);
+          },
+        },
+      },
+      { betId: BET, termsHash: HASH, idempotencyKey: 'k-4' },
+    );
+    expect(lost).toMatchObject({ ok: false, freshKey: false });
+  });
+
+  it('Lock it in waits for B to accept the challenge; until then the card says Waiting for B', () => {
+    const sent = run(typedOn(), { type: 'submit' }, {
+      type: 'submitted',
+      outcome: { kind: 'proposed', terms_hash: HASH, code: 'c' },
+    } as TypedEvent);
+    // B's phone is still on the incoming screen.
+    expect(canConfirm(sent, HASH, null)).toBe(false);
+    expect(waitingForAccept(sent, HASH, null)).toBe(true);
+    expect(canConfirm(sent, HASH, 'declined')).toBe(false);
+    // bet.invite_answered accepted reaches A's store.
+    const m = applyBetEvent(
+      fromSnapshot(snapshot()),
+      ev('bet.invite_answered', { party: 'B', answer: 'accepted' }, 2),
+    );
+    expect(m.inviteAnswer).toBe('accepted');
+    expect(canConfirm(sent, HASH, m.inviteAnswer)).toBe(true);
+    expect(waitingForAccept(sent, HASH, m.inviteAnswer)).toBe(false);
+    // Before the card is on screen there is nothing to wait on: Send stays.
+    expect(waitingForAccept(typedOn(), HASH, null)).toBe(false);
   });
 
   it('every note the form can show passes the copy rule', () => {
-    for (const n of ['Terms changed, review again', t(COPY.app.failed)])
+    for (const n of [
+      'Terms changed, review again',
+      'They have not accepted yet.',
+      t(COPY.app.failed),
+    ])
       expect(checkCopy(n, 'body')).toEqual([]);
   });
 
@@ -252,6 +305,6 @@ describe('typed terms actions', () => {
       type: 'submitted',
       outcome: { kind: 'proposed', terms_hash: env.terms_hash, code: 'c' },
     } as TypedEvent);
-    expect(canConfirm(sent, m.envelope?.terms_hash ?? null)).toBe(true);
+    expect(canConfirm(sent, m.envelope?.terms_hash ?? null, 'accepted')).toBe(true);
   });
 });

@@ -182,4 +182,6 @@ export const fill = {
   headToHead: (w: number, l: number, name: string, net: string) =>
     `You're ${w}-${l} against ${name} (${net})`,
   turn: (name: string) => `${name}'s turn`,
+  /** A's typed terms are on the card; B has not accepted yet. First name only: a 3-word label. */
+  waitingFor: (name: string) => `Waiting for ${name.trim().split(/\s+/)[0] || 'them'}`,
 } as const;
