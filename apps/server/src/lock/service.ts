@@ -57,12 +57,14 @@ import {
   cosignTx,
   customErrorCode,
   cuWithMargin,
+  heightOnce,
   messageB64,
   poolAddress,
   PreflightError,
   readNonce,
   SimulationError,
   TxFailedError,
+  txFate,
   wireOf,
   type ChainRuntime,
   type SendOptions,
@@ -1214,6 +1216,39 @@ export class LockService {
         continue;
       }
       await this.revokeNonce(rt, n, adv.bet_id);
+    }
+
+    // 4. 'sent' nonce advances no advancing nonce points at any more (the nonce was retired
+    //    after 3 failures, or re-advanced by a later revoke): settle the row from the chain so
+    //    it does not sit 'sent' for good. The nonce itself is already handled.
+    const orphanAdvances = await this.deps.db
+      .select()
+      .from(chainTxs)
+      .where(
+        and(
+          eq(chainTxs.kind, 'nonce_advance'),
+          eq(chainTxs.status, 'sent'),
+          sql`NOT EXISTS (SELECT 1 FROM ${noncePool} p WHERE p.advance_tx_id = ${chainTxs.id})`,
+        ),
+      )
+      .limit(25);
+    const height = heightOnce(rt.client);
+    for (const row of orphanAdvances) {
+      if (!row.signature) continue;
+      const { fate } = await txFate(rt.client, row.signature, row.last_valid_block_height, {
+        sentAtMs: row.sent_at?.getTime() ?? 0,
+        nowMs,
+        height,
+      });
+      if (fate === 'pending') continue;
+      await this.deps.db
+        .update(chainTxs)
+        .set(
+          fate === 'landed'
+            ? { status: 'confirmed', rpc_confirmed_at: now }
+            : { status: fate === 'failed' ? 'failed' : 'expired', err: `orphan advance ${fate}` },
+        )
+        .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
     }
     return result;
   }

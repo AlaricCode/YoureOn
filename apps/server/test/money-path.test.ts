@@ -8,12 +8,13 @@
 // This suite runs in its OWN database (<DATABASE_URL db>_money): it owns nonce_pool and calls
 // POST /v1/demo/reset (which deletes every non-seed bet). Skips without DATABASE_URL or escrow.so.
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
+  getBase58Decoder,
   type Base64EncodedWireTransaction,
   type KeyPairSigner,
 } from '@solana/kit';
@@ -560,6 +561,26 @@ run('money path hardening over LiteSVM', () => {
     const [lock] = await txRows(betId, 'atomic_lock');
     expect(lock!.status).toBe('confirmed');
     expect(client.sent).toContain(lock!.signature);
+  });
+
+  it('lock sweep settles a sent nonce advance no nonce points at any more (never stuck sent)', async () => {
+    const betId = await lockedBet();
+    const [n] = await ctx.deps.db.select().from(noncePool).limit(1);
+    const sig = getBase58Decoder().decode(new Uint8Array(randomBytes(64)));
+    await ctx.deps.db.insert(chainTxs).values({
+      bet_id: betId,
+      kind: 'nonce_advance',
+      signer_role: 'fee_payer',
+      message_sha256: 'ef'.repeat(32),
+      nonce_account: n!.nonce_account,
+      signature: sig,
+      expected_status: 'none',
+      status: 'sent',
+      sent_at: new Date(now() - 20 * 60_000), // no lvbh, long ago, never seen: dead
+    });
+    await lc.lock.sweep(now());
+    const [row] = await ctx.deps.db.select().from(chainTxs).where(eq(chainTxs.signature, sig));
+    expect(row!.status).toBe('expired');
   });
 
   // ---- orphans -------------------------------------------------------------------------------
