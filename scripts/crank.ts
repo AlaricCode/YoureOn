@@ -15,7 +15,7 @@ import { chainNow, connect, explorerTx, lamportsOf } from './lib/chain';
 import { crankOnce } from './lib/crank';
 import { loadKeypairFile } from './lib/keys';
 
-const USAGE = `usage: npm run crank -- [--url <rpc>] --payer <keypair.json> [--dry-run] [--devnet]
+const USAGE = `usage: npm run crank -- [--url <rpc>] --payer <keypair.json> [--dry-run] [--devnet] [--only <pda,...>] [--skip <pda,...>]
 Settles and closes every escrow Bet whose deadline has passed; rent goes to each Bet's rent payer.
   --payer    any funded keypair (solana-keygen JSON); pays the fees only
   --dry-run  list what would be sent, send nothing
@@ -26,6 +26,8 @@ run(async () => {
     payer: { type: 'string' },
     'dry-run': { type: 'boolean' },
     devnet: { type: 'boolean' },
+    only: { type: 'string' },
+    skip: { type: 'string' },
   });
   if (!values.payer) {
     console.error(`--payer is required\n\n${USAGE}`);
@@ -45,6 +47,8 @@ run(async () => {
   const results = await crankOnce(chain.rpc, payer, now, {
     dryRun: values['dry-run'] ?? false,
     log: (l) => console.log(l),
+    only: pdaSet(values.only),
+    skip: pdaSet(values.skip),
   });
   const due = results.filter((r) => r.action);
   console.log(`\n${results.length} bet(s) on chain, ${due.length} due`);
@@ -59,3 +63,13 @@ run(async () => {
   const failed = due.filter((r) => r.error);
   if (failed.length) throw new Error(`${failed.length} bet(s) could not be cranked`);
 });
+
+/** Comma-separated Bet PDAs (--only / --skip). */
+function pdaSet(v: string | undefined): Set<string> {
+  return new Set(
+    (v ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
+  );
+}
