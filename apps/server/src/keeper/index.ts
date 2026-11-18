@@ -4,6 +4,7 @@
 // register here.
 import type { AppDeps } from '../context';
 import { lifecycleOf } from '../lock/runtime';
+import { resolveDueTask } from '../payout/resolve-due';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
 import { Keeper, type KeeperOptions, type KeeperTask } from './keeper';
 
@@ -33,12 +34,14 @@ export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): Kee
 }
 
 export function createServerKeeper(
-  deps: SweepDeps & Pick<AppDeps, 'now' | 'log'> & Partial<Pick<AppDeps, 'env'>>,
+  deps: SweepDeps & Pick<AppDeps, 'now' | 'log'> & Partial<Pick<AppDeps, 'env' | 'onRuling'>>,
   opts: Omit<KeeperOptions, 'now' | 'log'> = {},
 ): Keeper {
   const keeper = new Keeper({ now: deps.now, log: deps.log, ...opts });
   keeper.register(draftIdleTask(deps));
   const env = deps.env;
   if (env) for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
+  // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
+  if (env) keeper.register(resolveDueTask(deps));
   return keeper;
 }
