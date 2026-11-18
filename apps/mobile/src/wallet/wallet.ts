@@ -21,7 +21,7 @@ import {
   type AuthPrompt,
   type AuthStage,
 } from './authMethod';
-import { base58Encode, wipe } from './bytes';
+import { base58Encode, utf8, wipe } from './bytes';
 import { messageBytesOf, runDevicePolicy, type DevicePolicyRequest } from './devicePolicy';
 import { ed, sha256 } from './noble';
 import type {
@@ -141,9 +141,20 @@ export type Wallet = {
     request: DevicePolicyRequest,
     prompt: string | AuthPrompt,
   ): Promise<AuthorizeResult & { policy: DevicePolicyPass }>;
+  /**
+   * Signs the signup `wallet_sig` (API-CONTRACT §1.3: "proves the phone holds the wallet key
+   * once"; no Face ID). Only a `yo-bind-v1` message naming THIS wallet is signed: the ASCII tag
+   * can never parse as a Solana message (§1.3 domain separation), so this cannot sign money.
+   * Returns the 64-byte signature.
+   */
+  signWalletBinding(message: string): Promise<Uint8Array>;
   /** Deletes both items. For a debug screen / tests only; there is no backup. */
   destroy(): Promise<void>;
 };
+
+/** `yo-bind-v1\nwallet=<w>\ndevice=<d>\nchallenge=<nonce>\n` (packages/shared walletBindMessage). */
+const BIND_RE =
+  /^yo-bind-v1\nwallet=([1-9A-HJ-NP-Za-km-z]{32,44})\ndevice=[1-9A-HJ-NP-Za-km-z]{32,44}\nchallenge=[A-Za-z0-9_-]{43}\n$/;
 
 const CANCEL_ERRORS: readonly string[] = ['user_cancel', 'system_cancel', 'app_cancel'];
 
@@ -358,6 +369,23 @@ export function createWallet(platform: WalletPlatform): Wallet {
       const result = await wallet.authorize(message, prompt, { devicePolicy: request });
       if (!result.policy) throw new WalletError('POLICY_REJECTED', 'device policy did not run');
       return { ...result, policy: result.policy };
+    },
+
+    async signWalletBinding(message) {
+      const m = BIND_RE.exec(message);
+      const publicKey = await getPublicKey();
+      if (publicKey === null) throw new WalletError('NO_WALLET', 'no wallet on this device');
+      if (!m || m[1] !== publicKey)
+        throw new WalletError('BAD_MESSAGE', 'not a yo-bind-v1 message for this wallet');
+      const seed = await readSeed();
+      if (seed === null) throw new WalletError('NO_WALLET', 'wallet seed missing');
+      try {
+        if (base58Encode(ed.getPublicKey(seed)) !== publicKey)
+          throw new WalletError('KEY_MISMATCH', 'stored seed does not match the stored public key');
+        return ed.sign(utf8(message), seed);
+      } finally {
+        wipe(seed);
+      }
     },
 
     destroy: () =>
