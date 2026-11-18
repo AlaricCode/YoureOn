@@ -13,6 +13,7 @@ import {
   type ImageFaceDetector,
 } from 'react-native-vision-camera-face-detector';
 
+import { useVisionCameraPresence } from '../device/visionCamera';
 import { CheckBadge, Label, QuietButton, ShutterButton, Stage, StageBubble } from '../ui/kit';
 import { motion, palette, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi } from './api';
@@ -57,6 +58,7 @@ export function FaceCapturePanel({
   onAlert: (message: string | null) => void;
 }) {
   const permission = useCameraPermission();
+  const presence = useVisionCameraPresence('front');
   const photoOutput = usePhotoOutput({ containerFormat: 'jpeg', quality: 0.9 });
   const outputs = useMemo(() => [photoOutput], [photoOutput]);
   const [prompts, setPrompts] = useState(() => makePrompts());
@@ -237,6 +239,15 @@ export function FaceCapturePanel({
             <QuietButton label="Open settings" onPress={() => void Linking.openSettings()} />
           )}
         </View>
+      </Stage>
+    );
+  }
+
+  // No camera (the simulator): <Camera> is never mounted (device/visionCamera).
+  if (presence !== 'present') {
+    return (
+      <Stage style={styles.center}>
+        {presence === 'none' ? <Label style={styles.muted}>No camera</Label> : null}
       </Stage>
     );
   }

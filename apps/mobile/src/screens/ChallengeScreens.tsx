@@ -23,6 +23,7 @@ import {
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
 import { feel } from '../device/feedback';
+import { useVisionCameraPresence } from '../device/visionCamera';
 import { signedUsd, type BetView } from '../bets/view';
 import type { PreviewUser } from '../preview/data';
 import {
@@ -58,6 +59,8 @@ export function ScanScreen({
   tag?: string | undefined;
 }) {
   const permission = useCameraPermission();
+  // No camera (the simulator): <Camera> is never mounted (device/visionCamera).
+  const presence = useVisionCameraPresence('back');
   const photoOutput = usePhotoOutput({ containerFormat: 'jpeg', quality: 0.9 });
   const outputs = useMemo(() => [photoOutput], [photoOutput]);
   const [checking, setChecking] = useState(false);
@@ -84,7 +87,11 @@ export function ScanScreen({
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.scan.title)} tag={tag} />
       <Page>
-        {permission.hasPermission ? (
+        {permission.hasPermission && presence !== 'present' ? (
+          <Stage style={styles.center}>
+            {presence === 'none' ? <StageBubble prompt={t(COPY.judgeCam.noCamera)} /> : null}
+          </Stage>
+        ) : permission.hasPermission ? (
           <Stage>
             <Camera
               style={StyleSheet.absoluteFill}
