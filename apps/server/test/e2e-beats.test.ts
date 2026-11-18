@@ -1473,6 +1473,53 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     }
   });
 
+  it("the chain's BetAppealed before our confirm: votes stored while RULED reach the log before the result", async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8);
+    await expectRuled(betId, r);
+    panel = { anthropic: vote('NOT_MET'), openai: vote('MET'), google: vote('NOT_MET') };
+    // Our status poll never sees the appeal tx (its confirm times out; the row stays 'sent').
+    const real = rt.client.signatureStatus.bind(rt.client);
+    const appealTx = async (sig: string) =>
+      (
+        await ctx.deps.db
+          .select({ kind: chainTxs.kind })
+          .from(chainTxs)
+          .where(eq(chainTxs.signature, sig))
+      )[0]?.kind === 'appeal';
+    rt.client.signatureStatus = async (sig, o) => ((await appealTx(sig)) ? null : real(sig, o));
+    try {
+      const { body } = await appealBody(betId, 'A', r);
+      expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body)).status).toBe(202);
+      await lc.idle(); // the panel's votes are stored while the bet is still RULED
+      expect((await betRow(betId)).state).toBe('RULED');
+      expect((await dbEvents(betId)).filter((e) => e.type === 'appeal.vote')).toHaveLength(0);
+      // The projector applies the chain's BetAppealed (chain wins): APPEALED, our confirm unseen.
+      await ctx.deps.db.update(bets).set({ state: 'APPEALED' }).where(eq(bets.id, betId));
+      await lc.appeal.sweep(now());
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    } finally {
+      rt.client.signatureStatus = real;
+    }
+    const types = (await dbEvents(betId)).map((e) => e.type);
+    const result = types.indexOf('appeal.result');
+    expect(types.filter((t) => t === 'appeal.vote')).toHaveLength(3);
+    expect(types.lastIndexOf('appeal.vote')).toBeLessThan(result);
+    // Our confirm turns up late (the sweep finds the tx): nothing is streamed or paid twice.
+    await lc.appeal.sweep(now());
+    await lc.idle();
+    const after = (await dbEvents(betId)).map((e) => e.type);
+    expect(after.filter((t) => t === 'appeal.vote')).toHaveLength(3);
+    expect(after.filter((t) => t === 'appeal.result')).toHaveLength(1);
+    const [tx] = await ctx.deps.db
+      .select()
+      .from(chainTxs)
+      .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'appeal')));
+    expect(tx!.status).toBe('confirmed');
+  });
+
   it('LOCK_SIGNER=server: POST /v1/demo/bets/:id/appeal signs the losing demo party custodially', async () => {
     // phones mode: no custodial appeal
     const phonesBet = await lockedBet();
