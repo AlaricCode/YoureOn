@@ -278,7 +278,8 @@ export function ProfileScreen({
   name: string;
   faceOn: boolean;
   onBack: () => void;
-  onFace: () => void;
+  /** Face enrollment / settings; omitted while the app has none: the row is then plain info. */
+  onFace?: (() => void) | undefined;
   onHistory: () => void;
   onJudgeCam: () => void;
   onDemo: () => void;
