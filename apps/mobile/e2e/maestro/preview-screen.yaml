@@ -1,0 +1,22 @@
+# One screen of the stand-in design preview (used by sim-preview.yaml): from the Screens menu,
+# open menu-${KEY}, let it settle, check it did not throw (the diagnostics screen's boundary
+# would say "App preview failed to load") and screenshot it (preview-${KEY}). The caller checks
+# what it needs on the screen, then taps preview-menu to go back.
+appId: dev.youreon.app
+name: preview-screen
+---
+- scrollUntilVisible:
+    element:
+      id: menu-${KEY}
+    direction: DOWN
+# Let the list stop: a tap computed while it still drifts can land between rows.
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: menu-${KEY}
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertNotVisible: .*failed to load.*
+- assertVisible:
+    id: preview-menu
+- takeScreenshot: preview-${KEY}

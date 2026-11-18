@@ -20,6 +20,7 @@
 //                          └──────────────────────────────── round over ◀──┘ (no card, countdown)
 import type { FairRefusal } from '@youre-on/shared/gemini';
 import {
+  callOf,
   MARKET_STAKES_USD,
   marketSideOf,
   type MarketCall,
@@ -27,6 +28,7 @@ import {
 } from '@youre-on/shared/judge/market-terms';
 import { formatUsd, parseUsd } from '@youre-on/shared/money';
 import { formatPrice } from '@youre-on/shared/settlement';
+import type { TermsEnvelope } from '@youre-on/shared/terms';
 
 import type { YoApi } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
@@ -85,11 +87,21 @@ export const initialMarket: MarketState = {
   note: null,
 };
 
+/** The market card already on screen when the panel opens on a bet (a restart mid-bet). */
+export interface ShownMarketCard {
+  terms_hash: string;
+  /** A's call (A holds the Terms side). */
+  side: MarketCall;
+  /** Per side, before the odds split the pot. */
+  stakeUsd: MarketStakeUsd;
+}
+
 export type SubmitMarketOutcome =
   { kind: 'proposed'; terms_hash: string } | { kind: 'error'; note: string };
 
 export type MarketEvent =
-  | { type: 'init'; bet_id: string }
+  /** A new bet; with a card already shown (a restart), the panel reopens on it, ready to lock. */
+  | { type: 'init'; bet_id: string; shown?: ShownMarketCard | null }
   | { type: 'open' }
   | { type: 'close' }
   | { type: 'side'; side: MarketCall }
@@ -112,7 +124,17 @@ const locked = (s: MarketState) => s.phase === 'confirmed';
 export function marketReducer(s: MarketState, e: MarketEvent): MarketState {
   switch (e.type) {
     case 'init':
-      return s.bet_id === e.bet_id ? s : { ...initialMarket, bet_id: e.bet_id };
+      if (s.bet_id === e.bet_id) return s;
+      return e.shown
+        ? {
+            ...initialMarket,
+            bet_id: e.bet_id,
+            phase: 'sent',
+            side: e.shown.side,
+            stakeUsd: e.shown.stakeUsd,
+            proposedHash: e.shown.terms_hash,
+          }
+        : { ...initialMarket, bet_id: e.bet_id };
     case 'open':
       return s.bet_id === null || s.phase !== 'closed' ? s : { ...s, phase: 'browsing' };
     case 'close':
@@ -148,6 +170,21 @@ export function marketReducer(s: MarketState, e: MarketEvent): MarketState {
     case 'confirm_failed':
       return s.phase === 'confirming' ? { ...s, phase: 'sent', note: e.note } : s;
   }
+}
+
+/** The market card on screen: A's call and the even-money stake (half the pot). */
+export function marketCardOf(
+  env: Pick<TermsEnvelope, 'terms' | 'terms_hash'> | null | undefined,
+): ShownMarketCard | null {
+  const m = env?.terms.market;
+  if (!env || !m) return null;
+  const pot = BigInt(env.terms.stakes.a) + BigInt(env.terms.stakes.b);
+  if (pot % 2_000_000n !== 0n) return null;
+  const usd = Number(pot / 2_000_000n);
+  const stakeUsd = MARKET_STAKES_USD.find((x) => x === usd);
+  return stakeUsd === undefined
+    ? null
+    : { terms_hash: env.terms_hash, side: callOf(m.side), stakeUsd };
 }
 
 /** Propose only what Gemini is pricing right now. */

@@ -3,9 +3,10 @@
 // server's ElevenLabs clip (apps/server/src/voice/tts.ts) and the stage's own speechSynthesis
 // fallback (apps/stage/src/voice.ts, when no clip arrives) say the same words.
 //
-//   ruling.issued            the judge voice. "Jake wins. <reason>"; REDO "Run it back. <reason>";
-//                            VOID says why and that both stakes go back; a Gemini settlement
-//                            starts "Gemini settles it."
+//   ruling.issued            the judge voice. "Jake wins. <reason>"; REDO "Run it back. <reason>"
+//                            (said once: a reason that already says it, as the server's own REDO
+//                            reasons do, is read as it is); VOID says why and that both stakes go
+//                            back; a Gemini settlement starts "Gemini settles it."
 //   judge.cue PAID / VOIDED  the judge voice, when money moved (read from the [EVENT] line's
 //                            values): "Paid. Jake takes $10.00." The VOIDED cue a VOID ruling sends
 //                            at ruling time is not voiced: its ruling.issued already is.
@@ -171,8 +172,14 @@ const VOID_LINE: Record<string, string> = {
   safety_stop: 'Stopped for safety.',
 };
 
+/** The server ends its own REDO reasons with "Run it back." (apps/server/src/judge/ruling.ts). */
+const SAYS_RUN_IT_BACK = /\brun it back\b/i;
+
 function rulingLine(r: z.infer<typeof RulingLite>, name: (p: 'A' | 'B') => string): string {
-  if (r.outcome === 'REDO') return `Run it back. ${sentence(r.reason)}`;
+  if (r.outcome === 'REDO')
+    return SAYS_RUN_IT_BACK.test(r.reason)
+      ? sentence(r.reason)
+      : `Run it back. ${sentence(r.reason)}`;
   if (r.outcome === 'VOID')
     return `${VOID_LINE[r.void_reason ?? ''] ?? ''} It's void: both stakes go back.`.trim();
   const won = `${name(r.outcome === 'A_WINS' ? 'A' : 'B')} wins. ${sentence(r.reason)}`;

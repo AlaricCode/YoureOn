@@ -3,11 +3,23 @@ import { join } from 'node:path';
 
 import { hashJcs } from '@youre-on/shared/jcs';
 import { renderSignCard } from '@youre-on/shared/sign-card';
+import type { CameraEvidence } from '@youre-on/shared/evidence';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod/v4';
 
 import { frameTimesMs } from '../../attempt/frames';
 import { applyBetEvent, fromSnapshot } from '../../bets/store';
-import { authorizeLock, checkLockPolicy, concede, sendAttempt, verifiedRuling } from '../actions';
+import { ApiClientError } from '../../net/signedFetch';
+import {
+  authorizeLock,
+  checkLockPolicy,
+  concede,
+  refusesLandingCrop,
+  sendAttempt,
+  verifiedRuling,
+  withoutLandingCrop,
+  type PreparedAttempt,
+} from '../actions';
 import { authorizeRequest, BET, ev, ruling, snapshot, envelope } from './fixtures';
 
 const signed = (party: 'A' | 'B', kind = 'atomic_lock') => ({
@@ -278,6 +290,158 @@ describe('attempt upload retry', () => {
     expect(uploads[1]!.e).toBe(uploads[0]!.e);
     expect(uploads[1]!.frames).toEqual(uploads[0]!.frames);
     expect(uploads[1]!.key).toBe('k-4');
+  });
+});
+
+describe('attempt upload: a server older than D10 refuses the landing crop', () => {
+  const validation = (issues: { path: string; message: string }[]) =>
+    new ApiClientError('VALIDATION_FAILED', 422, 'Request failed validation.', false, { issues });
+  /** The base server's strict EvidenceFrame (no landing_crop), issues mapped as its zodIssues. */
+  const OldFrames = z.array(
+    z.strictObject({ index: z.number(), t_ms: z.number(), sha256: z.string() }),
+  );
+  /** `lost`: which uploads (1-based) never reach it (a network error on the phone). */
+  function oldServer(o: { schemaFirst: boolean; lost?: number[] }) {
+    const uploads: { e: CameraEvidence; frames: readonly Uint8Array[]; key: string }[] = [];
+    return {
+      uploads,
+      api: {
+        async uploadFrames(e: CameraEvidence, frames: readonly Uint8Array[], key: string) {
+          uploads.push({ e, frames, key });
+          if (o.lost?.includes(uploads.length)) throw new Error('network');
+          const r = OldFrames.safeParse(e.frames);
+          if (o.schemaFirst && !r.success)
+            throw validation(
+              r.error.issues.map((i) => ({
+                path: `frames.${i.path.join('.')}`,
+                message: i.message,
+              })),
+            );
+          if (frames.length > 12)
+            throw validation([
+              { path: 'frame', message: `send 8 to 12 frames (got ${frames.length})` },
+            ]);
+          return { judging: true, frame_hashes: [] };
+        },
+      },
+    };
+  }
+  const crop = new Uint8Array(900).fill(77);
+  const d0 = {
+    readClip: async () => new Uint8Array(4096).fill(1),
+    extractFrames: async (_u: string, ms: number) => {
+      const times = frameTimesMs(ms);
+      return [
+        ...times.map((t_ms, i) => ({ t_ms, jpeg: new Uint8Array(500).fill(i) })),
+        { t_ms: times.at(-1)!, jpeg: crop, landing_crop: true },
+      ];
+    },
+    iso: (ms: number) => new Date(ms).toISOString(),
+    noCropKey: () => 'k-nocrop',
+  };
+  const a = {
+    bet_id: BET,
+    attempt_no: 1,
+    recorded_by: 'A' as const,
+    clip: { uri: 'file:///c.mov', durationMs: 5200, endedAtMs: Date.UTC(2026, 10, 21, 18, 7) },
+    idempotencyKey: 'k-5',
+  };
+
+  for (const schemaFirst of [true, false])
+    it(`${schemaFirst ? '"Unrecognized key: landing_crop"' : 'the 12-image limit'}: the 12 frames go again without the crop, under their own key`, async () => {
+      const srv = oldServer({ schemaFirst });
+      const { evidence } = await sendAttempt({ ...d0, api: srv.api }, a);
+      expect(srv.uploads.map((u) => [u.key, u.frames.length])).toEqual([
+        ['k-5', 13],
+        ['k-nocrop', 12],
+      ]);
+      const second = srv.uploads[1]!;
+      expect(second.frames).toEqual(srv.uploads[0]!.frames.slice(0, 12));
+      expect(second.frames).not.toContain(crop);
+      expect(second.e.frames.map((f) => f.index)).toEqual([...Array(12).keys()]);
+      expect(second.e.frames.some((f) => 'landing_crop' in f)).toBe(false);
+      expect(second.e.clip_sha256).toBe(srv.uploads[0]!.e.clip_sha256);
+      expect(evidence).toBe(second.e);
+    });
+
+  it('a retry after the fallback failed resends the 12-frame upload under its key', async () => {
+    // the 13-image upload is refused; the 12-frame one is lost on the network
+    const srv = oldServer({ schemaFirst: true, lost: [2] });
+    const d = { ...d0, api: srv.api };
+    const cache = new Map<string, PreparedAttempt>();
+    await expect(sendAttempt(d, a, cache)).rejects.toThrow('network');
+    await sendAttempt(d, a, cache);
+    expect(srv.uploads.map((u) => [u.key, u.frames.length])).toEqual([
+      ['k-5', 13],
+      ['k-nocrop', 12],
+      ['k-nocrop', 12],
+    ]);
+    expect(srv.uploads[2]!.e).toBe(srv.uploads[1]!.e);
+  });
+
+  it('no fallback for other refusals, for an upload with no crop, or without a key', async () => {
+    const refuse = (err: Error) => {
+      const keys: string[] = [];
+      return {
+        keys,
+        api: {
+          async uploadFrames(_e: CameraEvidence, _f: readonly Uint8Array[], key: string) {
+            keys.push(key);
+            throw err;
+          },
+        },
+      };
+    };
+    const other = refuse(
+      validation([{ path: 'evidence.bet_id', message: 'does not match the URL' }]),
+    );
+    await expect(sendAttempt({ ...d0, api: other.api }, a)).rejects.toThrow(ApiClientError);
+    expect(other.keys).toEqual(['k-5']);
+
+    const noKey = oldServer({ schemaFirst: true });
+    await expect(
+      sendAttempt({ ...d0, api: noKey.api, noCropKey: undefined }, a),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    expect(noKey.uploads).toHaveLength(1);
+
+    const count = refuse(validation([{ path: 'frame', message: 'send 8 to 12 frames (got 7)' }]));
+    const twelve = {
+      ...d0,
+      extractFrames: async (u: string, ms: number) => (await d0.extractFrames(u, ms)).slice(0, 12),
+    };
+    await expect(sendAttempt({ ...twelve, api: count.api }, a)).rejects.toThrow(ApiClientError);
+    expect(count.keys).toEqual(['k-5']);
+  });
+
+  it('refusesLandingCrop reads only a 422 VALIDATION_FAILED that names the crop or the count', () => {
+    expect(
+      refusesLandingCrop(
+        validation([{ path: 'frames.12', message: 'Unrecognized key: "landing_crop"' }]),
+      ),
+    ).toBe(true);
+    expect(refusesLandingCrop(validation([{ path: 'frame', message: 'send 8 to 12' }]))).toBe(true);
+    expect(
+      refusesLandingCrop(
+        validation([{ path: 'evidence.frames.3.landing_crop', message: 'must be last' }]),
+      ),
+    ).toBe(true);
+    expect(refusesLandingCrop(validation([{ path: 'frame.3', message: 'not a JPEG' }]))).toBe(
+      false,
+    );
+    expect(refusesLandingCrop(validation([]))).toBe(false);
+    const conflict = new ApiClientError('IDEMPOTENCY_KEY_REUSED', 409, 'x', false, {
+      issues: [{ path: 'frame', message: 'x' }],
+    });
+    expect(refusesLandingCrop(conflict)).toBe(false);
+    expect(refusesLandingCrop(new Error('landing_crop'))).toBe(false);
+  });
+
+  it('withoutLandingCrop: null when there is no crop', () => {
+    const e = {
+      evidence: { frames: [{ index: 0, t_ms: 0, sha256: 'a'.repeat(64) }] } as CameraEvidence,
+      frames: [new Uint8Array(1)],
+    };
+    expect(withoutLandingCrop(e)).toBeNull();
   });
 });
 

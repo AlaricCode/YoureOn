@@ -4,7 +4,7 @@
 // model) create native objects as their modules load, so if any of them is reachable through
 // static imports, a native module that fails to start crashes the app at launch and takes the
 // room list and Beats 2-4 down with it. They must only be reached through import().
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -85,6 +85,52 @@ describe('app start', () => {
     expect(FACE_NATIVE_PACKAGES.filter((p) => graph.packages.has(p))).toEqual([]);
     expect(FACE_NATIVE_MODULES.filter((m) => files.includes(m))).toEqual([]);
     expect(files.filter((f) => f.endsWith('.tflite'))).toEqual([]);
+  });
+
+  // The design preview (diagnostics > App preview) loads lazily, but as one module graph: a face
+  // native reached statically from it fails the whole preview, which is the only way to render
+  // the terms card, ruling, appeal and market screens without a real bet. The simulator build
+  // leaves the ML Kit detector out (react-native.config.js), so there it never loaded at all.
+  it('the design preview reaches none of the face natives statically either', () => {
+    const preview = bootGraph(join(APP_ROOT, 'src/preview/PreviewApp.tsx'));
+    const previewFiles = [...preview.files].map((f) => relative(APP_ROOT, f));
+    expect(previewFiles).toContain('src/screens/PlayScreens.tsx');
+    expect(FACE_NATIVE_PACKAGES.filter((p) => preview.packages.has(p))).toEqual([]);
+    expect(FACE_NATIVE_MODULES.filter((m) => previewFiles.includes(m))).toEqual([]);
+  });
+
+  // A bare import() of a module that throws while it loads does not reject: Metro hands the
+  // error to the fatal handler and a Release build aborts (app/importSafely). Seen on the
+  // simulator: "Scan a face" warms the embedder up, which imported face/native bare; ML Kit is
+  // not in that build, its module threw at load, and the app died instead of turning face off.
+  it('every import() of the face natives goes through importSafely', () => {
+    const bare: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) {
+          if (name !== '__tests__') walk(p);
+          continue;
+        }
+        if (!/\.tsx?$/.test(name)) continue;
+        const src = readFileSync(p, 'utf8');
+        for (const m of src.matchAll(/import\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+          const spec = m[1] as string;
+          const target = spec.startsWith('.') ? resolveRelative(p, spec) : null;
+          const face =
+            FACE_NATIVE_PACKAGES.includes(spec) ||
+            (target !== null && FACE_NATIVE_MODULES.includes(relative(APP_ROOT, target)));
+          if (!face) continue;
+          const line = src.slice(0, m.index).split('\n').length;
+          const before = src.slice(Math.max(0, (m.index ?? 0) - 40), m.index);
+          const comment = /\/\/[^\n]*$|\*[^\n]*$/.test(before);
+          if (!comment && !/importSafely\(\s*\(\)\s*=>\s*$/.test(before))
+            bare.push(`${relative(APP_ROOT, p)}:${line} import('${spec}')`);
+        }
+      }
+    };
+    walk(join(APP_ROOT, 'src'));
+    expect(bare).toEqual([]);
   });
 
   it('the walker does see a static import of the face natives', () => {

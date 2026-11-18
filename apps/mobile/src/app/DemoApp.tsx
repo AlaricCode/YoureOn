@@ -78,7 +78,9 @@ import {
 import type { HistoryItem, PreviewUser } from '../preview/data';
 import { createServerSignupApi } from '../signup/api';
 import { SignupScreen } from '../signup/SignupScreen';
+import { SplashView } from '../ui/brand';
 import { Label, PrimaryButton } from '../ui/kit';
+import { setConnectionStatus } from '../ui/connection';
 import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { palette } from '../ui/tokens';
@@ -108,6 +110,7 @@ import {
   fetchMarketQuote,
   initialMarket,
   MARKET_STAKES_USD,
+  marketCardOf,
   marketReducer,
   QUOTE_POLL_MS,
   shouldPoll,
@@ -119,8 +122,14 @@ import {
 import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { demoLinkLives, parseDeepLink } from './deepLink';
-import { attemptStartAlert, createJudgeCamSync, deviceRoleRequest } from './judgeCam';
-import { RESUME_LIMIT, resumable } from './resume';
+import {
+  attemptStartAlert,
+  createJudgeCamSync,
+  deviceRoleRequest,
+  rejoinAndRebind,
+} from './judgeCam';
+import { createLiveRetry, RESUME_LIMIT, resumable, type LiveRetry } from './resume';
+import { createSocketStatusHandler } from './socketStatus';
 import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
 import {
@@ -137,6 +146,7 @@ import {
   initialTyped,
   submitTypedTerms,
   TYPED_STAKES_USD,
+  typedCardOf,
   typedReducer,
   waitingForAccept,
   type TypedStakeUsd,
@@ -158,8 +168,13 @@ const JudgeVoice = lazy(() => importSafely(() => import('../voice/JudgeVoice')))
 const VOICE_TAIL_MS = 20_000;
 /** EXPO_PUBLIC_FACE=off hides face enrollment and the face scan (the room list still works). */
 const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
-/** The face natives load on first use, never at app start (see createLazyEmbedder). */
-const loadFaceEmbedder = () => import('../face/native').then((m) => m.getNativeEmbedder());
+/**
+ * The face natives load on first use, never at app start (see createLazyEmbedder), and through
+ * importSafely: a face native that throws while it loads (ML Kit is not in the simulator build)
+ * rejects here instead of aborting the app (opening "Scan a face" used to kill it).
+ */
+const loadFaceEmbedder = () =>
+  importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
@@ -172,7 +187,8 @@ export default function DemoApp({ onOperator }: { onOperator: () => void }) {
     getRuntime().then(setRt, () => setFailed(true));
   }, []);
   useEffect(start, [start]);
-  if (!rt) return <Loading failed={failed} onRetry={start} />;
+  // The native splash hands off to the same mark (ui/brand SplashView): no jump at launch.
+  if (!rt) return <SplashView failed={failed} onRetry={start} />;
   return <DemoAppInner rt={rt} onOperator={onOperator} />;
 }
 
@@ -295,6 +311,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [rt],
   );
 
+  /** Sign-in steps waiting for the socket to be live again (./resume createLiveRetry). */
+  const liveRetries = useRef<readonly LiveRetry[]>([]);
+
   // ---- boot / session ---------------------------------------------------------------------
   const boot = useCallback(() => {
     setBootFailed(false);
@@ -334,35 +353,63 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         if (restored === 'send_phone') void camSync.off();
         return restored;
       });
+    // A step the server could not answer here (offline at a cold start) runs again once the
+    // socket is live (./resume createLiveRetry): it used to wait for the next restart, with the
+    // phone on home, room-less, and its open bet stranded.
+    const roomRetry = createLiveRetry(async () => {
+      if (appRef.current.room) return true;
+      const S = await import('expo-secure-store');
+      const code = await S.getItemAsync(LAST_ROOM_KEY);
+      return !code || !live || (await joinRoomId(code)) !== null;
+    });
     // Re-join the last room (a convenience; the server's room_members row is the truth). A
     // restored judge cam then re-binds itself to that room on the server, which may hold another
-    // room or none (a demo claim resets the device to 'phone').
-    void cam.then(async (restored) => {
-      const S = await import('expo-secure-store').catch(() => null);
-      const code = linked ?? (await S?.getItemAsync(LAST_ROOM_KEY).catch(() => null)) ?? null;
-      if (code && live && (linked || !appRef.current.room)) await joinRoom(code);
-      if (!live || restored !== 'judge_cam' || !appRef.current.judgeCam) return;
-      void bindJudgeCam(appRef.current.room?.room_id ?? null);
-    });
+    // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
+    // room comes from the join, not from appRef (a render behind right after it).
+    void cam
+      .then((restored) =>
+        rejoinAndRebind({
+          restored,
+          linked,
+          storedCode: async () => {
+            const S = await import('expo-secure-store');
+            return S.getItemAsync(LAST_ROOM_KEY);
+          },
+          currentRoomId: () => appRef.current.room?.room_id ?? null,
+          join: joinRoomId,
+          live: () => live,
+          stillOn: () => camSync.restoredOn,
+          bind: (roomId) => void bindJudgeCam(roomId),
+        }),
+      )
+      .then((joined) => {
+        if (!joined) roomRetry.markPending();
+      });
     // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
-    void (async () => {
+    const betsRetry = createLiveRetry(async () => {
       let open: BetSnapshot[];
       try {
         open = resumable((await rt.api.myBets('active', RESUME_LIMIT)).items);
       } catch {
-        return; // offline: the bet's own pushes or the next sign-in bring it back
+        return false; // offline: again once the socket is live
       }
       for (const snap of open) {
-        if (!live) return;
+        if (!live) return true;
         if (!rt.hub.has(snap.bet_id)) await rt.hub.restore(snap);
         rt.ws.subscribe(snap.bet_id);
       }
       await cam; // judge cam or not decides the screen this bet opens on
       const newest = open[0];
       if (live && newest) dispatch({ type: 'bet_opened', bet_id: newest.bet_id });
-    })();
+      return true;
+    });
+    void betsRetry.run();
+    liveRetries.current = [roomRetry, betsRetry];
     return () => {
       live = false;
+      roomRetry.stop();
+      betsRetry.stop();
+      liveRetries.current = [];
       rt.ws.stop();
     };
   }, [app.auth, userId, rt, camSync]);
@@ -389,11 +436,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   // ---- socket status, presence -------------------------------------------------------------
   useEffect(() => {
-    const a = rt.onStatus((s) => {
-      dispatch({ type: 'offline', offline: s === 'reconnecting' || s === 'unauthorized' });
-      // A turn-off the server never confirmed (./judgeCam): send it again now that it answers.
-      if (s === 'live') void camSync.retry();
-    });
+    // Home's offline flag, the reconnect banner on every screen (./socketStatus), and a turn-off
+    // the server never confirmed (./judgeCam) sent again once the socket answers.
+    const a = rt.onStatus(
+      createSocketStatusHandler({
+        offline: (offline) => dispatch({ type: 'offline', offline }),
+        live: () => {
+          void camSync.retry();
+          for (const r of liveRetries.current) r.onLive();
+        },
+      }),
+    );
     const b = rt.onControl((f) => {
       if (f.op === 'room.presence')
         dispatch({ type: 'presence', room_id: f.room_id, members: f.members });
@@ -410,6 +463,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       a();
       b();
       c();
+      // Not following the socket any more (the operator screen, a restart of this tree): no
+      // stale "Reconnecting" on the next screen.
+      setConnectionStatus('idle');
     };
   }, [rt, camSync]);
 
@@ -529,13 +585,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     (bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id)));
   useEffect(() => {
     if (!negotiating || !bet) return;
-    typedDispatch({ type: 'init', bet_id: bet.bet_id, bName: opponentName, typed: typedForced });
+    // After a restart mid-bet the card is already on screen: start the form on it (./typedTerms).
+    typedDispatch({
+      type: 'init',
+      bet_id: bet.bet_id,
+      bName: opponentName,
+      typed: typedForced,
+      shown: typedCardOf(bet.envelope),
+    });
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
 
   // ---- Bet on Bitcoin (A only, Beat 6): reset per bet; poll Gemini's odds while it is open ----
   useEffect(() => {
     if (!negotiating || !bet || !MARKET_ENABLED) return;
-    marketDispatch({ type: 'init', bet_id: bet.bet_id });
+    marketDispatch({ type: 'init', bet_id: bet.bet_id, shown: marketCardOf(bet.envelope) });
   }, [negotiating, bet?.bet_id]);
   const polling = negotiating && market.bet_id === bet?.bet_id && shouldPoll(market);
   useEffect(() => {
@@ -848,6 +911,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   );
 
   async function joinRoom(code: string): Promise<boolean> {
+    return (await joinRoomId(code)) !== null;
+  }
+
+  /** Join by code; the room id, or null when it failed. */
+  async function joinRoomId(code: string): Promise<string | null> {
     try {
       const prev = appRef.current.room;
       const r = await rt.api.joinRoom(code);
@@ -866,9 +934,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       void import('expo-secure-store')
         .then((S) => S.setItemAsync(LAST_ROOM_KEY, r.room.code))
         .catch(() => undefined);
-      return true;
+      return r.room.room_id;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -987,19 +1055,22 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     async (clip: Clip | null) => {
       const b = appRef.current.activeBetId ? rt.hub.get(appRef.current.activeBetId) : undefined;
       if (!clip || !b?.attempt) throw new Error('no clip');
+      const frameKey = `frames:${b.bet_id}:${b.attempt.attempt_no}`;
       await sendAttempt(
         {
           api: rt.api,
           readClip,
           extractFrames: (uri, ms) => extractFrames(uri, ms),
           iso: (ms) => new Date(ms + rt.clock.offsetMs).toISOString(),
+          // a server older than D10 refuses the landing crop: the 12 frames go under this key
+          noCropKey: () => keyFor(`${frameKey}:nocrop`),
         },
         {
           bet_id: b.bet_id,
           attempt_no: b.attempt.attempt_no,
           recorded_by: b.my_party ?? 'A',
           clip,
-          idempotencyKey: keyFor(`frames:${b.bet_id}:${b.attempt.attempt_no}`),
+          idempotencyKey: keyFor(frameKey),
         },
         preparedUploads.current,
       );
@@ -1063,7 +1134,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     voice !== null && voiceBet?.bet_id === bet?.bet_id && voicePhase === 'connected';
 
   // ---- render ------------------------------------------------------------------------------
-  if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
+  if (bootFailed && app.auth === 'booting') return <SplashView failed onRetry={boot} />;
 
   // After an appeal the panel's outcome pays (and may differ from the ruling's).
   const outcome = bet ? finalOutcome(bet) : null;
@@ -1075,7 +1146,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const screen = (() => {
     switch (route) {
       case 'boot':
-        return waiting;
+        return <SplashView />;
       case 'signup':
         return (
           <SignupScreen

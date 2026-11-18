@@ -9,7 +9,9 @@ import {
   deviceRoleRequest,
   encodeMemo,
   parseMemo,
+  rejoinAndRebind,
   type CamOwner,
+  type CamRestore,
 } from '../judgeCam';
 
 describe('deviceRoleRequest (PATCH /v1/devices/current)', () => {
@@ -217,6 +219,107 @@ describe('createJudgeCamSync: off on screen means phone on the server', () => {
     await h.fail(0);
     expect(await on).toEqual({ status: 'superseded' });
     expect(h.calls).toHaveLength(1); // no 'phone' on the new user's behalf
+  });
+});
+
+describe('rejoinAndRebind: a restored judge cam re-binds the room it just rejoined', () => {
+  /** The app state lags: currentRoomId() keeps answering what the last render saw. */
+  function run(o: {
+    restored: CamRestore;
+    stored?: string | null;
+    linked?: string | null;
+    shown?: string | null;
+    joins?: Record<string, string | null>;
+    stillOn?: () => boolean;
+  }) {
+    const joined: string[] = [];
+    const bound: (string | null)[] = [];
+    const done = rejoinAndRebind({
+      restored: o.restored,
+      linked: o.linked ?? null,
+      storedCode: () => Promise.resolve(o.stored ?? null),
+      currentRoomId: () => o.shown ?? null,
+      join: (code) => {
+        joined.push(code);
+        return Promise.resolve(o.joins?.[code] ?? null);
+      },
+      live: () => true,
+      stillOn: o.stillOn ?? (() => true),
+      bind: (roomId) => bound.push(roomId),
+    });
+    return { done, joined, bound };
+  }
+
+  it('binds the room the join returned, not the stale room on screen (it used to turn off)', async () => {
+    const r = run({ restored: 'judge_cam', stored: 'ABC123', joins: { ABC123: 'room-1' } });
+    expect(await r.done).toBe(true);
+    expect(r.joined).toEqual(['ABC123']);
+    expect(r.bound).toEqual(['room-1']);
+  });
+
+  it('keeps the room on screen when no join is needed', async () => {
+    const r = run({ restored: 'judge_cam', stored: 'ABC123', shown: 'room-0' });
+    await r.done;
+    expect(r.joined).toEqual([]);
+    expect(r.bound).toEqual(['room-0']);
+  });
+
+  it('a room link wins over the stored room, even with a room on screen', async () => {
+    const r = run({
+      restored: 'judge_cam',
+      stored: 'ABC123',
+      linked: 'LINK42',
+      shown: 'room-0',
+      joins: { LINK42: 'room-2' },
+    });
+    await r.done;
+    expect(r.joined).toEqual(['LINK42']);
+    expect(r.bound).toEqual(['room-2']);
+  });
+
+  it('no room to rejoin: binds null (the caller turns it off and says "Join room first")', async () => {
+    const r = run({ restored: 'judge_cam', stored: 'GONE01', joins: { GONE01: null } });
+    // false: the caller tries the rejoin again once the socket is live (offline at a cold start)
+    expect(await r.done).toBe(false);
+    expect(r.bound).toEqual([null]);
+  });
+
+  it('nothing to rejoin, or a room already on screen: done', async () => {
+    expect(await run({ restored: 'none' }).done).toBe(true);
+    expect(await run({ restored: 'none', stored: 'ABC123', shown: 'room-0' }).done).toBe(true);
+  });
+
+  it('a plain phone rejoins its room and binds nothing', async () => {
+    const r = run({ restored: 'none', stored: 'ABC123', joins: { ABC123: 'room-1' } });
+    await r.done;
+    expect(r.joined).toEqual(['ABC123']);
+    expect(r.bound).toEqual([]);
+  });
+
+  it('turned off while the join was in flight: binds nothing', async () => {
+    let on = true;
+    const r = run({
+      restored: 'judge_cam',
+      stored: 'ABC123',
+      joins: { ABC123: 'room-1' },
+      stillOn: () => on,
+    });
+    on = false;
+    await r.done;
+    expect(r.bound).toEqual([]);
+  });
+});
+
+describe('createJudgeCamSync.restoredOn: the restored judge cam, untouched since', () => {
+  it('is true after a judge_cam restore until the next on/off, false otherwise', () => {
+    const h = harness();
+    expect(h.sync.restoredOn).toBe(false);
+    h.sync.restore(encodeMemo(A_CAM, 'judge_cam'));
+    expect(h.sync.restoredOn).toBe(true);
+    void h.sync.off();
+    expect(h.sync.restoredOn).toBe(false);
+    h.sync.restore(encodeMemo(A_CAM, 'phone'));
+    expect(h.sync.restoredOn).toBe(false);
   });
 });
 

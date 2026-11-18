@@ -1,15 +1,32 @@
 // Bet history (Home and Profile "History"; API-CONTRACT §2.14 GET /v1/me/bets?status=settled).
 // Before this both buttons did nothing. Each settled bet becomes one HistoryScreen row: the
-// title, the opponent, and my net (payout - stake) with won / lost / refunded.
+// title, the opponent, and my net (payout - stake) with won / lost / refunded. Seed rows (is_seed:
+// POST /v1/demo/seed-h2h, no on-chain footprint) are titled "Demo history", never like a real bet.
 // Pure TS: tested in node.
 import { MeBetItem } from '@youre-on/shared/api';
 
 import type { HistoryItem } from '../preview/data';
+import { COPY, t } from '../screens/copy';
 
 /** How many settled bets the screen asks for (one page; the server caps it at 50). */
 export const HISTORY_LIMIT = 30;
 
 const SETTLED = new Set(['PAID', 'VOIDED']);
+
+/** The server's title for a bet with no terms (apps/server me/bets: seed rows have none). */
+const UNTITLED = 'Challenge';
+
+/**
+ * A seed row's title: "Demo history" (+ ": <title>" when the server sent a real one). A server
+ * that already sends the row's own "Demo history: …" title is shown as is.
+ */
+function titleOf(b: MeBetItem): string {
+  if (!b.is_seed) return b.title;
+  const demo = t(COPY.history.demo);
+  const title = b.title.trim();
+  if (title.toLowerCase().startsWith(demo.toLowerCase())) return title;
+  return title && title !== UNTITLED ? `${demo}: ${title}` : demo;
+}
 
 export function historyItemOf(b: MeBetItem): HistoryItem | null {
   if (!SETTLED.has(b.state)) return null;
@@ -25,7 +42,7 @@ export function historyItemOf(b: MeBetItem): HistoryItem | null {
     b.state === 'VOIDED' || net === 0n ? 'void' : net > 0n ? 'won' : 'lost';
   return {
     bet_id: b.bet_id,
-    title: b.title,
+    title: titleOf(b),
     opponent: b.opponent.display_name,
     net: net.toString(),
     outcome,

@@ -1567,12 +1567,12 @@ export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
 | `type` | Payload | Why |
 |---|---|---|
 | `tx.sign_request` | `{request: SignRequest}` (API §2.18), kinds `concede` and `appeal` only, recent blockhash | The loser's GG / "I appeal!" message. The lock is **not** sent this way: it is `terms.authorize_request` with `AuthorizeRequest` (§9). |
-| `judge.cue` | `{cue, text, speak}` | Server-composed `[EVENT]` line; only A's phone (the voice host) acts on it (API §4.5) |
+| `judge.cue` | `{cue, text, speak}` | Server-composed `[EVENT]` line; A's phone (the voice host) speaks the `speak: true` ones (API §4.5). The stage also voices `PAID` and the payout's `VOIDED` from the line's values, unless a voice judge hosts the bet (API §4.5 "One judge at a time"), so `text` must reach the stage intact |
 | `hearing.turn_open` | `{hearing_id, turn_index, party, closes_at}` | Starts each hearing turn's clock |
 | `bet.invite_answered` | `{party: 'B', answer}` | B tapped accept/decline on the invite (not an authorization) |
 | `attempt.started` (+ fields) | adds `recorder_device_id`, `go_at` | The judge cam's countdown |
 
-Not bet-scoped, so not `RealtimeEvent`s: the unsequenced WS control frames `room.presence`, `stage.market` (≤ 2/s chart feed) and `stage.cue` (API §3.1). Other API-owned types (`PartySignature`, `AuthorizationResult`, `BetSnapshot`, `SignedMicroUsdc`, `SealedEmbedding`, `HeadToHead`) live in API-CONTRACT §2.18 and import from this doc.
+Not bet-scoped, so not `RealtimeEvent`s: the unsequenced WS control frames `room.presence`, `stage.market` (≤ 2/s chart feed), `stage.cue {bet_id, kind, audio_url?}` (`audio_url`: the cue's ElevenLabs Sound Effects clip; absent, the stage synthesizes it) and `stage.voice {bet_id, seq, type, voice, text, clip_id, audio_url}` (stage sessions only: the TTS clip of the stage line for bet event `(bet_id, seq)`, `packages/shared/src/stage-voice.ts`) (API §3.1, §4.5; `WsServerControlFrame` in `packages/shared/src/api.ts`). Other API-owned types (`PartySignature`, `AuthorizationResult`, `BetSnapshot`, `SignedMicroUsdc`, `SealedEmbedding`, `HeadToHead`) live in API-CONTRACT §2.18 and import from this doc.
 
 ### 10.2 Chain event payloads (mirror ESCROW-PROGRAM §7.2 field for field)
 
@@ -1794,3 +1794,4 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
   - Re-verified the §5.2 ruling hash independently (Python JCS, 1,173 B → `997ce278…5daa`; frame and clip placeholders match their commands). No TS code changed except comments.
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): **§4** `EvidenceFrame.landing_crop` (optional `true`; at most one, last), the `frames` comment (12 + the crop), and `recorded_by` for the two-phone fallback (`recorder:'self'`, API-CONTRACT §2.9). No hash vector changes: the field is absent on every existing record.
 - **2026-11-18 (Beat 5 appeal built).** §7: `AppealVote.outcome` is `voteOutcome` (no 0.8 floor; the 0.6 floor is `countVote`'s), and the built decision timing (all three votes in; the result is unchanged). Shared helpers `voteOutcome`, `appellantsOf`, `PANEL_SEATS`, `PANEL_VOTE_TIMEOUT_MS`; API types `AppealSubmitted`, `DemoAppealRequest`.
+- **2026-11-18 (stage voice, from API-CONTRACT §3.1 / §4.5).** §10.1: the control frames gain `stage.voice` (stage sessions only) and `stage.cue.audio_url?`; the `judge.cue` row says the stage voices `PAID` / the payout `VOIDED` too (not A's phone only). Docs only: the shared `WsServerControlFrame` already had both.

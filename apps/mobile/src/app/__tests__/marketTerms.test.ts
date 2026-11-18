@@ -16,6 +16,7 @@ import {
   fetchMarketQuote,
   initialMarket,
   MARKET_STAKES_USD,
+  marketCardOf,
   marketReducer,
   REFUSAL_LABEL,
   shouldPoll,
@@ -26,6 +27,7 @@ import {
   type MarketQuoteView,
   type MarketState,
 } from '../marketTerms';
+import { bottleFlip, btcCloser } from '../../preview/data';
 import { BET, DEVICE_A, ev, ME_A, stateEv } from './fixtures';
 
 const HASH = 'ab'.repeat(32);
@@ -188,6 +190,39 @@ describe('market panel reducer', () => {
     const q = run(opened(), { type: 'stake', usd: 5 }, { type: 'close' });
     expect(q).toMatchObject({ phase: 'closed', stakeUsd: 5 });
     expect(run(q, { type: 'open' }).phase).toBe('browsing');
+  });
+});
+
+describe('restart mid-bet: the panel adopts the market card already on screen', () => {
+  const btc = btcCloser('Logan'); // A holds YES (Up), $6.20 vs $3.80: $5 a side
+  const card = { terms: btc.terms, terms_hash: btc.termsHash };
+
+  it('reopens on the card: its side and stake, "Lock it in" once B has accepted', () => {
+    expect(marketCardOf(card)).toEqual({ terms_hash: btc.termsHash, side: 'UP', stakeUsd: 5 });
+    const s = run(initialMarket, { type: 'init', bet_id: BET, shown: marketCardOf(card) });
+    expect(s).toMatchObject({ bet_id: BET, phase: 'sent', side: 'UP', stakeUsd: 5 });
+    expect(s.proposedHash).toBe(btc.termsHash);
+    expect(shouldPoll(s)).toBe(true); // the odds keep coming while it is up
+    expect(canConfirmMarket(s, btc.termsHash, 'accepted')).toBe(true);
+    expect(waitingForAcceptMarket(s, btc.termsHash, null)).toBe(true);
+    // A re-init of the same bet keeps the panel as it is.
+    expect(run(s, { type: 'init', bet_id: BET, shown: null })).toBe(s);
+  });
+
+  it('B holds YES: A is Down', () => {
+    const market = { ...btc.terms.market!, side: 'NO' as const };
+    expect(marketCardOf({ ...card, terms: { ...card.terms, market } })?.side).toBe('DOWN');
+  });
+
+  it('marketCardOf: nothing for no card, a camera bet, or a stake the panel does not offer', () => {
+    expect(marketCardOf(null)).toBeNull();
+    const flip = bottleFlip('Logan');
+    expect(marketCardOf({ terms: flip.terms, terms_hash: flip.termsHash })).toBeNull();
+    const odd = {
+      ...card,
+      terms: { ...card.terms, stakes: { a: '4000000', b: '3000000', currency: 'USDC' as const } },
+    };
+    expect(marketCardOf(odd)).toBeNull(); // $3.50 a side
   });
 });
 

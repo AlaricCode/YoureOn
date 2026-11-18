@@ -31,7 +31,28 @@ name: signup
 - takeScreenshot: 02-signup-filled
 - tapOn:
     id: signup-continue
-# The signed sign-up (device key + wallet binding) went through: home, with a balance.
+# The signed sign-up (device key + wallet binding) went through. Face enrollment is offered
+# first (opt-in, consent before any capture): skip it here. A build with EXPO_PUBLIC_FACE=off
+# goes straight home.
+- extendedWaitUntil:
+    visible:
+      id: enroll-skip|balance-header
+    timeout: 30000
+- runFlow:
+    when:
+      visible:
+        id: enroll-skip
+    commands:
+      - extendedWaitUntil:
+          visible: I consent
+          timeout: 15000
+      - assertVisible:
+          id: enroll-continue
+          enabled: false
+      - takeScreenshot: 02b-enroll-offer
+      - tapOn:
+          id: enroll-skip
+# Home, with a balance.
 - extendedWaitUntil:
     visible:
       id: balance-header

@@ -82,6 +82,83 @@ export interface CapturedFrame {
   landing_crop?: boolean | undefined;
 }
 
+/** One way capture.ts saves a shot: a JPEG quality at an output size. */
+export interface EncodeStep {
+  quality: number;
+  width: number;
+  height: number;
+}
+
+/** JPEG qualities tried at the shot's full output size, best first. */
+export const JPEG_QUALITIES = [JPEG_QUALITY, 0.65, 0.5, 0.35] as const;
+/** Then smaller sizes (of the long side), at the lower qualities: 1024 -> 768 -> 512 px. */
+const SMALLER_SIZES = [0.75, 0.5] as const;
+const SMALLER_QUALITIES = [0.5, 0.35] as const;
+
+/**
+ * The encodings to try for a shot whose output is `out`, in order, until one is under
+ * MAX_FRAME_BYTES: every quality at full size, then a step down in size (never up).
+ */
+export function encodeSteps(out: { width: number; height: number }): EncodeStep[] {
+  const steps: EncodeStep[] = JPEG_QUALITIES.map((quality) => ({ quality, ...out }));
+  const long = Math.max(out.width, out.height, 1);
+  for (const f of SMALLER_SIZES) {
+    const size = fitSize(out.width, out.height, Math.max(1, Math.round(long * f)));
+    for (const quality of SMALLER_QUALITIES) steps.push({ quality, ...size });
+  }
+  return steps;
+}
+
+/** A JPEG the server takes: not empty, at most MAX_FRAME_BYTES (API-CONTRACT §2.9). */
+export const fitsFrameCap = (jpeg: Uint8Array | null | undefined): jpeg is Uint8Array =>
+  !!jpeg && jpeg.length > 0 && jpeg.length <= MAX_FRAME_BYTES;
+
+/**
+ * Saves the shot with each step in turn and returns the first JPEG under the cap, or null when
+ * even the smallest is over it (the caller drops the shot: the server would refuse the whole
+ * upload for one oversized image).
+ */
+export async function fitUnderCap(
+  steps: readonly EncodeStep[],
+  save: (step: EncodeStep) => Promise<Uint8Array>,
+): Promise<Uint8Array | null> {
+  for (const step of steps) {
+    const jpeg = await save(step);
+    if (fitsFrameCap(jpeg)) return jpeg;
+  }
+  return null;
+}
+
+/**
+ * Runs a capturePlan: `shoot` makes one shot's JPEG (null: none fits under the cap). The crop is
+ * extra: one that throws or does not fit is dropped and the frames still go. A frame that does
+ * not fit is dropped too (8..12 frames are accepted; buildEvidence refuses fewer); a frame that
+ * throws fails the capture. Nothing returned is over the server's cap.
+ */
+export async function runCapturePlan(
+  plan: readonly Shot[],
+  shoot: (shot: Shot, index: number) => Promise<Uint8Array | null>,
+  warn: (message: string) => void = () => undefined,
+): Promise<CapturedFrame[]> {
+  const out: CapturedFrame[] = [];
+  for (const [i, shot] of plan.entries()) {
+    if (shot.kind === 'frame') {
+      const jpeg = await shoot(shot, i);
+      if (fitsFrameCap(jpeg)) out.push({ t_ms: shot.t_ms, jpeg });
+      else warn(`frame ${i} dropped: no JPEG under ${MAX_FRAME_BYTES} bytes`);
+      continue;
+    }
+    try {
+      const jpeg = await shoot(shot, i);
+      if (fitsFrameCap(jpeg)) out.push({ t_ms: shot.t_ms, jpeg, landing_crop: true });
+      else warn(`landing crop dropped: no JPEG under ${MAX_FRAME_BYTES} bytes`);
+    } catch (e) {
+      warn(`landing crop skipped: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return out;
+}
+
 export const sha256Hex = (bytes: Uint8Array): string => bytesToHex(sha256(bytes));
 
 export function hashFrames(frames: readonly CapturedFrame[]): EvidenceFrame[] {

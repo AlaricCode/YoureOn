@@ -91,6 +91,33 @@ describe('stageLineFor', () => {
     expect(
       line({ outcome: 'REDO', redo_reason: 'unclear', reason: 'The bottle left the frame' }),
     ).toBe('Run it back. The bottle left the frame.');
+    // The server's own REDO reasons already say it (judge/ruling.ts): said once, not twice.
+    expect(
+      line({
+        outcome: 'REDO',
+        redo_reason: 'unclear',
+        claim_result: 'UNCLEAR',
+        confidence: 0,
+        reason: "The clerk couldn't make out that attempt. Run it back.",
+      }),
+    ).toBe("The clerk couldn't make out that attempt. Run it back.");
+    expect(
+      line({
+        outcome: 'REDO',
+        redo_reason: 'unclear',
+        reason:
+          'Checks disagree: the call says it landed, but the checks miss upright at rest. Run it back.',
+      }),
+    ).toBe(
+      'Checks disagree: the call says it landed, but the checks miss upright at rest. Run it back.',
+    );
+    expect(
+      line({
+        outcome: 'REDO',
+        redo_reason: 'low_confidence',
+        reason: 'run it back, keep it in frame',
+      }),
+    ).toBe('run it back, keep it in frame.');
     expect(line({ outcome: 'VOID', void_reason: 'max_redos' })).toBe(
       "Three tries and no clean call. It's void: both stakes go back.",
     );
