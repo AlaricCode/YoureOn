@@ -1,12 +1,44 @@
 // SCHEMAS §7 — appeals panel. Three providers vote independently; no majority upholds the original (D7, O7).
 import { z } from 'zod/v4';
 import { PANEL_ABSTAIN_BELOW } from './constants';
-import { BetId, Hex32, IsoUtc, NText, Party, Uuid } from './primitives';
-import { Confidence } from './ruling';
+import { BetId, Hex32, IsoUtc, NText, otherParty, Party, Uuid } from './primitives';
+import { Confidence, type ClaimResult } from './ruling';
 
 /** 'google' = the Gemini LLM; unrelated to Gemini the exchange. */
 export const PanelProvider = z.enum(['anthropic', 'openai', 'google']);
 export type PanelProvider = z.infer<typeof PanelProvider>;
+
+/** Seat k is PANEL_SEATS[k] (API-CONTRACT §7.2): Claude, GPT, Gemini. */
+export const PANEL_SEATS: readonly PanelProvider[] = ['anthropic', 'openai', 'google'];
+
+/** Per-vote budget (SCHEMAS §9.3 "Panel vote timeout"): a seat that has not answered abstains. */
+export const PANEL_VOTE_TIMEOUT_MS = 8_000;
+
+/**
+ * A voter's side from its VisionVerdict: MET -> the yes party wins, NOT_MET -> the other party,
+ * UNCLEAR -> REDO. Unlike the first ruling's toOutcome there is no REDO_BELOW (0.8) floor here: a
+ * vote's own floor is PANEL_ABSTAIN_BELOW (0.6), applied by countVote (the SCHEMAS §7 example
+ * counts a 0.71 vote).
+ */
+export function voteOutcome(
+  v: { claim_result: ClaimResult },
+  yesParty: Party,
+): 'A_WINS' | 'B_WINS' | 'REDO' {
+  if (v.claim_result === 'UNCLEAR') return 'REDO';
+  const winner = v.claim_result === 'MET' ? yesParty : otherParty(yesParty);
+  return winner === 'A' ? 'A_WINS' : 'B_WINS';
+}
+
+/**
+ * Who may appeal an outcome (SCHEMAS §5.3 "Loser"): the loser of a decisive ruling, either party
+ * of a VOID (onchain Refund / Split).
+ */
+export function appellantsOf(outcome: string): Party | 'either' | null {
+  if (outcome === 'A_WINS' || outcome === 'PartyA' || outcome === 'party_a') return 'B';
+  if (outcome === 'B_WINS' || outcome === 'PartyB' || outcome === 'party_b') return 'A';
+  if (['VOID', 'Refund', 'Split', 'refund', 'split'].includes(outcome)) return 'either';
+  return null;
+}
 
 export const VoteCountedAs = z.enum(['A_WINS', 'B_WINS', 'ABSTAIN']);
 export type VoteCountedAs = z.infer<typeof VoteCountedAs>;
