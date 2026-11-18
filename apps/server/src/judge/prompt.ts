@@ -73,8 +73,14 @@ export const JUDGE_OUTPUT: StructuredOutput<JudgeVerdict> = {
   upperCase: ['claim_result'],
 };
 
+/** The Terms fields the vision prompt reads (the warm-up passes a fixed set, demo/warmup.ts). */
+export type JudgeTerms = Pick<
+  Terms,
+  'claim' | 'attempts' | 'success_criteria' | 'failure_criteria' | 'edge_cases'
+>;
+
 /** The terms block (stable per bet, so it carries the cache breakpoint). */
-export function termsText(terms: Terms, performerName: string): string {
+export function termsText(terms: JudgeTerms, performerName: string): string {
   const lines = [
     'TERMS',
     `Claim: ${terms.claim}`,
@@ -99,7 +105,7 @@ export interface PromptFrame {
 
 /** System + user parts for one attempt. Frames are numbered 0..N-1 (cited_frames index them). */
 export function buildJudgeParts(
-  terms: Terms,
+  terms: JudgeTerms,
   performerName: string,
   frames: PromptFrame[],
 ): ChatPart[] {

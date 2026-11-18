@@ -29,6 +29,16 @@
 //                                        /v1/devices/current. 201 {device_id, user_id}; a repeat for
 //                                        the same user answers 200 with the same device. Demo
 //                                        accounts only (demo/players.ts): 409 not_demo_user otherwise.
+//   GET  /v1/demo/toggles                the runtime toggles (toggles.ts): cached_ruling, its source
+//   POST /v1/demo/toggles {cached_ruling?: boolean | null}
+//                                        set at runtime, read by the judge at call time (no restart);
+//                                        null = back to env CACHED_RULING. Audited 'demo.toggle'.
+//   POST /v1/demo/warmup                 one live judge call on a stored JPEG, getLatestBlockhash,
+//                                        one Gemini relay poll, voice readiness; per check
+//                                        {ok, ms, error} (warmup.ts). No bet, no money. 1 per 10 s.
+//   POST /v1/demo/seed-h2h {a_wins?, b_wins?}
+//                                        replaces the is_seed head-to-head history of demo-a vs
+//                                        demo-b (default 4-7, seed-h2h.ts); reset keeps it.
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import type { Context, MiddlewareHandler } from 'hono';
@@ -53,6 +63,9 @@ import { claimTokensOf, demoPartyKey } from './claim-tokens';
 import { demoWallets, isDemoPlayer } from './players';
 import { rebalanceDemoWallets } from './rebalance';
 import { DemoResetRequest, resetDemo } from './reset';
+import { SeedH2hRequest, seedHeadToHead } from './seed-h2h';
+import { DemoTogglesRequest, togglesOf } from './toggles';
+import { runWarmup, takeWarmupToken } from './warmup';
 import { realWorldEnabled } from '../markets/quote';
 import { settlementOf } from '../markets/settlement';
 
@@ -159,6 +172,48 @@ export const demoRoutes: RouteModule = {
         requestId: c.get('requestId'),
       });
       return c.json({ ok: true, ...result }, 200);
+    });
+
+    app.get('/v1/demo/toggles', requireDemo, (c) => {
+      const deps = c.get('deps');
+      c.header('Cache-Control', 'no-store');
+      return c.json(togglesOf(deps).view(deps.env), 200);
+    });
+
+    // Runtime toggles (toggles.ts): the judge reads cached_ruling at call time, so this takes
+    // effect on the next ruling, no restart. Every toggle the body names is audited.
+    app.post('/v1/demo/toggles', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const body = await readBody(c, DemoTogglesRequest);
+      const toggles = togglesOf(deps);
+      const changed = toggles.apply(body, deps.env, deps.now());
+      for (const ch of changed) {
+        await deps.db.insert(auditLog).values({
+          actor_kind: 'system',
+          action: 'demo.toggle',
+          request_id: c.get('requestId'),
+          details: { ...ch, env_default: deps.env.CACHED_RULING },
+        });
+        deps.log.warn('demo.toggle', { ...ch });
+      }
+      c.header('Cache-Control', 'no-store');
+      return c.json({ ok: true, toggles: toggles.view(deps.env), changed }, 200);
+    });
+
+    // One warm-up per 10 s (each is a paid Claude call): 429 RATE_LIMITED + Retry-After.
+    app.post('/v1/demo/warmup', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      takeWarmupToken(deps);
+      const r = await runWarmup(deps, { requestId: c.get('requestId') });
+      c.header('Cache-Control', 'no-store');
+      return c.json(r, 200);
+    });
+
+    app.post('/v1/demo/seed-h2h', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const body = await readBody(c, SeedH2hRequest);
+      const r = await seedHeadToHead(deps, body, { requestId: c.get('requestId') });
+      return c.json({ ok: true, ...r }, 200);
     });
 
     // Every money sweep, now (before a beat, or to see the orphan refunds go out): the same

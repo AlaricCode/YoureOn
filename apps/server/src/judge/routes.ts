@@ -4,7 +4,8 @@
 //   POST  /v1/bets/:bet_id/attempts/:n/frames    (S, recorder device; multipart) -> 202   ATTEMPT -> JUDGING
 //
 // After the 202 the ruling job runs in the background: one structured vision call through
-// deps.providers.llm (or the CACHED_RULING verdict), the deterministic bottle checks, the
+// deps.providers.llm (or, while cached_ruling is on, the stored verdict: env CACHED_RULING or the
+// runtime toggle POST /v1/demo/toggles, read per call), the deterministic bottle checks, the
 // SCHEMAS §5.1 mapping (toOutcome, REDO_BELOW, MAX_REDOS -> VOID), the Ruling record and its
 // ruling_hash (committing to the frame hashes, D7), one DB transaction (rulings row, attempt
 // status, redo_count, ruling.issued + judge.cue), fan-out to the bet channel and the room's

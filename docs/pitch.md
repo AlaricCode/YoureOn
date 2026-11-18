@@ -128,7 +128,8 @@ in the ticker. Winner's phone: the payout. If nobody taps GG, the 10-second wind
 server finalizes.
 
 If the ruling is REDO ("Run it back"), flip again: that is the deterministic checks refusing a
-verdict they can't confirm. If the judge is slow or wrong, see the runbook (`CACHED_RULING`).
+verdict they can't confirm. If the judge is slow or wrong, see the runbook: the cached ruling is a
+runtime switch (`POST /v1/demo/toggles {"cached_ruling": true}`), no restart.
 
 ### 3:20–3:45 · Beat 5: what if you disagree? (talk, no demo)
 

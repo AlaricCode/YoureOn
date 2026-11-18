@@ -36,30 +36,36 @@ Check these first; each changes the script ([`pitch.md`](pitch.md)).
 ```sh
 npm run demo-check                          # GO / NO-GO; exit 0 = GO (warnings allowed)
 npm run demo-check -- --json                # the same, machine-readable
+npm run demo-check -- --warmup              # first warm up (one paid judge call), then check
 ```
 
-`scripts/demo-check.ts` is read-only (it sends and signs nothing). It reads `GET /health`
-(reachable, latency, clock skew) and, with `DEMO_ADMIN_TOKEN`, `GET /v1/demo/health`. With
-`SOLANA_RPC_URL` set it also checks the chain directly: the program is deployed, Config exists and is
-not paused, the fee payer's SOL, the nonce accounts, the demo wallets' USDC, and live bets past a
-deadline. With `QN_API_KEY` and `QN_STREAM_ID` set it reads the Stream's status. Every failed check
-prints its fix.
+`scripts/demo-check.ts` is read-only (it signs nothing and, without `--warmup`, sends nothing). It
+reads `GET /health` (reachable, latency, clock skew) and, with `DEMO_ADMIN_TOKEN`,
+`GET /v1/demo/health`, including the judge (last success and failure, p50 / p95) and the
+`cached_ruling` toggle. With `--warmup` it first calls `POST /v1/demo/warmup` (see "Warm-up"
+below) and adds one `warmup.*` line per dependency. With `SOLANA_RPC_URL` set it also checks the
+chain directly: the program is deployed, Config exists and is not paused, the fee payer's SOL, the
+nonce accounts, the demo wallets' USDC, and live bets past a deadline. With `QN_API_KEY` and
+`QN_STREAM_ID` set it reads the Stream's status. Every failed check prints its fix.
 
-| Check                | GO                      | Warn      | What to do                                                                          |
-| -------------------- | ----------------------- | --------- | ----------------------------------------------------------------------------------- |
-| `/health` round trip | ≤ 1.5 s                 | ≤ 4 s     | Slow network or a cold machine: `fly machine list -a youre-on`                      |
-| Clock skew           | < 10 s                  | < 45 s    | Fix the laptop clock; requests are signed with a 60 s window                        |
-| Fee payer SOL        | ≥ 1 SOL                 | ≥ 0.1 SOL | A human tops up `ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8` from the bank wallet |
-| Free nonces          | ≥ 2 of 5                |           | See "Nonce pool" below                                                              |
-| demo-a / demo-b USDC | ≥ $5 each               | ≥ $1 each | `POST /v1/demo/rebalance`, then `npm run fund` from the treasury                    |
-| RPC p95              | ≤ 1.5 s                 | ≤ 4 s     | See "RPC rate-limited" below                                                        |
-| Gemini relay         | a good poll < 2 min ago |           | See "Gemini is down" below                                                          |
+| Check                  | GO                              | Warn                                    | What to do                                                                          |
+| ---------------------- | ------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------- |
+| `/health` round trip   | ≤ 1.5 s                         | ≤ 4 s                                   | Slow network or a cold machine: `fly machine list -a youre-on`                      |
+| Clock skew             | < 10 s                          | < 45 s                                  | Fix the laptop clock; requests are signed with a 60 s window                        |
+| Fee payer SOL          | ≥ 1 SOL                         | ≥ 0.1 SOL                               | A human tops up `ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8` from the bank wallet |
+| Free nonces            | ≥ 2 of 5                        |                                         | See "Nonce pool" below                                                              |
+| demo-a / demo-b USDC   | ≥ $5 each                       | ≥ $1 each                               | `POST /v1/demo/rebalance`, then `npm run fund` from the treasury                    |
+| RPC p95                | ≤ 1.5 s                         | ≤ 4 s                                   | See "RPC rate-limited" below                                                        |
+| Gemini relay           | a good poll < 2 min ago         |                                         | See "Gemini is down" below                                                          |
+| Judge (`server.judge`) | a success since boot, p95 ≤ 8 s | no success yet, or the last call failed | `npm run demo-check -- --warmup`; still failing: see "The judge is slow or wrong"   |
+| `server.cached_ruling` | off                             | on                                      | Fine for a staged flip; otherwise turn it off (see "The judge is slow or wrong")    |
 
 ### The health report
 
 ```sh
 demo "$SERVER/v1/demo/health" | jq '{ok, warnings, lock_signer, fee_payer_sol, nonce_pool,
-  balances, rpc_stats, keeper, inflight, stuck_bets, escrow, stream, gemini, build}'
+  balances, rpc_stats, keeper, inflight, stuck_bets, escrow, stream, gemini, toggles, judge_llm,
+  build}'
 ```
 
 - `ok` is false when any warning is critical. Read every `warnings[]` entry: each has a `code`, a
@@ -71,6 +77,52 @@ demo "$SERVER/v1/demo/health" | jq '{ok, warnings, lock_signer, fee_payer_sol, n
   transactions older than 2 minutes; `stuck_bets` lists bets that are not moving.
 - `escrow`: orphaned escrow (bets on chain whose row is gone or terminal). See section 5.
 - `build`: which image and machine answered, to confirm the deploy you expect.
+- `toggles`: `cached_ruling` and whether it comes from the env (`CACHED_RULING`, the boot default)
+  or was set at runtime. `judge_llm`: the judge's calls since boot (rulings and warm-ups): the last
+  success and failure, p50 / p95, the provider (`live` or `mock`) and the model. These are in
+  memory: a restart starts them again, which is why `judge_no_success` (a warning, not critical)
+  shows until the first call. `judge_failing` means the last call failed after the last success;
+  `cached_ruling_on` that every ruling is the stored verdict.
+
+### Warm-up (10 minutes before the pitch)
+
+```sh
+demo -X POST "$SERVER/v1/demo/warmup" -d '{}' | jq '{ok, notes, checks}'
+```
+
+It makes no bet and moves no money. It runs four checks in parallel; each answers `ok`, `ms` and
+`error`:
+
+- `judge`: one live Claude call with the real prompt and output schema on a stored 16 px JPEG. It
+  always calls the live judge, even while `cached_ruling` is on, and counts in `judge_llm`. Its
+  verdict is meaningless (`UNCLEAR` is normal); `ok` means Claude answered in the ruling's schema.
+- `rpc`: `getLatestBlockhash` on the server's RPC.
+- `gemini`: one poll of the Gemini relay and its current contract (`lockable`, `refusal`).
+- `voice`: whether the voice judge is configured (no token is minted: that would start a billed
+  session). Until the ElevenLabs key lands this is `ok: false` and A types the terms.
+
+`notes` says when a check did not exercise the real thing: `LLM_PROVIDER=mock`, the cached ruling,
+the REPLAY feed. The server allows one warm-up per 10 s (429 with `Retry-After` otherwise): each is
+a paid call.
+
+### Head-to-head history (once, after the phones are claimed)
+
+The face-match reply on A's phone says "You're 4-7 against Jake" from the head-to-head record.
+Seed it once demo-a and demo-b have accounts (the phones are claimed, or `cp1-drive` signed them
+up):
+
+```sh
+demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{}' | jq '{inserted, replaced, head_to_head}'
+demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 4, "b_wins": 7}'   # the same, explicit
+demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 0, "b_wins": 0}'   # remove the history
+```
+
+- The rows are demo history, labelled `is_seed` (titles "Demo history: …"): 11 settled bets with
+  no on-chain footprint, one a day in the past, so the record reads 4-7 and −$7.00 for demo-a.
+  The phones' history lists them, flagged `is_seed`.
+- Re-running replaces the old seed rows (it never doubles them). `POST /v1/demo/reset` keeps them.
+- 409 `demo_player_missing`: that demo wallet has no account yet; claim its phone first.
+- Live bets between A and B add to the record as they settle.
 
 ### Reset between rehearsals
 
@@ -219,12 +271,29 @@ with the deterministic checks is a REDO ("Run it back"); a third REDO voids the 
 both.
 
 - A REDO on stage: flip again. That is the judge refusing a verdict it can't confirm.
-- Rulings slow or flaky in rehearsal: set `CACHED_RULING = "true"` in `fly.toml [env]` and
-  `fly deploy` from a checkout of the deployed commit (a deploy ships whatever is checked out).
-  The ruling then comes from a stored verdict with no model call (model `cache/demo-bottle@1`,
-  always "landed"); it still commits to the hashes of the frames actually uploaded. Use it only for
-  a staged clean flip. The stage does not label a cached ruling, so say it out loud ("cached
-  ruling"). Set it back to `"false"` afterwards.
+- Check the judge first: `demo "$SERVER/v1/demo/health" | jq .judge_llm` (the last failure says
+  why), or warm it up: `demo -X POST "$SERVER/v1/demo/warmup" -d '{}' | jq .checks.judge`.
+- Rulings slow or flaky: switch on the cached ruling at runtime. It takes effect on the next
+  ruling, with no restart and no deploy:
+
+  ```sh
+  demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": true}'    # on
+  demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": false}'   # off (the live judge)
+  demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": null}'    # back to the env default
+  demo "$SERVER/v1/demo/toggles"                                         # what is on now
+  ```
+
+  The ruling then comes from a stored verdict with no model call (always "landed", B wins); it
+  still commits to the hashes of the frames actually uploaded, and pays out on chain as usual.
+  Every such ruling carries `model: "cache/demo-bottle@1"` in its payload. Use it only for a
+  staged clean flip. Unless the stage labels it, say it out loud ("cached ruling"). Each switch is
+  in the audit log (`demo.toggle`) and `/v1/demo/health` shows `toggles` and the
+  `cached_ruling_on` warning while it is on.
+
+- A runtime switch lasts until the machine restarts (a `fly secrets set`, a deploy, a crash); then
+  the env `CACHED_RULING` in `fly.toml [env]` (`"false"`) applies again. To make it survive a
+  restart, set `CACHED_RULING = "true"` there and `fly deploy` from a checkout of the deployed
+  commit (a deploy ships whatever is checked out).
 
 ### The voice judge fails
 
@@ -288,4 +357,6 @@ npm run crank -- --url "$SOLANA_RPC_URL" --devnet --payer <funded-keypair.json> 
 - `demo -X POST "$SERVER/v1/demo/reset" -d '{"rebalance": true}'`.
 - Pause the Stream once it exists, to save credits: `npm run qn-stream -- pause <stream id>`.
 - Switch the Gemini relay back to live if you used the replay.
-- Put `CACHED_RULING` and `LOCK_SIGNER` back if you changed them.
+- Turn the cached ruling off if you switched it on
+  (`demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": null}'`), and put
+  `CACHED_RULING` and `LOCK_SIGNER` back if you changed them.

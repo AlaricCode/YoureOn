@@ -77,7 +77,7 @@ import {
 import { hashJcs } from '@youre-on/shared/jcs';
 import { betIdToBytes, sha256Hex } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
-import { Ruling } from '@youre-on/shared/ruling';
+import { CACHED_RULING_MODEL, isCachedRuling, Ruling } from '@youre-on/shared/ruling';
 import { renderSignCard } from '@youre-on/shared/sign-card';
 import {
   createPoolNonce,
@@ -991,6 +991,64 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
         ...PAID_BY('CONCEDED'),
       ]);
     } finally {
+      install('phones');
+    }
+  });
+
+  it('POST /v1/demo/toggles cached_ruling: the next ruling is the stored verdict (marked cached), no restart; off -> the model again', async () => {
+    install('server');
+    try {
+      // The server booted with CACHED_RULING=false; flip it at runtime.
+      const on = await admin('/v1/demo/toggles', { cached_ruling: true });
+      expect(on.json!.toggles).toMatchObject({
+        cached_ruling: true,
+        cached_ruling_source: 'runtime',
+        cached_ruling_env: false,
+      });
+      const b0 = await usdc(signerB.address);
+      const betId = await lockedBet();
+      await startAttempt(betId, 1);
+      replies = [NOT_MET]; // the model would say A wins: it must not be asked
+      const calls0 = llm.calls.length;
+      const up = await uploadFrames(betId, 1, 12);
+      await settle();
+      expect(llm.calls.length).toBe(calls0);
+      // Every surface carries the marker: the phones' and the stage's ruling.issued, the row.
+      const issued = await wsA.next((f) => f.type === 'ruling.issued' && f.bet_id === betId);
+      const ruling = Ruling.parse(issued.payload.ruling);
+      expect(ruling).toMatchObject({
+        outcome: 'B_WINS',
+        model: CACHED_RULING_MODEL,
+        cited_frames: [9, 10, 11],
+        frame_hashes: up.frames.map((f) => sha256Hex(f)),
+        evidence_hash: up.evidence.clip_sha256,
+      });
+      expect(isCachedRuling(ruling)).toBe(true);
+      const staged = await wsStage.next((f) => f.type === 'ruling.issued' && f.bet_id === betId);
+      expect(isCachedRuling(staged.payload.ruling)).toBe(true);
+      // ...and it pays out on chain like any ruling.
+      await expectRuled(betId, { ruling, ruling_hash: issued.payload.ruling_hash });
+      await finalizeAfterWindow(betId);
+      expect(await usdc(signerB.address)).toBe(b0 + 1n * USDC);
+      replies = [];
+
+      // Off again at runtime: the next bet's ruling is the model's.
+      expect(
+        (await admin('/v1/demo/toggles', { cached_ruling: false })).json!.toggles,
+      ).toMatchObject({ cached_ruling: false });
+      const bet2 = await lockedBet();
+      const r = await judged(bet2, 1, NOT_MET, 8); // asserts exactly one model call
+      expect(r.ruling).toMatchObject({
+        outcome: 'A_WINS',
+        model: 'anthropic/mock/claude-sonnet-5-5',
+      });
+      expect(isCachedRuling(r.ruling)).toBe(false);
+      await expectRuled(bet2, r);
+      await finalizeAfterWindow(bet2);
+    } finally {
+      replies = [];
+      // back to the env default, so the env-driven tests below still flip CACHED_RULING
+      await admin('/v1/demo/toggles', { cached_ruling: null });
       install('phones');
     }
   });

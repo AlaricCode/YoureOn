@@ -326,7 +326,14 @@ to Gemini's regulated market; this devnet demo uses our escrow with Gemini as th
   `packages/shared/src/judge`. Guardrails: 18+ at signup, the $20 on-chain stake cap, and a keyword
   prefilter that refuses dangerous, illegal, alcohol/drug, self-harm or minor-related challenges.
 - **`CACHED_RULING=true`** rules from a stored verdict with no model call (model
-  `cache/demo-bottle@1`); it still commits to the hashes of the frames actually uploaded.
+  `cache/demo-bottle@1`); it still commits to the hashes of the frames actually uploaded. On the
+  demo server it is also a runtime switch, `POST /v1/demo/toggles {"cached_ruling": true}`, read
+  per ruling (no restart); the env value is the boot default.
+- **Demo-day valves** (admin key, `docs/runbook.md`): `POST /v1/demo/warmup` makes one live judge
+  call on a stored JPEG and checks the RPC, the Gemini relay and voice readiness (no bet, no money,
+  one per 10 s); `GET /v1/demo/health` reports the judge's last success and failure and its
+  latency; `POST /v1/demo/seed-h2h` seeds the 4-7 head-to-head history the face match shows
+  (labelled `is_seed`, kept by the demo reset).
 - **Spend guard.** Every paid provider refuses to start without `ALLOW_SPEND=true`, and under
   `NODE_ENV=production` the mock LLM refuses every call, so a misconfigured deploy cannot issue fake
   rulings.
