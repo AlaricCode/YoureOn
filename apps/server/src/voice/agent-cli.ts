@@ -19,6 +19,7 @@ import {
 } from '@youre-on/shared/judge/el-enums';
 import { FIRST_MESSAGE, JUDGE_AGENT_NAME } from '@youre-on/shared/judge/persona';
 import type { SyncAction, SyncOptions } from './agent-sync';
+import { publicBaseUrlProblem } from './readiness';
 
 export const ELEVENLABS_OPENAPI_URL = 'https://api.elevenlabs.io/openapi.json';
 /** Placeholder base URL a dry run uses when PUBLIC_BASE_URL is unset. */
@@ -142,16 +143,8 @@ export function parseAgentCli(
     baseUrl = PLACEHOLDER_BASE_URL;
     notes.push(`PUBLIC_BASE_URL unset; the dry run uses ${PLACEHOLDER_BASE_URL}`);
   } else {
-    let u: URL;
-    try {
-      u = new URL(baseUrl);
-    } catch {
-      return fail(`PUBLIC_BASE_URL is not a URL: ${baseUrl}`);
-    }
-    if (u.protocol !== 'https:')
-      return fail('PUBLIC_BASE_URL must be https:// (ElevenLabs calls it from the internet)');
-    if (/^(localhost|127\.|10\.|192\.168\.|\[::1\])/.test(u.hostname))
-      return fail(`PUBLIC_BASE_URL ${baseUrl} is not reachable from ElevenLabs`);
+    const problem = publicBaseUrlProblem(baseUrl);
+    if (problem) return fail(problem);
   }
 
   const voiceId = get('ELEVENLABS_JUDGE_VOICE_ID');
