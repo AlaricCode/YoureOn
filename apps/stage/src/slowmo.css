@@ -155,7 +155,7 @@
   padding: 0.5em 1.1em;
   border-radius: 0.6em;
   border: 1px solid var(--line, #262b3b);
-  background: var(--panel-2, #161a26);
+  background: var(--fill, #1c1c1f);
   font-weight: 700;
   pointer-events: none;
 }
