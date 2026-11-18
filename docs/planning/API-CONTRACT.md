@@ -120,7 +120,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 - Timestamps are `IsoUtc` (ms). Onchain-mirroring fields are unix seconds (SCHEMAS §0). `X-YO-Timestamp` is unix ms.
 - Ids are UUIDv4. Pubkeys and tx signatures are base58. Hashes are `Hex32`. Binary in JSON is base64 (standard, padded): `message_b64`, `embedding` ciphertext.
 - Pagination is `?cursor=<opaque>&limit=<1..50>` and returns `{items, next_cursor|null}`.
-- Size limits: JSON body 64 KB; frames multipart 2 MB; hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9). Larger bodies return `413 PAYLOAD_TOO_LARGE`.
+- Size limits: JSON body 64 KB; frames multipart 2 MB; hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9); QuickNode webhook 1 MiB. Larger bodies return `413 PAYLOAD_TOO_LARGE`. A body above 64 KB without a `Content-Length` (chunked) is capped as the route reads it, after its auth / header checks, never buffered before them.
 - Every response carries `X-Request-Id`; a client-supplied one is echoed back.
 
 ### 1.5 Errors

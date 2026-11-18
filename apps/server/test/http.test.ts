@@ -1,4 +1,5 @@
 // No-DB tests: /health, the error envelope, env validation, and the in-process stores.
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   authChallengeMessage,
@@ -7,6 +8,7 @@ import {
   ApiError,
 } from '@youre-on/shared/api';
 import { buildApp } from '../src/app';
+import { QUICKNODE_BODY_LIMIT } from '../src/chain/routes';
 import { ChallengeStore } from '../src/auth/challenges';
 import type { RouteModule } from '../src/context';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
@@ -123,6 +125,80 @@ describe('error envelope (API-CONTRACT §1.5)', () => {
     const res = await app.request('/v1/auth/session', { method: 'DELETE' });
     expect(res.status).toBe(401);
     expect((await env(res)).code).toBe('AUTH_REQUIRED');
+  });
+});
+
+describe("large bodies are read only after the route's own checks (inputs-1)", () => {
+  /** A body of `n` 64 KB chunks that counts how many the server pulled. */
+  function counted(n: number, headers: Record<string, string> = {}) {
+    const seen = { pulled: 0 };
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
+    const body = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        if (seen.pulled >= n) return ctrl.close();
+        seen.pulled++;
+        ctrl.enqueue(chunk);
+      },
+    });
+    return { seen, init: { method: 'POST', body, duplex: 'half', headers } as RequestInit };
+  }
+  const errCode = async (res: Response) => ApiError.parse(await res.json()).error.code;
+
+  it('an unsized (chunked) frames upload without a bearer is 401 before its body is read', async () => {
+    const { seen, init } = counted(32); // 2 MiB, under the 3 MiB frames cap
+    const res = await app.request(`/v1/bets/${randomUUID()}/attempts/1/frames`, init);
+    expect(res.status).toBe(401);
+    expect(seen.pulled).toBeLessThanOrEqual(3);
+  });
+
+  it('an unsized body to the QuickNode webhook (no secret: 404) is never buffered', async () => {
+    const { seen, init } = counted(16);
+    const res = await app.request('/webhooks/quicknode', init);
+    expect(res.status).toBe(404);
+    expect(seen.pulled).toBeLessThanOrEqual(3);
+  });
+
+  it('an unsized body over a route cap is still 413 once the route reads it', async () => {
+    const over = counted(4); // 256 KB > /probe/big's 200 KB
+    const r1 = await app.request('/probe/big', over.init);
+    expect(r1.status).toBe(413);
+    expect(await errCode(r1)).toBe('PAYLOAD_TOO_LARGE');
+    const under = counted(2);
+    const r2 = await app.request('/probe/big', under.init);
+    expect(r2.status).toBe(200);
+    expect(await r2.json()).toEqual({ bytes: 2 * 64 * 1024 });
+  });
+
+  const { deps: qnDeps } = createDeps({
+    env: testEnv({
+      DATABASE_URL: 'postgres://unused@127.0.0.1:1/none',
+      QN_STREAM_SECURITY_TOKEN: 'qn-test-secret',
+    }),
+    rateLimit: false,
+  });
+  const qnApp = buildApp(qnDeps);
+  const sized = (n: number, qn: Record<string, string>) =>
+    counted(n, { 'content-length': String(n * 64 * 1024), ...qn });
+
+  it('the webhook refuses a stale timestamp or a malformed signature without reading the body', async () => {
+    const fresh = String(Math.floor(Date.now() / 1000));
+    for (const [qn, reason] of [
+      [{ 'x-qn-nonce': 'n', 'x-qn-timestamp': '1000', 'x-qn-signature': 'a'.repeat(64) }, 'stale'],
+      [{ 'x-qn-nonce': 'n', 'x-qn-timestamp': fresh, 'x-qn-signature': 'zz' }, 'bad_signature'],
+    ] as const) {
+      const { seen, init } = sized(8, qn);
+      const res = await qnApp.request('/webhooks/quicknode', init);
+      expect(res.status).toBe(401);
+      expect(ApiError.parse(await res.json()).error.details).toMatchObject({ reason });
+      expect(seen.pulled).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it(`the webhook body cap is ${QUICKNODE_BODY_LIMIT} bytes (was 8 MiB)`, async () => {
+    expect(QUICKNODE_BODY_LIMIT).toBeLessThanOrEqual(1024 * 1024);
+    const { init } = sized(24, {}); // 1.5 MiB declared
+    const res = await qnApp.request('/webhooks/quicknode', init);
+    expect(res.status).toBe(413);
   });
 });
 
