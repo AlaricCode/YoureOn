@@ -531,14 +531,14 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 
 ### 2.17 Stage and demo controls (stage-only, protected)
 
-Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-YO-Demo-Key`, and returns 404 unless `DEMO_MODE=true`. All are idempotent by intent.
+Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-YO-Demo-Key`, and returns 404 unless `DEMO_MODE=true`. All are idempotent by intent. (Built: the admin key alone gates them; the read-only `GET /v1/demo/health` also takes the stage token alone, so the projector needs no admin key.)
 
 | Route | Effect |
 |---|---|
 | `POST /v1/stage/session {stage_key, room_id}` | Stage token (WS stage scope, §3.1) |
 | `POST /v1/demo/reset` | `db:demo-reset` (DATA-MODEL §11): non-seed bets deleted, rooms recreated, `audit_log 'demo.reset'`. **Never touches `face_enrollments`.** Also advances every leased nonce. |
 | `POST /v1/demo/accounts/:user_id/claim-token` | One-time QR payload for `POST /v1/auth/demo-claim` (10 min) |
-| `POST /v1/demo/users/:user_id/devices {device_pubkey}` | Registers a further device key of a user (the judge-cam iPhone as a device of A, §2.9); it then logs in with `POST /v1/auth/session` and binds itself with `PATCH /v1/devices/current`. 201 `{device_id, user_id}`; 200 on a repeat for the same user |
+| `POST /v1/demo/users/:user_id/devices {device_pubkey}` | Registers a further device key of a demo account (the judge-cam iPhone as a device of A, §2.9); it then logs in with `POST /v1/auth/session` and binds itself with `PATCH /v1/devices/current`. 201 `{device_id, user_id}`; 200 on a repeat for the same user. Demo accounts only (`is_demo`, or the demo-a / demo-b wallet): `409 INVALID_STATE {reason:'not_demo_user'}` for any other user, so a leaked admin key cannot take over a real account |
 | `POST /v1/demo/bets/:bet_id/force-hearing` | Opens a hearing with `trigger:'demo'` (SCHEMAS §6) |
 | `POST /v1/demo/fallback {beat: 1..6, action: 'play'\|'stop'}` | The stage plays the pre-recorded beat (BRIEF 5i) |
 | `POST /v1/demo/stream/replay {fixture}` | Replays recorded webhook payloads to the stage ticker only (FINDINGS §4); never writes `chain_events` |

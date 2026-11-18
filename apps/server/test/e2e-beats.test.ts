@@ -46,6 +46,7 @@ import {
   betEvents,
   bets,
   createDb,
+  devices,
   noncePool,
   rulings,
   runMigrations,
@@ -315,20 +316,36 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     return { device, wallet, session: r.json as unknown as Session };
   }
 
-  async function secondDeviceOf(u: SignedUp): Promise<SignedUp> {
+  async function secondDeviceOf(u: SignedUp, o: { viaDb?: boolean } = {}): Promise<SignedUp> {
     const device = newKey();
-    const reg = await admin(`/v1/demo/users/${u.session.user.user_id}/devices`, {
-      device_pubkey: device.pubkey,
-    });
-    expect(reg.status).toBe(201);
-    // idempotent for the same user
-    expect(
-      (
-        await admin(`/v1/demo/users/${u.session.user.user_id}/devices`, {
-          device_pubkey: device.pubkey,
-        })
-      ).json,
-    ).toEqual(reg.json);
+    let deviceId: string;
+    if (o.viaDb) {
+      // Not a demo account: the demo op refuses it (a leaked admin key must not add a device to
+      // a real account), so the device goes straight into the table.
+      const refused = await admin(`/v1/demo/users/${u.session.user.user_id}/devices`, {
+        device_pubkey: device.pubkey,
+      });
+      expect(refused.status).toBe(409);
+      const [d] = await ctx.deps.db
+        .insert(devices)
+        .values({ user_id: u.session.user.user_id, platform: 'ios', device_pubkey: device.pubkey })
+        .returning({ id: devices.id });
+      deviceId = d!.id;
+    } else {
+      const reg = await admin(`/v1/demo/users/${u.session.user.user_id}/devices`, {
+        device_pubkey: device.pubkey,
+      });
+      expect(reg.status).toBe(201);
+      // idempotent for the same user
+      expect(
+        (
+          await admin(`/v1/demo/users/${u.session.user.user_id}/devices`, {
+            device_pubkey: device.pubkey,
+          })
+        ).json,
+      ).toEqual(reg.json);
+      deviceId = reg.json!.device_id;
+    }
     const ch = await getChallenge(ctx.base, device);
     const login = await postJson(ctx.base, '/v1/auth/session', {
       challenge_id: ch.challenge_id,
@@ -347,7 +364,7 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     expect(login.status).toBe(200);
     const session = login.json as unknown as Session;
     expect(session.user.user_id).toBe(u.session.user.user_id);
-    expect(session.device_id).toBe(reg.json!.device_id);
+    expect(session.device_id).toBe(deviceId);
     return { device, wallet: u.wallet, session };
   }
 
@@ -858,7 +875,7 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
 
       // A judge cam of a non-party (a third user in the room) is never the recorder: the cam must
       // be a device of the non-performer (§2.9). That is why the driver registers a device of A.
-      const camC = await secondDeviceOf(C);
+      const camC = await secondDeviceOf(C, { viaDb: true });
       await signed(CAM, 'PATCH', '/v1/devices/current', { role: 'phone' });
       await bindCam(camC);
       const none = await signed(A, 'POST', `/v1/bets/${betId}/attempts`, {
@@ -976,6 +993,12 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     const secret = (k: TestKey, s: KeyPairSigner) =>
       JSON.stringify([...k.secret, ...new Uint8Array(getAddressEncoder().encode(s.address))]);
     const stateFile = join(tmpdir(), `cp1-drive-${randomUUID()}.json`);
+    // cp1-drive runs with the server's own demo-a / demo-b keys (its users are the demo
+    // accounts, e.g. for the judge-cam device op), so this server knows these as its demo keys.
+    const env = ctx.deps.env as { DEMO_A_SECRET_KEY?: string; DEMO_B_SECRET_KEY?: string };
+    const savedKeys = [env.DEMO_A_SECRET_KEY, env.DEMO_B_SECRET_KEY] as const;
+    env.DEMO_A_SECRET_KEY = secret(...wallets[0]!);
+    env.DEMO_B_SECRET_KEY = secret(...wallets[1]!);
     // While the driver waits out the appeal window, move both clocks (LiteSVM has no wall clock).
     let ticking = true;
     const ticker = (async () => {
@@ -1030,6 +1053,7 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
       await ticker;
       rmSync(stateFile, { force: true });
       await settle();
+      [env.DEMO_A_SECRET_KEY, env.DEMO_B_SECRET_KEY] = savedKeys;
     }
   }
 
