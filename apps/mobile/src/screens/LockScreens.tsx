@@ -120,8 +120,12 @@ export function TermsCardScreen({
         ) : null}
 
         <View style={styles.rows}>
+          {view.mySide ? <InfoRow label={t(COPY.market.side)} value={view.mySide} /> : null}
+          {view.lineUsd ? <InfoRow label={t(COPY.market.line)} value={view.lineUsd} /> : null}
           <InfoRow label={t(COPY.terms.evidence)} value={view.evidence} />
-          <InfoRow label={t(COPY.terms.tries)} value={view.attempts} />
+          {view.kind === 'skill' ? (
+            <InfoRow label={t(COPY.terms.tries)} value={view.attempts} />
+          ) : null}
           {view.odds ? <InfoRow label={t(COPY.terms.odds)} value={view.odds} /> : null}
           <InfoRow label={t(COPY.terms.deadline)} value={clockLabel(view.deadline)} />
           <InfoRow label={t(COPY.terms.code)} value={view.termsCode} />
