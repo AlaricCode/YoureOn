@@ -828,7 +828,6 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             name={app.me?.display_name ?? ''}
             faceOn={false}
             onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
-            onFace={() => undefined}
             onHistory={() => dispatch({ type: 'overlay', overlay: 'history' })}
             onJudgeCam={() => setJudgeCam(!app.judgeCam)}
             onDemo={() => dispatch({ type: 'overlay', overlay: 'demoClaim' })}
