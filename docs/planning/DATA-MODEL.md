@@ -1327,6 +1327,8 @@ FROM s;
 -- Expect: SELECT wins, losses, net FROM head_to_head WHERE user_a = logan AND user_b = jake  ->  4, 7, -7000000
 ```
 
+**Built: `POST /v1/demo/seed-h2h {a_wins?, b_wins?}`** (API-CONTRACT §2.17, `apps/server/src/demo/seed-h2h.ts`) is this fallback as a route, for the two demo accounts the server has (demo-a / demo-b, the users holding the demo wallets) instead of the three seeded users above: `a_wins + b_wins` rows (default 4-7, demo-a winning bets 2, 5, 7 and 10 with the stakes above, so −$7.00), `is_seed = true`, titles "Demo history: …", `room_id` NULL (the projector never shows them), random ids, the party wallets set, no `chain_txs` or events. Each call first deletes the pair's `is_seed` rows, so re-seeding replaces them. The face-match reply on demo-a's phone then reads 4-7 against demo-b.
+
 **Demo reset** (`npm run db:demo-reset`, npm workspaces per TASKS K-06): delete non-seed bets in the demo room (children cascade; `chain_events` stay, since they have no FK), close and recreate rooms, and write `audit_log 'demo.reset'`. It never touches `face_enrollments`.
 
 ---

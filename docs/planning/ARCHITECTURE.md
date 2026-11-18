@@ -803,12 +803,12 @@ Likelihoods and mitigations come from FINDINGS §4. This table adds what the sys
 
 | Toggle | Effect | Notes |
 |---|---|---|
-| Seeded accounts | 3–4 custodial demo accounts provisioned by one-time QR; `seed:chain` history (real devnet bets) or SQL `is_seed` rows | FINDINGS §3.4, DATA-MODEL §11; the stage labels seeded rows "demo history" |
+| Seeded accounts | 3–4 custodial demo accounts provisioned by one-time QR; `seed:chain` history (real devnet bets) or SQL `is_seed` rows | FINDINGS §3.4, DATA-MODEL §11; the stage labels seeded rows "demo history". Built: the two demo accounts (demo-a / demo-b) and `POST /v1/demo/seed-h2h` (the SQL fallback, 4-7) |
 | Short timers | Onchain: Config demo values (appeal 10 s, accept 300 s / quote 60 s, resolve 3600 s, appeal-resolve 300 s). Offchain: draft idle 5 min, hearing turn 10 s, panel 8 s | Onchain values change only via `update_config` and only for new bets (I11) |
 | `force_hearing` | Next ruling opens a hearing (`trigger: 'demo'`) | SCHEMAS §6, keeps Beat 5 deterministic; `POST /v1/demo/bets/:bet_id/force-hearing` |
 | `lock_mode` | `atomic` (default) or `sequential` | FINDINGS §3.7; `POST /v1/demo/lock-mode` |
 | `replay_beat_N` (1–6, h2h) | Stage plays the pre-recorded video of that beat, labelled REPLAY | Record the take at Thursday's rehearsal; `POST /v1/demo/fallback` |
-| `cached_ruling` | Beat 4 uses a pre-recorded clip and its cached ruling | FINDINGS §4 |
+| `cached_ruling` | Beat 4 uses a pre-recorded clip and its cached ruling | FINDINGS §4. Built as the stored verdict for the frames actually uploaded (`Ruling.model = 'cache/demo-bottle@1'`), switched at runtime by `POST /v1/demo/toggles` (no restart; env `CACHED_RULING` is the boot default) |
 | `replay_streams` | Recorded webhook payloads feed the stage ticker, labelled | FINDINGS §4 "All"; `POST /v1/demo/stream/replay` |
 | `gemini_fallback` | `next_contract_5050` or `index_model_odds` (labelled) | FINDINGS §4 Beat 6 |
 | `voice_fallback` | Speech Engine, or pre-generated TTS lines | FINDINGS §3.10 |
