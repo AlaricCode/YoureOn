@@ -11,7 +11,12 @@ import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { formatUsd } from '@youre-on/shared/money';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
-import { formatPrice } from '@youre-on/shared/settlement';
+import { sha256Hex } from '@youre-on/shared/primitives';
+import {
+  formatPrice,
+  verifySettlement,
+  type SettlementEvidence,
+} from '@youre-on/shared/settlement';
 import {
   applyFrame,
   explorerTx,
@@ -23,6 +28,7 @@ import {
 import {
   fetchBetSnapshot,
   fetchMarket,
+  fetchSettlement,
   fetchStageToken,
   StageConnection,
   wsUrlFor,
@@ -34,6 +40,16 @@ import { previewMarketState } from './preview-market';
 
 const STORE_KEY = 'yo-stage-config';
 export const REPLAY_BEATS = [1, 2, 3, 4, 5, 6] as const;
+/** States in which a bet's resolve has landed (its evidence hashes are on chain). */
+const RULED_OR_LATER = new Set([
+  'RULED',
+  'CONCEDED',
+  'FINALIZED',
+  'APPEALED',
+  'APPEAL_RESOLVED',
+  'PAID',
+  'VOIDED',
+]);
 
 function loadConfig(): StageConfig {
   try {
@@ -137,15 +153,47 @@ function outcomeLine(b: BetView): string {
 }
 
 /** Beat 6 on the projector: the live market bet, then Gemini's settled result. */
+/** The stage's own re-check of a Gemini bet's evidence chain (verifySettlement). */
+export interface Verification {
+  ok: boolean;
+  /** The on-chain hashes were part of it (the resolve landed). */
+  onchain: boolean;
+  failed: string[];
+}
+
+/** Re-runs the shared verifySettlement over GET /v1/bets/:id/settlement (never trusts its `ok`). */
+export function verifyEvidence(bet: BetView, ev: SettlementEvidence): Verification | null {
+  const t = bet.envelope?.terms;
+  if (!t?.market) return null;
+  const v = verifySettlement({
+    record: ev.record,
+    evidence_hash: ev.evidence_hash,
+    ruling: ev.ruling,
+    ruling_hash: ev.ruling_hash,
+    terms: { yes_party: t.yes_party, market: t.market },
+    body_sha256: ev.raw_body === null ? null : sha256Hex(ev.raw_body),
+    onchain: ev.onchain,
+  });
+  return {
+    ok: v.ok,
+    onchain: v.checks.onchain_evidence === true && v.checks.onchain_ruling === true,
+    failed: Object.entries(v.checks)
+      .filter(([, good]) => !good)
+      .map(([k]) => k.replace(/_/g, ' ')),
+  };
+}
+
 export function MarketPanel({
   bet,
   tick,
   now,
+  verification = null,
 }: {
   bet: BetView;
   /** The latest snapshot of THIS bet's contract (market.tick, or the relay's if it matches). */
   tick: GeminiMarketSnapshot | null;
   now: number;
+  verification?: Verification | null;
 }) {
   const t = bet.envelope?.terms;
   const m = t?.market;
@@ -234,6 +282,15 @@ export function MarketPanel({
               Gemini ↗
             </a>
           </p>
+          {verification && (
+            <p className={`market-evidence ${verification.ok ? 'good' : 'bad'}`}>
+              {verification.ok
+                ? verification.onchain
+                  ? "✓ verified: Gemini's response → record → on-chain evidence"
+                  : "✓ verified: Gemini's response → record → ruling"
+                : `✗ evidence mismatch: ${verification.failed.join(', ')}`}
+            </p>
+          )}
         </>
       ) : left > 0 ? (
         ahead && <p className="muted">{ahead} is ahead</p>
@@ -248,11 +305,14 @@ export function BetCard({
   bet,
   now,
   tick = null,
+  verification = null,
 }: {
   bet: BetView;
   now: number;
   /** Gemini bets: the latest snapshot of the bet's contract. */
   tick?: GeminiMarketSnapshot | null;
+  /** Gemini bets: the stage's re-check of the evidence chain, once ruled. */
+  verification?: Verification | null;
 }) {
   const t = bet.envelope?.terms ?? null;
   const cited = bet.ruling?.cited_frames[0];
@@ -289,7 +349,7 @@ export function BetCard({
         <p className="muted big">Negotiating terms…</p>
       )}
 
-      {t?.market && <MarketPanel bet={bet} tick={tick} now={now} />}
+      {t?.market && <MarketPanel bet={bet} tick={tick} now={now} verification={verification} />}
 
       <div className="grid2">
         <div>
@@ -459,11 +519,14 @@ export function StageView({
   now,
   onDisconnect,
   preview = false,
+  verifications = {},
 }: {
   state: TickerState;
   now: number;
   onDisconnect?: () => void;
   preview?: boolean;
+  /** Gemini bets' evidence re-checks, by bet id. */
+  verifications?: Readonly<Record<string, Verification>>;
 }) {
   const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
   const mv = useMemo(
@@ -495,6 +558,7 @@ export function StageView({
             <BetCard
               bet={bet}
               now={now}
+              verification={verifications[bet.bet_id] ?? null}
               tick={
                 state.betTicks[bet.bet_id] ??
                 (state.market?.eventTicker === bet.envelope?.terms.market?.eventTicker
@@ -532,6 +596,8 @@ export function App() {
   const [replay, setReplay] = useState<number | null>(null);
   const [live, setLive] = useState<{ token: string; serverUrl: string } | null>(null);
   const conn = useRef<StageConnection | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const seeded = useRef(new Set<string>());
   const now = useNow(state.clockOffsetMs);
   const [preview] = useState(() => {
@@ -563,6 +629,39 @@ export function App() {
   );
 
   useEffect(() => () => conn.current?.stop(), []);
+
+  // Beat 6: once a Gemini bet is ruled (the resolve landed), fetch its evidence chain and re-check
+  // it here (verifyEvidence), so the projector shows Gemini's bytes tied to the on-chain hashes.
+  const [verifications, setVerifications] = useState<Record<string, Verification>>({});
+  const asked = useRef(new Set<string>());
+  const ruledGemini = Object.values(state.bets)
+    .filter(
+      (b) =>
+        b.settlement !== null &&
+        b.envelope?.terms.market &&
+        b.state !== null &&
+        RULED_OR_LATER.has(b.state),
+    )
+    .map((b) => b.bet_id)
+    .join(',');
+  useEffect(() => {
+    if (!live || !ruledGemini) return;
+    for (const id of ruledGemini.split(',')) {
+      if (asked.current.has(id)) continue;
+      asked.current.add(id);
+      fetchSettlement(live.serverUrl, live.token, id).then(
+        (ev) => {
+          const bet = stateRef.current.bets[id];
+          const v = bet ? verifyEvidence(bet, ev) : null;
+          if (v) setVerifications((m) => ({ ...m, [id]: v }));
+        },
+        (err: unknown) => {
+          asked.current.delete(id); // retry on the next change
+          dispatch({ kind: 'error', message: `settlement ${id}: ${String(err)}` });
+        },
+      );
+    }
+  }, [ruledGemini, live]);
 
   // Keys 1-6: full-screen replay clips; Esc closes.
   useEffect(() => {
@@ -660,6 +759,7 @@ export function App() {
         <StageView
           state={state}
           now={now}
+          verifications={verifications}
           onDisconnect={() => {
             conn.current?.stop();
             conn.current = null;

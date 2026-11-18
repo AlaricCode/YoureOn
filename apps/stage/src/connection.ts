@@ -14,6 +14,7 @@ import {
 } from '@youre-on/shared/api';
 import { BetSnapshot } from '@youre-on/shared/api';
 import { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import { SettlementEvidence, settlementPath } from '@youre-on/shared/settlement';
 import { z } from 'zod/v4';
 import type { TickerAction } from './ticker';
 
@@ -71,6 +72,19 @@ export async function fetchMarket(
   return MarketCurrentLite.parse(
     await getJson(serverUrl, '/v1/markets/btc5m/current', token, doFetch),
   ).market;
+}
+
+/**
+ * Beat 6: GET /v1/bets/:id/settlement, the Gemini evidence chain with the server's checks; the
+ * stage re-runs the shared verifySettlement itself before it shows "verified".
+ */
+export async function fetchSettlement(
+  serverUrl: string,
+  token: string,
+  betId: string,
+  doFetch: typeof fetch = fetch,
+): Promise<SettlementEvidence> {
+  return SettlementEvidence.parse(await getJson(serverUrl, settlementPath(betId), token, doFetch));
 }
 
 export function wsUrlFor(serverUrl: string): string {
