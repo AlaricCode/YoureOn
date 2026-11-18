@@ -13,8 +13,8 @@ Both talk to the same server (https://youre-on.fly.dev).
 ## Paid account (EAS)
 
 From `eas login` to "installed on 3 phones" takes about an hour, most of it waiting for the
-build. The lead runs everything on their Mac. Teammates only open a link on their phone, twice:
-once to register it, once to install the app.
+build. The lead runs everything on their Mac. Teammates only open a link on their phone, twice
+(once to register it, once to install the app), then scan a sign-in QR the lead prints.
 
 ### At a glance
 
@@ -25,7 +25,7 @@ once to register it, once to install the app.
 | 2. Log in, link the project   | lead                                   | `eas login`, `eas init`, commit `app.json`       |
 | 3. Register the phones        | lead sends a link, each owner opens it | `eas device:create`                              |
 | 4. Build                      | lead                                   | `eas build -p ios --profile preview`             |
-| 5. Install                    | each owner opens the build link        | (Safari)                                         |
+| 5. Install, sign in           | each owner opens the build link        | (Safari), then `npm run demo-claim-qr` per phone |
 | 6. JS-only fix                | lead                                   | `scripts/eas-update.sh --profile preview -m "…"` |
 | 7. Native change or new phone | lead                                   | `eas build …` again, reinstall                   |
 
@@ -163,6 +163,24 @@ What happens next:
    none of them pops up on stage.
 4. Delete any older free-team "You're On" (bundle ID `dev.youreon.app`) from the phone. It
    would otherwise stay as a second, identical icon.
+5. **Sign the phones in.** To iOS the EAS build is a different app (bundle ID
+   `dev.youreon.app.eas`, not the free team's `dev.youreon.app`), so its keychain starts empty:
+   no device key, no session and no demo wallet, whatever the free-team build had. Without this
+   step, phones A and B reach the demo signed out. On the lead's Mac, with the server's
+   `DEMO_ADMIN_TOKEN` exported (from the password manager, since `fly secrets list` shows only a
+   digest; never commit or paste it), print one QR per phone:
+
+   ```bash
+   npm run demo-claim-qr -- --party a --base-url https://youre-on.fly.dev   # phone A
+   npm run demo-claim-qr -- --party b --base-url https://youre-on.fly.dev   # phone B
+   npm run demo-claim-qr -- --party a --base-url https://youre-on.fly.dev   # judge cam
+   ```
+
+   On each phone, tap **Demo account** on the sign-up screen (or Profile → Demo account) and
+   point the camera at its QR. Each QR is single use and expires after 10 minutes; run the
+   command again for a new one. The judge cam is a second device of A, so it claims party `a`
+   too, then turns on Profile → **Judge cam**. A claim binds that install's device key to the
+   party and imports the party's wallet, so claiming again later is harmless.
 
 Share build links only within the team. Anyone with the link can download the app file. It only
 installs on the registered phones, but it contains the face model, whose licence is
@@ -210,14 +228,18 @@ scripts/eas-dry-run.sh --linked     # optional: proves it compiles, unsigned, be
 (cd apps/mobile && eas build -p ios --profile preview)
 ```
 
-Then reinstall from the new link on each phone. The same bundle ID and team means the app's data
-and keychain (the wallet) survive the reinstall.
+Then reinstall from the new link on each phone. A new build with the same bundle ID
+(`dev.youreon.app.eas`) and team installs over the old one, so the app's data and keychain (the
+device key, the session, the wallet) survive and the phones stay signed in. That holds only
+between EAS builds: the first EAS install after the free-team build starts empty (step 5).
 
 `scripts/eas-dry-run.sh` replays the EAS iOS pipeline on the Mac (5–20 minutes, needs Xcode and
 CocoaPods). It starts from eas-cli's own upload copy and runs `npm ci`, `expo prebuild` with an
 injected team ID, `pod install`, both hooks and an unsigned `xcodebuild archive`. Then it checks
 the `.app` for the bundle ID, the face model's bytes, the inlined API URL and the entitlements.
-`--worker-node` uses the worker's Node 22.23.4 and npm 10.9.9.
+`--worker-node` uses the worker's Node 22.23.4 and npm 10.9.9. It wipes its work directory
+first, so `--out DIR` must be new, empty or an earlier run's; it refuses `$HOME`, the repo and
+their parents.
 
 For a new phone: run `eas device:create` for it, then build again. EAS asks to regenerate the
 provisioning profile with the new device; say yes. Only the new phone has to install the new
@@ -246,7 +268,9 @@ build, but installing it everywhere keeps all phones on one build.
   installs beside the demo build as "You're On Dev". It loads JS from Metro, and its API URL
   comes from `apps/mobile/.env.local`. It has its own bundle ID, so it also has its own keychain
   and does not share the demo build's wallet. `preview`, `pitch` and `production` share one
-  bundle ID, so they replace each other on a phone and keep the wallet.
+  bundle ID, so they replace each other on a phone and keep the wallet. The free-team build
+  (`dev.youreon.app`) shares nothing with them: after switching from it, claim the demo
+  accounts again (step 5).
 - **iOS Simulator:** on an Apple-silicon Mac, a simulator build does not link. The face
   detector's ML Kit frameworks (`MLImage`, `MLKitFaceDetection`) ship only x86_64 and
   arm64-device slices, so `ld` reports "building for 'iOS-simulator', but linking in object file
