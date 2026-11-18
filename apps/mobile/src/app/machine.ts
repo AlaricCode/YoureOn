@@ -88,6 +88,10 @@ export function appReducer(
         ? { ...s, auth: 'signedIn', me: e.me, deviceId: e.deviceId }
         : { ...s, auth: 'signedOut', me: null, deviceId: null };
     case 'signed_in':
+      // A different user (demo claim from Profile): the old user's room, bet and lock acks
+      // are not theirs; carrying them over makes the socket subscribe to subs it may not see.
+      if (s.me && s.me.user_id !== e.me.user_id)
+        return { ...initialApp, auth: 'signedIn', me: e.me, deviceId: e.deviceId };
       return { ...s, auth: 'signedIn', me: e.me, deviceId: e.deviceId, overlay: 'none' };
     case 'signed_out':
       return { ...initialApp, auth: 'signedOut' };

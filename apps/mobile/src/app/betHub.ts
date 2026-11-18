@@ -57,6 +57,13 @@ export class BetHub {
     for (const l of this.listeners) l(e, before, after);
   }
 
+  /** Forget every bet (the signed-in user changed): nothing of the old user's bets carries over. */
+  clear(): void {
+    this.models.clear();
+    this.seqs.clear();
+    this.resyncing.clear();
+  }
+
   /** Start following a bet from a snapshot (POST /v1/bets response, or GET /v1/bets/:id). */
   adopt(s: BetSnapshot): BetModel {
     const before = this.models.get(s.bet_id) ?? null;

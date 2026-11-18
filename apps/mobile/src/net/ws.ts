@@ -5,6 +5,9 @@
 //   No frame for 45 s -> dead; reconnect with 0.25 -> 0.5 -> 1 -> 2 -> 5 s backoff + jitter and
 //   resend hello with each bet's after_seq = last applied seq (the server replays the gap).
 //   Close 4401 -> the token is bad: ask for a fresh session before reconnecting.
+//   Close 4403 -> a sub is not allowed (reason 'bet not allowed' / 'room not allowed'): drop the
+//   offending subs (all bets: the reason does not name the bet) and reconnect with a growing
+//   backoff, so a stale sub never loops. reset() clears every sub (a user switch).
 //
 // Plus the per-bet sequencer (§3.3): apply in seq order, drop seq <= last_seen, buffer a gap up
 // to 2 s, then ask for REST resync (GET /v1/bets/:id/events?after=last_seen) and drain.
@@ -122,6 +125,8 @@ export interface RealtimeClientDeps {
   onStatus?(s: WsStatus): void;
   /** Called on close 4401; resolve true when a new session is ready (reconnect then). */
   onUnauthorized?(): Promise<boolean>;
+  /** Called on close 4403 after the offending subs were dropped. */
+  onForbidden?(dropped: { room: string | null; bets: string[]; reason: string }): void;
   timers?: TimerApi;
   random?: () => number;
   log?: (msg: string, extra?: unknown) => void;
@@ -133,6 +138,8 @@ export interface RealtimeClient {
   subscribe(betId: string): void;
   unsubscribe(betId: string): void;
   subscribeRoom(roomId: string | null): void;
+  /** Forget every bet and room sub (the signed-in user changed). Takes effect on the next hello. */
+  reset(): void;
   readonly status: WsStatus;
 }
 
@@ -150,6 +157,8 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
   let ws: SocketLike | null = null;
   let status: WsStatus = 'idle';
   let attempt = 0;
+  /** Consecutive 4403 closes: not reset by welcome (sent before the subs are checked). */
+  let forbidden = 0;
   let deadTimer: unknown = null;
   let retryTimer: unknown = null;
   let running = false;
@@ -176,14 +185,14 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
     deadTimer = retryTimer = null;
   };
 
-  const drop = () => {
+  const drop = (step = attempt++) => {
     const old = ws;
     ws = null;
     if (old) old.onopen = old.onmessage = old.onclose = old.onerror = null;
     clearTimers();
     if (!running) return;
     setStatus('reconnecting');
-    retryTimer = timers.setTimeout(connect, reconnectDelay(attempt++, random));
+    retryTimer = timers.setTimeout(connect, reconnectDelay(step, random));
   };
 
   function connect() {
@@ -253,6 +262,22 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
         );
         return;
       }
+      if (ev.code === WS_CLOSE.FORBIDDEN) {
+        const reason = ev.reason ?? '';
+        const dropped = { room: null as string | null, bets: [] as string[], reason };
+        if (!/^bet\b/.test(reason)) {
+          dropped.room = room;
+          room = null;
+        }
+        if (!/^room\b/.test(reason)) {
+          dropped.bets = [...bets];
+          bets.clear();
+        }
+        log('ws.forbidden', dropped);
+        d.onForbidden?.(dropped);
+        drop(Math.max(attempt++, ++forbidden));
+        return;
+      }
       drop();
     };
   }
@@ -265,6 +290,7 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
       if (running) return;
       running = true;
       attempt = 0;
+      forbidden = 0;
       connect();
     },
     stop() {
@@ -286,6 +312,11 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
     unsubscribe(betId) {
       if (!bets.delete(betId)) return;
       send({ op: 'unsubscribe', bet_id: betId });
+    },
+    reset() {
+      bets.clear();
+      room = null;
+      forbidden = 0;
     },
     subscribeRoom(roomId) {
       room = roomId;

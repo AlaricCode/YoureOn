@@ -50,6 +50,23 @@ describe('app reducer', () => {
     expect(selectRoute(inn, null)).toBe('home');
   });
 
+  it('a different user signing in (demo claim from Profile) drops the old room and bet', () => {
+    let s = signedIn(ME_A);
+    s = appReducer(s, { type: 'room', room: { room_id: ROOM, code: 'UBC26X', name: 'UBC' } });
+    s = appReducer(s, { type: 'bet_opened', bet_id: BET });
+    s = appReducer(s, { type: 'lock_ack', bet_id: BET });
+    // the same user again (a silent re-login) keeps everything
+    const same = appReducer(s, { type: 'signed_in', me: ME_A, deviceId: DEVICE_A });
+    expect(same.room?.room_id).toBe(ROOM);
+    expect(same.activeBetId).toBe(BET);
+    const other = appReducer(s, { type: 'signed_in', me: ME_B, deviceId: DEVICE_A });
+    expect(other.me).toEqual(ME_B);
+    expect(other.auth).toBe('signedIn');
+    expect(other.room).toBeNull();
+    expect(other.activeBetId).toBeNull();
+    expect(other.lockAcked).toEqual([]);
+  });
+
   it('demo claim -> signed in -> home; profile overlay; sign out resets', () => {
     let s = appReducer(initialApp, { type: 'booted', me: null, deviceId: null });
     s = appReducer(s, { type: 'overlay', overlay: 'demoClaim' });
