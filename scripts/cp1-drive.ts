@@ -76,6 +76,7 @@ import {
   walletBindMessage,
   type Session,
 } from '@youre-on/shared/api';
+import { MAX_JUDGE_FRAMES, MIN_JUDGE_FRAMES } from '@youre-on/shared/judge/frames';
 
 import { expandPath, keysDirFrom, parseCli, run } from './lib/cli';
 import { assertNotCommittable, loadRole } from './lib/keys';
@@ -481,9 +482,11 @@ run(async () => {
     console.error(`--through must be locked or paid\n\n${USAGE}`);
     process.exit(2);
   }
-  const nFrames = Number(values.frames ?? 8);
-  if (!Number.isInteger(nFrames) || nFrames < 8 || nFrames > 12) {
-    console.error(`--frames must be 8..12 (the server's MIN_FRAMES..MAX_FRAMES)\n\n${USAGE}`);
+  const nFrames = Number(values.frames ?? MIN_JUDGE_FRAMES);
+  if (!Number.isInteger(nFrames) || nFrames < MIN_JUDGE_FRAMES || nFrames > MAX_JUDGE_FRAMES) {
+    console.error(
+      `--frames must be ${MIN_JUDGE_FRAMES}..${MAX_JUDGE_FRAMES} (the server's limits; the phone sends 12 + a landing crop)\n\n${USAGE}`,
+    );
     process.exit(2);
   }
   const base = (
