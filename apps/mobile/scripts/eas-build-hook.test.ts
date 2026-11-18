@@ -64,11 +64,11 @@ function fixture(opts: { model?: Buffer | null; patched?: boolean; webrtc?: stri
 }
 
 function hook(name: string, app: string, env: Record<string, string> = {}) {
-  const clean = Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([k]) => !k.startsWith('EAS_BUILD') && !k.startsWith('EXPO_PUBLIC_'),
-    ),
-  );
+  // The worker's env is EAS_BUILD_* + the profile's EXPO_PUBLIC_*: start from a clean slate.
+  const clean: NodeJS.ProcessEnv = { ...process.env };
+  for (const k of Object.keys(clean)) {
+    if (k.startsWith('EAS_BUILD') || k.startsWith('EXPO_PUBLIC_')) delete clean[k];
+  }
   return spawnSync('bash', [HOOK, name, '--app-dir', app], {
     encoding: 'utf8',
     env: { ...clean, ...env },
