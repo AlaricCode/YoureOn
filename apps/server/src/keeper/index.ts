@@ -3,6 +3,7 @@
 // expiry with the nonce advance, `timeout_refund`, the nonce-pool sweep, the outbox drain)
 // register here.
 import type { AppDeps } from '../context';
+import { rpcPollFallbackMs, StreamGapReconciler } from '../chain/reconciler';
 import { lifecycleOf } from '../lock/runtime';
 import { HEALTH_LOG_MS, logChainHealth } from '../chain/health';
 import { bootReconcile } from '../chain/reconcile';
@@ -50,6 +51,20 @@ export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): Kee
   ];
 }
 
+/**
+ * stream-gaps: server txs with no Stream event after rpcPollFallbackMs(env) (30 s with a Stream
+ * configured, else 5 s) -> getTransaction -> chain_events (source rpc_poll) -> projector
+ * (src/chain/reconciler.ts, DATA-MODEL §8.3). The only best-effort RPC poller: registered after
+ * the money sweeps, so a throttled RPC delays nothing behind it (its pass is also time-boxed).
+ */
+export function streamGapsTask(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask {
+  const gaps = new StreamGapReconciler({ fallbackMs: rpcPollFallbackMs(deps.env) });
+  return {
+    name: 'stream-gaps',
+    run: async (now) => gaps.run(deps, await lifecycleOf(deps).runtime(), now),
+  };
+}
+
 export function createServerKeeper(
   deps: SweepDeps & Pick<AppDeps, 'now' | 'log'> & Partial<Pick<AppDeps, 'env' | 'onRuling'>>,
   opts: Omit<KeeperOptions, 'now' | 'log'> = {},
@@ -77,6 +92,8 @@ export function createServerKeeper(
   for (const t of chainLifecycleTasks(chain)) keeper.register(t);
   // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
   keeper.register(resolveDueTask(chain));
+  // The only best-effort RPC poller: after every money sweep, so a throttled RPC delays nothing.
+  keeper.register(streamGapsTask(chain));
   // Every 10 min: one chain.unhealthy line when anything needs a human. Its first run (the boot
   // pass) is skipped: boot-reconcile already logged chain.boot_health.
   let booted = false;

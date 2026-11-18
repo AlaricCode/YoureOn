@@ -10,6 +10,7 @@ import { parseRealtimeEvent } from '@youre-on/shared/realtime';
 import { createDb } from '@youre-on/db';
 import { createDeps, startServer } from '../src/server';
 import { routeModules } from '../src/routes';
+import { createLifecycle, installLifecycle, lifecycleOf } from '../src/lock/runtime';
 import {
   DRAFT_IDLE_MS,
   draftIdleCue,
@@ -440,6 +441,7 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
       'timeout-refund',
       'orphan-escrow',
       'resolve-due',
+      'stream-gaps', // the best-effort RPC poller runs after every money sweep
       'chain-health',
     ]);
     expect(deps.keeper?.isStarted).toBe(false);
@@ -452,5 +454,26 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
     expect(deps.keeper?.isStarted).toBe(true);
     await running.close();
     expect(deps.keeper?.isStarted).toBe(false);
+  });
+
+  it("the chain sweeps run on the routes' lifecycle (one LockService / PayoutService per server)", async () => {
+    const dbHandle = createDb({ url: DB_URL!, max: 2 });
+    try {
+      const { deps } = createDeps({ env: testEnv(), dbHandle, rateLimit: false, keeper: true });
+      // what the routes use: lifecycleOf(deps), the same object createServerKeeper got
+      const lc = installLifecycle(deps, createLifecycle(deps, { runtime: async () => null }));
+      const sweep = vi.spyOn(lc.lock, 'sweep');
+      const finalizeDue = vi.spyOn(lc.payout, 'finalizeDue');
+      const runtime = vi.spyOn(lc, 'runtime');
+      await deps.keeper!.tick();
+      // a copy of deps would have built a second lifecycle: separate `confirming` /
+      // `finalizing` guards and timers, so a sweep could race the routes' own confirm
+      expect(sweep).toHaveBeenCalledTimes(1);
+      expect(finalizeDue).toHaveBeenCalledTimes(1);
+      expect(runtime).toHaveBeenCalled(); // stream-gaps asked the same lifecycle for its runtime
+      expect(lifecycleOf(deps)).toBe(lc);
+    } finally {
+      await dbHandle.close();
+    }
   });
 });

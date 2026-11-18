@@ -7,6 +7,7 @@
 // (LiteSVM cannot enumerate accounts), plus any address passed to `track`.
 import {
   getBase58Encoder,
+  getBase58Decoder,
   getBase64Encoder,
   getCompiledTransactionMessageDecoder,
   getI64Encoder,
@@ -15,11 +16,15 @@ import {
   getU64Encoder,
   type Address,
   type Base64EncodedWireTransaction,
+  type Transaction,
 } from '@solana/kit';
 import { getTokenDecoder } from '@solana-program/token';
-import { FailedTransactionMetadata, type LiteSVM } from 'litesvm';
+import { FailedTransactionMetadata, type LiteSVM, type TransactionMetadata } from 'litesvm';
+import type { RpcTransaction } from '../src/chain/streams';
 import { PreflightError, type ChainClient, type SigStatus } from '../src/chain/tx';
 import { ataOf } from '../src/chain/tx';
+
+const b58 = getBase58Decoder();
 
 const SYSVAR_CLOCK = 'SysvarC1ock11111111111111111111111111111111';
 
@@ -38,12 +43,45 @@ export function rpcErr(f: FailedTransactionMetadata): unknown {
   return { Other: String(err) };
 }
 
+/** A landed LiteSVM tx as getTransaction (json) would return it (chain/streams.ts RpcTransaction). */
+export function rpcTransactionOf(
+  tx: Transaction,
+  meta: TransactionMetadata,
+  at: { slot: bigint; unixTimestamp: bigint },
+): RpcTransaction {
+  const compiled = getCompiledTransactionMessageDecoder().decode(tx.messageBytes) as unknown as {
+    staticAccounts: Address[];
+  };
+  return {
+    signature: getSignatureFromTransaction(tx),
+    slot: Number(at.slot),
+    blockTime: Number(at.unixTimestamp),
+    err: null,
+    accountKeys: compiled.staticAccounts,
+    innerInstructions: meta
+      .innerInstructions()
+      .map((ixs, index) => ({
+        index,
+        instructions: ixs.map((ii) => {
+          const ci = ii.instruction();
+          return {
+            programIdIndex: ci.programIdIndex(),
+            accounts: [...ci.accounts()],
+            data: b58.decode(ci.data()),
+          };
+        }),
+      }))
+      .filter((g) => g.instructions.length > 0),
+  };
+}
+
 export function liteSvmClient(
   svm: LiteSVM,
 ): ChainClient & { sent: string[]; track(addr: Address): void } {
   const statuses = new Map<string, SigStatus>();
   const sent: string[] = [];
   const seen = new Set<Address>();
+  const landed = new Map<string, RpcTransaction>();
   const decode = (wire: Base64EncodedWireTransaction) =>
     getTransactionDecoder().decode(getBase64Encoder().encode(wire));
   return {
@@ -94,6 +132,7 @@ export function liteSvmClient(
       for (const a of getCompiledTransactionMessageDecoder().decode(tx.messageBytes).staticAccounts)
         seen.add(a);
       statuses.set(sig, { err: null, confirmationStatus: 'confirmed', slot: svm.getClock().slot });
+      landed.set(sig, rpcTransactionOf(tx, r, svm.getClock()));
       // A new "slot": a durable nonce advanced in this tx may be advanced again (Agave refuses a
       // second advance under the same blockhash, NonceBlockhashNotExpired).
       svm.expireBlockhash();
@@ -145,5 +184,6 @@ export function liteSvmClient(
       }
       return out;
     },
+    transaction: async (sig) => landed.get(sig) ?? null,
   };
 }

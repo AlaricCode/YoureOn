@@ -69,6 +69,12 @@ export const EnvSchema = z.object({
   SOLANA_DEVNET_RPC: opt(z.url()),
   SOLANA_DEVNET_WS: opt(z.url()),
   QN_STREAM_SECURITY_TOKEN: opt(str),
+  /**
+   * How long after a server tx's send the Stream-gap reconciler waits for the Stream before it
+   * polls getTransaction (src/chain/reconciler.ts rpcPollFallbackMs). Unset: 30 s when
+   * QN_STREAM_SECURITY_TOKEN is set (a Stream is expected), else 5 s (SCHEMAS STREAM_FALLBACK_MS).
+   */
+  RPC_POLL_FALLBACK_MS: opt(intStr),
   // --- server keypairs (secret; base58 or solana-keygen JSON)
   FEE_PAYER_SECRET_KEY: opt(str),
   JUDGE_AUTHORITY_SECRET_KEY: opt(str),
