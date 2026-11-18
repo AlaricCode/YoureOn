@@ -2,9 +2,10 @@
 // stage shows to take over one of the team's seeded accounts. The accounts are custodial, and
 // the README says so (FINDINGS §3.4).
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
+import { hasCameraLens } from '../device/camera';
 import { AlertLine, PrimaryButton, QuietButton, Stage, StageBubble } from '../ui/kit';
 import { Page, Screen, StatusHero, TopBar } from '../ui/parts';
 import { COPY, t } from './copy';
@@ -25,6 +26,9 @@ export function DemoClaimScreen({
   const [checking, setChecking] = useState(false);
   const [name, setName] = useState<string | null>(null);
   const [alert, setAlert] = useState<string | null>(null);
+  /** The camera failed to start, or it started with no lens (the simulator). */
+  const [noCamera, setNoCamera] = useState(false);
+  const cam = useRef<CameraView | null>(null);
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) void requestPermission();
@@ -51,12 +55,18 @@ export function DemoClaimScreen({
         ) : permission?.granted ? (
           <Stage>
             <CameraView
+              ref={cam}
               style={StyleSheet.absoluteFill}
               facing="back"
               barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
               onBarcodeScanned={checking ? undefined : (r) => void scanned(r.data)}
+              onCameraReady={() => void hasCameraLens(cam.current).then((ok) => setNoCamera(!ok))}
+              onMountError={() => setNoCamera(true)}
             />
-            <StageBubble prompt={t(COPY.demo.scan)} checking={checking} />
+            <StageBubble
+              prompt={t(noCamera ? COPY.judgeCam.noCamera : COPY.demo.scan)}
+              checking={checking}
+            />
           </Stage>
         ) : (
           <Stage style={styles.center}>

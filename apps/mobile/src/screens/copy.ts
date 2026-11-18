@@ -102,6 +102,7 @@ export const COPY = {
     sending: ['Sending', 'label'],
     sent: ['Sent', 'label'],
     start: ['Start', 'label'],
+    noCamera: ['No camera', 'error'],
   },
   ruling: {
     judge: ['Judge', 'label'],
