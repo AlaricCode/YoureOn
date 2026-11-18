@@ -18,7 +18,7 @@ import { RateLimiter } from '../src/http/rate-limit';
 import { createDeps } from '../src/server';
 import { routeModules } from '../src/routes';
 import { z } from 'zod/v4';
-import { testEnv } from './helpers';
+import { newKey, testEnv } from './helpers';
 
 // createDb is lazy (postgres.js connects on first query), so these deps never touch a DB.
 const { deps } = createDeps({
@@ -238,5 +238,45 @@ describe('RateLimiter', () => {
     }
     t += 20_000;
     rl.take('auth', 'ip', spec);
+  });
+
+  it('holds at most maxBuckets keys: a flood of fresh keys evicts the least recently used', () => {
+    const t = 0;
+    const rl = new RateLimiter(() => t, 10);
+    const spec = { limit: 3, windowMs: 60_000 };
+    const keep = { limit: 2, windowMs: 60_000 };
+    rl.take('auth', 'oldest', keep);
+    for (let i = 0; i < 50; i++) rl.take('auth', `flood-${i}`, spec);
+    expect(rl.size).toBeLessThanOrEqual(10);
+    // The oldest key was evicted: it is a fresh bucket (2 tokens) again, not the 1 it had left.
+    rl.take('auth', 'oldest', keep);
+    rl.take('auth', 'oldest', keep);
+    expect(() => rl.take('auth', 'oldest', keep)).toThrow(HttpError);
+  });
+});
+
+describe('auth rate limit keys (inputs-2)', () => {
+  // A real limiter: the device bucket must never be keyed on an unvalidated string.
+  const { deps: limited } = createDeps({
+    env: testEnv({ DATABASE_URL: 'postgres://unused@127.0.0.1:1/none' }),
+  });
+  const limitedApp = buildApp(limited);
+  const challenge = (device_pubkey: unknown) =>
+    limitedApp.request('/v1/auth/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ device_pubkey }),
+    });
+
+  it('a malformed device_pubkey (any 60 KB string) is 422 and leaves no bucket behind', async () => {
+    const before = limited.rateLimit!.size;
+    for (let i = 0; i < 4; i++) {
+      const res = await challenge(`${i}`.padEnd(60_000, 'x'));
+      expect(res.status).toBe(422);
+    }
+    // Only the per-IP bucket was added, not one per junk key.
+    expect(limited.rateLimit!.size - before).toBeLessThanOrEqual(1);
+    const res = await challenge(newKey().pubkey);
+    expect(res.status).toBe(200);
+    expect(limited.rateLimit!.size - before).toBe(2); // + auth/device for a real key
   });
 });

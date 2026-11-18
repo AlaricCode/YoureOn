@@ -3,7 +3,7 @@ import { getConnInfo } from '@hono/node-server/conninfo';
 import type { Context } from 'hono';
 import type { Db } from '@youre-on/db';
 import type { Session } from '@youre-on/shared/api';
-import type { UserRef } from '@youre-on/shared/primitives';
+import { Pubkey, type UserRef } from '@youre-on/shared/primitives';
 import { HttpError } from '../errors';
 import { BUCKETS } from '../http/rate-limit';
 import type { AppEnv } from '../context';
@@ -19,11 +19,17 @@ export function clientIp(c: Context<AppEnv>): string {
   }
 }
 
+/**
+ * §1.7 auth buckets. Runs before the body is validated, so the device bucket is keyed only on a
+ * well-formed key: any other string (up to the 64 KB body cap) would be a fresh map entry per
+ * request. The request then fails validation (422) under the IP bucket alone.
+ */
 export function limitAuth(c: Context<AppEnv>, device_pubkey?: string) {
   const rl = c.get('deps').rateLimit;
   if (!rl) return;
   rl.take('auth/ip', clientIp(c), BUCKETS.auth);
-  if (device_pubkey) rl.take('auth/device', device_pubkey, BUCKETS.auth);
+  if (device_pubkey && Pubkey.safeParse(device_pubkey).success)
+    rl.take('auth/device', device_pubkey, BUCKETS.auth);
 }
 
 export function consumeChallenge(
