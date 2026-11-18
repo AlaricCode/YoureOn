@@ -4,7 +4,8 @@
 //
 //   lock    the atomic lock confirmed (tx.confirmed / BetCreated)
 //   gavel   a decisive or VOID ruling            redo   a REDO ruling
-//   paid    money moved (BetFinalized, BetConceded, AppealResolved, BetRefunded, BetCancelled)
+//   paid    money moved: bet.state PAID / VOIDED (the server's own RPC confirmation), or a chain
+//           BetFinalized, BetConceded, AppealResolved, BetRefunded, BetCancelled (Streams)
 // plus any stage.cue frame the server sends (gavel, drumroll, buzzer, cheer).
 //
 // Only fresh events sound (their server ts within FRESH_MS of the stage clock), so the seq-0 replay
@@ -49,7 +50,10 @@ export function freshSounds(
     } else if (e.type === 'ruling.issued') {
       key = `${betId}:ruling:${e.payload.ruling_hash}`;
       sfx = e.payload.ruling.outcome === 'REDO' ? 'redo' : 'gavel';
-    } else if (MONEY.has(e.type)) {
+    } else if (
+      MONEY.has(e.type) ||
+      (e.type === 'bet.state' && (e.payload.state === 'PAID' || e.payload.state === 'VOIDED'))
+    ) {
       key = `${betId}:paid`;
       sfx = 'paid';
     }
