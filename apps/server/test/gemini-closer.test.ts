@@ -43,10 +43,16 @@ import { createReplayClient, createRoutedClient } from '../src/markets/replay';
 import { MarketService } from '../src/markets/service';
 import {
   installSettlement,
+  RESOLVE_DEADLINE_MARGIN_MS,
   SettlementService,
   SETTLE_RESOLVE_GRACE_MS,
   SETTLE_SWEEP_EVERY_MS,
+  terminalResolveError,
+  type BetChainView,
 } from '../src/markets/settlement';
+import { SimulationError } from '../src/chain/tx';
+import { HttpError } from '../src/errors';
+import type { Logger } from '../src/log';
 import { confirmTerms } from '../src/lock/terms';
 import { realWorldReply } from '../src/markets/voice-tool';
 import { silentLogger } from '../src/log';
@@ -78,6 +84,16 @@ import {
 
 const T0240 = Date.parse('2026-11-18T02:40:00.000Z');
 const TICKER = 'BTC05M2611180240';
+
+/** A logger that keeps every line: [level, event, fields]. */
+function recordingLog(): Logger & { lines: Array<[string, string, Record<string, unknown>]> } {
+  const lines: Array<[string, string, Record<string, unknown>]> = [];
+  const at = (level: string) => (msg: string, fields?: Record<string, unknown>) =>
+    void lines.push([level, msg, fields ?? {}]);
+  return { lines, debug: at('debug'), info: at('info'), warn: at('warn'), error: at('error') };
+}
+const linesOf = (log: ReturnType<typeof recordingLog>, event: string, level?: string) =>
+  log.lines.filter(([l, m]) => m === event && (level === undefined || l === level));
 const SYMBOL = 'GEMI-BTC05M2611180240-UP';
 
 /** SYNTHETIC: the real settled body with the other side ("yes", settled above the line). */
@@ -955,6 +971,195 @@ describeDb(
         fix: 'TOO_CLOSE_TO_EXPIRY',
         say: 'Too late for this round. The next one opens at 02:40 UTC.',
       });
+    });
+
+    // ---- the resolve deadline, re-sends --------------------------------------------------
+
+    /** A settlement service of its own: its logger, and `view` as the Bet account. */
+    function serviceWith(view: () => BetChainView, over: Partial<typeof ctx.deps> = {}) {
+      const log = recordingLog();
+      const reads = { n: 0 };
+      const s = new SettlementService(
+        { ...ctx.deps, log, ...over },
+        { timers: false, chain: async () => (reads.n++, view()) },
+      );
+      return { s, log, reads };
+    }
+
+    it('Gemini settles inside the resolve-deadline margin: no ruling, left for timeout_refund, one error', async () => {
+      const { betId } = await lockedBet('UP');
+      // the Bet's resolve_deadline is 20 s after Gemini's answer: inside the 30 s margin
+      const { s, log, reads } = serviceWith(() => ({
+        kind: 'locked',
+        resolveDeadlineMs: T0240 + 26_000,
+      }));
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      expect(await s.check(betId)).toBe('skipped');
+      expect(await settlementRows(betId)).toHaveLength(0);
+      expect((await betRow(betId)).state).toBe('AWAITING_MARKET');
+      expect(ruled).toHaveLength(0);
+      // nobody was told someone won
+      expect(await types(betId)).not.toContain('market.settled');
+      expect(await types(betId)).not.toContain('ruling.issued');
+      const err = linesOf(log, 'market.settlement_after_deadline', 'error');
+      expect(err).toHaveLength(1);
+      expect(err[0]![2]).toMatchObject({
+        bet_id: betId,
+        reason: 'resolve_deadline',
+        resolve_deadline: new Date(T0240 + 26_000).toISOString(),
+      });
+      expect(s.abandonedBets).toEqual([betId]);
+      // the sweep and later checks leave it alone: no Gemini call, no chain read, no new line
+      const calls = g.calls.length;
+      for (let i = 1; i <= 3; i++) {
+        clock.t += SETTLE_SWEEP_EVERY_MS;
+        expect((await s.sweep(clock.t)).checked).not.toContain(betId);
+      }
+      expect(await s.check(betId)).toBe('skipped');
+      expect(g.calls.length).toBe(calls);
+      expect(reads.n).toBe(1);
+      expect(log.lines.filter(([l]) => l === 'error')).toHaveLength(1);
+    });
+
+    it('a Bet with time left settles as usual; a Bet no longer Locked is never ruled', async () => {
+      const far = await lockedBet('UP');
+      const gone = await lockedBet('DOWN');
+      const ok = serviceWith(() => ({ kind: 'locked', resolveDeadlineMs: T0240 + 3_600_000 }));
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      expect(await ok.s.check(far.betId)).toBe('settled');
+      expect(ruled.map((r) => r.betId)).toEqual([far.betId]);
+      // the margin is the boundary: 30 s before the deadline is too late
+      expect(RESOLVE_DEADLINE_MARGIN_MS).toBe(30_000);
+
+      const refunded = serviceWith(() => ({ kind: 'not_locked', status: 'Refunded' }));
+      expect(await refunded.s.check(gone.betId)).toBe('skipped');
+      expect(await settlementRows(gone.betId)).toHaveLength(0);
+      expect(linesOf(refunded.log, 'market.settlement_after_deadline')[0]![2]).toMatchObject({
+        reason: 'bet Refunded onchain',
+      });
+    });
+
+    it('a resend never overlaps a send still in flight (slow devnet confirm): one resolve', async () => {
+      const { betId } = await lockedBet('UP');
+      let release!: () => void;
+      const confirming = new Promise<void>((r) => (release = r));
+      let sends = 0;
+      const { s } = serviceWith(() => ({ kind: 'unknown' }), {
+        onRuling: async (id, r) => {
+          sends++;
+          await confirming;
+          await ctx.deps.onRuling!(id, r);
+        },
+      });
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      const first = s.check(betId); // commits, then the resolve takes > 15 s to confirm
+      await expect.poll(() => sends).toBe(1);
+      clock.t += SETTLE_RESOLVE_GRACE_MS + 1;
+      expect((await s.sweep(clock.t)).resent).toEqual([]);
+      clock.t += SETTLE_RESOLVE_GRACE_MS;
+      expect((await s.sweep(clock.t)).resent).toEqual([]);
+      expect(sends).toBe(1);
+      release();
+      expect(await first).toBe('settled');
+      expect(ruled).toHaveLength(1);
+    });
+
+    it('a failing resolve is re-sent with backoff (15 s, 30 s, 60 s ...), one error line, then recovers', async () => {
+      const { betId } = await lockedBet('UP');
+      let sends = 0;
+      const { s, log } = serviceWith(() => ({ kind: 'unknown' }), {
+        onRuling: async (id, r) => {
+          sends++;
+          await ctx.deps.onRuling!(id, r);
+        },
+      });
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      const t0 = T0240 + 6_000;
+      clock.t = t0;
+      failRuling = true;
+      expect(await s.check(betId)).toBe('settled'); // send 1 fails: next try at +15 s
+      const resentAt = async (ms: number) => {
+        clock.t = t0 + ms;
+        return (await s.sweep(clock.t)).resent.includes(betId);
+      };
+      expect(await resentAt(10_000)).toBe(false);
+      expect(await resentAt(15_000)).toBe(true); // send 2 fails: next at +30 s
+      expect(await resentAt(25_000)).toBe(false);
+      expect(await resentAt(40_000)).toBe(false);
+      expect(await resentAt(45_000)).toBe(true); // send 3 fails: next at +60 s
+      expect(await resentAt(100_000)).toBe(false);
+      expect(await resentAt(105_000)).toBe(true); // send 4 fails: next at +120 s
+      expect(sends).toBe(4);
+      expect(linesOf(log, 'market.on_ruling_failed', 'error')).toHaveLength(1);
+      expect(linesOf(log, 'market.on_ruling_failed', 'error')[0]![2]).toMatchObject({
+        retry_in_ms: SETTLE_RESOLVE_GRACE_MS,
+      });
+      failRuling = false;
+      expect(await resentAt(225_000)).toBe(true);
+      expect(sends).toBe(5);
+      expect(ruled.map((r) => r.betId)).toEqual([betId]);
+      expect(linesOf(log, 'market.resolve_recovered')[0]![2]).toMatchObject({ failures: 4 });
+    });
+
+    it('re-sends stop at the resolve deadline (committed in time, the RPC down until then)', async () => {
+      const a = await lockedBet('UP');
+      const deadline = T0240 + 6_000 + 120_000;
+      const late = serviceWith(() => ({ kind: 'locked', resolveDeadlineMs: deadline }));
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      failRuling = true;
+      expect(await late.s.check(a.betId)).toBe('settled');
+      expect(await settlementRows(a.betId)).toHaveLength(1);
+      clock.t += SETTLE_RESOLVE_GRACE_MS;
+      expect((await late.s.sweep(clock.t)).resent).toEqual([a.betId]);
+      clock.t = deadline - RESOLVE_DEADLINE_MARGIN_MS;
+      expect((await late.s.sweep(clock.t)).resent).toEqual([]);
+      expect(late.s.abandonedBets).toEqual([a.betId]);
+      expect(linesOf(late.log, 'market.resolve_abandoned', 'error')[0]![2]).toMatchObject({
+        bet_id: a.betId,
+        reason: 'resolve_deadline',
+      });
+      clock.t += 600_000;
+      failRuling = false;
+      expect((await late.s.sweep(clock.t)).resent).toEqual([]);
+      expect(ruled).toHaveLength(0);
+    });
+
+    it('re-sends stop at once when the payout seam says the Bet is no longer Locked onchain', async () => {
+      const b = await lockedBet('DOWN');
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      let sends = 0;
+      const gone = serviceWith(() => ({ kind: 'unknown' }), {
+        onRuling: async () => {
+          sends++;
+          throw new HttpError('INVALID_STATE', 'The bet is no longer Locked onchain.', {
+            onchain: 'Refunded',
+          });
+        },
+      });
+      clock.t = T0240 + 6_000;
+      expect(await gone.s.check(b.betId)).toBe('settled');
+      clock.t += 10 * SETTLE_RESOLVE_GRACE_MS;
+      expect((await gone.s.sweep(clock.t)).resent).toEqual([]);
+      expect(sends).toBe(1);
+      expect(linesOf(gone.log, 'market.resolve_abandoned')[0]![2]).toMatchObject({
+        reason: 'not_resolvable',
+      });
+    });
+
+    it('terminalResolveError: ResolveDeadlinePassed (6023) and INVALID_STATE are final; an RPC 429 is not', () => {
+      const sim = new SimulationError('resolve', { InstructionError: [1, { Custom: 6023 }] }, []);
+      expect(terminalResolveError(sim)).toBe('resolve_deadline_passed');
+      expect(terminalResolveError(new HttpError('INVALID_STATE'))).toBe('not_resolvable');
+      expect(
+        terminalResolveError(
+          new SimulationError('resolve', { InstructionError: [1, { Custom: 6000 }] }, []),
+        ),
+      ).toBeNull();
+      expect(terminalResolveError(new Error('rpc 429'))).toBeNull();
     });
 
     it('a bet that left AWAITING_MARKET (e.g. RULED) is skipped and forgotten', async () => {

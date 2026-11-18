@@ -23,9 +23,19 @@
 //     sweep()      keeper task 'market-settlement' (the durable backstop): LOCKED gemini bets ->
 //                  AWAITING_MARKET; AWAITING_MARKET bets past expiry are checked (each at most
 //                  every 10 s), and a settlement ruling that never reached RULED (an RPC failure,
-//                  a restart) is handed to deps.onRuling again after 15 s (it is idempotent).
+//                  a restart) is handed to deps.onRuling again (it is idempotent): never while
+//                  a send of it is in flight, first 15 s after the ruling, then with per-bet
+//                  exponential backoff (capped at 5 min, one error line per outage).
 //                  A contract Gemini never settles keeps the bet waiting: the program's
 //                  timeout_refund (anyone, after resolve_deadline = lock + 3600 s) is the backstop.
+//   The resolve deadline (the Bet account's resolve_deadline, read once per bet and cached):
+//                  a decisive ruling is never committed within RESOLVE_DEADLINE_MARGIN_MS of it
+//                  (Gemini settling after the deadline: resolve could never land, while
+//                  market.settled / ruling.issued would already tell everyone who won), and a
+//                  committed one stops being re-sent there, or once resolve fails for good
+//                  (ResolveDeadlinePassed, the bet no longer Locked). Such a bet is left for
+//                  timeout_refund: one market.settlement_after_deadline /
+//                  market.resolve_abandoned error line, no more Gemini or RPC calls for it.
 //     onSnapshot() the relay's 2 s snapshots -> market.tick (persisted, <= 1 Hz per bet) for each
 //                  AWAITING_MARKET bet on that contract, until its expiry: the phones' and the
 //                  stage's live price.
@@ -34,6 +44,7 @@
 // settlement ruling).
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, lte } from 'drizzle-orm';
+import { BetStatus, ESCROW_ERROR__RESOLVE_DEADLINE_PASSED } from '@youre-on/shared/escrow-client';
 import { auditLog, bets, geminiMarkets, rulings, users } from '@youre-on/db';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { hashJcs, jcs } from '@youre-on/shared/jcs';
@@ -48,11 +59,14 @@ import {
 } from '@youre-on/shared/settlement';
 import type { Terms } from '@youre-on/shared/terms';
 import type { AppDeps } from '../context';
+import { customErrorCode } from '../chain/tx';
+import { HttpError } from '../errors';
 import { asciiFold, judgeCue } from '../bets/cues';
 import type { BetRow } from '../bets/snapshot';
 import type { KeeperTask } from '../keeper/keeper';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
-import { fanout, iso, lockBet, statePayload, type Tx } from '../lock/common';
+import { fanout, iso, lockBet, readBetAccount, statePayload, type Tx } from '../lock/common';
+import { lifecycleOf } from '../lock/runtime';
 import { loadEnvelope } from '../lock/terms';
 import { cleanDecimal, isoOrNull, toStrike } from './gemini';
 
@@ -69,6 +83,15 @@ export const SETTLE_FAST_WINDOW_MS = 120_000;
 export const SETTLE_SWEEP_EVERY_MS = 10_000;
 /** A settlement ruling still not RULED after this is handed to onRuling again. */
 export const SETTLE_RESOLVE_GRACE_MS = 15_000;
+/** Re-sends of a failing resolve back off (doubling from the grace) up to this. */
+export const SETTLE_RESEND_MAX_MS = 5 * 60_000;
+/**
+ * No settlement ruling is committed (or re-sent) this close to the Bet's resolve_deadline: the
+ * resolve has to be built, sent and confirmed before it, against a chain clock that may drift.
+ */
+export const RESOLVE_DEADLINE_MARGIN_MS = 30_000;
+/** The Bet account read gives up after this (it then counts as unknown). */
+const CHAIN_READ_TIMEOUT_MS = 5_000;
 /** market.tick at most this often per bet (API-CONTRACT §3.4: 1 Hz). */
 export const MARKET_TICK_MIN_MS = 1_000;
 /** At most this many bets per sweep. */
@@ -80,6 +103,49 @@ export type SettlementDeps = Pick<AppDeps, 'db' | 'hub' | 'log' | 'now' | 'env'>
   Partial<Pick<AppDeps, 'markets' | 'onRuling'>>;
 
 export type CheckResult = 'settled' | 'pending' | 'skipped';
+
+/** What the Bet account says, as far as settlement cares. */
+export type BetChainView =
+  /** No chain configured, the read failed, or no account (yet). */
+  | { kind: 'unknown' }
+  | { kind: 'locked'; resolveDeadlineMs: number }
+  /** Resolved, refunded, ...: nothing to settle any more. */
+  | { kind: 'not_locked'; status: string };
+
+/** The default BetChainView reader: the lifecycle's runtime, the Bet PDA, CHAIN_READ_TIMEOUT_MS. */
+export async function readBetChainView(deps: SettlementDeps, betId: string): Promise<BetChainView> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<BetChainView>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'unknown' }), CHAIN_READ_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  const read = (async (): Promise<BetChainView> => {
+    const rt = await lifecycleOf(deps).runtime();
+    if (!rt) return { kind: 'unknown' };
+    const acc = await readBetAccount(rt, betId);
+    if (!acc) return { kind: 'unknown' };
+    if (acc.status !== BetStatus.Locked)
+      return { kind: 'not_locked', status: BetStatus[acc.status] ?? String(acc.status) };
+    return { kind: 'locked', resolveDeadlineMs: Number(acc.resolveDeadline) * 1000 };
+  })().catch((err: unknown) => {
+    deps.log.warn('market.chain_read_failed', { bet_id: betId, err: String(err) });
+    return { kind: 'unknown' } as const;
+  });
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A resolve that can never land (so re-sending it is pointless), else null. */
+export function terminalResolveError(err: unknown): string | null {
+  if (err instanceof HttpError && err.code === 'INVALID_STATE') return 'not_resolvable';
+  const inner = (err as { err?: unknown } | null)?.err;
+  if (customErrorCode(inner) === ESCROW_ERROR__RESOLVE_DEADLINE_PASSED)
+    return 'resolve_deadline_passed';
+  return null;
+}
 
 async function partyNames(db: Pick<Tx, 'select'>, bet: Pick<BetRow, 'party_a_id' | 'party_b_id'>) {
   const rows = await db
@@ -139,6 +205,8 @@ interface Watched {
 export interface SettlementOptions {
   /** Arm the setTimeout fast path (default true). Tests drive check() / sweep() themselves. */
   timers?: boolean;
+  /** Reads the Bet account (default readBetChainView). */
+  chain?: (betId: string) => Promise<BetChainView>;
 }
 
 export class SettlementService {
@@ -149,6 +217,14 @@ export class SettlementService {
   private readonly ticking = new Set<string>();
   private readonly running = new Set<Promise<unknown>>();
   private readonly lateLogged = new Set<string>();
+  /** resolve_deadline per bet, once read from a Locked Bet account (it never changes). */
+  private readonly deadlines = new Map<string, number>();
+  /** Bets left for timeout_refund: too late to rule / resolve, or not Locked any more. */
+  private readonly abandoned = new Set<string>();
+  /** onRuling in flight per bet (the fast path's and the sweep's never overlap). */
+  private readonly sending = new Map<string, Promise<void>>();
+  /** Failed sends in a row per bet, and when the sweep may try again. */
+  private readonly resend = new Map<string, { failures: number; nextAt: number }>();
 
   constructor(
     private readonly deps: SettlementDeps,
@@ -173,14 +249,48 @@ export class SettlementService {
 
   /** Starts following a bet that just entered AWAITING_MARKET (ticks + the fast path). */
   follow(betId: string, terms: Terms): void {
-    if (!terms.market) return;
+    if (!terms.market || this.abandoned.has(betId)) return;
     const expiryMs = Date.parse(terms.market.expiry);
+    const fresh = !this.watching.has(betId);
     this.watching.set(betId, {
       eventTicker: terms.market.eventTicker,
       expiryMs,
       lastTickAt: this.watching.get(betId)?.lastTickAt ?? 0,
     });
     this.arm(betId, expiryMs + SETTLE_FIRST_CHECK_MS);
+    // read resolve_deadline now, off the settlement's critical path
+    if (fresh && !this.deadlines.has(betId)) void this.track(this.chainView(betId));
+  }
+
+  /** The Bet account (a Locked one's resolve_deadline is cached: it never changes). */
+  private async chainView(betId: string): Promise<BetChainView> {
+    const cached = this.deadlines.get(betId);
+    if (cached !== undefined) return { kind: 'locked', resolveDeadlineMs: cached };
+    const v = await (this.o.chain ?? ((id: string) => readBetChainView(this.deps, id)))(betId);
+    if (v.kind === 'locked') this.deadlines.set(betId, v.resolveDeadlineMs);
+    return v;
+  }
+
+  /** Too late to resolve at `atMs` (with the margin), or the Bet is not Locked: why, else null. */
+  private tooLate(v: BetChainView, atMs: number): string | null {
+    if (v.kind === 'not_locked') return `bet ${v.status} onchain`;
+    if (v.kind === 'locked' && atMs >= v.resolveDeadlineMs - RESOLVE_DEADLINE_MARGIN_MS)
+      return 'resolve_deadline';
+    return null;
+  }
+
+  /** Leaves the bet for timeout_refund: one error line, no more checks, sends or ticks. */
+  private abandon(betId: string, event: string, fields: Record<string, unknown>): void {
+    if (this.abandoned.has(betId)) return;
+    this.abandoned.add(betId);
+    this.forget(betId);
+    const deadline = this.deadlines.get(betId);
+    this.deps.log.error(event, {
+      bet_id: betId,
+      ...fields,
+      resolve_deadline: deadline === undefined ? null : iso(deadline),
+      hint: 'left for timeout_refund (scripts/crank.ts, or anyone after resolve_deadline)',
+    });
   }
 
   /**
@@ -230,6 +340,7 @@ export class SettlementService {
 
   private async doCheck(betId: string): Promise<CheckResult> {
     const deps = this.deps;
+    if (this.abandoned.has(betId)) return 'skipped';
     const [bet] = await deps.db.select().from(bets).where(eq(bets.id, betId)).limit(1);
     if (!bet || bet.state !== 'AWAITING_MARKET') {
       this.forget(betId);
@@ -261,6 +372,12 @@ export class SettlementService {
       deps.log.warn('market.settle_no_feed', { bet_id: betId });
       return 'pending';
     }
+    // Known to be past resolving already: don't even ask Gemini.
+    const known = this.deadlines.get(betId);
+    if (known !== undefined && now >= known - RESOLVE_DEADLINE_MARGIN_MS) {
+      this.abandon(betId, 'market.settlement_after_deadline', { reason: 'resolve_deadline' });
+      return 'skipped';
+    }
     let resp: Awaited<ReturnType<typeof client.getEventRaw>>;
     try {
       resp = await client.getEventRaw(market.eventTicker);
@@ -290,6 +407,17 @@ export class SettlementService {
         });
       }
       return 'pending';
+    }
+
+    // Gemini settled: rule only if the resolve can still land (else money and words disagree).
+    const late = this.tooLate(await this.chainView(betId), fetchedAt);
+    if (late) {
+      this.abandon(betId, 'market.settlement_after_deadline', {
+        reason: late,
+        gemini_status: state.kind,
+        fetched_at: iso(fetchedAt),
+      });
+      return 'skipped';
     }
 
     const bodyText = new TextDecoder('utf-8', { fatal: false }).decode(resp.bytes);
@@ -423,13 +551,45 @@ export class SettlementService {
     return 'settled';
   }
 
-  private async sendRuling(betId: string, ruling: Ruling): Promise<void> {
+  /** deps.onRuling, at most one in flight per bet (a second caller shares it). Never throws. */
+  private sendRuling(betId: string, ruling: Ruling): Promise<void> {
+    let p = this.sending.get(betId);
+    if (!p) {
+      p = this.doSend(betId, ruling).finally(() => this.sending.delete(betId));
+      this.sending.set(betId, p);
+    }
+    return p;
+  }
+
+  private async doSend(betId: string, ruling: Ruling): Promise<void> {
     if (!this.deps.onRuling) return;
     try {
       await this.deps.onRuling(betId, ruling);
+      const prev = this.resend.get(betId);
+      if (prev) this.deps.log.info('market.resolve_recovered', { bet_id: betId, ...prev });
+      this.resend.delete(betId);
     } catch (err) {
-      // The sweep retries after SETTLE_RESOLVE_GRACE_MS (onRuling is idempotent).
-      this.deps.log.error('market.on_ruling_failed', { bet_id: betId, err: String(err) });
+      const terminal = terminalResolveError(err);
+      if (terminal) {
+        this.abandon(betId, 'market.resolve_abandoned', { reason: terminal, err: String(err) });
+        return;
+      }
+      // The sweep retries (onRuling is idempotent), backing off per bet.
+      const failures = (this.resend.get(betId)?.failures ?? 0) + 1;
+      const retryMs = Math.min(SETTLE_RESEND_MAX_MS, SETTLE_RESOLVE_GRACE_MS * 2 ** (failures - 1));
+      this.resend.set(betId, { failures, nextAt: this.deps.now() + retryMs });
+      if (failures === 1)
+        this.deps.log.error('market.on_ruling_failed', {
+          bet_id: betId,
+          err: String(err),
+          retry_in_ms: retryMs,
+        });
+      else if (failures % 10 === 0)
+        this.deps.log.warn('market.on_ruling_failed', {
+          bet_id: betId,
+          failures,
+          err: String(err),
+        });
     }
   }
 
@@ -473,6 +633,7 @@ export class SettlementService {
       .where(eq(bets.state, 'AWAITING_MARKET'))
       .limit(SETTLE_BATCH * 5);
     for (const w of waiting) {
+      if (this.abandoned.has(w.id)) continue;
       const [ruled] = await deps.db
         .select({ record: rulings.record_canonical, created_at: rulings.created_at })
         .from(rulings)
@@ -485,14 +646,26 @@ export class SettlementService {
         )
         .limit(1);
       if (ruled) {
-        if (out.resent.length >= SETTLE_BATCH) continue;
-        try {
-          await this.sendRuling(w.id, Ruling.parse(JSON.parse(ruled.record)));
-          out.resent.push(w.id);
-          deps.log.info('market.resolve_retried', { bet_id: w.id });
-        } catch (err) {
-          deps.log.warn('market.resolve_retry_failed', { bet_id: w.id, err: String(err) });
+        if (out.resent.length >= SETTLE_BATCH || this.sending.has(w.id)) continue;
+        if ((this.resend.get(w.id)?.nextAt ?? 0) > nowMs) continue;
+        const late = this.tooLate(await this.chainView(w.id), nowMs);
+        if (late) {
+          this.abandon(w.id, 'market.resolve_abandoned', { reason: late });
+          continue;
         }
+        let ruling: Ruling;
+        try {
+          ruling = Ruling.parse(JSON.parse(ruled.record));
+        } catch (err) {
+          deps.log.error('market.resolve_retry_failed', { bet_id: w.id, err: String(err) });
+          continue;
+        }
+        out.resent.push(w.id);
+        deps.log.info('market.resolve_retried', {
+          bet_id: w.id,
+          failures: this.resend.get(w.id)?.failures ?? 0,
+        });
+        await this.sendRuling(w.id, ruling);
         continue;
       }
       if (!this.watching.has(w.id)) {
@@ -549,6 +722,11 @@ export class SettlementService {
   /** Bets followed for ticks / the fast path (diagnostics, tests). */
   get followed(): string[] {
     return [...this.watching.keys()];
+  }
+
+  /** Bets left for timeout_refund (diagnostics, tests). */
+  get abandonedBets(): string[] {
+    return [...this.abandoned];
   }
 }
 

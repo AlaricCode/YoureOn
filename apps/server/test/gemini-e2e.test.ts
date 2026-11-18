@@ -830,4 +830,25 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
     expect(await usdc(w[1]![1].address)).toBe(b0 - 2_440_000n);
     expect((await betRow(settledBet!)).state).toBe('PAID');
   }, 120_000);
+
+  // Last: it leaves a Locked bet behind (for timeout_refund), which the driver test would see.
+  it('Gemini answers inside the Bet account’s resolve_deadline margin: no ruling; the bet stays Locked for timeout_refund', async () => {
+    install('server');
+    const { betId, res } = await marketBet('UP', '1');
+    await expectAwaitingMarket(betId, res);
+    await settle(); // follow() read the Bet account's resolve_deadline (lock + 3600 s)
+    const deadlineMs = Number((await onchainBet(betId))!.resolveDeadline) * 1000;
+    expect(deadlineMs - Date.parse(res.quote.market.quotedAt)).toBeGreaterThan(3_500_000);
+    g.routes.set(eventPath(TICKER), F.event_0240_settled);
+    at(deadlineMs - 10_000 - T0237); // Gemini's PM API was down for the hour
+    expect(await svc.check(betId)).toBe('skipped');
+    await settle();
+    expect(svc.abandonedBets).toContain(betId);
+    expect((await betRow(betId)).state).toBe('AWAITING_MARKET');
+    expect(await ctx.deps.db.select().from(rulings).where(eq(rulings.bet_id, betId))).toEqual([]);
+    expect((await onchainBet(betId))!.status).toBe(BetStatus.Locked);
+    const types = (await dbEvents(betId)).map((e) => (e.envelope as any).type);
+    expect(types).not.toContain('market.settled');
+    expect(types).not.toContain('ruling.issued');
+  });
 });
