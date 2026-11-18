@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   type Base64EncodedWireTransaction,
@@ -44,6 +44,7 @@ import {
   USDC,
   type Env as SvmEnv,
 } from '../../../packages/shared/test/escrow/harness';
+import { logChainHealth } from '../src/chain/health';
 import { bootReconcile } from '../src/chain/reconcile';
 import {
   instrumentChainClient,
@@ -664,11 +665,18 @@ run('money path hardening over LiteSVM', () => {
     // Again: already balanced, no tx.
     const again = await admin('/v1/demo/rebalance');
     expect(again.json).toMatchObject({ status: 'balanced', signature: null });
+    // audit_log is append-only and outlives runs of this suite: find this run's row.
     const sent = await ctx.deps.db
       .select()
       .from(auditLog)
-      .where(eq(auditLog.action, 'demo.rebalance_sent'));
-    expect(sent.at(-1)!.details).toMatchObject({ signature: r.json!.signature, from: 'demo-b' });
+      .where(
+        and(
+          eq(auditLog.action, 'demo.rebalance_sent'),
+          sql`${auditLog.details}->>'signature' = ${r.json!.signature as string}`,
+        ),
+      );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.details).toMatchObject({ from: 'demo-b', fee_payer: svm.s.address });
   });
 
   it('rebalance never doubles: an earlier one still in flight -> 409 rebalance_in_flight', async () => {
@@ -785,6 +793,26 @@ run('money path hardening over LiteSVM', () => {
       install('server');
       await admin('/v1/demo/reset');
     }
+  });
+
+  it('logChainHealth: one chain.unhealthy line with every warning code', async () => {
+    await lc.lock.ensurePool(rt);
+    const lines: Array<[string, Record<string, unknown> | undefined]> = [];
+    const rec = (msg: string, f?: Record<string, unknown>) => void lines.push([msg, f]);
+    const prevLog = ctx.deps.log;
+    // The same deps object (lifecycleOf keys by identity), with a recording logger.
+    ctx.deps.log = { debug: rec, info: rec, warn: rec, error: rec };
+    try {
+      const r = await logChainHealth(ctx.deps);
+      expect(r.warnings.map((w) => w.code)).toContain('keeper_off'); // no keeper in tests
+    } finally {
+      ctx.deps.log = prevLog;
+    }
+    const health = lines.filter(([m]) => m.startsWith('chain.'));
+    expect(health).toHaveLength(1);
+    expect(health[0]![0]).toBe('chain.unhealthy');
+    expect(health[0]![1]).toMatchObject({ ok: true, nonces_free: 3 });
+    expect(health[0]![1]!.warnings).toContain('warn:keeper_off');
   });
 
   it('a FINALIZED bet with no payout in flight is not stranded: still Resolved -> RULED -> PAID', async () => {
