@@ -31,6 +31,7 @@ import {
   BetStatus,
   ESCROW_PROGRAM_ADDRESS,
   findBetPda,
+  findConfigPda,
   getAppealInstructionAsync,
   getBetDecoder,
   getCreateBetInstructionAsync,
@@ -953,6 +954,27 @@ run('money path hardening over LiteSVM', () => {
         expect.objectContaining({ code: 'judge_key_mismatch', level: 'critical' }),
       );
       expect(h.ok).toBe(false);
+    } finally {
+      install('server');
+    }
+  });
+
+  it('health: an unreadable Config is a warning, never a silent pass', async () => {
+    const [cfgPda] = await findConfigPda();
+    const c: ChainClient = {
+      ...rt.client,
+      getAccount: async (a) => {
+        if (a === cfgPda) throw new Error('HTTP 503');
+        return rt.client.getAccount(a);
+      },
+    };
+    install('server', { client: c });
+    try {
+      const h = (await get(null, '/v1/demo/health', { 'X-YO-Demo-Key': ADMIN })).json!;
+      expect(h.config).toBeNull();
+      expect(h.warnings).toContainEqual(
+        expect.objectContaining({ code: 'config_unreadable', level: 'warn' }),
+      );
     } finally {
       install('server');
     }

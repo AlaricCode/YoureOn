@@ -21,7 +21,7 @@
 // Later server txs (resolve, payout) do NOT overwrite them, so the stub projector keeps attributing
 // every later event of the bet to our lock (see lockSignaturesFromChainTxs for the chain_txs-based
 // lookup a full projector should switch to).
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   address,
   createNoopSigner,
@@ -1039,10 +1039,11 @@ export class LockService {
     } catch (err) {
       this.deps.log.warn('nonce.advance_failed', { seed_index: n.seed_index, err });
       await this.deps.db.transaction(async (tx) => {
+        // Only while still 'sent': the sweep may have settled it from the chain meanwhile.
         await tx
           .update(chainTxs)
           .set({ status: 'failed', err: String(err).slice(0, 200) })
-          .where(eq(chainTxs.id, adv.id));
+          .where(and(eq(chainTxs.id, adv.id), eq(chainTxs.status, 'sent')));
         await tx
           .update(noncePool)
           .set({ failures: sql`${noncePool.failures} + 1` })
@@ -1228,15 +1229,17 @@ export class LockService {
         and(
           eq(chainTxs.kind, 'nonce_advance'),
           eq(chainTxs.status, 'sent'),
+          isNotNull(chainTxs.signature),
           sql`NOT EXISTS (SELECT 1 FROM ${noncePool} p WHERE p.advance_tx_id = ${chainTxs.id})`,
         ),
       )
+      .orderBy(asc(chainTxs.sent_at))
       .limit(25);
     const height = heightOnce(rt.client);
     for (const row of orphanAdvances) {
-      if (!row.signature) continue;
-      const { fate } = await txFate(rt.client, row.signature, row.last_valid_block_height, {
-        sentAtMs: row.sent_at?.getTime() ?? 0,
+      // An unknown send time is never declared dead (txFate): such a row just waits.
+      const { fate } = await txFate(rt.client, row.signature!, row.last_valid_block_height, {
+        sentAtMs: row.sent_at?.getTime(),
         nowMs,
         height,
       });
