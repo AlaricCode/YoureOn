@@ -154,7 +154,13 @@ export async function persistEvaluation(
   deps: LifecycleDeps,
   betId: string,
   evaluation: ProposeEvaluation,
-  o: { requestId?: string; source?: string; rev?: number } = {},
+  o: {
+    requestId?: string;
+    source?: string;
+    rev?: number;
+    /** bet_terms_versions.drafted_by: 'party_a' for typed terms (terms/routes.ts). */
+    draftedBy?: 'judge' | 'party_a' | 'party_b';
+  } = {},
 ): Promise<PersistResult> {
   if (evaluation.kind === 'invalid') return { kind: 'skipped', reason: 'invalid' };
   const now = deps.now();
@@ -232,7 +238,7 @@ export async function persistEvaluation(
       bet_id: betId,
       version: nextVersion,
       schema_version: 1,
-      drafted_by: 'judge',
+      drafted_by: o.draftedBy ?? 'judge',
       source_tool: o.source ?? 'propose_terms',
       canonical_json: composed.canonical,
       terms_hash: composed.terms_hash,
@@ -338,7 +344,12 @@ export type ConfirmResult =
 export async function confirmTerms(
   deps: LifecycleDeps,
   betId: string,
-  o: { heard?: string; requestId?: string; actor?: 'judge' | 'system' } = {},
+  o: {
+    heard?: string;
+    requestId?: string;
+    actor?: 'judge' | 'system' | 'user';
+    actorUserId?: string;
+  } = {},
 ): Promise<ConfirmResult> {
   const now = deps.now();
   const out = await deps.db.transaction(async (tx) => {
@@ -382,6 +393,7 @@ export async function confirmTerms(
     if (!row) throw new Error(`confirm: bet ${betId} raced`);
     await tx.insert(auditLog).values({
       actor_kind: o.actor ?? 'judge',
+      actor_user_id: o.actorUserId ?? null,
       action: 'bet.state_changed',
       bet_id: betId,
       request_id: o.requestId ?? null,

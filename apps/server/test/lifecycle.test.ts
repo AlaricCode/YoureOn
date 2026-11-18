@@ -49,6 +49,12 @@ import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/r
 import { createPayoutService } from '../src/payout';
 import { createLogger } from '../src/log';
 import { DEMO_TERMS_ARGS } from '../src/demo/routes';
+import {
+  bottleFlipClaim,
+  termsConfirmPath,
+  typedTermsPath,
+  typedTermsRequest,
+} from '@youre-on/shared/judge/typed-terms';
 import { liteSvmClient } from './litesvm-client';
 import {
   DB_URL,
@@ -469,6 +475,42 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
       const bAfter = await tokenAmount(svm.svm, (await findAta(signerB)) as never);
       expect(bAfter - bBefore).toBe(2n * USDC);
       expect(await onchainBet(betId)).toBeNull();
+    } finally {
+      install('phones');
+    }
+  });
+
+  it('typed path (LOCK_SIGNER=server): A types the terms, taps Lock it in -> LOCKED', async () => {
+    install('server');
+    try {
+      const room = await signed(A, 'POST', '/v1/rooms', { name: 'Typed', kind: 'session' });
+      await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code });
+      const bet = await signed(A, 'POST', '/v1/bets', {
+        room_id: room.json!.room_id,
+        opponent_user_id: B.session.user.user_id,
+        challenge_method: 'list',
+      });
+      const betId = bet.json!.bet.bet_id as string;
+      const p = await signed(
+        A,
+        'POST',
+        typedTermsPath(betId),
+        typedTermsRequest({ claim: bottleFlipClaim('Jake'), stakeUsd: 1, bName: 'Jake' }),
+      );
+      expect(p.status).toBe(200);
+      expect(p.json).toMatchObject({ ok: true, kind: 'proposed', state: 'TERMS_PROPOSED' });
+      const c = await signed(A, 'POST', termsConfirmPath(betId), {
+        terms_hash: p.json!.terms_hash,
+      });
+      expect(c.status).toBe(200);
+      expect(c.json).toMatchObject({ ok: true, code: p.json!.code });
+      await lc.idle();
+      const row = await betRow(betId);
+      expect(row.state).toBe('LOCKED');
+      expect(row.terms_hash).toBe(p.json!.terms_hash);
+      expect(row.stake_a).toBe(1_000_000n);
+      const onchain = await onchainBet(betId);
+      expect(onchain?.status).toBe(BetStatus.Locked);
     } finally {
       install('phones');
     }
