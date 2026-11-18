@@ -21,7 +21,7 @@
 // Later server txs (resolve, payout) do NOT overwrite them, so the stub projector keeps attributing
 // every later event of the bet to our lock (see lockSignaturesFromChainTxs for the chain_txs-based
 // lookup a full projector should switch to).
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   address,
   createNoopSigner,
@@ -57,12 +57,14 @@ import {
   cosignTx,
   customErrorCode,
   cuWithMargin,
+  heightOnce,
   messageB64,
   poolAddress,
   PreflightError,
   readNonce,
   SimulationError,
   TxFailedError,
+  txFate,
   wireOf,
   type ChainRuntime,
   type SendOptions,
@@ -91,6 +93,8 @@ const sigString = (b: Uint8Array) => b58dec.decode(b);
 
 /** SPL Token InsufficientFunds (a party's ATA is short). */
 const TOKEN_INSUFFICIENT_FUNDS = 1;
+/** The sweep stops re-broadcasting a lost lock this long before its expires_at. */
+export const LOCK_RESEND_STOP_MS = 5_000;
 
 export interface LockServiceOptions {
   deps: LifecycleDeps;
@@ -1035,10 +1039,11 @@ export class LockService {
     } catch (err) {
       this.deps.log.warn('nonce.advance_failed', { seed_index: n.seed_index, err });
       await this.deps.db.transaction(async (tx) => {
+        // Only while still 'sent': the sweep may have settled it from the chain meanwhile.
         await tx
           .update(chainTxs)
           .set({ status: 'failed', err: String(err).slice(0, 200) })
-          .where(eq(chainTxs.id, adv.id));
+          .where(and(eq(chainTxs.id, adv.id), eq(chainTxs.status, 'sent')));
         await tx
           .update(noncePool)
           .set({ failures: sql`${noncePool.failures} + 1` })
@@ -1141,7 +1146,16 @@ export class LockService {
         await this.failLock(row.bet_id, why.reason, why.party, null, { nonceAdvanced: true });
         continue;
       }
-      if (!row.expires_at || nowMs < row.expires_at.getTime()) continue;
+      if (!row.expires_at || nowMs < row.expires_at.getTime()) {
+        // Unseen and its confirm loop is gone (it timed out, or the server restarted, maybe
+        // before the first send): re-broadcast the exact signed bytes. A durable-nonce tx is
+        // valid until accept_deadline and can land at most once (its ix 0 advances the nonce),
+        // so this is always safe; the next pass sees the status. Not in the last seconds before expires_at, so a re-send
+        // never races the expire + revoke below.
+        if (!st && row.expires_at && nowMs < row.expires_at.getTime() - LOCK_RESEND_STOP_MS)
+          await this.rebroadcastLock(rt, row);
+        continue;
+      }
       // Fate unknown at expires_at. A status lookup can miss a landed tx, so the chain decides:
       // the Bet PDA (Locked, our terms_hash) means it landed; a consumed nonce without one means
       // it never can; otherwise expire + revoke, and the next pass settles it either way.
@@ -1204,7 +1218,74 @@ export class LockService {
       }
       await this.revokeNonce(rt, n, adv.bet_id);
     }
+
+    // 4. 'sent' nonce advances no advancing nonce points at any more (the nonce was retired
+    //    after 3 failures, or re-advanced by a later revoke): settle the row from the chain so
+    //    it does not sit 'sent' for good. The nonce itself is already handled.
+    const orphanAdvances = await this.deps.db
+      .select()
+      .from(chainTxs)
+      .where(
+        and(
+          eq(chainTxs.kind, 'nonce_advance'),
+          eq(chainTxs.status, 'sent'),
+          isNotNull(chainTxs.signature),
+          sql`NOT EXISTS (SELECT 1 FROM ${noncePool} p WHERE p.advance_tx_id = ${chainTxs.id})`,
+        ),
+      )
+      .orderBy(asc(chainTxs.sent_at))
+      .limit(25);
+    const height = heightOnce(rt.client);
+    for (const row of orphanAdvances) {
+      // An unknown send time is never declared dead (txFate): such a row just waits.
+      const { fate } = await txFate(rt.client, row.signature!, row.last_valid_block_height, {
+        sentAtMs: row.sent_at?.getTime(),
+        nowMs,
+        height,
+      });
+      if (fate === 'pending') continue;
+      await this.deps.db
+        .update(chainTxs)
+        .set(
+          fate === 'landed'
+            ? { status: 'confirmed', rpc_confirmed_at: now }
+            : { status: fate === 'failed' ? 'failed' : 'expired', err: `orphan advance ${fate}` },
+        )
+        .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
+    }
     return result;
+  }
+
+  /** Re-sends a 'sent' lock's stored bytes (both party signatures + the fee payer's, re-signed). */
+  private async rebroadcastLock(rt: ChainRuntime, row: LockRow): Promise<void> {
+    if (!row.message_b64 || !row.a_signature || !row.b_signature) return;
+    const [bet] = await this.deps.db
+      .select({ a: bets.party_a_wallet, b: bets.party_b_wallet })
+      .from(bets)
+      .where(eq(bets.id, row.bet_id))
+      .limit(1);
+    if (!bet?.a || !bet.b) return;
+    const full = await cosignTx(
+      txFromStored(
+        row.message_b64,
+        new Map([
+          [bet.a, sigBytes(row.a_signature)],
+          [bet.b, sigBytes(row.b_signature)],
+        ]),
+      ),
+      [rt.keys.feePayer],
+    );
+    // ed25519 is deterministic: the re-signed fee payer signature is the stored tx id.
+    if (sigString(full.signatures[rt.keys.feePayer.address]!) !== row.signature) return;
+    // Preflight stays ON (TM-N4: a doomed lock is rejected for free instead of burning the
+    // nonce). A rejection here (already processed, nonce moved, deadline) changes nothing: the
+    // status poll and the expires_at path below decide the lock's fate.
+    await rt.client
+      .send(wireOf(full), false)
+      .then(() => this.deps.log.info('lock.rebroadcast', { bet_id: row.bet_id }))
+      .catch((err: unknown) =>
+        this.deps.log.warn('lock.rebroadcast_failed', { bet_id: row.bet_id, err }),
+      );
   }
 
   /**

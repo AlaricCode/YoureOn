@@ -3,12 +3,16 @@
 //
 // Safety rails (hard rules for these scripts):
 //   - mainnet-beta is refused outright (detected by genesis hash, not by URL);
-//   - an RPC URL is only ever printed as scheme://host, because QuickNode URLs embed a token.
+//   - an RPC URL is only ever printed as scheme://host, because QuickNode URLs embed a token;
+//   - every RPC request is time-boxed (30 s per attempt, 120 s in all) and retried on 429 / 5xx /
+//     timeouts / socket errors, with the server's transport (apps/server/src/chain/tx.ts
+//     withRpcRetry): the public devnet RPC answers 429 under any real load, and a 429 on the
+//     confirm poll after a send made the crank / smoke report "FAILED" for txs that had landed.
+//     Re-sending the same signed bytes is safe; sendAndConfirm's first send goes through the
+//     server's ChainClient.send, which tells a real rejection from its own retried, landed tx.
 import {
   address,
   appendTransactionMessageInstructions,
-  createDefaultRpcTransport,
-  createSolanaRpcFromTransport,
   createTransactionMessage,
   fetchEncodedAccount,
   getAddressDecoder,
@@ -19,7 +23,6 @@ import {
   getProgramDerivedAddress,
   getSignatureFromTransaction,
   getTransactionSize,
-  isSolanaError,
   getU32Encoder,
   getU64Encoder,
   pipe,
@@ -27,8 +30,6 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   setTransactionMessageLifetimeUsingDurableNonce,
   signTransactionMessageWithSigners,
-  SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
-  type RpcTransport,
   type Address,
   type Blockhash,
   type Commitment,
@@ -43,6 +44,12 @@ import {
 import { findAssociatedTokenPda, fetchMaybeToken } from '@solana-program/token';
 
 import { TOKEN_PROGRAM_ID } from '@youre-on/shared/chain/constants';
+
+import {
+  createRetryingSolanaRpc,
+  rpcChainClient,
+  SendFateUnknownError,
+} from '../../apps/server/src/chain/tx';
 
 export type ChainRpc = Rpc<SolanaRpcApi>;
 
@@ -80,34 +87,11 @@ export function redactUrl(url: string): string {
   }
 }
 
-/**
- * The public devnet RPC answers 429 under any real load, and a 429 on the confirm poll after a
- * send made the crank / smoke report "FAILED" for transactions that had landed. Retry 429/5xx
- * with exponential backoff (re-sending the same signed bytes is safe; reads are idempotent).
- * Mirrors apps/server/src/chain/tx.ts withRpcRetry.
- */
-function retryingTransport(url: string, attempts = 6, baseMs = 300): RpcTransport {
-  const inner = createDefaultRpcTransport({ url });
-  return (async (config: Parameters<RpcTransport>[0]) => {
-    for (let i = 0; ; i++) {
-      try {
-        return await inner(config);
-      } catch (e) {
-        const status = isSolanaError(e, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)
-          ? e.context.statusCode
-          : 0;
-        if (i >= attempts - 1 || !(status === 429 || status >= 500)) throw e;
-        await new Promise((r) =>
-          setTimeout(r, baseMs * 2 ** i + Math.floor(Math.random() * baseMs)),
-        );
-      }
-    }
-  }) as RpcTransport;
-}
-
 /** Connects, identifies the cluster by genesis hash and refuses mainnet. */
 export async function connect(url: string): Promise<Chain> {
-  const rpc = createSolanaRpcFromTransport(retryingTransport(url));
+  // Longer than the server's (scripts are operator-driven: a slow getProgramAccounts over every
+  // Bet must finish rather than time out on a struggling RPC).
+  const rpc = createRetryingSolanaRpc(url, { timeoutMs: 30_000, budgetMs: 120_000 });
   const label = redactUrl(url);
   let genesis: string;
   try {
@@ -337,9 +321,15 @@ export async function sendAndConfirm(
   const lastValid = (tx as { lifetimeConstraint?: { lastValidBlockHeight?: bigint } })
     .lifetimeConstraint?.lastValidBlockHeight;
   const t0 = performance.now();
-  await rpc
-    .sendTransaction(wire, { encoding: 'base64', preflightCommitment: 'processed', maxRetries: 0n })
-    .send();
+  try {
+    // The server's send(): preflight ON, and a rejection that is really this tx's own landed
+    // first attempt (the transport re-sends after a timeout: AlreadyProcessed, or a durable nonce
+    // it advanced itself) is recognized instead of reported as FAILED.
+    await rpcChainClient('script://rpc', rpc).send(wire, false);
+  } catch (err) {
+    if (!(err instanceof SendFateUnknownError)) throw err;
+    console.log('  (send rejected and its status is unknown: polling the signature)');
+  }
   const sendMs = performance.now() - t0;
   let processedMs: number | undefined;
   let lastSend = performance.now();

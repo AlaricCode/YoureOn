@@ -2,9 +2,15 @@
 // (404 otherwise, so the surface does not exist outside the demo). The stage-token requirement
 // of §2.17 is not enforced yet (no stage session issuer); the admin key alone gates these.
 //
-//   GET  /v1/demo/health                 fee payer SOL, nonce pool counts, last server tx, rpc/db ms
-//   POST /v1/demo/reset                  revoke leased nonces, delete non-seed bets (cascade), re-sync
-//                                        the nonce pool from chain. Never touches face_enrollments.
+//   GET  /v1/demo/health                 chain health + warnings (src/chain/health.ts): balances, nonce
+//                                        pool, RPC p50/p95, keeper, stuck txs/bets, orphan escrow.
+//   POST /v1/demo/reset {rebalance?}     escrow of rehearsal bets returned (resolve(Refund) / exits),
+//                                        leased nonces revoked, non-seed bets deleted (cascade), the
+//                                        nonce pool re-synced (src/demo/reset.ts). Sessions, users,
+//                                        rooms and face_enrollments are untouched.
+//   POST /v1/demo/rebalance              demo-a / demo-b USDC evened out, fee payer pays (rebalance.ts).
+//   POST /v1/demo/sweep                  every money sweep now (lock / payout / resolve-due / refund
+//                                        / orphan escrow, chain/reconcile.ts) + the health report.
 //   POST /v1/demo/bets/:bet_id/terms     inject fixture terms through the SAME sink as propose_terms
 //                                        (no voice_conversation_id needed). Body: optional
 //                                        propose_terms args (the LLM projection) overriding the fixture.
@@ -20,25 +26,28 @@
 //                                        POST /v1/auth/session and binds itself with PATCH
 //                                        /v1/devices/current. 201 {device_id, user_id}; a repeat for
 //                                        the same user answers 200 with the same device.
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import type { MiddlewareHandler } from 'hono';
-import { auditLog, bets, chainTxs, devices, noncePool, users } from '@youre-on/db';
+import { auditLog, chainTxs, devices, users } from '@youre-on/db';
 import { DemoClaimTokenRequest, type DemoClaimTokenResponse } from '@youre-on/shared/api';
 import { MAX_STAKE } from '@youre-on/shared/constants';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import { Pubkey, Uuid } from '@youre-on/shared/primitives';
+import { chainHealth } from '../chain/health';
+import { bootReconcile } from '../chain/reconcile';
 import type { AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody, readJsonBody } from '../http/body';
 import { betIdParam } from '../lock/routes';
 import { lifecycleOf } from '../lock/runtime';
 import { readBet } from '../lock/common';
-import { syncNoncePool } from '../lock/service';
 import { displayCode } from '../lock/terms';
 import { confirmAndLock, termsSink } from '../voice/tools';
 import { toolSecretOk } from '../voice/tool-auth';
 import { claimTokensOf, demoPartyKey } from './claim-tokens';
+import { rebalanceDemoWallets } from './rebalance';
+import { DemoResetRequest, resetDemo } from './reset';
 
 export const DEMO_KEY_HEADER = 'X-YO-Demo-Key';
 
@@ -79,120 +88,42 @@ export const demoRoutes: RouteModule = {
   name: 'demo',
   register(app) {
     app.get('/v1/demo/health', requireDemo, async (c) => {
-      const deps = c.get('deps');
-      const t0 = performance.now();
-      const pool = await deps.db
-        .select({ status: noncePool.status, n: sql<number>`count(*)::int` })
-        .from(noncePool)
-        .groupBy(noncePool.status);
-      const [last] = await deps.db
-        .select({
-          kind: chainTxs.kind,
-          status: chainTxs.status,
-          signature: chainTxs.signature,
-          bet_id: chainTxs.bet_id,
-          built_at: chainTxs.built_at,
-          rpc_confirmed_at: chainTxs.rpc_confirmed_at,
-          err: chainTxs.err,
-        })
-        .from(chainTxs)
-        .orderBy(desc(chainTxs.built_at))
-        .limit(1);
-      const dbMs = performance.now() - t0;
-      const counts = Object.fromEntries(pool.map((p) => [p.status, p.n])) as Record<string, number>;
-      const rt = await lifecycleOf(deps).runtime();
-      let feePayerSol: number | null = null;
-      let rpcMs: number | null = null;
-      let rpcError: string | null = null;
-      if (rt) {
-        const t1 = performance.now();
-        try {
-          feePayerSol = Number(await rt.client.lamports(rt.keys.feePayer.address)) / 1e9;
-          rpcMs = Math.round(performance.now() - t1);
-        } catch (err) {
-          rpcError = String((err as Error).message ?? err).slice(0, 120);
-        }
-      }
-      return c.json(
-        {
-          chain_configured: !!rt,
-          lock_signer: deps.env.LOCK_SIGNER,
-          rpc: rt?.client.label ?? null,
-          fee_payer: rt?.keys.feePayer.address ?? null,
-          fee_payer_pinned: rt?.feePayerPinned ?? null,
-          fee_payer_sol: feePayerSol,
-          judge: rt?.keys.judge?.address ?? null,
-          custodial: { a: rt?.keys.demoA?.address ?? null, b: rt?.keys.demoB?.address ?? null },
-          nonce_pool: {
-            size: Object.values(counts).reduce((a, b) => a + b, 0),
-            free: counts.free ?? 0,
-            leased: counts.leased ?? 0,
-            advancing: counts.advancing ?? 0,
-            retired: counts.retired ?? 0,
-          },
-          last_tx: last ?? null,
-          rpc_ms: rpcMs,
-          rpc_error: rpcError,
-          db_ms: Math.round(dbMs),
-        },
-        200,
-      );
+      // src/chain/health.ts: balances, nonce pool, RPC p50 / p95, keeper, stuck txs / bets,
+      // orphan escrow, Stream, Gemini relay, and `warnings` (+ `ok`: no critical warning).
+      c.header('Cache-Control', 'no-store');
+      return c.json(await chainHealth(c.get('deps')), 200);
     });
 
     app.post('/v1/demo/reset', requireDemo, async (c) => {
       const deps = c.get('deps');
+      const body = await readBody(c, DemoResetRequest);
+      const result = await resetDemo(deps, {
+        rebalance: body.rebalance,
+        requestId: c.get('requestId'),
+      });
+      return c.json({ ok: true, ...result }, 200);
+    });
+
+    // Every money sweep, now (before a beat, or to see the orphan refunds go out): the same
+    // idempotent passes the keeper runs, plus the orphan scan, then the health report.
+    app.post('/v1/demo/sweep', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const report = await bootReconcile(deps, deps.now());
+      const orphans = await lifecycleOf(deps).refund.sweepOrphans(deps.now());
+      await lifecycleOf(deps).idle();
+      return c.json({ ok: true, reconcile: report, orphans, health: await chainHealth(deps) }, 200);
+    });
+
+    app.post('/v1/demo/rebalance', requireDemo, async (c) => {
+      const deps = c.get('deps');
       const lc = lifecycleOf(deps);
       const rt = await lc.runtime();
-      // 1. revoke every leased nonce (best effort): stored lock signatures become useless.
-      if (rt) {
-        const leased = await deps.db
-          .select()
-          .from(noncePool)
-          .where(inArray(noncePool.status, ['leased']));
-        for (const n of leased) {
-          if (!n.leased_bet_id) continue;
-          await lc.lock
-            .revokeNonce(rt, n, n.leased_bet_id)
-            .catch((err: unknown) =>
-              deps.log.warn('demo.reset_revoke_failed', { seed_index: n.seed_index, err }),
-            );
-        }
-      }
-      await lc.idle();
-      // 2. drop the pool's references to bets / txs about to be deleted.
-      await deps.db
-        .update(noncePool)
-        .set({
-          status: 'retired',
-          retired_at: new Date(deps.now()),
-          leased_bet_id: null,
-          leased_tx_id: null,
-          leased_at: null,
-          advance_tx_id: null,
-        })
-        .where(inArray(noncePool.status, ['leased', 'advancing']));
-      // 3. non-seed bets (chain_txs, bet_terms_versions, bet_events, voice_sessions, outbox cascade).
-      const deleted = await deps.db
-        .delete(bets)
-        .where(sql`NOT ${bets.is_seed}`)
-        .returning({ id: bets.id });
-      // 4. re-read the pool from chain: every account that is fine is free again.
-      let synced = 0;
-      if (rt) {
-        await deps.db
-          .update(noncePool)
-          .set({ status: 'free', retired_at: null, failures: 0 })
-          .where(sql`${noncePool.status} = 'retired' AND ${noncePool.nonce_value} IS NOT NULL`);
-        await deps.db.delete(noncePool).where(sql`${noncePool.status} = 'retired'`);
-        synced = await syncNoncePool(deps, rt);
-      }
-      await deps.db.insert(auditLog).values({
-        actor_kind: 'system',
-        action: 'demo.reset',
-        request_id: c.get('requestId'),
-        details: { deleted_bets: deleted.length, nonces_synced: synced },
+      if (!rt) throw new HttpError('RPC_UNAVAILABLE', 'The chain is not configured.');
+      const r = await rebalanceDemoWallets(deps, rt, {
+        requestId: c.get('requestId'),
+        send: lc.sendOptions,
       });
-      return c.json({ ok: true, deleted_bets: deleted.length, nonces_synced: synced }, 200);
+      return c.json({ ok: true, ...r }, 200);
     });
 
     app.post('/v1/demo/bets/:bet_id/terms', requireDemo, async (c) => {
