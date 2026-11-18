@@ -1,10 +1,14 @@
 // Helpers shared by the terms sink, LockService and the payout service: the Drizzle tx type,
 // bet row locking, bet.state payloads, fan-out to both parties + the bet channel + the stage.
 import { eq } from 'drizzle-orm';
+import type { ReadonlyUint8Array } from '@solana/kit';
 import { bets, type Db } from '@youre-on/db';
 import type { BetState } from '@youre-on/shared/bet-state';
 import type { PendingTx } from '@youre-on/shared/bet-state';
+import { findBetPda, getBetDecoder, type Bet } from '@youre-on/shared/escrow-client';
+import { betIdToBytes } from '@youre-on/shared/primitives';
 import type { AppDeps } from '../context';
+import type { ChainRuntime } from '../chain/tx';
 import { chainAckOf, toOnchainStatus, type BetRow } from '../bets/snapshot';
 import type { BetEventEnvelope } from '../realtime/events';
 
@@ -51,6 +55,17 @@ export function fanout(
     deps.hub.publishToUser(bet.party_b_id, e);
   }
 }
+
+/** The onchain Bet account of `betId` (our program only), or null when it does not exist. */
+export async function readBetAccount(rt: ChainRuntime, betId: string): Promise<Bet | null> {
+  const [pda] = await findBetPda({ betId: betIdToBytes(betId) });
+  const acc = await rt.client.getAccount(pda);
+  if (!acc || acc.owner !== rt.programId) return null;
+  return getBetDecoder().decode(acc.data);
+}
+
+export const hexOf = (b: ReadonlyUint8Array): string =>
+  Buffer.from(b as Uint8Array).toString('hex');
 
 export const iso = (ms: number | Date): string => new Date(ms).toISOString();
 

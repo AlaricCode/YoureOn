@@ -42,6 +42,7 @@ import type {
 } from '@youre-on/shared/authorization';
 import { LOCK_SUBMIT_MARGIN_SECS, NONCE_POOL_SIZE } from '@youre-on/shared/constants';
 import { compileLock, lockBody } from '@youre-on/shared/chain/lock-tx';
+import { BetStatus } from '@youre-on/shared/escrow-client';
 import { formatUsd } from '@youre-on/shared/money';
 import { betIdToBytes, otherParty, type Party } from '@youre-on/shared/primitives';
 import { asciiFold, declinedCue, judgeCue } from '../bets/cues';
@@ -69,9 +70,11 @@ import {
 import {
   fanout,
   hexBytes,
+  hexOf,
   iso,
   Inflight,
   lockBet,
+  readBetAccount,
   statePayload,
   type LifecycleDeps,
   type Tx,
@@ -715,10 +718,31 @@ export class LockService {
         })
         .where(eq(chainTxs.id, lockId));
       await this.releaseNonce(tx, lockId, fresh?.value ?? null, now);
-      if (bet.state !== 'AWAITING_LOCK') return { bet, envs: [] as BetEventEnvelope[] };
+      // The chain wins (DATA-MODEL §8.3): a lock that landed after the bet was expired or
+      // lock_failed still moved both stakes, so the bet is LOCKED. bets_guard only lets a
+      // terminal row move when onchain_status is locked or later in the same UPDATE, so this
+      // path writes it (the landed atomic lock is exactly that status).
+      const revived =
+        (bet.state === 'EXPIRED' && bet.end_reason === 'accept_timeout') ||
+        (bet.state === 'CANCELLED' && bet.end_reason === 'lock_failed');
+      if (bet.state !== 'AWAITING_LOCK' && !revived) return { bet, envs: [] as BetEventEnvelope[] };
+      if (revived)
+        this.deps.log.warn('lock.chain_wins', { bet_id: betId, from: bet.state, signature });
       const [row] = await tx
         .update(bets)
-        .set({ state: 'LOCKED', onchain_pending: 'locked', pending_sig: signature })
+        .set({
+          state: 'LOCKED',
+          onchain_pending: 'locked',
+          pending_sig: signature,
+          ...(revived
+            ? {
+                end_reason: null,
+                onchain_status: ['none', 'open'].includes(bet.onchain_status)
+                  ? ('locked' as const)
+                  : bet.onchain_status,
+              }
+            : {}),
+        })
         .where(eq(bets.id, betId))
         .returning();
       const names = await partyNames(tx, bet);
@@ -1093,7 +1117,8 @@ export class LockService {
       }
     }
 
-    // 2. sent locks whose confirm loop is not running: ask the chain.
+    // 2. sent locks whose confirm loop is not running (e.g. after a restart): ask the chain.
+    //    searchTransactionHistory, since the default lookup only sees the recent status cache.
     const sent = await this.deps.db
       .select()
       .from(chainTxs)
@@ -1101,7 +1126,7 @@ export class LockService {
       .limit(25);
     for (const row of sent) {
       if (this.confirming.has(row.id) || !row.signature) continue;
-      const st = await rt.client.signatureStatus(row.signature);
+      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
       if (
         st &&
         !st.err &&
@@ -1109,14 +1134,33 @@ export class LockService {
       ) {
         await this.onLanded(rt, row.bet_id, row.id, row.signature, nowMs, nowMs, st.slot);
         result.landed.push(row.bet_id);
-      } else if (st?.err) {
+        continue;
+      }
+      if (st?.err) {
         const why = failureReason(st.err);
         await this.failLock(row.bet_id, why.reason, why.party, null, { nonceAdvanced: true });
-      } else if (row.expires_at && nowMs >= row.expires_at.getTime()) {
-        // Fate unknown at expires_at: revoke; if it landed meanwhile the chain wins (status 'sent' stays for audit).
-        if (await this.expire(row.bet_id, row.id, nowMs))
-          await this.revokeOrRelease(row.bet_id, row.id, false);
-        result.expired.push(row.bet_id);
+        continue;
+      }
+      if (!row.expires_at || nowMs < row.expires_at.getTime()) continue;
+      // Fate unknown at expires_at. A status lookup can miss a landed tx, so the chain decides:
+      // the Bet PDA (Locked, our terms_hash) means it landed; a consumed nonce without one means
+      // it never can; otherwise expire + revoke, and the next pass settles it either way.
+      const fate = await this.lockFate(rt, row);
+      if (fate === 'landed') {
+        this.deps.log.warn('lock.landed_late', { bet_id: row.bet_id, signature: row.signature });
+        await this.onLanded(rt, row.bet_id, row.id, row.signature, nowMs, nowMs, st?.slot ?? null);
+        result.landed.push(row.bet_id);
+        continue;
+      }
+      if (await this.expire(row.bet_id, row.id, nowMs)) result.expired.push(row.bet_id);
+      if (fate === 'dead') {
+        await this.deps.db
+          .update(chainTxs)
+          .set({ status: 'expired' })
+          .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
+        await this.revokeOrRelease(row.bet_id, row.id, true);
+      } else {
+        await this.revokeOrRelease(row.bet_id, row.id, false);
       }
     }
 
@@ -1161,6 +1205,30 @@ export class LockService {
       await this.revokeNonce(rt, n, adv.bet_id);
     }
     return result;
+  }
+
+  /**
+   * A sent lock's fate from chain state alone: 'landed' when the Bet PDA is Locked with the bet's
+   * terms_hash; 'dead' when the lock's nonce value is consumed and no such Bet exists (the nonce
+   * is read first, so a lock that consumed it is visible in the PDA read after); else 'unknown'.
+   */
+  private async lockFate(rt: ChainRuntime, row: LockRow): Promise<'landed' | 'dead' | 'unknown'> {
+    const nonce = row.nonce_account ? await readNonce(rt.client, address(row.nonce_account)) : null;
+    const [bet] = await this.deps.db
+      .select({ terms_hash: bets.terms_hash })
+      .from(bets)
+      .where(eq(bets.id, row.bet_id))
+      .limit(1);
+    const onchain = await readBetAccount(rt, row.bet_id);
+    if (
+      onchain &&
+      onchain.status === BetStatus.Locked &&
+      bet?.terms_hash &&
+      hexOf(onchain.termsHash) === bet.terms_hash
+    )
+      return 'landed';
+    if (nonce && nonce.value !== row.nonce_value) return 'dead';
+    return 'unknown';
   }
 
   /** built/signed (or sent, fate unknown) at expires_at -> EXPIRED (accept_timeout). */
