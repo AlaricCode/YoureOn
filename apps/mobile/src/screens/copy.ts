@@ -176,6 +176,7 @@ export const COPY = {
     done: ['Signed in', 'label'],
     badCode: ['Code expired', 'error'],
     continue: ['Continue', 'label'],
+    useLink: ['Use this account', 'label'],
   },
 } as const satisfies Record<string, Record<string, Line>>;
 
