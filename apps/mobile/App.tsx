@@ -22,7 +22,8 @@ export default function App() {
         ) : (
           <DemoApp onOperator={() => setOperator(true)} />
         )}
-        <StatusBar style="dark" />
+        {/* Light text on the dark app; the diagnostics screen is white. */}
+        <StatusBar style={operator ? 'dark' : 'light'} />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

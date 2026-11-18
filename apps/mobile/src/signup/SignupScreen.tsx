@@ -3,7 +3,14 @@
 // The phone's own key is the login (API-CONTRACT §2.1), so a returning user, even after a
 // reinstall, never sees this screen. Face enrollment is offered right after (D3-M3).
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import {
   AlertLine,
@@ -77,7 +84,8 @@ export function SignupScreen({
             <Label variant="display">{SIGNUP_COPY.title}</Label>
           </Pressable>
           <BodyText style={styles.gap}>{SIGNUP_COPY.body}</BodyText>
-          <View style={styles.flex} />
+          {/* Tapping the empty space puts the keyboard away. */}
+          <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />
           <TextField
             testID="signup-name"
             label={SIGNUP_COPY.nameLabel}
