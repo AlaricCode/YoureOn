@@ -230,7 +230,17 @@ describe('provider registry', () => {
   });
 
   it('NODE_ENV=production boots, but the mock LLM / STT refuse every call (no fake rulings)', async () => {
-    const env = testEnv({ NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://example.test' });
+    const env = testEnv({
+      NODE_ENV: 'production',
+      PUBLIC_BASE_URL: 'https://example.test',
+      // REQUIRED_IN_PRODUCTION (env.ts): never used by this test.
+      SOLANA_DEVNET_RPC: 'http://127.0.0.1:1',
+      FEE_PAYER_SECRET_KEY: 'unused',
+      JUDGE_AUTHORITY_SECRET_KEY: 'unused',
+      ELEVENLABS_TOOL_SECRET: 'unused',
+      ANTHROPIC_API_KEY: 'unused',
+      DEMO_ADMIN_TOKEN: 'unused',
+    });
     const p = createProviders(env);
     expect(providerModes(p)).toEqual({ llm: 'mock', stt: 'mock', sfx: 'mock' });
     const req: ChatRequest<z.infer<typeof VisionVerdict>> = {

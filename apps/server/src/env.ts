@@ -34,6 +34,14 @@ export const EnvSchema = z.object({
   MAX_STAKE_MICRO: opt(z.string().regex(/^[1-9][0-9]{0,19}$/)),
   APPEAL_WINDOW_S: opt(intStr),
   LOCK_MODE: z.preprocess(unset, z.enum(['atomic', 'sequential']).default('atomic')),
+  /**
+   * Who signs the atomic lock (src/lock). 'phones' = API-CONTRACT §2.8 (each phone signs the stored
+   * message after hold + Face ID). 'server' = custodial demo path: the server signs create_bet /
+   * accept_bet as demo-a / demo-b (DEMO_A/B_SECRET_KEY) right after confirm_terms (D-A).
+   */
+  LOCK_SIGNER: z.preprocess(unset, z.enum(['phones', 'server']).default('phones')),
+  /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
+  SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
@@ -55,6 +63,9 @@ export const EnvSchema = z.object({
   JUDGE_AUTHORITY_SECRET_KEY: opt(str),
   APPEAL_AUTHORITY_SECRET_KEY: opt(str),
   TREASURY_SECRET_KEY: opt(str),
+  /** Custodial demo party keys (scripts/keys.ts demo-a / demo-b), used when LOCK_SIGNER=server. */
+  DEMO_A_SECRET_KEY: opt(str),
+  DEMO_B_SECRET_KEY: opt(str),
   // --- AI providers (secret)
   ANTHROPIC_API_KEY: opt(str),
   OPENAI_API_KEY: opt(str),
@@ -91,7 +102,18 @@ export type Env = z.infer<typeof EnvSchema>;
  * Keys the production deploy must have *today*. Grows as features land; keep it honest so a
  * Fly deploy with a missing secret fails at boot instead of mid-demo.
  */
-export const REQUIRED_IN_PRODUCTION = ['PUBLIC_BASE_URL'] as const satisfies readonly (keyof Env)[];
+export const REQUIRED_IN_PRODUCTION = [
+  'PUBLIC_BASE_URL',
+  // chain lifecycle (src/chain/tx.ts, src/lock, src/payout)
+  'SOLANA_DEVNET_RPC',
+  'FEE_PAYER_SECRET_KEY',
+  'JUDGE_AUTHORITY_SECRET_KEY',
+  // the judge's tools and its LLM
+  'ELEVENLABS_TOOL_SECRET',
+  'ANTHROPIC_API_KEY',
+  // /v1/demo/* (src/demo)
+  'DEMO_ADMIN_TOKEN',
+] as const satisfies readonly (keyof Env)[];
 
 export class EnvError extends Error {
   constructor(public readonly problems: string[]) {
