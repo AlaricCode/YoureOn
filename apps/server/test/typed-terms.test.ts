@@ -204,8 +204,30 @@ describeDb('typed terms: POST /v1/bets/:id/terms/typed + /terms/confirm (DB)', (
     expect((await betRow(betId)).state).toBe('DRAFTING');
   });
 
+  it('confirm before B accepts the invite: 409 invite_pending, nothing frozen; after the accept it locks in', async () => {
+    const { A, B, betId } = await newBet();
+    const p = TypedTermsResponse.parse((await post(A, typedTermsPath(betId), flip(1))).json);
+    if (!p.ok) throw new Error('not proposed');
+    const early = await post(A, termsConfirmPath(betId), { terms_hash: p.terms_hash });
+    expect(early.status).toBe(409);
+    expect(early.json!.error).toMatchObject({
+      code: 'INVALID_STATE',
+      details: { reason: 'invite_pending', state: 'TERMS_PROPOSED' },
+    });
+    const row = await betRow(betId);
+    expect(row.state).toBe('TERMS_PROPOSED');
+    expect(row.terms_final_at).toBeNull();
+
+    expect((await post(B, `/v1/bets/${betId}/invite/accept`, {})).status).toBe(200);
+    const c = await post(A, termsConfirmPath(betId), { terms_hash: p.terms_hash });
+    expect(c.status).toBe(200);
+    expect(TermsConfirmResponse.parse(c.json).code).toBe(p.code);
+    expect((await betRow(betId)).terms_final_at).not.toBeNull();
+  });
+
   it('confirm: wrong state 409, stale hash 409, then freeze -> AWAITING_AUTHORIZATIONS; typed after freeze 409', async () => {
-    const { A, betId } = await newBet();
+    const { A, B, betId } = await newBet();
+    expect((await post(B, `/v1/bets/${betId}/invite/accept`, {})).status).toBe(200);
     // DRAFTING: nothing to confirm.
     const early = await post(A, termsConfirmPath(betId), { terms_hash: 'ab'.repeat(32) });
     expect(early.status).toBe(409);
