@@ -82,6 +82,7 @@ import {
   submitTypedTerms,
   TYPED_STAKES_USD,
   typedReducer,
+  waitingForAccept,
   type TypedStakeUsd,
 } from './typedTerms';
 
@@ -346,18 +347,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const confirmTyped = async () => {
     const hash = bet?.envelope?.terms_hash ?? null;
-    if (!bet || !hash || !canConfirm(typed, hash)) return;
+    // Gated on B's accept too: an early tap would get a 409 replayed for this key for 24h.
+    if (!bet || !hash || !canConfirm(typed, hash, bet.inviteAnswer)) return;
     typedDispatch({ type: 'confirm' });
+    const keyName = `confirm:${bet.bet_id}:${hash}`;
     const r = await confirmTypedTerms(
       { api: rt.api },
-      {
-        betId: bet.bet_id,
-        termsHash: hash,
-        idempotencyKey: keyFor(`confirm:${bet.bet_id}:${hash}`),
-      },
+      { betId: bet.bet_id, termsHash: hash, idempotencyKey: keyFor(keyName) },
     );
     if (r.ok) typedDispatch({ type: 'confirmed' });
     else {
+      // A 4xx is replayed for its key: the next tap is a new request with a new key.
+      if (r.freshKey) keys.current.delete(keyName);
       typedDispatch({ type: 'confirm_failed', note: r.note });
       feel('failed');
     }
@@ -737,7 +738,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     sending: typed.phase === 'sending',
                     confirming: typed.phase === 'confirming' || typed.phase === 'confirmed',
                     canSubmit: canSubmit(typed),
-                    canConfirm: canConfirm(typed, bet?.envelope?.terms_hash ?? null),
+                    canConfirm: canConfirm(
+                      typed,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    ),
+                    waitingFor: waitingForAccept(
+                      typed,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    )
+                      ? names.theirName
+                      : null,
                     note: typed.note,
                     onOpen: () => typedDispatch({ type: 'open' }),
                     onVoice: () => typedDispatch({ type: 'voice' }),

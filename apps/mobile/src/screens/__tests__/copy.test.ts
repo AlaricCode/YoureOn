@@ -38,8 +38,15 @@ describe('results and data', () => {
   it.each(Object.values(RESULT_TITLE))('title "%s"', (text) => {
     expect(checkCopy(text, 'label')).toEqual([]);
   });
-  it.each([fill.turn('Jake')])('label "%s"', (text) => {
-    expect(checkCopy(text, 'label')).toEqual([]);
+  it.each([fill.turn('Jake'), fill.waitingFor('Jake'), fill.waitingFor('Eva Santos')])(
+    'label "%s"',
+    (text) => {
+      expect(checkCopy(text, 'label')).toEqual([]);
+    },
+  );
+  it('Waiting for <name> keeps to the label limit with a full name', () => {
+    expect(fill.waitingFor('Eva Santos')).toBe('Waiting for Eva');
+    expect(fill.waitingFor(' ')).toBe('Waiting for them');
   });
   it('preview data has no chain words, addresses or emoji', () => {
     const data = [

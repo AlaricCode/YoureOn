@@ -198,8 +198,10 @@ export interface TypedTermsPanel {
   sending: boolean;
   confirming: boolean;
   canSubmit: boolean;
-  /** The card this form sent is on screen: show "Lock it in". */
+  /** The card this form sent is on screen and B accepted: show "Lock it in". */
   canConfirm: boolean;
+  /** The card is on screen but B has not accepted yet: "Waiting for <name>" (disabled). */
+  waitingFor: string | null;
   /** A judge line or short error from the server (already copy-checked). */
   note: string | null;
   onOpen: () => void;
@@ -312,6 +314,13 @@ export function NegotiateScreen({
               label={t(COPY.negotiate.lockItIn)}
               busy={typed.confirming}
               onPress={typed.onConfirm}
+            />
+          ) : typed.waitingFor !== null ? (
+            <PrimaryButton
+              testID="typed-waiting"
+              label={fill.waitingFor(typed.waitingFor)}
+              disabled
+              onPress={() => undefined}
             />
           ) : (
             <PrimaryButton
