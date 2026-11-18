@@ -79,6 +79,7 @@ import {
   PreflightError,
   SimulationError,
   TOKEN_PROGRAM,
+  heightOnce,
   TxFailedError,
   txFate,
   wireOf,
@@ -194,8 +195,11 @@ export class PayoutService {
       // checked), the row is retired, so one immediate rebuild beats waiting for resolve-due.
       if (!isBlockhashNotFound(err)) throw err;
       this.deps.log.warn('payout.resolve_blockhash_retry', { bet_id: betId });
-      // Never the rejected blockhash again: the same one would rebuild the very same bytes.
-      return this.resolveOnce(betId, input, (err as PreflightError).blockhash);
+      // Never the rejected blockhash again: the same one would rebuild the very same bytes
+      // (unknown -> wait a slot, so getLatestBlockhash moves on).
+      const rejected = (err as PreflightError).blockhash;
+      if (!rejected) await new Promise((r) => setTimeout(r, 500));
+      return this.resolveOnce(betId, input, rejected);
     }
   }
 
@@ -375,7 +379,7 @@ export class PayoutService {
       rt.client,
       prior.signature,
       prior.last_valid_block_height,
-      { sentAtMs: prior.sent_at?.getTime() ?? null, nowMs: this.deps.now() },
+      { sentAtMs: prior.sent_at?.getTime() ?? 0, nowMs: this.deps.now() },
     );
     if (fate === 'failed') return retire('failed', JSON.stringify(status?.err));
     if (fate === 'dead') return retire('expired', 'expired unconfirmed');
@@ -1127,6 +1131,7 @@ export class PayoutService {
       .orderBy(chainTxs.sent_at)
       .limit(25);
     const paid: string[] = [];
+    const height = heightOnce(rt.client);
     for (const row of rows) {
       if (this.confirming.has(row.id) || !row.signature) continue;
       const kind = row.kind as 'resolve' | 'concede' | 'finalize';
@@ -1137,7 +1142,7 @@ export class PayoutService {
         rt.client,
         row.signature,
         row.last_valid_block_height,
-        { sentAtMs: row.sent_at?.getTime() ?? null, nowMs },
+        { sentAtMs: row.sent_at?.getTime() ?? 0, nowMs, height },
       );
       const landed = fate === 'landed';
       const dead: 'failed' | 'expired' | null =

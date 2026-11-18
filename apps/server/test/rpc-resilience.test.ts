@@ -17,6 +17,7 @@ import {
   buildBlockhashTx,
   confirmSent,
   customErrorCode,
+  heightOnce,
   isBlockhashNotFound,
   instrumentChainClient,
   isNetworkError,
@@ -554,5 +555,54 @@ describe('preflight errors exactly as kit builds them from a real RPC response',
     ).toBe('TransactionError(7050005)');
     expect(rpcErrFromSolanaError(new Error('x'))).toBeNull();
     expect(rpcErrFromSolanaError(null)).toBeNull();
+  });
+});
+
+describe('txFate / send: second-round rules', () => {
+  it('lvbh-less with an unknown send time is never declared dead', async () => {
+    const c = fake({ signatureStatus: async () => null });
+    expect((await txFate(c, 's', null)).fate).toBe('pending');
+  });
+
+  it('heightOnce: one getBlockHeight per sweep pass, however many rows', async () => {
+    let calls = 0;
+    const c = fake({
+      signatureStatus: async () => null,
+      blockHeight: async () => (calls++, 50n),
+    });
+    const height = heightOnce(c);
+    for (let i = 0; i < 5; i++) await txFate(c, `s${i}`, 100n, { height });
+    expect(calls).toBe(1);
+  });
+
+  it('a tx-level rejection that cannot be our duplicate (InsufficientFundsForFee) throws at once', async () => {
+    const calls: string[] = [];
+    const rpc = {
+      sendTransaction: () => ({
+        send: async () => {
+          calls.push('send');
+          throw getSolanaErrorFromJsonRpcError({
+            code: -32002,
+            message: 'Transaction simulation failed',
+            data: { err: 'InsufficientFundsForFee', logs: [], accounts: null, unitsConsumed: 0n },
+          });
+        },
+      }),
+      getSignatureStatuses: () => ({
+        send: async () => (calls.push('status'), { value: [null] }),
+      }),
+    } as unknown as Rpc<SolanaRpcApi>;
+    const fp = await generateKeyPairSigner();
+    const ix = {
+      programAddress: 'ComputeBudget111111111111111111111111111111' as never,
+      data: new Uint8Array([1]),
+    };
+    const built = await buildBlockhashTx(fake(), fp.address, [ix], { signers: [fp], label: 't' });
+    const e = await rpcChainClient('http://127.0.0.1:1', rpc)
+      .send(wireOf(built.tx), false)
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(PreflightError);
+    expect((e as Error).cause).toBeDefined(); // the kit error (scripts print its logs)
+    expect(calls).toEqual(['send']);
   });
 });

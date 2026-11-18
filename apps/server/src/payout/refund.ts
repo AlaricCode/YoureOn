@@ -26,7 +26,18 @@
 //
 // Not reachable today: an Open Bet tracked by a live row (the atomic lock never leaves one; the
 // sequential fallback is not implemented). The orphan path covers any Open Bet anyway.
-import { and, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
+import {
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  notExists,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { getBase58Decoder, type Address, type Transaction } from '@solana/kit';
 import { auditLog, bets, chainTxs } from '@youre-on/db';
 import { isTerminalBetState, type BetState } from '@youre-on/shared/bet-state';
@@ -61,6 +72,7 @@ import {
   messageB64,
   PreflightError,
   SimulationError,
+  heightOnce,
   TxFailedError,
   txFate,
   wireOf,
@@ -144,7 +156,10 @@ export interface OrphanSummary {
 export class RefundService {
   private readonly confirming = new Set<string>();
   private readonly anomalies = new Map<string, number>();
-  private readonly orphanTx = new Map<string, { signature: string; lvbh: bigint | null }>();
+  private readonly orphanTx = new Map<
+    string,
+    { signature: string; lvbh: bigint | null; sentAtMs: number }
+  >();
   private readonly orphanBusy = new Set<string>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   /** The last orphan scan, for GET /v1/demo/health. */
@@ -204,9 +219,18 @@ export class RefundService {
       .from(bets)
       .where(
         and(
-          sql`NOT EXISTS (SELECT 1 FROM ${chainTxs} t WHERE t.bet_id = ${bets.id}
-                AND t.kind IN ('resolve','concede','finalize','timeout_refund')
-                AND t.status = 'sent')`,
+          notExists(
+            this.deps.db
+              .select({ one: sql`1` })
+              .from(chainTxs)
+              .where(
+                and(
+                  eq(chainTxs.bet_id, bets.id),
+                  inArray(chainTxs.kind, [...BLOCKING_KINDS]),
+                  eq(chainTxs.status, 'sent'),
+                ),
+              ),
+          ),
           backoff.length ? notInArray(bets.id, backoff) : undefined,
           or(
             // Locked: the judge never ruled before resolve_deadline (or it is not known yet).
@@ -405,13 +429,15 @@ export class RefundService {
       .orderBy(chainTxs.sent_at)
       .limit(25);
     const done: string[] = [];
+    const height = heightOnce(rt.client);
     for (const row of rows) {
       if (this.confirming.has(row.id) || !row.signature) continue;
+      // A row without sent_at counts as old (the lvbh-less fallback, never ours in practice).
       const { fate, status: st } = await txFate(
         rt.client,
         row.signature,
         row.last_valid_block_height,
-        { sentAtMs: row.sent_at?.getTime() ?? null, nowMs },
+        { sentAtMs: row.sent_at?.getTime() ?? 0, nowMs, height },
       );
       if (fate === 'failed') {
         await this.markRow(row.id, 'failed', JSON.stringify(st?.err));
@@ -682,7 +708,10 @@ export class RefundService {
   ): Promise<string | null> {
     const prev = this.orphanTx.get(l.address);
     if (prev) {
-      const { fate } = await txFate(rt.client, prev.signature, prev.lvbh);
+      const { fate } = await txFate(rt.client, prev.signature, prev.lvbh, {
+        sentAtMs: prev.sentAtMs,
+        nowMs: this.deps.now(),
+      });
       if (fate === 'landed' || fate === 'pending') {
         // Landed: the next scan sees the Bet's new status. Pending: it may still land.
         if (fate === 'landed') this.orphanTx.delete(l.address);
@@ -697,7 +726,11 @@ export class RefundService {
       label: `${action}${action === 'close_bet' ? '' : '+close_bet'} (orphan)`,
     });
     const signature = sigOf(built, fp.address);
-    this.orphanTx.set(l.address, { signature, lvbh: built.lastValidBlockHeight });
+    this.orphanTx.set(l.address, {
+      signature,
+      lvbh: built.lastValidBlockHeight,
+      sentAtMs: this.deps.now(),
+    });
     await this.deps.db.insert(auditLog).values({
       actor_kind: 'server',
       action: 'chain.orphan_exit',

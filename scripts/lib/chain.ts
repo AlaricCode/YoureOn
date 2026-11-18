@@ -8,8 +8,8 @@
 //     timeouts / socket errors, with the server's transport (apps/server/src/chain/tx.ts
 //     withRpcRetry): the public devnet RPC answers 429 under any real load, and a 429 on the
 //     confirm poll after a send made the crank / smoke report "FAILED" for txs that had landed.
-//     Re-sending the same signed bytes is safe; sendAndConfirm checks a rejected first send's
-//     signature before failing (the rejection may be its own retry of a tx that landed).
+//     Re-sending the same signed bytes is safe; sendAndConfirm's first send goes through the
+//     server's ChainClient.send, which tells a real rejection from its own retried, landed tx.
 import {
   address,
   appendTransactionMessageInstructions,
@@ -45,7 +45,11 @@ import { findAssociatedTokenPda, fetchMaybeToken } from '@solana-program/token';
 
 import { TOKEN_PROGRAM_ID } from '@youre-on/shared/chain/constants';
 
-import { createRetryingSolanaRpc } from '../../apps/server/src/chain/tx';
+import {
+  createRetryingSolanaRpc,
+  rpcChainClient,
+  SendFateUnknownError,
+} from '../../apps/server/src/chain/tx';
 
 export type ChainRpc = Rpc<SolanaRpcApi>;
 
@@ -318,24 +322,13 @@ export async function sendAndConfirm(
     .lifetimeConstraint?.lastValidBlockHeight;
   const t0 = performance.now();
   try {
-    await rpc
-      .sendTransaction(wire, {
-        encoding: 'base64',
-        preflightCommitment: 'processed',
-        maxRetries: 0n,
-      })
-      .send();
+    // The server's send(): preflight ON, and a rejection that is really this tx's own landed
+    // first attempt (the transport re-sends after a timeout: AlreadyProcessed, or a durable nonce
+    // it advanced itself) is recognized instead of reported as FAILED.
+    await rpcChainClient('script://rpc', rpc).send(wire, false);
   } catch (err) {
-    // The transport re-sends a send whose first try timed out; if the node had it, the retry's
-    // preflight fails (AlreadyProcessed, or a nonce it advanced itself). Only a signature the
-    // chain does not know is a real rejection.
-    const known = await rpc
-      .getSignatureStatuses([signature], { searchTransactionHistory: true })
-      .send()
-      .then((r) => r.value[0] ?? null)
-      .catch(() => null);
-    if (!known) throw err;
-    console.log('  (the first send landed; its retry was rejected as a duplicate)');
+    if (!(err instanceof SendFateUnknownError)) throw err;
+    console.log('  (send rejected and its status is unknown: polling the signature)');
   }
   const sendMs = performance.now() - t0;
   let processedMs: number | undefined;

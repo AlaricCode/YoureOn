@@ -50,7 +50,7 @@ export interface RebalanceResult {
 type Deps = Pick<AppDeps, 'db' | 'log' | 'now'>;
 
 const b58 = getBase58Decoder();
-type LastTx = { signature: string; lvbh: bigint | null };
+type LastTx = { signature: string; lvbh: bigint | null; sentAtMs: number; nowMs: () => number };
 /** The last rebalance sent through each chain client (one per server process in practice). */
 const lastSent = new WeakMap<object, LastTx>();
 
@@ -68,7 +68,7 @@ async function assertNoneInFlight(deps: Deps, rt: ChainRuntime) {
   let prev = lastSent.get(rt.client) ?? null;
   if (!prev) {
     const [row] = await deps.db
-      .select({ details: auditLog.details })
+      .select({ details: auditLog.details, at: auditLog.at })
       .from(auditLog)
       .where(
         and(
@@ -80,12 +80,20 @@ async function assertNoneInFlight(deps: Deps, rt: ChainRuntime) {
       .orderBy(desc(auditLog.at))
       .limit(1);
     const d = row?.details as { signature?: string; lvbh?: string | null } | undefined;
-    if (d?.signature) prev = { signature: d.signature, lvbh: d.lvbh ? BigInt(d.lvbh) : null };
+    // audit_log.at is the DB clock: compare it with the wall clock, not deps.now().
+    if (d?.signature && row)
+      prev = {
+        signature: d.signature,
+        lvbh: d.lvbh ? BigInt(d.lvbh) : null,
+        sentAtMs: row.at.getTime(),
+        nowMs: Date.now,
+      };
   }
   if (!prev) return;
-  // Without an lvbh (never for ours) a 5-min-old audit row is past any blockhash lifetime.
   const { fate } = await txFate(rt.client, prev.signature, prev.lvbh, {
-    sentAtMs: deps.now() - REBALANCE_LOOKBACK_MS - 1,
+    sentAtMs: prev.sentAtMs,
+    nowMs: prev.nowMs(),
+    maxAgeMs: REBALANCE_LOOKBACK_MS,
   });
   if (fate !== 'pending') {
     lastSent.delete(rt.client); // landed, failed or known dead: a new one is safe
@@ -101,10 +109,10 @@ async function assertNoneInFlight(deps: Deps, rt: ChainRuntime) {
   );
 }
 
-/** Moves USDC between demo-a and demo-b until they hold the same amount (± 1 micro-unit). */
 /** Rebalances of one chain client run one at a time (the check above is check-then-set). */
 const queues = new WeakMap<object, Promise<unknown>>();
 
+/** Moves USDC between demo-a and demo-b until they hold the same amount (± 1 micro-unit). */
 export function rebalanceDemoWallets(
   deps: Deps,
   rt: ChainRuntime,
@@ -218,7 +226,12 @@ async function rebalanceOnce(
   });
   const signature = b58.decode(built.tx.signatures[feePayer.address]!);
   const from = fromKey.address === demoA.address ? 'demo-a' : 'demo-b';
-  lastSent.set(rt.client, { signature, lvbh: built.lastValidBlockHeight });
+  lastSent.set(rt.client, {
+    signature,
+    lvbh: built.lastValidBlockHeight,
+    sentAtMs: deps.now(),
+    nowMs: deps.now,
+  });
   await deps.db.insert(auditLog).values({
     actor_kind: 'system',
     action: 'demo.rebalance_sent',
