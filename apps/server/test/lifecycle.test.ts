@@ -607,6 +607,12 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     const row = await betRow(betId);
     expect(row.party_a_wallet).toBe(signerA.address);
     expect(row.stake_a).toBe(1_000_000n);
+    // A spoken "deal" is not B's consent: B taps accept on B's own phone first.
+    expect((await tool('confirm_terms', { heard: 'both' })).json).toMatchObject({
+      ok: false,
+      fix: 'INVITE_PENDING',
+    });
+    expect((await signed(B, 'POST', `/v1/bets/${betId}/invite/accept`)).status).toBe(200);
     const c = await tool('confirm_terms', { heard: 'both' });
     expect(c.json).toMatchObject({
       ok: true,
