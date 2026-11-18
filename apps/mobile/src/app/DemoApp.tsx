@@ -79,6 +79,7 @@ import type { HistoryItem, PreviewUser } from '../preview/data';
 import { createServerSignupApi } from '../signup/api';
 import { SignupScreen } from '../signup/SignupScreen';
 import { Label, PrimaryButton } from '../ui/kit';
+import { setConnectionStatus } from '../ui/connection';
 import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { palette } from '../ui/tokens';
@@ -127,6 +128,7 @@ import {
   rejoinAndRebind,
 } from './judgeCam';
 import { RESUME_LIMIT, resumable } from './resume';
+import { createSocketStatusHandler } from './socketStatus';
 import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
 import {
@@ -405,11 +407,14 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   // ---- socket status, presence -------------------------------------------------------------
   useEffect(() => {
-    const a = rt.onStatus((s) => {
-      dispatch({ type: 'offline', offline: s === 'reconnecting' || s === 'unauthorized' });
-      // A turn-off the server never confirmed (./judgeCam): send it again now that it answers.
-      if (s === 'live') void camSync.retry();
-    });
+    // Home's offline flag, the reconnect banner on every screen (./socketStatus), and a turn-off
+    // the server never confirmed (./judgeCam) sent again once the socket answers.
+    const a = rt.onStatus(
+      createSocketStatusHandler({
+        offline: (offline) => dispatch({ type: 'offline', offline }),
+        live: () => void camSync.retry(),
+      }),
+    );
     const b = rt.onControl((f) => {
       if (f.op === 'room.presence')
         dispatch({ type: 'presence', room_id: f.room_id, members: f.members });
@@ -426,6 +431,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       a();
       b();
       c();
+      // Not following the socket any more (the operator screen, a restart of this tree): no
+      // stale "Reconnecting" on the next screen.
+      setConnectionStatus('idle');
     };
   }, [rt, camSync]);
 
