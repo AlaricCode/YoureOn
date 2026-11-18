@@ -9,7 +9,8 @@
 //      the person tapped "Don't Allow" on the Face ID permission): without the second prompt such
 //      a phone could never authorize, and D2 is "Face ID, then passcode" (O8: a Face ID problem
 //      must not end Beat 3). This goes beyond O8's literal list; the method is still recorded.
-//   3. Anything else (cancel, not enrolled, ...) fails without a second prompt.
+//   3. Anything else (user_cancel, system_cancel, authentication_failed, passcode_not_set, ...)
+//      fails without a second prompt.
 // ESTIMATED behaviour: check it on a device (FINDINGS §6 step 8, TASKS D1-M2).
 import type { LocalAuthenticationError, LocalAuthLike } from './platform';
 
