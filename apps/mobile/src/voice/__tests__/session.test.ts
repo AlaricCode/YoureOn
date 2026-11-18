@@ -1,6 +1,8 @@
 import { Uuid } from '@youre-on/shared/primitives';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { BetState } from '@youre-on/shared/bet-state';
+
 import type { VoiceLine } from '../judgeTools';
 import {
   ACTIVITY_EVERY_MS,
@@ -227,23 +229,55 @@ describe('judge session: [EVENT] cues (§4.5)', () => {
 });
 
 describe('judge session: mute, do not end (FINDINGS §4) + user activity', () => {
-  it('muted from the terms card to the ruling, one continuous span', () => {
+  it('live only while negotiating or in a hearing; muted from the terms card on', () => {
     expect(micMutedFor('DRAFTING')).toBe(false);
     expect(micMutedFor('TERMS_PROPOSED')).toBe(false);
+    // A hearing: the parties argue out loud to the judge.
+    expect(micMutedFor('HEARING')).toBe(false);
     for (const s of [
       'AWAITING_AUTHORIZATIONS',
       'AWAITING_LOCK',
       'LOCKED',
       'ATTEMPT',
       'JUDGING',
+      // Beat 6: five minutes on speaker during the pitch; the judge must not answer it.
+      'AWAITING_MARKET',
+      // The ruling and its appeal / GG window: they tap, no spoken tool (no file_appeal).
+      'RULED',
+      'CONCEDED',
+      'FINALIZED',
+      'APPEALED',
+      'APPEAL_RESOLVED',
+      // The session lingers after the bet ends only to speak the closing [EVENT] line.
+      'PAID',
+      'VOIDED',
+      'CANCELLED',
+      'EXPIRED',
     ] as const)
       expect([s, micMutedFor(s)]).toEqual([s, true]);
-    for (const s of ['RULED', 'HEARING', 'APPEALED', 'CONCEDED'] as const)
-      expect([s, micMutedFor(s)]).toEqual([s, false]);
-    // The session lingers after the bet ends only to speak the closing [EVENT] line.
-    for (const s of ['PAID', 'VOIDED', 'CANCELLED', 'EXPIRED'] as const)
-      expect([s, micMutedFor(s)]).toEqual([s, true]);
     expect(micMutedFor(null)).toBe(false);
+    // Every state is decided (a state added later starts muted).
+    expect(BetState.options.filter((s) => !micMutedFor(s))).toEqual([
+      'DRAFTING',
+      'TERMS_PROPOSED',
+      'HEARING',
+    ]);
+  });
+
+  it('a skill bet is one mute span from the card to the payout: no toggle at the ruling', () => {
+    const path = [
+      'TERMS_PROPOSED',
+      'AWAITING_AUTHORIZATIONS',
+      'AWAITING_LOCK',
+      'LOCKED',
+      'ATTEMPT',
+      'JUDGING',
+      'RULED',
+      'FINALIZED',
+      'PAID',
+    ] as const;
+    const toggles = path.slice(1).filter((s, k) => micMutedFor(s) !== micMutedFor(path[k]!));
+    expect(toggles).toEqual(['AWAITING_AUTHORIZATIONS']);
   });
 
   it('mutes (never ends) the live session and pings sendUserActivity every 10 s while muted', async () => {

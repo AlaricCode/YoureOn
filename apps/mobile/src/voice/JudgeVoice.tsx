@@ -34,7 +34,7 @@ export interface JudgeVoiceProps {
   rt: Runtime;
   betId: string;
   dynamicVariables: VoiceDynamicVariables;
-  /** Mute, don't end (FINDINGS §4): true from the terms card to the ruling. */
+  /** Mute, don't end (FINDINGS §4): true from the terms card on, except in a hearing. */
   micMuted: boolean;
   startAttempt(attemptNo: number): Promise<void>;
   onShowTermsCard(): void;

@@ -6,7 +6,7 @@
 //                  clientTools}); connected within CONNECT_TIMEOUT_MS or it failed
 //   onCue()        judge.cue -> sendUserMessage (speak) / sendContextualUpdate, verbatim (§4.5);
 //                  queued while connecting, never thrown into the bet hub's listener loop
-//   setMuted()     "mute, don't end" from the terms card to the ruling (FINDINGS §4), with
+//   setMuted()     "mute, don't end" from the terms card on (FINDINGS §4), with
 //                  sendUserActivity every 10 s meanwhile so the turn timeout never fires (§4.1)
 //   onMessage()    captions (same id as the server's line, so its echo replaces ours) + the
 //                  transcript relay (POST /voice/lines); our own [EVENT] text is never captioned
@@ -15,7 +15,7 @@
 //                  An onError while connected (e.g. a client tool threw) is logged, not fatal.
 //
 // Why guarded: the SDK's controls throw "No active conversation" before connect / after end.
-import type { BetState } from '@youre-on/shared/bet-state';
+import { BetState } from '@youre-on/shared/bet-state';
 import type { JudgeCueName } from '@youre-on/shared/api';
 
 import { ATTEMPT_CUES, createLineBatcher, cueAction, type VoiceLine } from './judgeTools';
@@ -26,23 +26,23 @@ export const ACTIVITY_EVERY_MS = 10_000;
 export const MAX_QUEUED_CUES = 8;
 
 /**
- * Bet states in which A's mic is muted: the terms card (hold + Face ID), the lock, and the
- * attempt through the ruling (the room cheers at the camera; the judge must not answer that).
- * One continuous span, because every mute toggle plays an iOS tone (LiveKit #344). And the
- * terminal states: the session only lingers to speak the closing [EVENT] line, nobody is
- * negotiating any more (a "let's do another" would talk to a finished bet).
+ * The only bet states in which the judge must hear the room: the negotiation (DRAFTING,
+ * TERMS_PROPOSED) and a hearing (the parties argue out loud). Every other state mutes A's mic:
+ * the terms card (hold + Face ID), the lock, the attempt (the room cheers at the camera; the
+ * judge must not answer that), the 5-minute market wait (Beat 6: the judge is on speaker during
+ * the pitch), the ruling and its appeal / GG window (no spoken tool there: file_appeal is not
+ * registered; they tap), and the terminal states (the session only lingers to speak the closing
+ * [EVENT] line). Muting by default keeps it one continuous span from the card to the end, since
+ * every mute toggle plays an iOS tone (LiveKit #344), and a state added later starts muted.
  */
-export const MUTED_STATES: ReadonlySet<BetState> = new Set([
-  'AWAITING_AUTHORIZATIONS',
-  'AWAITING_LOCK',
-  'LOCKED',
-  'ATTEMPT',
-  'JUDGING',
-  'PAID',
-  'VOIDED',
-  'CANCELLED',
-  'EXPIRED',
+export const LIVE_MIC_STATES: ReadonlySet<BetState> = new Set([
+  'DRAFTING',
+  'TERMS_PROPOSED',
+  'HEARING',
 ]);
+export const MUTED_STATES: ReadonlySet<BetState> = new Set(
+  BetState.options.filter((s) => !LIVE_MIC_STATES.has(s)),
+);
 export const micMutedFor = (state: BetState | null): boolean =>
   state !== null && MUTED_STATES.has(state);
 
