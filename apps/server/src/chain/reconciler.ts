@@ -24,7 +24,11 @@
 // any status, since a lock marked expired / failed that landed after all is still ours), sent
 // between the fallback delay and RPC_POLL_MAX_AGE_MS ago, with no chain_events row yet, at most
 // RPC_POLL_BATCH getTransaction calls per tick, and a per-signature backoff (excluded in SQL, so
-// backed-off rows never starve newer ones). Anything the server did not send (a permissionless
+// backed-off rows never starve newer ones). The keeper runs its tasks one after another, so a
+// pass must stay short even when the RPC throttles: the calls go over the client's low-retry
+// poll RPC (tx.ts POLL_RPC_ATTEMPTS), a pass stops polling after RPC_POLL_BUDGET_MS (wall clock),
+// and the first 429 / 5xx ends it (the rest waits for the next tick, the rate limit is left to
+// the lock and payout confirms). Anything the server did not send (a permissionless
 // finalize / timeout_refund by someone else) only arrives through the Stream (the startup sweep
 // over getSignaturesForAddress(bet_pda) is not built).
 //
@@ -59,7 +63,7 @@ import { isTransientDbError } from './db-errors';
 import { ingestChainEvents, publishFanout, refoldParkedInTx, storeUnprojected } from './ingest';
 import { APPLY_ERROR, createChainProjector, type ChainProjector } from './projector';
 import { eventsFromRpcTransaction } from './streams';
-import type { ChainRuntime } from './tx';
+import { isRetriableRpcError, type ChainRuntime } from './tx';
 
 /** The default rpc_poll delay while a Stream is configured (see the header). */
 export const RPC_POLL_FALLBACK_WITH_STREAM_MS = 30_000;
@@ -79,6 +83,8 @@ export function rpcPollFallbackMs(
 export const RPC_POLL_MAX_AGE_MS = 30 * 60_000;
 /** getTransaction calls per keeper tick. */
 export const RPC_POLL_BATCH = 10;
+/** Wall-clock budget of one pass's RPC polling; what is left waits for the next tick. */
+export const RPC_POLL_BUDGET_MS = 2_000;
 /** How often one bet's rejected projection is retried. */
 export const REFOLD_RETRY_MS = 60_000;
 /** Parked projections are retried for this long (a fix may take a while to ship). */
@@ -96,6 +102,8 @@ export interface ReconcileResult {
   missing: number;
   /** Bets whose parked projection was retried. */
   refolded: number;
+  /** Why polling stopped early: the time budget ran out, or the RPC throttled (429 / 5xx). */
+  stopped: 'budget' | 'rpc_throttled' | null;
 }
 
 export interface StreamGapOptions {
@@ -106,6 +114,10 @@ export interface StreamGapOptions {
   batch?: number;
   refoldRetryMs?: number;
   refoldMaxAgeMs?: number;
+  /** Default RPC_POLL_BUDGET_MS. */
+  budgetMs?: number;
+  /** Wall clock for the budget (ms; default performance.now). Not deps.now: tests shift that. */
+  clock?: () => number;
 }
 
 type Deps = Pick<AppDeps, 'db' | 'hub' | 'now' | 'log'>;
@@ -133,7 +145,14 @@ export class StreamGapReconciler {
 
   /** One pass: gap-fill from getTransaction, then retry parked projections. */
   async run(deps: Deps, rt: ChainRuntime | null, nowMs: number): Promise<ReconcileResult> {
-    const out: ReconcileResult = { polled: 0, ingested: 0, published: 0, missing: 0, refolded: 0 };
+    const out: ReconcileResult = {
+      polled: 0,
+      ingested: 0,
+      published: 0,
+      missing: 0,
+      refolded: 0,
+      stopped: null,
+    };
     await this.fillGaps(deps, rt, nowMs, out);
     out.refolded = await this.retryRejected(deps, nowMs);
     return out;
@@ -145,6 +164,8 @@ export class StreamGapReconciler {
     const fallback = this.o.fallbackMs ?? STREAM_FALLBACK_MS;
     const maxAge = this.o.maxAgeMs ?? RPC_POLL_MAX_AGE_MS;
     const batch = this.o.batch ?? RPC_POLL_BATCH;
+    const clock = this.o.clock ?? (() => performance.now());
+    const until = clock() + (this.o.budgetMs ?? RPC_POLL_BUDGET_MS);
     for (const [sig, b] of this.backoff) if (b.at < nowMs - maxAge) this.backoff.delete(sig);
     const waiting = [...this.backoff].filter(([, b]) => b.at > nowMs).map(([sig]) => sig);
 
@@ -172,6 +193,10 @@ export class StreamGapReconciler {
 
     for (const r of rows) {
       const sig = r.signature!;
+      if (clock() >= until) {
+        out.stopped = 'budget';
+        break;
+      }
       out.polled++;
       try {
         const tx = await client.transaction(sig);
@@ -219,6 +244,10 @@ export class StreamGapReconciler {
       } catch (err) {
         this.defer(sig, nowMs, fallback);
         deps.log.warn('chain.rpc_poll_failed', { bet_id: r.bet_id, kind: r.kind, err });
+        if (isRetriableRpcError(err)) {
+          out.stopped = 'rpc_throttled';
+          break;
+        }
       }
     }
   }
