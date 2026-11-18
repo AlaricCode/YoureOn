@@ -488,6 +488,9 @@ async function bindVoiceSession(
   }
   if (s.user_id !== v.user_id) refuse('belongs to another user');
   if (s.status !== 'active') refuse(`session is ${s.status}`);
+  // The post-call webhook (voice/post-call.ts) sets ended_at; an unbound pre-mint row keeps
+  // status 'active' (voice_sessions_bet_bound), so the end shows only here.
+  if (s.ended_at !== null) refuse('session has ended');
   if (s.bet_id !== null && s.bet_id !== v.bet_id) refuse('already bound to another bet');
   await tx
     .update(voiceSessions)
