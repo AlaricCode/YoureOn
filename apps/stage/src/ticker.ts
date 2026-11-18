@@ -562,7 +562,9 @@ export type TickerAction =
   | { kind: 'frame'; raw: unknown; receivedAt: number }
   | { kind: 'snapshot'; bet: BetSnapshot; receivedAt: number }
   | { kind: 'market'; snapshot: GeminiMarketSnapshot | null; receivedAt: number }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  /** A new connection (another room): forget every bet, event and market point. */
+  | { kind: 'reset' };
 
 function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: number): TickerState {
   if (!snap) return { ...s, market: null };
@@ -574,6 +576,7 @@ function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: numbe
 }
 
 export function applyFrame(s: TickerState, a: TickerAction): TickerState {
+  if (a.kind === 'reset') return initialTicker;
   if (a.kind === 'status')
     return {
       ...s,

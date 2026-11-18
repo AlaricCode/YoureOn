@@ -264,6 +264,7 @@ export function App() {
     }) => {
       conn.current?.stop();
       seeded.current = new Set();
+      dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
       const serverUrl = resolveServer(s.serverUrl, origin());
       conn.current = new StageConnection({
         wsUrl: wsUrlFor(serverUrl),
