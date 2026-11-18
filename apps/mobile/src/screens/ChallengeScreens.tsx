@@ -9,7 +9,17 @@
 //                    instead" swaps the judge for a short form (claim + stake, app/typedTerms):
 //                    the card still arrives by the terms.proposed push; "Lock it in" confirms.
 import { useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Linking,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
 import { feel } from '../device/feedback';
@@ -223,6 +233,7 @@ export function NegotiateScreen({
   onBack,
   onDecline,
   tag,
+  voice = true,
 }: {
   view: Pick<BetView, 'myName' | 'theirName' | 'me'>;
   captions: readonly Caption[];
@@ -238,6 +249,11 @@ export function NegotiateScreen({
   onBack?: (() => void) | undefined;
   onDecline: () => void;
   tag?: string | undefined;
+  /**
+   * A voice judge runs (EXPO_PUBLIC_VOICE). Without one nobody is listening or reading back:
+   * this phone waits for the typed terms, then for the other party to lock them in.
+   */
+  voice?: boolean;
 }) {
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
   const nameOf = (who: Caption['who']) =>
@@ -252,7 +268,7 @@ export function NegotiateScreen({
     <Card style={styles.draft}>
       <View style={styles.draftHead}>
         <Label variant="small">{t(COPY.negotiate.draft)}</Label>
-        {typing ? null : <DotsLabel text={t(COPY.negotiate.readBack)} variant="small" />}
+        {typing || !voice ? null : <DotsLabel text={t(COPY.negotiate.readBack)} variant="small" />}
       </View>
       <DataText variant="labelStrong">{draft.claim}</DataText>
       <DataText muted>{`${draft.myStakeUsd} vs ${draft.theirStakeUsd}`}</DataText>
@@ -263,80 +279,89 @@ export function NegotiateScreen({
     return (
       <Screen>
         <TopBar onBack={onBack} title={t(COPY.negotiate.title)} tag={tag} />
-        <Page>
-          <ScrollView
-            style={styles.flex}
-            contentContainerStyle={styles.form}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Label variant="small" style={styles.fieldLabel}>
-              {t(COPY.negotiate.theBet)}
-            </Label>
-            <TextInput
-              testID="typed-claim"
-              accessibilityLabel={t(COPY.negotiate.theBet)}
-              value={typed.claim}
-              onChangeText={typed.onClaim}
-              editable={!typed.sending && !typed.confirming}
-              multiline
-              maxLength={200}
-              autoCapitalize="sentences"
-              keyboardAppearance="dark"
-              selectionColor={palette.accent}
-              style={styles.claimField}
-            />
-            <Label variant="small" style={styles.fieldLabel}>
-              {t(COPY.negotiate.stake)}
-            </Label>
-            <View style={styles.stakes} accessibilityRole="radiogroup">
-              {typed.stakes.map((usd) => {
-                const on = usd === typed.stakeUsd;
-                return (
-                  <Pressable
-                    key={usd}
-                    testID={`typed-stake-${usd}`}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: on }}
-                    onPress={() => typed.onStake(usd)}
-                    style={[styles.stake, on && styles.stakeOn]}
-                  >
-                    <Text style={[type.labelStrong, !on && styles.stakeOff]}>{`$${usd}`}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            {typed.note ? <DataText muted>{typed.note}</DataText> : null}
-            {draftCard}
-          </ScrollView>
-          {typed.canConfirm ? (
-            <PrimaryButton
-              testID="typed-confirm"
-              label={t(COPY.negotiate.lockItIn)}
-              busy={typed.confirming}
-              onPress={typed.onConfirm}
-            />
-          ) : typed.waitingFor !== null ? (
-            <PrimaryButton
-              testID="typed-waiting"
-              label={fill.waitingFor(typed.waitingFor)}
-              disabled
-              onPress={() => undefined}
-            />
-          ) : (
-            <PrimaryButton
-              testID="typed-send"
-              label={t(COPY.negotiate.send)}
-              busy={typed.sending}
-              disabled={!typed.canSubmit}
-              onPress={typed.onSubmit}
-            />
-          )}
-          <View style={styles.gap} />
-          {typed.canVoice ? (
-            <QuietButton label={t(COPY.negotiate.useVoice)} onPress={typed.onVoice} />
-          ) : null}
-          <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
-        </Page>
+        {/* "Send terms" and "Lock it in" stay above the keyboard while the claim is edited. */}
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Page>
+            <ScrollView
+              style={styles.flex}
+              contentContainerStyle={styles.form}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Label variant="small" style={styles.fieldLabel}>
+                {t(COPY.negotiate.theBet)}
+              </Label>
+              <TextInput
+                testID="typed-claim"
+                accessibilityLabel={t(COPY.negotiate.theBet)}
+                value={typed.claim}
+                onChangeText={typed.onClaim}
+                editable={!typed.sending && !typed.confirming}
+                multiline
+                // One paragraph: Return puts the keyboard away instead of adding a line.
+                returnKeyType="done"
+                submitBehavior="blurAndSubmit"
+                maxLength={200}
+                autoCapitalize="sentences"
+                keyboardAppearance="dark"
+                selectionColor={palette.accent}
+                style={styles.claimField}
+              />
+              <Label variant="small" style={styles.fieldLabel}>
+                {t(COPY.negotiate.stake)}
+              </Label>
+              <View style={styles.stakes} accessibilityRole="radiogroup">
+                {typed.stakes.map((usd) => {
+                  const on = usd === typed.stakeUsd;
+                  return (
+                    <Pressable
+                      key={usd}
+                      testID={`typed-stake-${usd}`}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: on }}
+                      onPress={() => typed.onStake(usd)}
+                      style={[styles.stake, on && styles.stakeOn]}
+                    >
+                      <Text style={[type.labelStrong, !on && styles.stakeOff]}>{`$${usd}`}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {typed.note ? <DataText muted>{typed.note}</DataText> : null}
+              {draftCard}
+            </ScrollView>
+            {typed.canConfirm ? (
+              <PrimaryButton
+                testID="typed-confirm"
+                label={t(COPY.negotiate.lockItIn)}
+                busy={typed.confirming}
+                onPress={typed.onConfirm}
+              />
+            ) : typed.waitingFor !== null ? (
+              <PrimaryButton
+                testID="typed-waiting"
+                label={fill.waitingFor(typed.waitingFor)}
+                disabled
+                onPress={() => undefined}
+              />
+            ) : (
+              <PrimaryButton
+                testID="typed-send"
+                label={t(COPY.negotiate.send)}
+                busy={typed.sending}
+                disabled={!typed.canSubmit}
+                onPress={typed.onSubmit}
+              />
+            )}
+            <View style={styles.gap} />
+            {typed.canVoice ? (
+              <QuietButton label={t(COPY.negotiate.useVoice)} onPress={typed.onVoice} />
+            ) : null}
+            <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
+          </Page>
+        </KeyboardAvoidingView>
       </Screen>
     );
 
@@ -348,7 +373,12 @@ export function NegotiateScreen({
           <View style={[styles.judgeRing, speaking && styles.judgeRingOn]}>
             <Label variant="heading">{t(COPY.ruling.judge)}</Label>
           </View>
-          {speaking ? (
+          {!voice ? (
+            <DotsLabel
+              text={draft ? fill.waitingFor(view.theirName) : t(COPY.negotiate.waitingTerms)}
+              variant="label"
+            />
+          ) : speaking ? (
             <DotsLabel text={t(COPY.negotiate.speaking)} variant="label" />
           ) : (
             <DotsLabel text={t(COPY.negotiate.listening)} variant="label" />
