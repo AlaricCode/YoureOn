@@ -218,6 +218,8 @@ async function cmdCreate(v: Values) {
       '',
       'next:',
       `  watch deliveries:  fly logs -a ${flyApp ?? DEFAULT_FLY_APP} | grep chain.delivery`,
+      `  Stream lag:        fly logs -a ${flyApp ?? DEFAULT_FLY_APP} | grep chain.stream_seen  (send_to_stream_ms;`,
+      '                     rpc_poll waits RPC_POLL_FALLBACK_MS = 30 s by default: keep it above that lag)',
       '  end to end:        npm run smoke-devnet -- --database-url <pg>  (waits for the 5 chain_events rows)',
       `  when idle:         npm run qn-stream -- pause ${id}`,
     ].join('\n'),
