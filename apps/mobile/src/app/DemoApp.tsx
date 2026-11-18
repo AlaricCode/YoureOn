@@ -20,7 +20,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Linking, StyleSheet, View } from 'react-native';
 
 import type { BetSnapshot, RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
@@ -75,6 +75,7 @@ import {
 } from './machine';
 import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
+import { parseDeepLink } from './deepLink';
 import { deviceRoleRequest } from './judgeCam';
 import { RESUME_LIMIT, resumable } from './resume';
 import { importSafely } from './importSafely';
@@ -182,6 +183,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [rt],
   );
   const signupApi = useMemo(() => createServerSignupApi(rt.sessions), [rt]);
+  /** A demo-claim token from a youreon:// link: the Demo account screen claims it on a tap. */
+  const [demoLink, setDemoLink] = useState<string | null>(null);
+  /** A room from a youreon://room/ link that arrived before sign-in. */
+  const pendingRoom = useRef<string | null>(null);
   /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
   const voiceVars = useRef(new Map<string, VoiceDynamicVariables>());
 
@@ -216,8 +221,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     // Re-join the last room (a convenience; the server's room_members row is the truth), and
     // come back as the judge cam if this phone was one.
     void import('expo-secure-store').then(async (SecureStore) => {
-      const code = await SecureStore.getItemAsync(LAST_ROOM_KEY).catch(() => null);
-      if (code && !appRef.current.room) void joinRoom(code);
+      const linked = pendingRoom.current;
+      pendingRoom.current = null;
+      const code = linked ?? (await SecureStore.getItemAsync(LAST_ROOM_KEY).catch(() => null));
+      if (code && (linked || !appRef.current.room)) void joinRoom(code);
       const cam = await SecureStore.getItemAsync(JUDGE_CAM_KEY).catch(() => null);
       if (live && cam === '1') dispatch({ type: 'judge_cam', on: true });
     });
@@ -242,6 +249,26 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       rt.ws.stop();
     };
   }, [app.auth, userId, rt]);
+
+  // ---- youreon:// links (./deepLink): the stage's room and demo-claim QRs -------------------
+  useEffect(() => {
+    const open = (url: string | null | undefined) => {
+      const link = parseDeepLink(url);
+      if (!link) return;
+      if (link.kind === 'demoClaim') {
+        setDemoLink(link.token);
+        dispatch({ type: 'overlay', overlay: 'demoClaim' });
+      } else if (appRef.current.auth === 'signedIn') {
+        dispatch({ type: 'overlay', overlay: 'none' });
+        void joinRoom(link.code);
+      } else {
+        pendingRoom.current = link.code;
+      }
+    };
+    Linking.getInitialURL().then(open, () => undefined);
+    const sub = Linking.addEventListener('url', (e) => open(e.url));
+    return () => sub.remove();
+  }, [rt]);
 
   // ---- socket status, presence -------------------------------------------------------------
   useEffect(() => {
@@ -532,7 +559,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   async function joinRoom(code: string): Promise<boolean> {
     try {
+      const prev = appRef.current.room;
       const r = await rt.api.joinRoom(code);
+      // Switching rooms (a room link): leave the old one so presence there is right.
+      if (prev && prev.room_id !== r.room.room_id)
+        void rt.api.leaveRoom(prev.room_id).catch(() => undefined);
       dispatch({
         type: 'room',
         room: { room_id: r.room.room_id, code: r.room.code, name: r.room.name ?? r.room.code },
@@ -701,7 +732,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       case 'demoClaim':
         return (
           <DemoClaimScreen
-            onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
+            linkCode={demoLink}
+            onBack={() => {
+              setDemoLink(null);
+              dispatch({ type: 'overlay', overlay: 'none' });
+            }}
             claim={async (qr) => {
               try {
                 const token = qr.trim().replace(/^youreon:\/\/[a-z-]+\//i, '');
@@ -711,7 +746,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 return null;
               }
             }}
-            onDone={() => dispatch({ type: 'overlay', overlay: 'none' })}
+            onDone={() => {
+              setDemoLink(null);
+              dispatch({ type: 'overlay', overlay: 'none' });
+            }}
           />
         );
       case 'home':
