@@ -29,7 +29,9 @@ export {
  *  - lock-sweep: lock windows past expires_at -> EXPIRED + nonce revoke; sent locks re-checked;
  *    nonce advances finished / retried (DATA-MODEL §5.20 "Boot reconcile and sweep").
  *  - finalize-due: RULED bets past appeal_deadline + 1 s -> [finalize, close_bet] (the durable
- *    backstop of the PayoutService setTimeout fast path).
+ *    backstop of the PayoutService setTimeout fast path). A bet whose appeal is out is skipped.
+ *  - appeal-sweep: 'sent' appeal / resolve_appeal txs whose confirm died, APPEALED bets with no
+ *    running panel (a restart) -> panel, AppealResult, [resolve_appeal, close_bet] (src/appeal).
  *  - timeout-refund (every 15 s): bets Locked past resolve_deadline / Appealed past
  *    appeal_resolve_deadline -> [timeout_refund, close_bet] -> EXPIRED (src/payout/refund.ts).
  *  - orphan-escrow (every 60 s): our Bets that no live bets row owns (deleted by demo reset,
@@ -39,6 +41,7 @@ export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): Kee
   return [
     { name: 'lock-sweep', run: (now) => lifecycleOf(deps).lock.sweep(now) },
     { name: 'finalize-due', run: (now) => lifecycleOf(deps).payout.finalizeDue(now) },
+    { name: 'appeal-sweep', run: (now) => lifecycleOf(deps).appeal.sweep(now) },
     {
       name: 'timeout-refund',
       everyMs: REFUND_SWEEP_MS,

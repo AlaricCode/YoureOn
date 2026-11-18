@@ -1,9 +1,11 @@
-// The chain lifecycle bundle (LockService + PayoutService + RefundService over one ChainRuntime) and its
+// The chain lifecycle bundle (LockService + PayoutService + RefundService + AppealService over one
+// ChainRuntime) and its
 // per-deps locator. Routes, the voice tools and the keeper tasks call `lifecycleOf(deps)`; it is
 // built lazily from env (SOLANA_DEVNET_RPC + FEE_PAYER_SECRET_KEY, src/chain/tx.ts). Tests and
 // scripts install their own with `installLifecycle(deps, createLifecycle(deps, { runtime }))`
 // (e.g. a LiteSVM-backed ChainClient). No AppDeps field is needed, so no core edit.
 import type { AppDeps } from '../context';
+import { AppealService, type AppealDeps } from '../appeal/service';
 import { chainRuntimeFromEnv, type ChainRuntime, type SendOptions } from '../chain/tx';
 import { RefundService } from '../payout/refund';
 import { PayoutService } from '../payout/service';
@@ -17,6 +19,8 @@ export interface Lifecycle {
   payout: PayoutService;
   /** timeout_refund of stuck bets, orphan escrow exits (src/payout/refund.ts). */
   refund: RefundService;
+  /** Beat 5: the loser's appeal, the three-vendor panel, resolve_appeal (src/appeal). */
+  appeal: AppealService;
   /** Resolves once every background send/confirm started so far has settled (tests). */
   idle(): Promise<void>;
   /** The send / confirm options of every tx this lifecycle sends (tests shorten them). */
@@ -34,6 +38,8 @@ export interface LifecycleOptions {
   send?: SendOptions;
   /** Arm the finalize setTimeout fast path (default true). */
   timers?: boolean;
+  /** The appeal panel's per-vote budget (default 8 s, API-CONTRACT §7.2); tests shorten it. */
+  appealVoteTimeoutMs?: number;
 }
 
 export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): Lifecycle {
@@ -60,6 +66,8 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
   const inflight = new Inflight(deps.log);
   const signer = o.signer ?? deps.env.LOCK_SIGNER;
   const lock = new LockService({ deps, runtime, inflight, signer, send: o.send });
+  // eslint-disable-next-line prefer-const -- assigned right below; the payout push reads it lazily
+  let appeal: AppealService;
   const payout = new PayoutService({
     deps,
     runtime,
@@ -67,13 +75,26 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
     signer,
     send: o.send,
     timers: o.timers,
+    appealRequest: (rt, bet, loser) => appeal.pushRequest(rt, bet, loser),
   });
   const refund = new RefundService({ deps, runtime, inflight, send: o.send, timers: o.timers });
+  // The route deps bag carries the LLM providers (AppDeps); a bare LifecycleDeps has none, and
+  // then every panel seat abstains (the original ruling stands).
+  appeal = new AppealService({
+    deps: deps as AppealDeps,
+    runtime,
+    inflight,
+    signer,
+    payout,
+    send: o.send,
+    ...(o.appealVoteTimeoutMs !== undefined ? { voteTimeoutMs: o.appealVoteTimeoutMs } : {}),
+  });
   return {
     runtime,
     lock,
     payout,
     refund,
+    appeal,
     idle: () => inflight.idle(),
     sendOptions: o.send,
     run: (name, fn) => inflight.run(name, fn),

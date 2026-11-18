@@ -8,6 +8,8 @@
 //   - 'sent' resolve / concede / finalize rows; RULED bets past the appeal window; CONCEDED /
 //     FINALIZED bets with no payout in flight                        PayoutService.finalizeDue
 //   - JUDGING bets whose decisive ruling never reached the chain   resolveDue (deps.onRuling)
+//   - 'sent' appeal / resolve_appeal rows; APPEALED bets whose panel died with the restart
+//                                                                    AppealService.sweep
 //   - 'sent' timeout_refund rows; bets past resolve_deadline        RefundService.sweep
 //   - and an audit: every post-lock, non-terminal bet against its Bet account; a mismatch the
 //     sweeps cannot explain is logged as chain.boot_anomaly (and listed in the summary).
@@ -94,6 +96,7 @@ export async function bootReconcile(deps: Deps, nowMs: number): Promise<BootReco
     report.lock = await step('lock-sweep', () => lc.lock.sweep(nowMs));
     report.payouts_settled = (await step('finalize-due', () => lc.payout.finalizeDue(nowMs))) ?? [];
     report.resolves_retried = (await step('resolve-due', () => resolveDue(deps, nowMs))) ?? 0;
+    await step('appeal-sweep', () => lc.appeal.sweep(nowMs));
     const r = await step('timeout-refund', () => lc.refund.sweep(nowMs));
     report.refunds = r ? { refunded: r.refunded, pending: r.pending } : null;
     await lc.idle();

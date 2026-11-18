@@ -439,6 +439,7 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
       'draft-idle',
       'lock-sweep',
       'finalize-due',
+      'appeal-sweep',
       'timeout-refund',
       'orphan-escrow',
       'resolve-due',

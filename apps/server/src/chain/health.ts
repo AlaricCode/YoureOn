@@ -65,6 +65,8 @@ export interface ChainHealthReport {
   fee_payer_pinned: boolean | null;
   fee_payer_sol: number | null;
   judge: string | null;
+  /** APPEAL_AUTHORITY_SECRET_KEY's address (null: unset; appeals are then never paid out). */
+  appeal_key: string | null;
   custodial: { a: string | null; b: string | null };
   nonce_pool: { size: number; free: number; leased: number; advancing: number; retired: number };
   last_tx: Record<string, unknown> | null;
@@ -304,6 +306,20 @@ export async function chainHealth(
           'critical',
           `JUDGE_AUTHORITY_SECRET_KEY is ${rt.keys.judge.address}, Config.judge_authority is ${c.judgeAuthority}: every resolve fails (NotJudge).`,
         );
+      // Beat 5 only: an appeal without the key is decided but never paid by resolve_appeal;
+      // timeout_refund returns both stakes after appeal_resolve_secs (300 s).
+      if (!rt.keys.appeal)
+        warn(
+          'appeal_key_missing',
+          'warn',
+          'APPEAL_AUTHORITY_SECRET_KEY is not set: an appealed bet is refunded after 300 s instead of paid.',
+        );
+      else if (rt.keys.appeal.address !== c.appealAuthority)
+        warn(
+          'appeal_key_mismatch',
+          'warn',
+          `APPEAL_AUTHORITY_SECRET_KEY is ${rt.keys.appeal.address}, Config.appeal_authority is ${c.appealAuthority}: every resolve_appeal fails (NotAppealAuthority).`,
+        );
     } else if (cfg.ok) {
       warn('config_missing', 'critical', 'No escrow Config account: run npm run init-config.');
     } else {
@@ -463,6 +479,7 @@ export async function chainHealth(
     fee_payer_pinned: rt?.feePayerPinned ?? null,
     fee_payer_sol: feePayerSol,
     judge: rt?.keys.judge?.address ?? null,
+    appeal_key: rt?.keys.appeal?.address ?? null,
     custodial: { a: rt?.keys.demoA?.address ?? null, b: rt?.keys.demoB?.address ?? null },
     nonce_pool,
     last_tx: last ?? null,
