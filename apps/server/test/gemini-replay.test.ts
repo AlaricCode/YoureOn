@@ -259,4 +259,71 @@ describe('the routed client', () => {
     expect(plain.feed).toBeNull();
     expect(plain.setFeed('replay')).toBe(false);
   });
+
+  it('setFeed mid-poll: the old feed’s poll is disowned, the backoff resets, refresh() polls the new feed', async () => {
+    const t = { now: at('2026-11-19T00:41:00.000Z') };
+    // live Gemini is down: every discovery fails, and the one in flight hangs until released
+    let release!: () => void;
+    const hung = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const down: GeminiClient = {
+      ...tagged('live', []),
+      listActiveCrypto: async () => {
+        calls++;
+        if (calls > 2) await hung;
+        throw new Error('gemini /v1/prediction-markets/events: HTTP 500');
+      },
+    };
+    const routed = createRoutedClient({
+      live: down,
+      replay: createReplayClient({ now: () => t.now }),
+    });
+    const svc = new MarketService({ client: routed, now: () => t.now, log: silentLogger });
+    await svc.refresh();
+    await svc.refresh();
+    expect(svc.failures).toBe(2);
+    expect(svc.nextPollMs()).toBe(8_000); // backed off
+    const inflight = svc.refresh(); // the 3rd live poll, hanging
+
+    expect(svc.setFeed('replay')).toBe(true);
+    expect(svc.failures).toBe(0);
+    expect(svc.lastError).toBeNull();
+    expect(svc.nextPollMs()).toBe(svc.pollMs);
+    // what POST /v1/demo/gemini does next: it gets the REPLAY contract, not the live poll's null
+    const switched = svc.refresh();
+    release();
+    expect((await switched)?.eventTicker).toBe(TICKER);
+    await inflight;
+    // the live poll failed after the switch: not counted, and it wrote nothing
+    expect(svc.failures).toBe(0);
+    expect(svc.lastError).toBeNull();
+    expect(svc.current()).toMatchObject({ lockable: true, market: { eventTicker: TICKER } });
+  });
+
+  it('a live poll that lands after the switch writes nothing (no old-feed contract for a cycle)', async () => {
+    const t = { now: at('2026-11-19T00:41:00.000Z') };
+    const liveEvent = RawEvent.parse(F.event_0240_active);
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    const live: GeminiClient = {
+      ...tagged('live', []),
+      listActiveCrypto: async () => {
+        await slow;
+        return [liveEvent];
+      },
+    };
+    const svc = new MarketService({
+      client: createRoutedClient({ live, replay: createReplayClient({ now: () => t.now }) }),
+      now: () => t.now,
+      log: silentLogger,
+    });
+    const old = svc.refresh();
+    svc.setFeed('replay');
+    const fresh = svc.refresh();
+    release();
+    await old;
+    expect((await fresh)?.eventTicker).toBe(TICKER);
+    expect(svc.snapshot?.eventTicker).toBe(TICKER);
+    expect(svc.contractOf('BTC05M2611180240')).toBeNull();
+  });
 });
