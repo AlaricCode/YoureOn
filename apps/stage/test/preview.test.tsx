@@ -227,7 +227,7 @@ describe('App from the URL', () => {
     const html = text(renderToString(<App />));
     expect(html).toContain('PREVIEW · sample data');
     expect(html).toContain('LOCKED');
-    expect(html).toContain('room PREVIEW');
+    expect(html).toContain('Room</span> PREVIEW');
     expect(html).not.toContain('Stage key');
   });
 
