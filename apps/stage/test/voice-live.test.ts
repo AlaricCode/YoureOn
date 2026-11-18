@@ -1,8 +1,10 @@
 // The projector's voice against the real server (DB-backed: skipped without DATABASE_URL): a
 // ruling goes out, the stage gets its stage.voice frame, fetches the ElevenLabs clip with its
 // bearer and plays it, and the browser stays silent. With the server's TTS off (no key) no frame
-// comes, and the browser speaks the same line after the wait. ElevenLabs is a fake fetch.
-import { createHash, randomBytes } from 'node:crypto';
+// comes, and the browser speaks the same line after the wait. In a bet the voice judge hosts
+// (A's phone relayed its judge.line transcript) neither speaks: the phone judge says the ruling.
+// ElevenLabs is a fake fetch.
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -202,6 +204,50 @@ d('the projector voice against the server (DB)', () => {
       elCalls.some((u) => u.includes(`/v1/text-to-speech/${DEFAULT_STAGE_VOICES.judge}`)),
     ).toBe(true);
     s.conn.stop();
+  });
+
+  it('a bet the voice judge hosts: no frame, no clip, and the browser stays silent too', async () => {
+    for (const server of [voiced, silent]) {
+      const s = await stageOn(server);
+      await emitBetEvent(server.deps, {
+        bet_id: s.betId,
+        type: 'judge.line',
+        payload: { utterance_id: randomUUID(), text: 'Logan, what counts as a flip?', final: true },
+      } as never);
+      // the judge talks in Beat 2, long before the ruling: the stage has the line by then
+      await expect
+        .poll(() => s.get().history[s.betId]?.some((e) => e.type === 'judge.line'), {
+          timeout: 3000,
+        })
+        .toBe(true);
+      const before = elCalls.length;
+      await emitBetEvent(server.deps, {
+        bet_id: s.betId,
+        type: 'ruling.issued',
+        payload: {
+          ruling: { ...rulingExample(), bet_id: s.betId, reason: 'The phone judge has it.' },
+          ruling_hash: '9'.repeat(64),
+        },
+      } as never);
+      await expect
+        .poll(() => s.get().history[s.betId]?.some((e) => e.type === 'ruling.issued'), {
+          timeout: 3000,
+        })
+        .toBe(true);
+      const lines = freshVoiceLines(s.get(), s.betId, new Set(), Date.now());
+      expect(lines).toEqual([
+        expect.objectContaining({ text: 'Jake wins. The phone judge has it.', phone: true }),
+      ]);
+      const { v, out } = voiceFor(s.base, s.token);
+      v.expect(lines[0]!);
+      await server.deps.stageVoice!.idle();
+      await new Promise((r) => setTimeout(r, VOICE_WAIT_MS + 200));
+      expect(out.spoken).toEqual([]);
+      expect(out.loaded).toEqual([]);
+      expect(s.get().voiceClips).toEqual([]);
+      expect(elCalls.length).toBe(before);
+      s.conn.stop();
+    }
   });
 
   it('ElevenLabs off (no key): no frame comes, so the browser speaks the line after the wait', async () => {

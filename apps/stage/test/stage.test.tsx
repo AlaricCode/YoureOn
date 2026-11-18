@@ -56,10 +56,33 @@ describe('stage page', () => {
     expect(voiceLabel(true, true, 'speech')).toBe('ElevenLabs (last line: browser)');
     expect(voiceLabel(true, false, null)).toBe('browser');
     expect(voiceLabel(false, true, 'clip')).toBe('off (V)');
+    // a bet the voice judge hosts: the phone said the line, the stage stayed quiet on purpose
+    expect(voiceLabel(true, true, 'phone')).toBe('ElevenLabs (last line: phone judge)');
+    expect(voiceLabel(true, false, 'phone')).toBe('browser (last line: phone judge)');
     const strip = renderToString(
       <HealthStrip health={null} error={null} replays={null} status="open" voice="ElevenLabs" />,
     );
     expect(strip).toMatch(/hi ok"><span class="label">Voice<\/span> <!-- -->ElevenLabs/);
+    const phone = renderToString(
+      <HealthStrip
+        health={null}
+        error={null}
+        replays={null}
+        status="open"
+        voice="ElevenLabs (last line: phone judge)"
+      />,
+    );
+    expect(phone).toMatch(/hi ok"><span class="label">Voice<\/span>/);
+    const late = renderToString(
+      <HealthStrip
+        health={null}
+        error={null}
+        replays={null}
+        status="open"
+        voice="ElevenLabs (last line: browser)"
+      />,
+    );
+    expect(late).toMatch(/hi warn"><span class="label">Voice<\/span>/);
     expect(KEYS.find(([k]) => k === 'V')?.[1]).toMatch(/voice/i);
   });
 

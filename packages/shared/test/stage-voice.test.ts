@@ -7,10 +7,14 @@ import { CACHED_RULING_MODEL, GEMINI_SETTLEMENT_MODEL, isCachedRulingModel } fro
 import {
   capLine,
   CLIP_ID_RE,
+  hasPhoneJudge,
+  leftToPhoneJudge,
   parseEventLine,
+  PHONE_JUDGE_EVENT,
   STAGE_LINE_MAX,
   stageLineFor,
   stageTtsPath,
+  VoicedEventType,
 } from '../src/stage-voice';
 import { rulingExample } from './fixtures';
 
@@ -160,6 +164,28 @@ describe('stageLineFor', () => {
     expect(text.endsWith('spins.')).toBe(true);
     expect(capLine('x'.repeat(400)).length).toBe(STAGE_LINE_MAX);
     expect(capLine('  a \n\t b  ')).toBe('a b');
+  });
+});
+
+describe('one judge at a time: what the phone judge says itself', () => {
+  it('a bet with a relayed judge.line has a phone judge; nothing else marks one', () => {
+    expect(PHONE_JUDGE_EVENT).toBe('judge.line');
+    expect(hasPhoneJudge([])).toBe(false);
+    expect(
+      hasPhoneJudge([{ type: 'bet.invited' }, { type: 'party.line' }, { type: 'judge.cue' }]),
+    ).toBe(false);
+    expect(hasPhoneJudge([{ type: 'bet.invited' }, { type: 'judge.line' }])).toBe(true);
+  });
+
+  it('with a phone judge the stage leaves it the rulings and payouts, never the appeal votes', () => {
+    // every ruling.issued comes with a speak:true RULING / REDO / VOIDED / MARKET_SETTLED cue,
+    // and the payout's PAID / VOIDED cue is speak:true: A's phone says all of them
+    expect(leftToPhoneJudge('ruling.issued', true)).toBe(true);
+    expect(leftToPhoneJudge('judge.cue', true)).toBe(true);
+    // §4.5: appeal votes are voiced on the stage, not by the agent
+    expect(leftToPhoneJudge('appeal.vote', true)).toBe(false);
+    // no phone judge (no key, the agent never spoke, a laptop-driven bet): the stage says them
+    for (const t of VoicedEventType.options) expect(leftToPhoneJudge(t, false)).toBe(false);
   });
 });
 

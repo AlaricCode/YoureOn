@@ -11,6 +11,10 @@
 //                            at ruling time is not voiced: its ruling.issued already is.
 //   appeal.vote              one voice per panel seat: "Judge 2, GPT, votes Logan. <reason>"
 //
+// One judge at a time: in a bet a voice judge hosts (A's phone has relayed a judge.line), the
+// phone says the ruling and the payout itself (their judge.cue lines are speak:true), so the stage
+// leaves them to it and voices only the appeal votes (leftToPhoneJudge).
+//
 // Only shape checks here (looseObject): the caller already parsed the event, and a line is never
 // worth failing over.
 import { z } from 'zod/v4';
@@ -21,6 +25,38 @@ export type StageVoiceName = z.infer<typeof StageVoiceName>;
 /** The bet events the stage speaks (see above). */
 export const VoicedEventType = z.enum(['ruling.issued', 'judge.cue', 'appeal.vote']);
 export type VoicedEventType = z.infer<typeof VoicedEventType>;
+
+/**
+ * The bet event that shows a voice judge hosts the bet: A's phone relays its ElevenLabs agent's
+ * transcript as `judge.line` (POST /v1/bets/:id/voice/lines, party A only), and nothing else
+ * sends one. The agent always speaks in Beat 2, long before any ruling.
+ */
+export const PHONE_JUDGE_EVENT = 'judge.line';
+
+/**
+ * The stage lines the phone judge says itself. Every ruling.issued goes out with a speak:true
+ * judge.cue (RULING, REDO, VOIDED, MARKET_SETTLED) and the payout with a speak:true PAID / VOIDED,
+ * which A's phone turns into an agent turn (sendUserMessage). appeal.vote is not here: appeal
+ * votes are voiced on the stage, never by the agent (API-CONTRACT §4.5).
+ */
+export const PHONE_JUDGE_SAYS: ReadonlySet<string> = new Set<VoicedEventType>([
+  'ruling.issued',
+  'judge.cue',
+]);
+
+/** Has a voice judge spoken in the bet whose events these are? */
+export function hasPhoneJudge(events: Iterable<{ type: string }>): boolean {
+  for (const e of events) if (e.type === PHONE_JUDGE_EVENT) return true;
+  return false;
+}
+
+/**
+ * Is this voiced event's line the phone judge's to say? Then the stage stays quiet for it (no
+ * clip, no browser voice): two judges talking over each other in the hall, and the projector
+ * heard through A's speakerphone, is what this prevents.
+ */
+export const leftToPhoneJudge = (type: string, phoneJudge: boolean): boolean =>
+  phoneJudge && PHONE_JUDGE_SAYS.has(type);
 
 /** A spoken line is at most this long (it bounds the TTS characters billed per moment). */
 export const STAGE_LINE_MAX = 300;

@@ -305,9 +305,14 @@ function toggleFullscreen() {
   }
 }
 
-/** The health strip's voice item: whose voice the judge has on this projector. */
+/**
+ * The health strip's voice item: whose voice the judge has on this projector. "(last line: phone
+ * judge)": the voice judge hosts that bet, so A's phone said it and the stage stayed quiet.
+ */
 export function voiceLabel(on: boolean, elevenLabs: boolean, last: VoiceHow | null): string {
   if (!on) return 'off (V)';
+  const base = elevenLabs ? 'ElevenLabs' : 'browser';
+  if (last === 'phone') return `${base} (last line: phone judge)`;
   if (!elevenLabs) return 'browser';
   return last === 'speech' ? 'ElevenLabs (last line: browser)' : 'ElevenLabs';
 }
@@ -677,7 +682,9 @@ export function App() {
 
   // The judge's voice (voice.ts): each fresh ruling / payout / appeal vote is heard, as the
   // ElevenLabs clip a stage.voice frame points at, else (no frame within ~800 ms, a failed clip)
-  // in the browser's voice. V turns the voice off and on; M mutes everything.
+  // in the browser's voice. V turns the voice off and on; M mutes everything. In a bet the voice
+  // judge hosts, the ruling and payout are left to A's phone (one judge at a time); a preview
+  // has no phones, so it voices them all.
   const liveRef = useRef(live);
   liveRef.current = live;
   const [voiceOn, setVoiceOn] = useState(true);
@@ -703,11 +710,14 @@ export function App() {
     voice.current.onDone = (_key, how) => setVoiceHow(how);
   }
   const voiced = useRef(new Set<string>());
+  const previewing = launch.preview !== null;
   useEffect(() => {
     for (const id of Object.keys(shown.bets))
-      for (const l of freshVoiceLines(shown, id, voiced.current, shownNow))
+      for (const l of freshVoiceLines(shown, id, voiced.current, shownNow, {
+        phoneJudge: !previewing,
+      }))
         voice.current!.expect(l);
-  }, [shown, shownNow]);
+  }, [shown, shownNow, previewing]);
   const clipsSeen = useRef(new Set<string>());
   useEffect(() => {
     for (const c of state.voiceClips) {
