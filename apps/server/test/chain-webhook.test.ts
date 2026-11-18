@@ -533,7 +533,8 @@ describeDb('POST /webhooks/quicknode over Postgres', () => {
     });
 
     // an rpc_poll row (no block height) the server never sent is ambiguous once the bet_id has
-    // been closed / re-created: not pushed either
+    // been closed / re-created: not pushed either, and parked (its order is unknown), not
+    // ruled out for good
     const polled = parseStreamDelivery(
       delivery([{ signature: randomSig(), events: [ev(0, 'BetRefunded')] }]),
     ).events.map((e) => ({ ...e, block_height: null, tx_index: null }));
@@ -542,7 +543,9 @@ describeDb('POST /webhooks/quicknode over Postgres', () => {
       source: 'rpc_poll',
     });
     expect(r).toMatchObject({ inserted: 1, published: 0 });
-    expect((await rowsOf(db(), polled[0]!.signature))[0]!.apply_error).toBe('not_ours_lock');
+    expect(
+      (await rowsOf(db(), polled[0]!.signature)).map((x) => [x.apply_error, x.applied_at]),
+    ).toEqual([['not_ours', null]]);
     publish.mockRestore();
   });
 
