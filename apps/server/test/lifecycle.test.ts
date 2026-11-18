@@ -4,12 +4,18 @@
 // the stored bytes, or the custodial demo keys) -> LOCKED -> onRuling (resolve) -> RULED ->
 // GG (concede) or finalize after the appeal window -> PAID; decline -> nonce revoke; balance.
 // Skips without DATABASE_URL or without programs/escrow/target/deploy/escrow.so.
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as ed from '@noble/ed25519';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
+  getAddressEncoder,
   getBase58Decoder,
   type KeyPairSigner,
 } from '@solana/kit';
@@ -554,6 +560,75 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     expect(body.nonce_pool.size).toBe(3);
     expect(body.nonce_pool.free).toBe(3);
   });
+
+  it('scripts/cp1-drive.ts drives challenge -> terms -> confirm -> LOCKED (plays both phones)', async () => {
+    const keys = [newKey(), newKey()];
+    const signers = await Promise.all(
+      keys.map((k) => createKeyPairSignerFromPrivateKeyBytes(k.secret)),
+    );
+    for (const owner of signers) await fund(owner);
+    const secret = (k: TestKey, s: KeyPairSigner) =>
+      JSON.stringify([...k.secret, ...new Uint8Array(getAddressEncoder().encode(s.address))]);
+    const stateFile = join(tmpdir(), `cp1-drive-${randomUUID()}.json`);
+    const out = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
+      (resolve) => {
+        const child = spawn(
+          'npx',
+          [
+            'tsx',
+            'scripts/cp1-drive.ts',
+            '--base-url',
+            ctx.base,
+            '--admin-token',
+            ADMIN,
+            '--state-file',
+            stateFile,
+            '--timeout',
+            '20',
+            '--name-a',
+            'Ava',
+            '--name-b',
+            'Ben',
+          ],
+          {
+            cwd: fileURLToPath(new URL('../../../', import.meta.url)),
+            env: {
+              ...process.env,
+              DEMO_A_SECRET_KEY: secret(keys[0]!, signers[0]!),
+              DEMO_B_SECRET_KEY: secret(keys[1]!, signers[1]!),
+            },
+          },
+        );
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => (stdout += String(d)));
+        child.stderr.on('data', (d) => (stderr += String(d)));
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
+      },
+    );
+    rmSync(stateFile, { force: true });
+    expect(out.stderr + out.stdout).toContain('LOCKED in');
+    expect(out.code).toBe(0);
+    await lc.idle();
+  }, 60_000);
+
+  async function fund(owner: KeyPairSigner) {
+    const ata = await findAta(owner);
+    await send(svm.svm, svm.s, [
+      await getCreateAssociatedTokenIdempotentInstructionAsync({
+        payer: svm.s,
+        owner: owner.address,
+        mint: svm.mint,
+      }),
+      getMintToCheckedInstruction({
+        mint: svm.mint,
+        token: ata,
+        mintAuthority: svm.s,
+        amount: 100n * USDC,
+        decimals: 6,
+      }),
+    ]);
+  }
 
   async function findAta(owner: KeyPairSigner) {
     const [ata] = await findAssociatedTokenPda({

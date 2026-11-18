@@ -15,6 +15,9 @@
 // stored message bytes with demo-a / demo-b, POST /lock/authorizations. With LOCK_SIGNER=server
 // the server signs custodially and the script only waits.
 //
+// Wallet keys: <keys-dir>/demo-a-keypair.json / demo-b-keypair.json (scripts/keys.ts), or the env
+// DEMO_A_SECRET_KEY / DEMO_B_SECRET_KEY (the same values the server's custodial signer uses).
+//
 // Every write is a signed request (yo-req-v1, API-CONTRACT §1.3). Device keys are fresh ed25519
 // keys kept (mode 600) in --state-file (default <keys-dir>/cp1-drive-devices.json, never in the
 // repo) so a re-run logs in instead of re-registering the demo wallets.
@@ -23,7 +26,15 @@ import { createHash, createPrivateKey, generateKeyPairSync, randomUUID, sign } f
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { getAddressDecoder, getBase58Decoder, signBytes, type KeyPairSigner } from '@solana/kit';
+import {
+  createKeyPairSignerFromBytes,
+  createKeyPairSignerFromPrivateKeyBytes,
+  getAddressDecoder,
+  getBase58Decoder,
+  getBase58Encoder,
+  signBytes,
+  type KeyPairSigner,
+} from '@solana/kit';
 
 import {
   authChallengeMessage,
@@ -90,10 +101,26 @@ class Api {
     return { status: res.status, json };
   }
 
-  /** A §1.3 signed write as `who`. */
-  signed(who: Player, method: string, path: string, body?: unknown) {
+  /** Server clock - local clock, learned from a CLOCK_SKEW answer (API-CONTRACT §1.3: ±60 s). */
+  private skewMs = 0;
+
+  /** A §1.3 signed write as `who`; retried once with the server's clock after CLOCK_SKEW. */
+  async signed(who: Player, method: string, path: string, body?: unknown) {
+    const r = await this.signedOnce(who, method, path, body);
+    const serverTime = r.json?.error?.details?.server_time;
+    if (r.status === 401 && r.json?.error?.code === 'CLOCK_SKEW' && serverTime) {
+      this.skewMs = Date.parse(serverTime) - Date.now();
+      console.log(
+        `  (clock skew ${Math.round(this.skewMs / 1000)} s vs the server; using its clock)`,
+      );
+      return this.signedOnce(who, method, path, body);
+    }
+    return r;
+  }
+
+  private signedOnce(who: Player, method: string, path: string, body?: unknown) {
     const raw = body === undefined ? '' : JSON.stringify(body);
-    const ts = String(Date.now());
+    const ts = String(Date.now() + this.skewMs);
     const idem = randomUUID();
     const str = requestSigningString({
       method,
@@ -123,6 +150,17 @@ class Api {
     if (!this.admin) throw new Error('--admin-token (or DEMO_ADMIN_TOKEN) is required');
     return this.call(method, path, { body, headers: { 'X-YO-Demo-Key': this.admin } });
   }
+}
+
+/** The role's keypair file, or (tests / CI) the same secret as the server's DEMO_A/B_SECRET_KEY env. */
+async function walletKey(dir: string, role: 'demo-a' | 'demo-b', secret: string | undefined) {
+  if (!secret) return loadRole(dir, role);
+  const bytes = secret.trim().startsWith('[')
+    ? Uint8Array.from(JSON.parse(secret) as number[])
+    : new Uint8Array(getBase58Encoder().encode(secret.trim()));
+  return bytes.length === 32
+    ? createKeyPairSignerFromPrivateKeyBytes(bytes)
+    : createKeyPairSignerFromBytes(bytes);
 }
 
 type Player = {
@@ -257,7 +295,10 @@ run(async () => {
     console.log(`reset: ${r.deleted_bets} bet(s) deleted, ${r.nonces_synced} nonce(s) synced`);
   }
 
-  const wallets = { A: await loadRole(keysDir, 'demo-a'), B: await loadRole(keysDir, 'demo-b') };
+  const wallets = {
+    A: await walletKey(keysDir, 'demo-a', process.env['DEMO_A_SECRET_KEY']),
+    B: await walletKey(keysDir, 'demo-b', process.env['DEMO_B_SECRET_KEY']),
+  };
   const names = { A: values['name-a'] ?? 'Logan', B: values['name-b'] ?? 'Jake' };
   const players = {} as Record<'A' | 'B', Player>;
   for (const party of ['A', 'B'] as const) {
