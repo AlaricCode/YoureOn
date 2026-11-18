@@ -7,7 +7,8 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { hashJcs } from '@youre-on/shared/jcs';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
-import { BetCard, MarketPanel, StageView } from '../src/App';
+import { BetCard, MarketPanel, StageView, verifyEvidence } from '../src/App';
+import { fetchSettlement } from '../src/connection';
 import { previewMarketState } from '../src/preview-market';
 import { applyFrame, initialTicker, type TickerAction, type TickerState } from '../src/ticker';
 
@@ -243,6 +244,75 @@ describe('Beat 6 on the stage', () => {
     const out3 = html(<StageView state={done} now={base + 90_000} preview />);
     expect(out3).toContain('Gemini settled DOWN');
     expect(out3).toContain('Jake wins');
+  });
+
+  it('the evidence chain: fetched, re-verified on the stage, shown as verified or as a mismatch', async () => {
+    seq = 0;
+    const rec = record('no');
+    const s = run([
+      ev('terms.proposed', { envelope }),
+      ev('market.settled', { record: rec, evidence_hash: hashJcs(rec) }),
+    ]);
+    const bet = s.bets[BET]!;
+    const ruling = {
+      schema_version: 1,
+      ruling_id: '9b1d2c3e-4f50-4a61-8b72-c3d4e5f60718',
+      bet_id: BET,
+      outcome: 'B_WINS',
+      claim_result: 'NOT_MET',
+      confidence: 1,
+      reason: 'Gemini settled DOWN: Bitcoin finished at $64,367.38, below the $64,389.60 line.',
+      cited_frames: [],
+      frame_hashes: [],
+      model: 'rule/gemini-settlement@1',
+      evidence_hash: hashJcs(rec),
+      terms_hash: TERMS_HASH,
+      created_at: '2026-11-18T02:40:08.000Z',
+      stage: 'settlement',
+      attempt_no: 1,
+      redo_reason: null,
+      void_reason: null,
+    };
+    const body = {
+      record: rec,
+      evidence_hash: hashJcs(rec),
+      ruling,
+      ruling_hash: hashJcs(ruling),
+      raw_body: null,
+      onchain: {
+        evidence_hash: hashJcs(rec),
+        ruling_hash: hashJcs(ruling),
+        resolve_signature: null,
+      },
+      verification: { ok: true, checks: {} },
+    };
+    const calls: string[] = [];
+    const f = (async (u: string) => {
+      calls.push(u);
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    const evidence = await fetchSettlement('https://h.dev', 'yo_s_t', BET, f);
+    expect(calls).toEqual([`https://h.dev/v1/bets/${BET}/settlement`]);
+    const v = verifyEvidence(bet, evidence);
+    expect(v).toEqual({ ok: true, onchain: true, failed: [] });
+    const now = Date.parse('2026-11-18T02:40:10.000Z');
+    const shown = html(<MarketPanel bet={bet} tick={null} now={now} verification={v} />);
+    expect(shown).toContain('✓ verified: Gemini');
+    expect(shown).toContain('record → on-chain evidence');
+    // the stage never trusts the server's `ok`: a tampered ruling fails its own check
+    const forged = { ...evidence, ruling: { ...evidence.ruling, outcome: 'A_WINS' as const } };
+    const bad = verifyEvidence(bet, forged)!;
+    expect(bad.ok).toBe(false);
+    expect(bad.failed).toEqual(expect.arrayContaining(['ruling hash', 'outcome follows gemini']));
+    expect(html(<MarketPanel bet={bet} tick={null} now={now} verification={bad} />)).toContain(
+      '✗ evidence mismatch',
+    );
+    // before the resolve: the record and ruling check out, the chain part is pending
+    expect(verifyEvidence(bet, { ...evidence, onchain: null })).toEqual({
+      ok: true,
+      onchain: false,
+      failed: [],
+    });
   });
 
   it('a voided contract reads as a refund', () => {
