@@ -33,14 +33,19 @@ export function frameTimesMs(durationMs: number, n = DEFAULT_FRAMES): number[] {
   for (let i = 0; i < uniform; i++) out.push(Math.round((denseStart * i) / uniform));
   for (let i = 1; i <= dense; i++) out.push(Math.round(denseStart + (denseSpan * i) / dense));
   // Strictly increasing even for very short clips.
-  for (let i = 1; i < out.length; i++) if ((out[i] as number) <= (out[i - 1] as number)) out[i] = (out[i - 1] as number) + 1;
+  for (let i = 1; i < out.length; i++)
+    if ((out[i] as number) <= (out[i - 1] as number)) out[i] = (out[i - 1] as number) + 1;
   return out;
 }
 
 export const sha256Hex = (bytes: Uint8Array): string => bytesToHex(sha256(bytes));
 
 export function hashFrames(frames: readonly { t_ms: number; jpeg: Uint8Array }[]): EvidenceFrame[] {
-  return frames.map((f, index) => ({ index, t_ms: Math.max(0, Math.round(f.t_ms)), sha256: sha256Hex(f.jpeg) }));
+  return frames.map((f, index) => ({
+    index,
+    t_ms: Math.max(0, Math.round(f.t_ms)),
+    sha256: sha256Hex(f.jpeg),
+  }));
 }
 
 export function buildEvidence(a: {
@@ -54,7 +59,8 @@ export function buildEvidence(a: {
   frames: readonly { t_ms: number; jpeg: Uint8Array }[];
 }): CameraEvidence {
   for (const f of a.frames)
-    if (f.jpeg.length === 0 || f.jpeg.length > MAX_FRAME_BYTES) throw new Error(`frame size ${f.jpeg.length} out of range`);
+    if (f.jpeg.length === 0 || f.jpeg.length > MAX_FRAME_BYTES)
+      throw new Error(`frame size ${f.jpeg.length} out of range`);
   return CameraEvidence.parse({
     schema_version: 1,
     kind: 'camera',

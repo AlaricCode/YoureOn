@@ -13,7 +13,11 @@ import {
   SignRequest,
   type PartySignature,
 } from '@youre-on/shared/api';
-import { AuthorizeRequest, type PartyAuthorization, type PartyDecline } from '@youre-on/shared/authorization';
+import {
+  AuthorizeRequest,
+  type PartyAuthorization,
+  type PartyDecline,
+} from '@youre-on/shared/authorization';
 import type { CameraEvidence } from '@youre-on/shared/evidence';
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
@@ -48,14 +52,21 @@ export const FramesResponse = z.object({
   judging: z.boolean(),
   frame_hashes: z.array(z.string()),
   clip_upload: z
-    .object({ url: z.string(), method: z.literal('PUT'), headers: z.record(z.string(), z.string()) })
+    .object({
+      url: z.string(),
+      method: z.literal('PUT'),
+      headers: z.record(z.string(), z.string()),
+    })
     .passthrough()
     .nullish(),
 });
 /** §2.10 POST /v1/bets/:id/concede -> 202 */
 export const SubmittedResponse = z.object({ status: z.literal('submitted'), signature: Signature });
 /** §2.14 GET /v1/bets/:id/events */
-export const BetEventsResponse = z.object({ events: z.array(z.unknown()), last_seq: z.number().int() });
+export const BetEventsResponse = z.object({
+  events: z.array(z.unknown()),
+  last_seq: z.number().int(),
+});
 
 const bet = (id: string) => `/v1/bets/${encodeURIComponent(id)}`;
 
@@ -65,11 +76,18 @@ export function createYoApi(c: ApiClient) {
 
     // §2.3 rooms
     createRoom: (name?: string) =>
-      c.request('POST', '/v1/rooms', { json: { kind: 'session', ...(name ? { name } : {}) }, schema: CreateRoomResponse }),
-    joinRoom: (code: string) => c.request('POST', '/v1/rooms/join', { json: { code }, schema: JoinRoomResponse }),
-    leaveRoom: (roomId: string) => c.request('POST', `/v1/rooms/${encodeURIComponent(roomId)}/leave`),
+      c.request('POST', '/v1/rooms', {
+        json: { kind: 'session', ...(name ? { name } : {}) },
+        schema: CreateRoomResponse,
+      }),
+    joinRoom: (code: string) =>
+      c.request('POST', '/v1/rooms/join', { json: { code }, schema: JoinRoomResponse }),
+    leaveRoom: (roomId: string) =>
+      c.request('POST', `/v1/rooms/${encodeURIComponent(roomId)}/leave`),
     presence: (roomId: string) =>
-      c.request('GET', `/v1/rooms/${encodeURIComponent(roomId)}/presence`, { schema: RoomPresenceResponse }),
+      c.request('GET', `/v1/rooms/${encodeURIComponent(roomId)}/presence`, {
+        schema: RoomPresenceResponse,
+      }),
 
     // §2.5 challenge (pick-from-list path; face match is cut from the live demo)
     createBet: (roomId: string, opponentUserId: string, voiceConversationId?: string) =>
@@ -82,14 +100,18 @@ export function createYoApi(c: ApiClient) {
         },
         schema: CreateBetResponse,
       }),
-    acceptInvite: (betId: string) => c.request('POST', `${bet(betId)}/invite/accept`, { schema: InviteAnswerResponse }),
-    declineInvite: (betId: string) => c.request('POST', `${bet(betId)}/invite/decline`, { schema: InviteAnswerResponse }),
+    acceptInvite: (betId: string) =>
+      c.request('POST', `${bet(betId)}/invite/accept`, { schema: InviteAnswerResponse }),
+    declineInvite: (betId: string) =>
+      c.request('POST', `${bet(betId)}/invite/decline`, { schema: InviteAnswerResponse }),
 
     // §2.14 reads / resync
     getBet: (betId: string) => c.request('GET', bet(betId), { schema: BetSnapshot }),
     /** Events after `after`; entries that fail RealtimeEvent parse are dropped (§10.1). */
     async getBetEvents(betId: string, after: number) {
-      const r = await c.request('GET', `${bet(betId)}/events?after=${after}&limit=200`, { schema: BetEventsResponse });
+      const r = await c.request('GET', `${bet(betId)}/events?after=${after}&limit=200`, {
+        schema: BetEventsResponse,
+      });
       const events = r.events.flatMap((e) => {
         const p = RealtimeEvent.safeParse(e);
         return p.success ? [p.data] : [];
@@ -98,11 +120,17 @@ export function createYoApi(c: ApiClient) {
     },
 
     // §2.8 lock
-    getLock: (betId: string) => c.request('GET', `${bet(betId)}/lock`, { schema: AuthorizeRequest }),
+    getLock: (betId: string) =>
+      c.request('GET', `${bet(betId)}/lock`, { schema: AuthorizeRequest }),
     /** Pin `idempotencyKey` per lock_request_id: a lost response resends the same signature (§1.6). */
     authorizeLock: (a: PartyAuthorization, idempotencyKey: string) =>
-      c.request('POST', `${bet(a.bet_id)}/lock/authorizations`, { json: a, schema: AuthorizationResult, idempotencyKey }),
-    declineLock: (d: PartyDecline) => c.request('POST', `${bet(d.bet_id)}/lock/decline`, { json: d }),
+      c.request('POST', `${bet(a.bet_id)}/lock/authorizations`, {
+        json: a,
+        schema: AuthorizationResult,
+        idempotencyKey,
+      }),
+    declineLock: (d: PartyDecline) =>
+      c.request('POST', `${bet(d.bet_id)}/lock/decline`, { json: d }),
 
     // §2.9 attempts and evidence
     startAttempt: (betId: string, attemptNo: number) =>
@@ -110,7 +138,11 @@ export function createYoApi(c: ApiClient) {
         json: { attempt_no: attemptNo, recorder: 'judge_cam' },
         schema: AttemptStartedResponse,
       }),
-    uploadFrames: (evidence: CameraEvidence, frames: readonly Uint8Array[], idempotencyKey: string) => {
+    uploadFrames: (
+      evidence: CameraEvidence,
+      frames: readonly Uint8Array[],
+      idempotencyKey: string,
+    ) => {
       const body = buildMultipart([
         { name: 'evidence', contentType: 'application/json', body: JSON.stringify(evidence) },
         ...frames.map((f, i) => ({
@@ -128,13 +160,20 @@ export function createYoApi(c: ApiClient) {
     },
 
     // §2.10 GG
-    getConcede: (betId: string) => c.request('GET', `${bet(betId)}/concede`, { schema: SignRequest }),
+    getConcede: (betId: string) =>
+      c.request('GET', `${bet(betId)}/concede`, { schema: SignRequest }),
     concede: (s: PartySignature, idempotencyKey: string) =>
-      c.request('POST', `${bet(s.bet_id)}/concede`, { json: s, schema: SubmittedResponse, idempotencyKey }),
+      c.request('POST', `${bet(s.bet_id)}/concede`, {
+        json: s,
+        schema: SubmittedResponse,
+        idempotencyKey,
+      }),
 
     // §2.15 judge-cam role
     setDeviceRole: (role: 'phone' | 'judge_cam', roomId?: string) =>
-      c.request('PATCH', '/v1/devices/current', { json: { role, ...(roomId ? { room_id: roomId } : {}) } }),
+      c.request('PATCH', '/v1/devices/current', {
+        json: { role, ...(roomId ? { room_id: roomId } : {}) },
+      }),
 
     // §2.6 voice
     voiceToken: (betId?: string) =>

@@ -57,7 +57,16 @@ describe('evidence', () => {
   it('rejects oversized or empty frames', () => {
     const bad = [{ t_ms: 0, jpeg: new Uint8Array(MAX_FRAME_BYTES + 1) }];
     expect(() =>
-      buildEvidence({ bet_id: BET, attempt_no: 1, clip: new Uint8Array(1), mime: 'video/mp4', duration_ms: 1, recorded_by: 'A', recorded_at: '2026-11-21T18:07:06.000Z', frames: bad }),
+      buildEvidence({
+        bet_id: BET,
+        attempt_no: 1,
+        clip: new Uint8Array(1),
+        mime: 'video/mp4',
+        duration_ms: 1,
+        recorded_by: 'A',
+        recorded_at: '2026-11-21T18:07:06.000Z',
+        frames: bad,
+      }),
     ).toThrow();
   });
 
@@ -70,7 +79,12 @@ describe('evidence', () => {
     const mp = buildMultipart(
       [
         { name: 'evidence', contentType: 'application/json', body: '{"k":1}' },
-        { name: 'frame', filename: '00.jpg', contentType: 'image/jpeg', body: new Uint8Array([0, 255, 13, 10]) },
+        {
+          name: 'frame',
+          filename: '00.jpg',
+          contentType: 'image/jpeg',
+          body: new Uint8Array([0, 255, 13, 10]),
+        },
       ],
       'B',
     );

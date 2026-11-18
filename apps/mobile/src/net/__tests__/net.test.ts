@@ -13,7 +13,13 @@ import { DEVICE_SEED_KEY, deviceKeyFromSeed, loadDeviceKey, type DeviceKey } fro
 import { base64ToBytes, bytesToBase64, bytesToBase64Url, uuidV4 } from '../encoding';
 import { buildMultipart } from '../multipart';
 import { createSessionManager, demoSeedFrom, secureSessionStore, SESSION_KEY } from '../session';
-import { ApiClientError, createApiClient, createClock, signedHeaders, type SessionRef } from '../signedFetch';
+import {
+  ApiClientError,
+  createApiClient,
+  createClock,
+  signedHeaders,
+  type SessionRef,
+} from '../signedFetch';
 import { createFakeServer } from './fakeServer';
 
 const rand = (a: Uint8Array) => randomFillSync(a);
@@ -29,7 +35,9 @@ describe('encoding', () => {
     }
   });
   it('uuidV4 is a lowercase v4', () => {
-    expect(uuidV4(rand)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(uuidV4(rand)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
 });
 
@@ -109,7 +117,10 @@ function world(opts: { demo?: boolean } = {}) {
   let now = NOW;
   const demoSeed = rand(new Uint8Array(32));
   const demoPubkey = base58Encode(ed.getPublicKey(demoSeed));
-  const server = createFakeServer({ now: () => now, ...(opts.demo ? { demoSeed: Uint8Array.from(demoSeed), demoPubkey } : {}) });
+  const server = createFakeServer({
+    now: () => now,
+    ...(opts.demo ? { demoSeed: Uint8Array.from(demoSeed), demoPubkey } : {}),
+  });
   const platform = createFakePlatform();
   const wallet = createWallet(platform);
   const clock = createClock(() => now);
@@ -136,14 +147,28 @@ function world(opts: { demo?: boolean } = {}) {
     setNow: (t: number) => (now = t),
     async init() {
       key = await loadDeviceKey(platform);
-      mgr = createSessionManager({ api, deviceKey: key, wallet, store: secureSessionStore(platform.secureStore), clock, appVersion: '1.0.0+1' });
+      mgr = createSessionManager({
+        api,
+        deviceKey: key,
+        wallet,
+        store: secureSessionStore(platform.secureStore),
+        clock,
+        appVersion: '1.0.0+1',
+      });
       return { key, mgr };
     },
   };
 }
 
-const fields = { display_name: 'Logan', age_attestation: { is_18_plus: true as const, attested_at: new Date(NOW).toISOString() } };
-const Echo = z.object({ ok: z.literal(true), path: z.string(), body_sha256: z.string().optional() });
+const fields = {
+  display_name: 'Logan',
+  age_attestation: { is_18_plus: true as const, attested_at: new Date(NOW).toISOString() },
+};
+const Echo = z.object({
+  ok: z.literal(true),
+  path: z.string(),
+  body_sha256: z.string().optional(),
+});
 
 describe('session + signed client against the fake server', () => {
   let w: ReturnType<typeof world>;
@@ -161,7 +186,10 @@ describe('session + signed client against the fake server', () => {
     // The signup wallet_sig needed no Face ID.
     expect(w.platform.events.some((e) => e.kind === 'auth')).toBe(false);
 
-    const r = await w.api.request('POST', '/v1/rooms/join', { json: { code: 'UBC26X' }, schema: Echo });
+    const r = await w.api.request('POST', '/v1/rooms/join', {
+      json: { code: 'UBC26X' },
+      schema: Echo,
+    });
     expect(r.ok).toBe(true);
     const call = w.server.calls.at(-1)!;
     expect(call.headers[HDR.idempotencyKey]).toMatch(/^[0-9a-f-]{36}$/);
@@ -179,18 +207,31 @@ describe('session + signed client against the fake server', () => {
     await mgr.signup(fields);
     const mp = buildMultipart([
       { name: 'evidence', contentType: 'application/json', body: '{"a":1}' },
-      { name: 'frame', filename: '00.jpg', contentType: 'image/jpeg', body: new Uint8Array([0xff, 0xd8, 0, 1, 2, 0xff, 0xd9]) },
+      {
+        name: 'frame',
+        filename: '00.jpg',
+        contentType: 'image/jpeg',
+        body: new Uint8Array([0xff, 0xd8, 0, 1, 2, 0xff, 0xd9]),
+      },
     ]);
-    const r = await w.api.request('POST', '/v1/bets/b/attempts/1/frames', { raw: mp, schema: Echo });
+    const r = await w.api.request('POST', '/v1/bets/b/attempts/1/frames', {
+      raw: mp,
+      schema: Echo,
+    });
     expect(r.body_sha256).toBe(sha256Hex(mp.bytes));
-    expect(w.server.calls.at(-1)!.headers['Content-Type']).toMatch(/^multipart\/form-data; boundary=yo-/);
+    expect(w.server.calls.at(-1)!.headers['Content-Type']).toMatch(
+      /^multipart\/form-data; boundary=yo-/,
+    );
   });
 
   it('CLOCK_SKEW: re-syncs the clock and resends with the same Idempotency-Key', async () => {
     const { mgr } = await w.init();
     await mgr.signup(fields);
     w.server.skewOnce();
-    await w.api.request('POST', '/v1/rooms', { json: {}, idempotencyKey: '44444444-4444-4444-8444-444444444444' });
+    await w.api.request('POST', '/v1/rooms', {
+      json: {},
+      idempotencyKey: '44444444-4444-4444-8444-444444444444',
+    });
     const [a, b] = w.server.calls.slice(-2);
     expect(a!.headers[HDR.idempotencyKey]).toBe('44444444-4444-4444-8444-444444444444');
     expect(b!.headers[HDR.idempotencyKey]).toBe('44444444-4444-4444-8444-444444444444');
@@ -219,7 +260,9 @@ describe('session + signed client against the fake server', () => {
     await mgr.signup(fields);
     const key = '55555555-5555-4555-8555-555555555555';
     await w.api.request('POST', '/v1/rooms', { json: { a: 1 }, idempotencyKey: key });
-    const e = await w.api.request('POST', '/v1/rooms', { json: { a: 2 }, idempotencyKey: key }).catch((x: unknown) => x);
+    const e = await w.api
+      .request('POST', '/v1/rooms', { json: { a: 2 }, idempotencyKey: key })
+      .catch((x: unknown) => x);
     expect(e).toBeInstanceOf(ApiClientError);
     expect((e as ApiClientError).code).toBe('IDEMPOTENCY_KEY_REUSED');
     expect((e as ApiClientError).status).toBe(409);
@@ -237,7 +280,9 @@ describe('session + signed client against the fake server', () => {
       appVersion: '1',
       session: () => null,
     });
-    const e = (await api.request('POST', '/v1/auth/challenge', { json: {} }).catch((x: unknown) => x)) as ApiClientError;
+    const e = (await api
+      .request('POST', '/v1/auth/challenge', { json: {} })
+      .catch((x: unknown) => x)) as ApiClientError;
     expect(e.code).toBe('NETWORK');
     expect(e.retryable).toBe(true);
   });
@@ -271,7 +316,9 @@ describe('session + signed client against the fake server', () => {
     expect(w.platform.items.get(SESSION_KEY)).not.toContain('wallet_seed_b64');
     // The imported key signs (one Face ID) and verifies under the demo pubkey.
     const r = await w.wallet.authorize(new Uint8Array([1, 2, 3]), 'x');
-    expect(ed.verify(r.signature, new Uint8Array([1, 2, 3]), ed.getPublicKey(w.demoSeed))).toBe(true);
+    expect(ed.verify(r.signature, new Uint8Array([1, 2, 3]), ed.getPublicKey(w.demoSeed))).toBe(
+      true,
+    );
   });
 
   it('demo seeds: 32-byte seeds and 64-byte keygen secrets', () => {
@@ -295,8 +342,14 @@ describe('wallet.signWalletBinding', () => {
     const sig = await wallet.signWalletBinding(msg);
     expect(verifyEd25519(publicKey, msg, sig)).toBe(true);
     expect(p.events.some((e) => e.kind === 'auth')).toBe(false);
-    await expect(wallet.signWalletBinding(msg.replace(publicKey, dev))).rejects.toMatchObject({ code: 'BAD_MESSAGE' });
-    await expect(wallet.signWalletBinding('yo-req-v1\nPOST\n/x')).rejects.toMatchObject({ code: 'BAD_MESSAGE' });
-    await expect(wallet.signWalletBinding(msg + 'x')).rejects.toMatchObject({ code: 'BAD_MESSAGE' });
+    await expect(wallet.signWalletBinding(msg.replace(publicKey, dev))).rejects.toMatchObject({
+      code: 'BAD_MESSAGE',
+    });
+    await expect(wallet.signWalletBinding('yo-req-v1\nPOST\n/x')).rejects.toMatchObject({
+      code: 'BAD_MESSAGE',
+    });
+    await expect(wallet.signWalletBinding(msg + 'x')).rejects.toMatchObject({
+      code: 'BAD_MESSAGE',
+    });
   });
 });

@@ -12,7 +12,10 @@ async function bytesOf(uri: string): Promise<Uint8Array> {
 }
 
 async function oneFrame(clipUri: string, tMs: number): Promise<Uint8Array> {
-  const thumb = await VideoThumbnails.getThumbnailAsync(clipUri, { time: tMs, quality: JPEG_QUALITY });
+  const thumb = await VideoThumbnails.getThumbnailAsync(clipUri, {
+    time: tMs,
+    quality: JPEG_QUALITY,
+  });
   const big = Math.max(thumb.width, thumb.height);
   const uri = thumb.uri;
   if (big > FRAME_MAX_PX) {

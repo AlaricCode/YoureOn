@@ -44,7 +44,9 @@ describe('sequencer', () => {
   });
 
   it('backoff follows 0.25 -> 0.5 -> 1 -> 2 -> 5 s plus <= 30 % jitter', () => {
-    expect([0, 1, 2, 3, 4, 9].map((a) => reconnectDelay(a, () => 0))).toEqual([250, 500, 1000, 2000, 5000, 5000]);
+    expect([0, 1, 2, 3, 4, 9].map((a) => reconnectDelay(a, () => 0))).toEqual([
+      250, 500, 1000, 2000, 5000, 5000,
+    ]);
     expect(reconnectDelay(0, () => 1)).toBe(325);
   });
 
@@ -116,14 +118,33 @@ describe('realtime client', () => {
     c.start();
     const s = FakeSocket.all[0]!;
     s.open();
-    expect(s.sent[0]).toEqual({ op: 'hello', token: 'yo_s_t', device_id: 'd1', app_version: '1', subs: [{ bet_id: BET, after_seq: 4 }] });
+    expect(s.sent[0]).toEqual({
+      op: 'hello',
+      token: 'yo_s_t',
+      device_id: 'd1',
+      app_version: '1',
+      subs: [{ bet_id: BET, after_seq: 4 }],
+    });
     expect(s.sent[1]).toEqual({ op: 'subscribe_room', room_id: 'room-1' });
-    s.msg({ op: 'welcome', server_time: '2026-11-21T18:00:00.000Z', heartbeat_ms: 20000, user_channel: true });
+    s.msg({
+      op: 'welcome',
+      server_time: '2026-11-21T18:00:00.000Z',
+      heartbeat_ms: 20000,
+      user_channel: true,
+    });
     expect(statuses.at(-1)).toBe('live');
     s.msg({ op: 'ping', t: 42, server_time: '2026-11-21T18:00:20.000Z' });
     expect(s.sent.at(-1)).toEqual({ op: 'pong', t: 42 });
     s.msg(stateEv('LOCKED', 5));
-    s.msg({ v: 1, type: 'nope.unknown', bet_id: BET, seq: 6, ts: 'x', source: 'server', payload: {} });
+    s.msg({
+      v: 1,
+      type: 'nope.unknown',
+      bet_id: BET,
+      seq: 6,
+      ts: 'x',
+      source: 'server',
+      payload: {},
+    });
     expect(events).toHaveLength(1);
   });
 
@@ -145,7 +166,12 @@ describe('realtime client', () => {
     s3.open();
     expect((s3.sent[0] as { subs: unknown }).subs).toEqual([{ bet_id: BET, after_seq: 9 }]);
     // welcome resets the backoff
-    s3.msg({ op: 'welcome', server_time: '2026-11-21T18:00:00.000Z', heartbeat_ms: 20000, user_channel: true });
+    s3.msg({
+      op: 'welcome',
+      server_time: '2026-11-21T18:00:00.000Z',
+      heartbeat_ms: 20000,
+      user_channel: true,
+    });
     s3.serverClose(1006);
     vi.advanceTimersByTime(250);
     expect(FakeSocket.all).toHaveLength(4);
@@ -202,7 +228,10 @@ describe('bet hub resync', () => {
           calls.push(`events>${after}`);
           // First call fills 3..4; the second finds the log already pruned past 5 (last_seq 9).
           return after === 2
-            ? { events: [stateEv('AWAITING_AUTHORIZATIONS', 3), stateEv('AWAITING_LOCK', 4)], last_seq: 5 }
+            ? {
+                events: [stateEv('AWAITING_AUTHORIZATIONS', 3), stateEv('AWAITING_LOCK', 4)],
+                last_seq: 5,
+              }
             : { events: [], last_seq: 9 };
         },
       },
@@ -228,9 +257,14 @@ describe('bet hub resync', () => {
   });
 
   it('notifies listeners with before/after for each applied event', () => {
-    const hub = new BetHub({ getBet: async () => snapshot(), getBetEvents: async () => ({ events: [], last_seq: 0 }) });
+    const hub = new BetHub({
+      getBet: async () => snapshot(),
+      getBetEvents: async () => ({ events: [], last_seq: 0 }),
+    });
     const seen: string[] = [];
-    hub.onChange((e, before, after) => seen.push(`${e?.type ?? 'snapshot'}:${before?.state ?? '-'}->${after.state}`));
+    hub.onChange((e, before, after) =>
+      seen.push(`${e?.type ?? 'snapshot'}:${before?.state ?? '-'}->${after.state}`),
+    );
     hub.push(ev('bet.invited', { challenger: snapshot().party_a, room_id: snapshot().room_id }, 1));
     hub.push(stateEv('DRAFTING', 2));
     expect(seen).toEqual(['bet.invited:-->null', 'bet.state:-->DRAFTING']);

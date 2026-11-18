@@ -6,7 +6,9 @@ import { JCS_VECTORS, jcsVectorsCheck, runJcsVectors, type JcsVector } from '../
 
 describe('jcs-vectors diagnostics check', () => {
   it('bundles every committed vector file', () => {
-    const files = readdirSync(new URL('../../../../../packages/shared/test/vectors', import.meta.url).pathname)
+    const files = readdirSync(
+      new URL('../../../../../packages/shared/test/vectors', import.meta.url).pathname,
+    )
       .filter((f) => f.endsWith('.json'))
       .map((f) => f.replace(/\.json$/, ''))
       .sort();
@@ -20,7 +22,9 @@ describe('jcs-vectors diagnostics check', () => {
   });
 
   it('fails the row when a hash differs', () => {
-    const bad: JcsVector[] = JCS_VECTORS.map((v) => (v.name === 'terms-v1-001' ? { ...v, hash: '00'.repeat(32) } : v));
+    const bad: JcsVector[] = JCS_VECTORS.map((v) =>
+      v.name === 'terms-v1-001' ? { ...v, hash: '00'.repeat(32) } : v,
+    );
     expect(runJcsVectors(bad).find((x) => x.name === 'terms-v1-001')!.ok).toBe(false);
   });
 });
