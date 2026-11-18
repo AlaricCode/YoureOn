@@ -41,6 +41,7 @@ import { getAdvanceNonceAccountInstruction, getNonceDecoder } from '@solana-prog
 import { findAssociatedTokenPda, getTokenDecoder } from '@solana-program/token';
 import {
   ESCROW_ID,
+  FEE_PAYER_PUBKEY,
   nonceSeed,
   SYSTEM_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -296,6 +297,11 @@ export interface ChainRuntime {
   programId: Address;
   /** 'devnet' in production; 'localnet' for a local validator / LiteSVM. */
   cluster: 'devnet' | 'localnet';
+  /**
+   * The fee payer equals the pinned FEE_PAYER_PUBKEY (packages/shared). When false the phones'
+   * device policy refuses every lock (LOCK_SIGNER=phones); custodial / local runs still work.
+   */
+  feePayerPinned?: boolean;
 }
 
 /** From env; null when the RPC or the fee payer is not configured (chain features answer 503-ish). */
@@ -309,6 +315,7 @@ export async function chainRuntimeFromEnv(env: Env): Promise<ChainRuntime | null
     mint: address(env.USDC_MINT ?? USDC_MINT_DEVNET),
     programId: address(ESCROW_ID),
     cluster: env.SOLANA_CLUSTER ?? 'devnet',
+    feePayerPinned: keys.feePayer.address === FEE_PAYER_PUBKEY,
   };
 }
 
