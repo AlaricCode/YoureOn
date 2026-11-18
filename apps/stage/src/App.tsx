@@ -6,6 +6,8 @@
 //   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
 //
 // connects with no typing (config.ts); ?preview plays a sample bet with no server (preview.ts).
+// A ruled Gemini bet's evidence chain is fetched and re-checked here (verify.ts), and the
+// projector says whether it verified.
 // Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, H help.
 import {
   useCallback,
@@ -22,6 +24,7 @@ import {
   fetchBetSnapshot,
   fetchFrame,
   fetchMarket,
+  fetchSettlement,
   openStageSession,
   StageConnection,
   wsUrlFor,
@@ -48,6 +51,7 @@ import { seedBet } from './seed';
 import { fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
+import { settlementFetches, verifyEvidence, type Verification } from './verify';
 import {
   initialReplays,
   liveBetInProgress,
@@ -282,6 +286,14 @@ export function App() {
   /** Evidence frames already requested (`bet|attempt|count`), and their object URLs. */
   const framesAsked = useRef(new Set<string>());
   const frameUrls = useRef<string[]>([]);
+  /** Gemini bets whose evidence chain was asked for: bet id -> the bet's state when asked. */
+  const settlementAsked = useRef(new Map<string, string>());
+  /** Gemini bets' evidence re-checks (verifyEvidence), by bet id. */
+  const [verifications, setVerifications] = useState<Record<string, Verification>>({});
+  const verificationsRef = useRef(verifications);
+  verificationsRef.current = verifications;
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const now = useNow(state.clockOffsetMs);
   // the REPLAY downloads hold while a live bet is on (the hotspot is the phones' first)
   const holdReplays = useRef(false);
@@ -329,6 +341,8 @@ export function App() {
     seeded.current = new Set();
     refetched.current = new Set();
     framesAsked.current = new Set();
+    settlementAsked.current = new Map();
+    setVerifications({});
     for (const u of frameUrls.current.splice(0)) URL.revokeObjectURL(u);
     dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
     // ?bet= / the form's bet id keeps the focus until that bet is over; a reload comes back to
@@ -542,6 +556,42 @@ export function App() {
     }
   }, [framesWanted, live]);
 
+  // Beat 6: once a Gemini bet is ruled (the resolve landed), fetch its evidence chain
+  // (GET /v1/bets/:id/settlement) and re-check it here (verifyEvidence), so the projector shows
+  // Gemini's bytes tied to the on-chain hashes. Once per bet, and once more on a later state if
+  // that answer had no on-chain hashes yet (the server could not read the chain); a failed fetch
+  // is retried on the next change.
+  const settlementsWanted = settlementFetches(state)
+    .map((b) => `${b.bet_id}|${b.state}`)
+    .join(',');
+  useEffect(() => {
+    if (!live || !settlementsWanted) return;
+    const gen = generation.current;
+    for (const want of settlementsWanted.split(',')) {
+      const [id, st] = want.split('|') as [string, string];
+      const askedAt = settlementAsked.current.get(id);
+      if (
+        askedAt !== undefined &&
+        (askedAt === st || verificationsRef.current[id]?.onchain !== false)
+      )
+        continue;
+      settlementAsked.current.set(id, st);
+      fetchSettlement(live.serverUrl, live.token, id).then(
+        (ev) => {
+          if (gen !== generation.current) return;
+          const bet = stateRef.current.bets[id];
+          const v = bet ? verifyEvidence(bet, ev) : null;
+          if (v) setVerifications((m) => ({ ...m, [id]: v }));
+        },
+        (err: unknown) => {
+          if (gen !== generation.current) return;
+          settlementAsked.current.delete(id); // retry on the next change
+          dispatch({ kind: 'error', message: `settlement ${id}: ${String(err)}` });
+        },
+      );
+    }
+  }, [settlementsWanted, live]);
+
   // A reconnect's hello resumes each bet after the last seq applied, not from 0.
   useEffect(() => {
     for (const [id, seq] of Object.entries(state.lastSeq)) conn.current?.noteSeq(id, seq);
@@ -649,6 +699,7 @@ export function App() {
           roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
           sound={sound}
           lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
+          verifications={pv ? undefined : verifications}
         />
       ) : (
         <div className="stage connect">
