@@ -1,5 +1,6 @@
 // Display helpers for the projector: short signatures, countdown clocks, dollars, initials, the
-// grouped terms code, and readable labels for event types.
+// grouped terms code, readable labels for event types, and the face-challenge rivalry line.
+import type { StageRivalry } from '@youre-on/shared/api';
 import { formatUsd } from '@youre-on/shared/money';
 
 export const shortSig = (s: string) => (s.length > 12 ? `${s.slice(0, 4)}…${s.slice(-4)}` : s);
@@ -97,6 +98,18 @@ export function eventLabel(
       : `${who(p.party)} authorized${typeof p.method === 'string' ? ` · ${AUTH_METHOD[p.method] ?? p.method}` : ''}`;
   if (type === 'terms.declined') return `${who(p.party)} declined`;
   if (type === 'terms.proposed') return 'Terms proposed';
+  if (type === 'odds.offered') {
+    const o = (p.offer ?? {}) as Record<string, unknown>;
+    const ratio = typeof o.ratio_label === 'string' ? ` ${o.ratio_label}` : '';
+    if (o.from === 'judge') return `Judge suggests${ratio}`;
+    return o.parent_id ? `${who(o.from)} counters${ratio}` : `${who(o.from)} offers${ratio}`;
+  }
+  if (type === 'odds.answered')
+    return p.answer === 'countered'
+      ? 'Odds countered'
+      : `Odds ${String(p.answer ?? 'answered')}${p.answer === 'accepted' ? ` · ${who(p.party)}` : ''}`;
+  if (type === 'odds.agreed')
+    return `Odds agreed${typeof p.ratio_label === 'string' ? ` · ${p.ratio_label}` : ''}`;
   if (type === 'ruling.issued') {
     const o = String(((p.ruling ?? {}) as Record<string, unknown>).outcome ?? '?');
     return o === 'A_WINS' || o === 'B_WINS'
@@ -108,4 +121,25 @@ export function eventLabel(
   if (type === 'appeal.vote') return 'Panel vote';
   if (type === 'appeal.result') return 'Appeal decided';
   return type;
+}
+
+/**
+ * The rivalry line under VS for a face challenge (bet.invited `rivalry`, A's view):
+ * "Logan 4–7 Jake · Rivals · Jake won 3 straight", "Logan vs Jake · First meeting". Pushes show
+ * as a third number ("4–7–1"). Null for list/link challenges and when the server sent none.
+ */
+export function rivalryLine(
+  r: StageRivalry | null | undefined,
+  names: { A: string | null; B: string | null },
+): string | null {
+  if (!r || r.challenge_method !== 'face') return null;
+  const a = names.A ?? 'Player A';
+  const b = names.B ?? 'Player B';
+  if (r.total === 0) return `${a} vs ${b} · First meeting`;
+  const record = [r.a_wins, r.b_wins, ...(r.pushes > 0 ? [r.pushes] : [])].join('–');
+  let line = `${a} ${record} ${b}`;
+  if (r.rival) line += ' · Rivals';
+  if (r.streak && r.streak.length >= 2)
+    line += ` · ${r.streak.party === 'A' ? a : b} won ${r.streak.length} straight`;
+  return line;
 }

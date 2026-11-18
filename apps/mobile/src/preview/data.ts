@@ -1,6 +1,7 @@
 // Stand-in data for the app preview, until rooms, bets, the judge and payouts are served
 // (TASKS D0-J4, D1-J1, D3-L1, D4-L2). The two bets are SCHEMAS §2.5 and §2.6 verbatim, with
 // the phone's own name as party A, so the screens render real, hash-checked Terms.
+import { emptyOdds, oddsReducer, type OddsOffer, type OddsState } from '@youre-on/shared/odds';
 import { computeTermsHash, type Terms } from '@youre-on/shared/terms';
 
 export interface PreviewUser {
@@ -24,6 +25,25 @@ export const HEAD_TO_HEAD = { wins: 4, losses: 7, net: '-7000000' } as const;
 /** Starting balance and what is in escrow, as `GET /v1/me/balance` would return them. */
 export const BALANCE = { usdc: '42500000', in_escrow: '0' } as const;
 
+/**
+ * The Home sparkline in the design preview: the balance (cents) over 24 points, oldest first,
+ * ending at BALANCE ($42.50). An irregular walk with an upward drift (a few flat runs, one real
+ * dip in the middle): up overall (+$12.50), so it draws green.
+ */
+export const BALANCE_SERIES: readonly number[] = [
+  3000, 3080, 3080, 3215, 3150, 3340, 3295, 3295, 3295, 3420, 3255, 3060, 2905, 3010, 3185, 3410,
+  3375, 3560, 3560, 3735, 3690, 3905, 4030, 4250,
+];
+
+/**
+ * The market screen's price line in the design preview: 20 recent Bitcoin ticks (USD), oldest
+ * first, jittering up to the preview's starting price ($97,412.50), so it draws green.
+ */
+export const MARKET_TRAIL: readonly number[] = [
+  97268.4, 97281.9, 97274.15, 97296.8, 97310.25, 97301.6, 97289.05, 97315.7, 97338.2, 97329.45,
+  97347.9, 97362.3, 97351.15, 97368.6, 97384.95, 97372.4, 97391.8, 97404.25, 97398.1, 97412.5,
+];
+
 export interface HistoryItem {
   bet_id: string;
   title: string;
@@ -32,6 +52,8 @@ export interface HistoryItem {
   net: string;
   outcome: 'won' | 'lost' | 'void';
   settled_at: string;
+  /** A bet at odds: "$5 vs $15" (mine first); absent for even stakes. */
+  stakes?: string;
 }
 
 export const HISTORY: readonly HistoryItem[] = [
@@ -75,7 +97,12 @@ export interface PreviewBet {
 }
 
 /** SCHEMAS §2.5: "Bet you $5 you can't land a bottle flip." `me` is party A. */
-export function bottleFlip(myName: string, opponent = 'Jake'): PreviewBet {
+export function bottleFlip(
+  myName: string,
+  opponent = 'Jake',
+  /** Odds: party A's and B's stakes (micro-USDC); even $5 each by default. */
+  stakes: { a: string; b: string } = { a: '5000000', b: '5000000' },
+): PreviewBet {
   const { terms, terms_hash } = computeTermsHash({
     schema_version: 1,
     bet_id: '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f',
@@ -104,7 +131,7 @@ export function bottleFlip(myName: string, opponent = 'Jake'): PreviewBet {
     ],
     evidence_source: 'camera',
     market: null,
-    stakes: { a: '5000000', b: '5000000', currency: 'USDC' },
+    stakes: { ...stakes, currency: 'USDC' },
     deadline: '2026-11-21T18:15:00.000Z',
     created_at: '2026-11-21T18:05:12.345Z',
   });
@@ -170,3 +197,75 @@ export const PANEL = [
   { seat: 1, name: 'GPT', reason: 'Upright for one frame, then falls. Not at rest.' },
   { seat: 2, name: 'Gemini', reason: 'Final frames show it on its side.' },
 ] as const;
+
+// ---- odds (app/odds, odds/*) -------------------------------------------------------------
+
+/** Logan gives 3 to 1 on Jake's flip: $15 against $5. */
+export const ODDS_STAKES = { a: '15000000', b: '5000000' } as const;
+
+const offer = (o: Partial<OddsOffer> & Pick<OddsOffer, 'from' | 'stakes' | 'ratio_label'>) =>
+  ({
+    offer_id: '0dd50000-0000-4000-8000-000000000001',
+    n: 1,
+    parent_id: null,
+    favored: BigInt(o.stakes.a) > BigInt(o.stakes.b) ? 'A' : 'B',
+    terms_hash: null,
+    suggestion: null,
+    created_at: '2026-11-21T18:05:20.000Z',
+    ...o,
+  }) as OddsOffer;
+
+/**
+ * The judge's suggestion for Jake's bottle flip, grounded in a seeded record (Jake 10-2 on
+ * bottle flips: shrunk to 69 %, fair 2.2 to 1, so Jake puts in $10 against Logan's $5). Labelled
+ * demo history, as the server labels seed rows.
+ */
+export const JUDGE_ODDS: OddsOffer = offer({
+  offer_id: '0dd50000-0000-4000-8000-000000000002',
+  from: 'judge',
+  stakes: { a: '5000000', b: '10000000' },
+  ratio_label: '2 to 1',
+  suggestion: {
+    ratio: '2:1',
+    favored: 'B',
+    stakes: { a: '5000000', b: '10000000' },
+    chance_pct: 69,
+    fair_ratio: 2.2,
+    allowed: ['2:1', '3:1'],
+    base_rate_pct: 25,
+    sample_meaningful: true,
+    stats: {
+      performer: { party: 'B', display_name: 'Jake' },
+      category: 'bottle_flip',
+      category_label: 'Bottle flip',
+      overall: { wins: 12, losses: 4, pushes: 0 },
+      in_category: { made: 10, tries: 12 },
+      as_performer: { made: 10, tries: 12 },
+      recent: ['W', 'W', 'L', 'W', 'W'],
+      streak: { kind: 'W', n: 2 },
+      h2h: {
+        wins: 12,
+        losses: 4,
+        pushes: 0,
+        net: '40000000',
+        net_display: '+$40.00',
+        last_settled_at: '2026-11-15T22:10:00.000Z',
+        includes_seed: true,
+      },
+      includes_seed: true,
+    },
+    reason: 'Jake has landed 10 of his last 12 bottle flips, so he gives 2 to 1.',
+    source: 'template',
+    model: null,
+    cache_key: 'ab'.repeat(32),
+  },
+});
+
+/** The odds as a phone folds them: Jake's offer (3 to 1, Jake gives) or the judge's. */
+export function previewOdds(kind: 'party' | 'judge'): OddsState {
+  const o =
+    kind === 'judge'
+      ? JUDGE_ODDS
+      : offer({ from: 'B', stakes: { a: '5000000', b: '15000000' }, ratio_label: '3 to 1' });
+  return oddsReducer(emptyOdds(), { type: 'odds.offered', payload: { offer: o } });
+}

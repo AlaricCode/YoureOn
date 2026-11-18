@@ -7,6 +7,7 @@ import {
   BetInviteAnsweredPayload,
   HearingTurnOpenPayload,
   JudgeCuePayload,
+  StageRivalry,
   TxSignRequestPayload,
 } from './api';
 import { AppealResult, AppealVote } from './appeal';
@@ -15,8 +16,10 @@ import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
 import { ChainEvents } from './chain-events';
 import { CameraEvidence, GeminiSettlementRecord } from './evidence';
 import { GeminiMarketSnapshot } from './gemini';
+import { BetGgPayload, ReviewClosedPayload, ReviewRequestedPayload } from './gg';
 import { HearingRuling, HearingTrigger, HearingTurn } from './hearing';
 import { ClarificationQuestion, GuardrailRefusal, TermsDraft } from './negotiation';
+import { OddsAgreedPayload, OddsAnsweredPayload, OddsOfferedPayload } from './odds';
 import { BetId, Hex32, IsoUtc, Party, Signature, UserRef, Uuid } from './primitives';
 import { Ruling } from './ruling';
 import { TermsEnvelope } from './terms';
@@ -43,7 +46,16 @@ const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType
 
 export const RealtimeEvent = z.discriminatedUnion('type', [
   /** To B's user channel. */
-  env('bet.invited', 'server', z.object({ challenger: UserRef, room_id: Uuid })),
+  env(
+    'bet.invited',
+    'server',
+    z.object({
+      challenger: UserRef,
+      room_id: Uuid,
+      /** API-CONTRACT §3.4 NEW: the pair's record before this bet (A = challenger). */
+      rivalry: StageRivalry.optional(),
+    }),
+  ),
   /** API-CONTRACT §3.4 NEW: B tapped accept/decline on the invite (not an authorization). */
   env('bet.invite_answered', 'server', BetInviteAnsweredPayload),
   env(
@@ -77,6 +89,12 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
     }),
   ),
   env('terms.declined', 'server', z.object({ party: Party })),
+  /** API-CONTRACT §3.4 NEW (odds, ./odds): a party or the judge offers stakes a/b. */
+  env('odds.offered', 'server', OddsOfferedPayload),
+  /** Accepted / countered / withdrawn / superseded. */
+  env('odds.answered', 'server', OddsAnsweredPayload),
+  /** Both accepted: these stakes are agreed (the card carries them under terms_hash). */
+  env('odds.agreed', 'server', OddsAgreedPayload),
   /** API-CONTRACT §3.4 NEW: the loser's concede/appeal message (never the lock). */
   env('tx.sign_request', 'server', TxSignRequestPayload),
   /** API-CONTRACT §3.4 NEW: server-composed [EVENT] line; only A's phone (voice host) acts on it (§4.5). */
@@ -127,6 +145,12 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
   /** API-CONTRACT §3.4 NEW: each hearing turn's clock starts. */
   env('hearing.turn_open', 'server', HearingTurnOpenPayload),
   env('hearing.turn', 'server', z.object({ turn: HearingTurn })),
+  /** NEW (./gg): the loser's GG went out (bet.state CONCEDED in the same commit). */
+  env('bet.gg', 'server', BetGgPayload),
+  /** NEW (./gg): a review was asked for (voice / demo); the loser's phone opens the appeal confirm. */
+  env('review.requested', 'server', ReviewRequestedPayload),
+  /** NEW (./gg): the loser kept the ruling, or confirm_by passed unconfirmed. */
+  env('review.closed', 'server', ReviewClosedPayload),
   env('appeal.vote', 'server', z.object({ vote: AppealVote })),
   env('appeal.result', 'server', z.object({ result: AppealResult, ruling_hash: Hex32 })),
   /** 1 Hz per gemini bet; the stage chart uses the stage.market control frame (API-CONTRACT §3.1). */

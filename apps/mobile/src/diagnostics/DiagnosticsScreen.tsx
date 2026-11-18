@@ -2,6 +2,7 @@
 // a few extra ones, and shows a red/green row for each. The camera panels are lazy-loaded and
 // only one is mounted at a time. "Log report" prints a JSON report to the Metro log for
 // docs/measurements.md.
+import { StatusBar } from 'expo-status-bar';
 import { lazy, Suspense, useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -19,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { importSafely } from '../app/importSafely';
 import { AUTO_CHECKS } from './autoChecks';
 import { CHECKS, type CameraPanel, type CheckId } from './catalog';
+import { half, palette, radius, space, type } from '../ui/tokens';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
 import {
   buildReport,
@@ -44,12 +46,14 @@ const TIMEOUTS_MS: Partial<Record<CheckId, number>> = {
 };
 
 const COLORS: Record<CheckResult['status'], string> = {
-  idle: '#9e9e9e',
-  running: '#1e88e5',
-  'awaiting-confirm': '#f9a825',
-  pass: '#2e7d32',
-  fail: '#c62828',
+  idle: palette.dim,
+  running: palette.text,
+  'awaiting-confirm': palette.accent,
+  pass: palette.success,
+  fail: palette.danger,
 };
+/** The system Button's tint (iOS draws its title in this colour). */
+const BUTTON_TINT = palette.accent;
 
 export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } = {}) {
   const [results, setResults] = useState<CheckResults>({});
@@ -108,6 +112,8 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+      {/* Black background: light status bar (mounted after the root's, so it wins). */}
+      <StatusBar style="light" />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Build diagnostics</Text>
         <Text
@@ -118,7 +124,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
                 ? COLORS.pass
                 : summary.failed.length
                   ? COLORS.fail
-                  : '#333',
+                  : palette.text,
             },
           ]}
         >
@@ -128,27 +134,33 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
 
         <View style={styles.row}>
           <Button
+            color={BUTTON_TINT}
             title={running ? 'Running…' : 'Run checks'}
             disabled={running}
             onPress={() => void runAuto()}
           />
-          <Button title="Log report" onPress={logReport} />
+          <Button color={BUTTON_TINT} title="Log report" onPress={logReport} />
         </View>
 
         <View style={styles.row}>
           <Button
+            color={BUTTON_TINT}
             title="VisionCamera"
             onPress={() => setPanel((p) => (p === 'vision' ? null : 'vision'))}
           />
           <Button
+            color={BUTTON_TINT}
             title="expo-camera"
             onPress={() => setPanel((p) => (p === 'expo' ? null : 'expo'))}
           />
-          {panel ? <Button title="Close camera" onPress={() => setPanel(null)} /> : null}
+          {panel ? (
+            <Button color={BUTTON_TINT} title="Close camera" onPress={() => setPanel(null)} />
+          ) : null}
         </View>
 
         <View style={styles.row}>
           <Button
+            color={BUTTON_TINT}
             title="App preview"
             onPress={() => {
               setPanel(null);
@@ -157,6 +169,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
           />
           {onClose ? (
             <Button
+              color={BUTTON_TINT}
               title="Back to app"
               onPress={() => {
                 setPanel(null);
@@ -172,7 +185,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
             name={panel === 'vision' ? 'VisionCamera panel' : 'expo-camera panel'}
             onError={(m) => panelError(panel, m)}
           >
-            <Suspense fallback={<ActivityIndicator />}>
+            <Suspense fallback={<ActivityIndicator color={palette.accent} />}>
               {panel === 'vision' ? (
                 <VisionCameraPanel onResult={setResult} />
               ) : (
@@ -200,10 +213,10 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
                 {status === 'awaiting-confirm' ? (
                   <View style={styles.row}>
                     <Pressable style={styles.confirm} onPress={() => confirm(c.id, true)}>
-                      <Text>Felt it</Text>
+                      <Text style={styles.confirmText}>Felt it</Text>
                     </Pressable>
                     <Pressable style={styles.confirm} onPress={() => confirm(c.id, false)}>
-                      <Text>Didn&apos;t</Text>
+                      <Text style={styles.confirmText}>Didn&apos;t</Text>
                     </Pressable>
                   </View>
                 ) : null}
@@ -220,7 +233,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
       >
         {previewOpen ? (
           <PanelErrorBoundary name="App preview" onError={() => undefined}>
-            <Suspense fallback={<ActivityIndicator />}>
+            <Suspense fallback={<ActivityIndicator color={palette.accent} />}>
               <PreviewApp onClose={() => setPreviewOpen(false)} />
             </Suspense>
           </PanelErrorBoundary>
@@ -231,20 +244,21 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  content: { padding: 16, gap: 12 },
-  title: { fontSize: 24, fontWeight: '700' },
-  summary: { fontSize: 16, fontWeight: '600' },
-  row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
-  check: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
-  dot: { width: 14, height: 14, borderRadius: 7, marginTop: 3 },
+  safe: { flex: 1, backgroundColor: palette.background },
+  content: { paddingHorizontal: space.page, paddingVertical: space.x2, gap: half.x15 },
+  title: { ...type.title },
+  summary: { ...type.heading },
+  row: { flexDirection: 'row', flexWrap: 'wrap', gap: space.x1, alignItems: 'center' },
+  check: { flexDirection: 'row', gap: half.x15, alignItems: 'flex-start' },
+  dot: { width: 14, height: 14, borderRadius: 7, marginTop: half.x05 },
   checkBody: { flex: 1, gap: 2 },
-  label: { fontSize: 15, fontWeight: '600' },
-  detail: { fontSize: 12, color: '#555' },
+  label: { ...type.labelStrong },
+  detail: { ...type.small },
   confirm: {
-    paddingHorizontal: 12,
+    paddingHorizontal: half.x15,
     paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#eee',
+    borderRadius: radius.pill,
+    backgroundColor: palette.fill,
   },
+  confirmText: { ...type.labelMedium },
 });

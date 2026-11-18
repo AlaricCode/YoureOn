@@ -1,0 +1,58 @@
+# The polish layer on the stand-in design preview (diagnostics > App preview): the History
+# loading skeleton, and the stake picker's sliding pill (a tap selects the chip, and its radio
+# state follows). Needs the preview's `historyLoading` entry.
+#   maestro --device <udid> test e2e/maestro/sim-polish.yaml   (signed in, on home)
+appId: dev.youreon.app
+name: sim-polish
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- longPressOn:
+    id: balance-header
+- extendedWaitUntil:
+    visible: App preview
+    timeout: 10000
+- waitForAnimationToEnd
+- tapOn: App preview
+- extendedWaitUntil:
+    visible:
+      id: menu-launch
+    timeout: 10000
+# History, first load: skeleton rows (one element reading "Loading"), not a spinner.
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: historyLoading
+- assertVisible:
+    id: history-loading
+- tapOn:
+    id: preview-menu
+# Bet on Bitcoin: tap $10, the pill slides there and $10 is the selected radio.
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: marketPanel
+- tapOn:
+    id: market-stake-10
+- waitForAnimationToEnd:
+    timeout: 1000
+- assertVisible:
+    id: market-stake-10
+    selected: true
+- takeScreenshot: polish-stake-10
+- tapOn:
+    id: market-stake-1
+- waitForAnimationToEnd:
+    timeout: 1000
+- assertVisible:
+    id: market-stake-1
+    selected: true
+- assertVisible:
+    id: market-stake-10
+    selected: false
+- tapOn:
+    id: preview-menu

@@ -25,6 +25,7 @@ import {
   canConcede,
   countdownLabel,
   RESULT_TITLE,
+  signedUsd,
   type BetView,
   type MyResult,
 } from '../bets/view';
@@ -41,21 +42,27 @@ import {
 import {
   AttemptDots,
   Avatar,
-  BalanceHeader,
-  Card,
+  BalanceLine,
   Chip,
-  CountdownBar,
   DataText,
   DotsLabel,
   InfoRow,
+  MomentGroup,
+  MomentHeadline,
+  MomentMoney,
+  MomentScreen,
   Page,
   Screen,
   Section,
+  Sparkline,
   StatusHero,
   TopBar,
   useNow,
 } from '../ui/parts';
-import { palette, space, type } from '../ui/tokens';
+import { DrainBar } from '../ui/DrainBar';
+import { RollingText } from '../ui/RollingNumber';
+import { SwipeToConfirm } from '../ui/SwipeToConfirm';
+import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
 // ---------------------------------------------------------------------------------------
@@ -86,31 +93,32 @@ export function LiveScreen({
     <Screen>
       <TopBar title={t(COPY.live.title)} tag={tag} />
       <Page>
-        <DataText variant="title">{view.claim}</DataText>
-        <Card style={styles.vs}>
-          <Avatar name={view.myName} size={48} accent />
+        <DataText variant="statement">{view.claim}</DataText>
+        {/* You (white ring), the pot in thin numerals, them; hairlines above and below. */}
+        <View style={styles.vs}>
+          <Avatar name={view.myName} size={avatarSize.vs} accent />
           <View style={styles.pot}>
             <Label variant="small">{t(COPY.live.pot)}</Label>
-            <DataText variant="title">{view.potUsd}</DataText>
+            <DataText variant="figure">{view.potUsd}</DataText>
           </View>
-          <Avatar name={view.theirName} size={48} />
-        </Card>
+          <Avatar name={view.theirName} size={avatarSize.vs} />
+        </View>
         <View style={styles.center}>
           {phase === 'locked' ? (
-            <StatusHero mark="check" title={t(COPY.live.locked)} />
+            <StatusHero mark="check" title={t(COPY.live.locked)} loud />
           ) : phase === 'filming' ? (
             <StatusHero
-              mark="ring"
               title={
                 performerIsMe
                   ? t(COPY.live.yourTurn)
                   : fill.turn(view.performerName ?? view.theirName)
               }
               detail={`${t(COPY.live.filming)} · ${attemptNo}`}
+              loud
             />
           ) : (
             <View style={styles.hero}>
-              <DotsLabel text={t(COPY.live.judging)} variant="title" />
+              <DotsLabel text={t(COPY.live.judging)} variant="subtitle" />
             </View>
           )}
         </View>
@@ -325,7 +333,7 @@ export function JudgeCamScreen({
         {phase === 'sending' || phase === 'sent' ? (
           <Stage style={styles.centerStage}>
             {phase === 'sending' ? (
-              <DotsLabel text={t(COPY.judgeCam.sending)} variant="title" />
+              <DotsLabel text={t(COPY.judgeCam.sending)} variant="subtitle" />
             ) : (
               <StatusHero
                 mark={failed ? 'cross' : 'check'}
@@ -349,7 +357,14 @@ export function JudgeCamScreen({
                   firstProgress.current = { atMs: Date.now(), durationS: e.duration };
               }}
             />
-            <StageBubble prompt={bubble} recording={phase === 'recording' && !noCamera} />
+            {noCamera ? (
+              // No lens (the simulator): the note sits in the middle of the stage, as on Scan.
+              <View style={styles.stageMiddle} pointerEvents="none">
+                <StageBubble prompt={bubble} centered />
+              </View>
+            ) : (
+              <StageBubble prompt={bubble} recording={phase === 'recording'} />
+            )}
             {phase === 'recording' ? (
               <View style={styles.shutterSlot}>
                 <ShutterButton active label={t(COPY.judgeCam.stop)} onPress={() => void stop()} />
@@ -418,53 +433,60 @@ export function RulingScreen({
   const now = useNow(200);
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
-  const mark = result === 'won' ? 'check' : result === 'lost' ? 'cross' : 'ring';
   const left = appealDeadlineMs - now;
+  // A moment, on both phones: the call in big thin white type on black. The money waits for the
+  // payout; the only colour here is the green action.
   return (
-    <Screen>
-      <TopBar tag={tag} />
-      <Page>
-        <StatusHero mark={mark} title={RESULT_TITLE[result]} detail={view.claim} />
-        <Card>
-          <Label variant="small" style={styles.cardLabel}>
-            {judgeLabel ?? t(COPY.ruling.judge)}
-          </Label>
-          <DataText>{reason}</DataText>
-        </Card>
-        <View style={styles.rows}>
-          <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
-          <CountdownBar fraction={left / APPEAL_WINDOW_MS} />
-          <InfoRow label={t(COPY.live.pot)} value={view.potUsd} />
-        </View>
-        <View style={styles.flex} />
-        <AlertLine message={alert ?? null} />
-        {result === 'lost' ? (
-          <>
-            <PrimaryButton
-              testID="ruling-gg"
-              label={t(COPY.ruling.gg)}
-              busy={busy}
-              disabled={!canConcede(result, appealDeadlineMs, now)}
-              onPress={onGG}
-            />
-            {onAppeal && canAppeal(view, result, appealDeadlineMs, now) ? (
-              <>
-                <View style={styles.gap} />
+    <MomentScreen
+      top={<TopBar tag={tag} />}
+      footer={
+        <>
+          <View>
+            <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
+            <DrainBar endsAtMs={appealDeadlineMs} windowMs={APPEAL_WINDOW_MS} />
+            <InfoRow label={t(COPY.live.pot)} value={view.potUsd} />
+          </View>
+          <AlertLine message={alert ?? null} />
+          {result === 'lost' ? (
+            <>
+              {/* GG pays the other side now: a swipe up, the same deliberate gesture as the lock. */}
+              <SwipeToConfirm
+                testID="ruling-gg"
+                label={t(COPY.ruling.gg)}
+                hint={t(COPY.terms.swipeHint)}
+                busy={busy}
+                disabled={!canConcede(result, appealDeadlineMs, now)}
+                onComplete={onGG}
+              />
+              {onAppeal && canAppeal(view, result, appealDeadlineMs, now) ? (
                 <QuietButton
                   testID="ruling-appeal"
                   label={t(COPY.ruling.appeal)}
                   onPress={onAppeal}
                 />
-              </>
-            ) : null}
-          </>
-        ) : (
-          <View style={styles.waiting}>
-            <DotsLabel text={t(COPY.ruling.waiting)} variant="label" />
-          </View>
-        )}
-      </Page>
-    </Screen>
+              ) : null}
+            </>
+          ) : (
+            <View style={styles.waiting}>
+              <DotsLabel text={t(COPY.ruling.waiting)} variant="value" />
+            </View>
+          )}
+        </>
+      }
+    >
+      <View style={styles.momentWords} accessibilityLiveRegion="polite">
+        <MomentHeadline>{RESULT_TITLE[result]}</MomentHeadline>
+        <DataText muted style={styles.centerText}>
+          {view.claim}
+        </DataText>
+      </View>
+      <View style={styles.call}>
+        <Label variant="small">{judgeLabel ?? t(COPY.ruling.judge)}</Label>
+        <DataText variant="label" style={styles.centerText}>
+          {reason}
+        </DataText>
+      </View>
+    </MomentScreen>
   );
 }
 
@@ -486,12 +508,10 @@ export function RedoScreen({
     <Screen>
       <TopBar tag={tag} />
       <Page>
-        <StatusHero mark="ring" title={RESULT_TITLE.redo} />
+        <StatusHero title={RESULT_TITLE.redo} loud />
         <AttemptDots current={attemptNo} total={maxAttempts} />
         <Section label={t(COPY.ruling.tip)}>
-          <Card>
-            <BodyText>{tip}</BodyText>
-          </Card>
+          <BodyText>{tip}</BodyText>
         </Section>
         <View style={styles.flex} />
         <PrimaryButton testID="redo-ready" label={t(COPY.ruling.ready)} onPress={onReady} />
@@ -519,35 +539,15 @@ export function PayoutScreen({
   onHome: () => void;
   tag?: string | undefined;
 }) {
-  const winAmount = view.theirStakeUsd;
+  // micro-USDC → cents, for the figure that counts up.
+  const winCents = Number(BigInt(view.theirStake) / 10_000n);
+  // The balance is one quiet grey line under the hero, never a second big figure.
+  const balance = <BalanceLine cents={balanceCents} pending={won && phase === 'processed'} />;
   return (
-    <Screen>
-      <TopBar tag={tag} />
-      <Page>
-        <BalanceHeader
-          cents={balanceCents}
-          pending={won && phase === 'processed'}
-          delta={won && phase !== 'reverted' ? `+${winAmount}` : null}
-        />
-        <View style={styles.center}>
-          {won ? (
-            <StatusHero
-              mark={phase === 'reverted' ? 'cross' : 'check'}
-              title={phase === 'reverted' ? t(COPY.ruling.payoutFailed) : RESULT_TITLE.won}
-              detail={phase === 'reverted' ? undefined : `+${winAmount}`}
-            />
-          ) : (
-            <StatusHero mark="cross" title={t(COPY.ruling.gg)} detail={`−${view.myStakeUsd}`} />
-          )}
-          {won && phase !== 'reverted' ? (
-            phase === 'processed' ? (
-              <DotsLabel text={t(COPY.ruling.paying)} variant="label" />
-            ) : (
-              <Chip label={t(COPY.ruling.paid)} tone="accent" />
-            )
-          ) : null}
-        </View>
-        {phase === 'reverted' ? (
+    <MomentScreen
+      top={<TopBar tag={tag} />}
+      footer={
+        phase === 'reverted' ? (
           <PrimaryButton label={t(COPY.ruling.retry)} onPress={onRetry} />
         ) : (
           <PrimaryButton
@@ -556,9 +556,43 @@ export function PayoutScreen({
             disabled={won && phase === 'processed'}
             onPress={onHome}
           />
-        )}
-      </Page>
-    </Screen>
+        )
+      }
+    >
+      {won ? (
+        phase === 'reverted' ? (
+          // The same rhythm as won / lost: about 28 pt from the title to the balance line.
+          <View style={styles.failedWords}>
+            <StatusHero mark="cross" title={t(COPY.ruling.payoutFailed)} end />
+            {balance}
+          </View>
+        ) : (
+          // The signature: a giant green figure counting up over a soft green glow (drawn behind
+          // the headline too, so "You won" stays pure white).
+          <MomentGroup glow="in">
+            <MomentHeadline>{RESULT_TITLE.won}</MomentHeadline>
+            <MomentMoney direction="in" cents={winCents} />
+            {balance}
+          </MomentGroup>
+        )
+      ) : (
+        // The mirror image: red, static, the same soft glow in red at a lower opacity.
+        <MomentGroup glow="out">
+          <MomentHeadline>{t(COPY.ruling.gg)}</MomentHeadline>
+          <MomentMoney direction="out" text={signedUsd(`-${view.myStake}`)} />
+          {balance}
+        </MomentGroup>
+      )}
+      {won && phase !== 'reverted' ? (
+        <View style={styles.payStatus}>
+          {phase === 'processed' ? (
+            <DotsLabel text={t(COPY.ruling.paying)} variant="value" />
+          ) : (
+            <Chip label={t(COPY.ruling.paid)} tone="accent" />
+          )}
+        </View>
+      ) : null}
+    </MomentScreen>
   );
 }
 
@@ -597,21 +631,28 @@ export function HearingScreen({
     <Screen>
       <TopBar title={t(COPY.hearing.title)} tag={tag} />
       <Page>
-        <DataText variant="labelStrong">{view.claim}</DataText>
+        <DataText variant="statement">{view.claim}</DataText>
         <View style={styles.turns}>
           {turns.map((tn) => (
             <View key={tn.name} style={styles.turn}>
-              <Avatar name={tn.name} size={36} accent={tn.state === 'now'} />
-              <DataText style={styles.flex}>{tn.name}</DataText>
-              <Chip label={stateLabel[tn.state]} tone={tn.state === 'now' ? 'accent' : 'muted'} />
+              <Avatar name={tn.name} size={avatarSize.md} accent={tn.state === 'now'} />
+              <DataText variant="rowMedium" style={styles.flex} lines={1}>
+                {tn.name}
+              </DataText>
+              <Chip
+                label={stateLabel[tn.state]}
+                tone={tn.state === 'now' ? 'accent' : 'muted'}
+                style={styles.rowChip}
+              />
             </View>
           ))}
         </View>
         <View style={styles.center}>
           {judging ? (
-            <DotsLabel text={t(COPY.hearing.judging)} variant="title" />
+            <DotsLabel text={t(COPY.hearing.judging)} variant="subtitle" />
           ) : turnEndsAtMs ? (
-            <Text style={type.display}>{countdownLabel(turnEndsAtMs - now)}</Text>
+            // The turn clock: big thin tabular numerals.
+            <Text style={type.moment}>{countdownLabel(turnEndsAtMs - now)}</Text>
           ) : null}
         </View>
         {myTurnOpen ? (
@@ -627,9 +668,11 @@ export function HearingScreen({
               setTalking(false);
               onTalkEnd();
             }}
-            style={[styles.talk, talking && styles.talkOn]}
+            style={styles.talk}
           >
-            <Label variant="labelStrong">
+            {/* The standard primary pill; while held, the hold's black sweep covers it. */}
+            {talking ? <View style={styles.talkOn} pointerEvents="none" /> : null}
+            <Label variant="button" style={styles.talkText}>
               {talking ? t(COPY.hearing.talking) : t(COPY.hearing.holdToTalk)}
             </Label>
           </Pressable>
@@ -661,29 +704,33 @@ export function AppealScreen({
     <Screen>
       <TopBar title={t(COPY.appeal.title)} tag={tag} />
       <Page>
-        {seats.map((s) => (
-          <Card key={s.name} style={styles.seat}>
-            <View style={styles.seatHead}>
-              <DataText variant="labelStrong" style={styles.flex}>
-                {s.name}
-              </DataText>
-              {s.vote === 'voting' ? (
-                <DotsLabel text={t(COPY.appeal.voting)} variant="small" />
-              ) : (
-                <Chip
-                  label={voteLabel[s.vote]}
-                  tone={s.vote === 'overturns' ? 'accent' : 'muted'}
-                />
-              )}
+        <View style={styles.seats}>
+          {seats.map((s) => (
+            <View key={s.name} style={styles.seat}>
+              <View style={styles.seatHead}>
+                <DataText variant="rowMedium" style={styles.flex}>
+                  {s.name}
+                </DataText>
+                {s.vote === 'voting' ? (
+                  <DotsLabel text={t(COPY.appeal.voting)} variant="small" align="end" />
+                ) : (
+                  <Chip
+                    label={voteLabel[s.vote]}
+                    tone={s.vote === 'overturns' ? 'accent' : 'muted'}
+                    style={styles.rowChip}
+                  />
+                )}
+              </View>
+              {s.reason ? <DataText muted>{s.reason}</DataText> : null}
             </View>
-            {s.reason ? <DataText muted>{s.reason}</DataText> : null}
-          </Card>
-        ))}
+          ))}
+        </View>
         <View style={styles.center}>
           {result ? (
             <StatusHero
-              mark={result === 'stands' ? 'ring' : 'check'}
+              mark={result === 'stands' ? undefined : 'check'}
               title={result === 'stands' ? t(COPY.appeal.stands) : t(COPY.appeal.flipped)}
+              loud
             />
           ) : null}
         </View>
@@ -700,10 +747,14 @@ export function MarketScreen({
   side,
   expiryMs,
   replay = false,
+  seedTrail,
   tag,
 }: {
   view: BetView;
   priceUsd: string;
+  /** Prices already seen, oldest first (the design preview's sample line); the live feed's ticks
+   * are appended to it. */
+  seedTrail?: readonly number[] | undefined;
   strikeUsd: string;
   /** "Up" or "Down": my side. */
   side: string;
@@ -713,61 +764,140 @@ export function MarketScreen({
   tag?: string | undefined;
 }) {
   const now = useNow(500);
+  const trail = usePriceTrail(priceUsd, seedTrail);
   return (
     <Screen>
       <TopBar title={t(COPY.market.title)} tag={tag} />
       <Page>
-        {replay ? <Chip label={t(COPY.market.replay)} /> : null}
-        <DataText variant="labelStrong">{view.claim}</DataText>
+        {replay ? (
+          <View style={styles.chipSlot}>
+            <Chip label={t(COPY.market.replay)} />
+          </View>
+        ) : null}
+        <DataText variant="statement" style={replay ? styles.afterChip : undefined}>
+          {view.claim}
+        </DataText>
+        {/* The price, Robinhood-style: grey label, big thin tabular numerals, then the ticks seen
+            on this screen as a 2 pt line (green if up, red if down; hidden until two ticks). */}
         <View style={styles.priceBlock}>
-          <Label variant="small">{t(COPY.market.price)}</Label>
-          <Text style={type.display}>{priceUsd}</Text>
+          <Label variant="value">{t(COPY.market.price)}</Label>
+          <RollingText text={priceUsd} style={type.balance} minScale={0.5} />
+          <View style={styles.trail}>
+            <Sparkline points={trail} />
+          </View>
         </View>
         <View style={styles.rows}>
-          <InfoRow label={t(COPY.market.strike)} value={strikeUsd} />
-          <InfoRow label={t(COPY.market.side)} value={side} />
-          <InfoRow label={t(COPY.market.odds)} value={view.odds ?? ''} />
-          <InfoRow label={t(COPY.live.pot)} value={`${view.myStakeUsd} vs ${view.theirStakeUsd}`} />
+          <InfoRow label={t(COPY.market.strike)} value={strikeUsd} divider />
+          <InfoRow label={t(COPY.market.side)} value={side} divider />
+          <InfoRow label={t(COPY.market.odds)} value={view.odds ?? ''} divider />
+          <InfoRow
+            label={t(COPY.live.pot)}
+            value={`${view.myStakeUsd} vs ${view.theirStakeUsd}`}
+            divider
+          />
           <InfoRow label={t(COPY.market.settlesIn)} value={countdownLabel(expiryMs - now)} />
         </View>
         <View style={styles.center}>
-          <DotsLabel text={t(COPY.market.waiting)} variant="label" />
+          <DotsLabel text={t(COPY.market.waiting)} variant="value" />
         </View>
       </Page>
     </Screen>
   );
 }
 
+/** Ticks kept for the market line: about two minutes at the feed's pace. */
+const TRAIL_MAX = 120;
+
+/**
+ * The prices this screen has shown, oldest first (no new fetches: each new `priceUsd` the
+ * screen receives is appended when it changes). "$97,312.50" → 97312.5; "—" is skipped.
+ */
+function usePriceTrail(priceUsd: string, seed?: readonly number[]): number[] {
+  const [trail, setTrail] = useState<number[]>(() => [...(seed ?? [])]);
+  useEffect(() => {
+    const n = Number(priceUsd.replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(n) || n <= 0) return;
+    setTrail((prev) =>
+      prev.at(-1) === n ? prev : [...prev, n].slice(Math.max(0, prev.length + 1 - TRAIL_MAX)),
+    );
+  }, [priceUsd]);
+  return trail;
+}
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  centerText: { textAlign: 'center' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.x2 },
   centerStage: { alignItems: 'center', justifyContent: 'center' },
   hero: { paddingVertical: space.x3 },
-  gap: { height: space.x1 },
-  gapLg: { height: space.x2 },
+  gapLg: { height: space.x3 },
+  // Live
   vs: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: space.x3,
+    paddingVertical: space.x3,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: color.divider,
   },
-  pot: { alignItems: 'center' },
-  shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x2 },
-  cardLabel: { marginBottom: 4, color: palette.accent },
-  rows: { marginTop: space.x2 },
+  pot: { alignItems: 'center', gap: half.x05 },
+  shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x3 },
+  // Moments (ruling, payout)
+  momentWords: { alignSelf: 'stretch', alignItems: 'center', gap: space.x2 },
+  /** The hero keeps 24 pt under its title; 4 more puts the balance ~28 pt below it. */
+  failedWords: { alignSelf: 'stretch', alignItems: 'center', gap: half.x05 },
+  call: { alignSelf: 'stretch', alignItems: 'center', gap: half.x05, paddingHorizontal: space.x2 },
+  stageMiddle: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  /** "Paying…" / Paid, centred under the figure. */
+  // A row, so the Chip's own alignSelf: 'flex-start' cannot pull it to the left edge.
+  payStatus: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: space.x2,
+  },
   waiting: { height: space.control, alignItems: 'center', justifyContent: 'center' },
-  turns: { marginTop: space.x3, gap: space.x1 },
-  turn: { flexDirection: 'row', alignItems: 'center', gap: space.x2, paddingVertical: 4 },
+  // Redo
+  // Hearing
+  turns: { marginTop: space.x3 },
+  turn: {
+    minHeight: space.row + space.x1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: half.x15 + half.x05,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: color.divider,
+  },
+  rowChip: { alignSelf: 'center' },
   talk: {
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 2,
-    borderColor: palette.accent,
+    height: space.control,
+    borderRadius: radius.pill,
+    backgroundColor: color.primaryAction,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  talkOn: { backgroundColor: palette.accent },
-  seat: { marginTop: space.x2, gap: 4 },
-  seatHead: { flexDirection: 'row', alignItems: 'center' },
-  priceBlock: { marginTop: space.x3 },
+  talkOn: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: palette.black,
+    opacity: hold.progressOpacity,
+  },
+  talkText: { color: color.onAccent },
+  // Appeal
+  seats: { marginTop: space.x1 },
+  seat: {
+    gap: space.x1,
+    paddingVertical: space.x2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: color.divider,
+  },
+  seatHead: { flexDirection: 'row', alignItems: 'center', gap: space.x1 },
+  // Market
+  chipSlot: { alignSelf: 'flex-start' },
+  afterChip: { marginTop: half.x15 },
+  priceBlock: { marginTop: space.x4, gap: half.x05 },
+  trail: { marginTop: space.x2 },
+  rows: { marginTop: space.x3 },
 });

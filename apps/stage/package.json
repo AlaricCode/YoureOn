@@ -11,6 +11,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@fontsource/geist": "5.3.0",
+    "@fontsource/geist-mono": "5.3.0",
     "@youre-on/shared": "*",
     "react": "19.3.0",
     "react-dom": "19.3.0",

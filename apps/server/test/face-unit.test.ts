@@ -9,7 +9,14 @@ import { DEV_KEK_ID, faceConfigOf, parseKey32, resolveFaceConfig } from '../src/
 import { issueMatchTicket, verifyMatchTicketWithKey } from '../src/face/ticket';
 import { atRestAad, openAtRest, openRequestEmbedding, sealAtRest } from '../src/face/vault';
 import { verifyMatchTicket } from '../src/bets/match-ticket';
-import { faceMatchGate, oneInFlight } from '../src/face/routes';
+import {
+  FACE_MATCH_BUCKET,
+  FACE_MATCH_LIVE_BUCKET,
+  FACE_MATCH_LIVE_BUCKET_NAME,
+  faceMatchGate,
+  oneInFlight,
+} from '../src/face/routes';
+import { RateLimiter } from '../src/http/rate-limit';
 import { testEnv } from './helpers';
 
 const KEY_B64 = Buffer.alloc(32, 7).toString('base64');
@@ -336,5 +343,95 @@ describe('face-match gate: the 30/min token is spent only by calls that run', ()
     expect(ran).toBe(1);
     // Not stuck "in flight": the next refusal is the bucket again, not "One scan at a time".
     await expect(gate('u1', work)).rejects.toMatchObject({ details: { bucket: 'face-match' } });
+  });
+});
+
+describe('face-match gate: the body picks the bucket (tap 30/min, live 60/min)', () => {
+  type Body = { mode?: 'tap' | 'live' | undefined };
+  it('takes the token of the body mode (absent = tap); without a reader the call is a tap', async () => {
+    const taken: string[] = [];
+    const gate = faceMatchGate((u, mode) => void taken.push(`${u}:${mode}`));
+    const seen: Body[] = [];
+    const work = async (b: Body) => void seen.push(b);
+    await gate<void, Body>('u1', work, async () => ({ mode: 'live' }));
+    await gate<void, Body>('u1', work, async () => ({ mode: 'tap' }));
+    await gate<void, Body>('u1', work, async () => ({}));
+    await gate('u1', async () => 'no reader');
+    expect(taken).toEqual(['u1:live', 'u1:tap', 'u1:tap', 'u1:tap']);
+    expect(seen).toEqual([{ mode: 'live' }, { mode: 'tap' }, {}]);
+  });
+
+  it('an invalid body (the reader throws 400) spends no token and frees the guard', async () => {
+    const taken: string[] = [];
+    const gate = faceMatchGate((_u, mode) => void taken.push(mode));
+    let ran = 0;
+    const bad = async (): Promise<Body> => {
+      throw new HttpError('VALIDATION_FAILED');
+    };
+    for (let i = 0; i < 3; i++) {
+      await expect(gate<number, Body>('u1', async () => ++ran, bad)).rejects.toMatchObject({
+        code: 'VALIDATION_FAILED',
+      });
+    }
+    expect(taken).toEqual([]);
+    expect(ran).toBe(0);
+    expect(
+      await gate<number, Body>(
+        'u1',
+        async () => ++ran,
+        async () => ({ mode: 'live' }),
+      ),
+    ).toBe(1);
+    expect(taken).toEqual(['live']);
+  });
+
+  it('live and tap share one in-flight slot per user: the second is face-match/in-flight', async () => {
+    const taken: string[] = [];
+    const gate = faceMatchGate((_u, mode) => void taken.push(mode));
+    let release!: () => void;
+    const slow = gate<string, Body>(
+      'u1',
+      () => new Promise<string>((r) => (release = () => r('live done'))),
+      async () => ({ mode: 'live' }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await expect(
+      gate<string, Body>(
+        'u1',
+        async () => 'tap',
+        async () => ({ mode: 'tap' }),
+      ),
+    ).rejects.toMatchObject({ code: 'RATE_LIMITED', details: { bucket: 'face-match/in-flight' } });
+    expect(taken).toEqual(['live']);
+    release();
+    expect(await slow).toBe('live done');
+    expect(
+      await gate<string, Body>(
+        'u1',
+        async () => 'tap',
+        async () => ({ mode: 'tap' }),
+      ),
+    ).toBe('tap');
+    expect(taken).toEqual(['live', 'tap']);
+  });
+
+  it('the live bucket refuses with face-match/live and the tap bucket is untouched', async () => {
+    const limiter = new RateLimiter(() => 0);
+    const gate = faceMatchGate((u, mode) =>
+      mode === 'live'
+        ? limiter.take(FACE_MATCH_LIVE_BUCKET_NAME, u, FACE_MATCH_LIVE_BUCKET)
+        : limiter.take('face-match', u, FACE_MATCH_BUCKET),
+    );
+    const ok = async () => 'ok';
+    const live = async (): Promise<Body> => ({ mode: 'live' });
+    for (let i = 0; i < 60; i++) expect(await gate<string, Body>('u1', ok, live)).toBe('ok');
+    await expect(gate<string, Body>('u1', ok, live)).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      details: { bucket: 'face-match/live' },
+    });
+    for (let i = 0; i < 30; i++) expect(await gate('u1', ok)).toBe('ok');
+    await expect(gate('u1', ok)).rejects.toMatchObject({ details: { bucket: 'face-match' } });
+    expect(FACE_MATCH_BUCKET).toEqual({ limit: 30, windowMs: 60_000 });
+    expect(FACE_MATCH_LIVE_BUCKET).toEqual({ limit: 60, windowMs: 60_000 });
   });
 });

@@ -29,6 +29,7 @@ import { Uuid } from '@youre-on/shared/primitives';
 import {
   evaluateProposeTerms,
   fitReply,
+  hasOdds,
   proposeTermsReply,
   type ProposeEvaluation,
   type ToolReply,
@@ -111,9 +112,10 @@ export const auditOnlySink: ProposalSink = {
   },
 };
 
-const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 200);
+/** Always HTTP 200, the body fitted under 300 B (§4.2). Shared by every webhook tool. */
+export const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 200);
 
-const SAY = {
+export const SAY = {
   WRONG_BET: "That's not this bet's docket.",
   NOT_DRAFTING: 'These terms are already frozen. Start a new bet to change them.',
   SLOW_DOWN: 'One at a time. Say that again.',
@@ -187,7 +189,11 @@ export class ToolState {
 export const toolDedupeKey = (conversationId: string, name: string, body: unknown): string =>
   sha256Hex(`${conversationId}\n${name}\n${jcs(body)}`);
 
-async function loadBinding(deps: AppDeps, conversationId: string): Promise<BoundSession | null> {
+/** conversation_id -> the active voice session's bet (§4.1 binding check); null = WRONG_BET. */
+export async function loadBinding(
+  deps: AppDeps,
+  conversationId: string,
+): Promise<BoundSession | null> {
   const [row] = await deps.db
     .select({
       voice_session_id: voiceSessions.id,
@@ -220,6 +226,18 @@ async function loadBinding(deps: AppDeps, conversationId: string): Promise<Bound
     party_b_id: row.party_b_id,
     room_id: row.room_id,
   };
+}
+
+async function partyNames(
+  deps: AppDeps,
+  s: Pick<BoundSession, 'party_a_id' | 'party_b_id'>,
+): Promise<{ a: string; b: string } | undefined> {
+  try {
+    const refs = await loadUserRefs(deps.db, [s.party_a_id, s.party_b_id]);
+    return { a: refs.get(s.party_a_id)!.display_name, b: refs.get(s.party_b_id)!.display_name };
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ToolHandlerOptions {
@@ -345,7 +363,16 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
           ? opts.state.revision(betId, sha256Hex(jcs(evaluation.proposal)))
           : undefined;
       // real_world: Gemini's split (or its refusal) in the spoken reply (markets/voice-tool.ts)
-      const r = realWorldReply(deps, evaluation, proposeTermsReply(evaluation, { rev, maxStake }));
+      // Odds read-back names ("Logan puts in fifteen, Jake puts in five"): one query, odds only.
+      const names =
+        evaluation.kind === 'proposal' && hasOdds(evaluation.proposal)
+          ? await partyNames(deps, session)
+          : undefined;
+      const r = realWorldReply(
+        deps,
+        evaluation,
+        proposeTermsReply(evaluation, { rev, maxStake, ...(names ? { names } : {}) }),
+      );
       opts.state.store(dedupeKey, now, r);
       if (evaluation.kind === 'refused') opts.state.markRefused(betId, r);
 
@@ -378,6 +405,7 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
 const CONFIRM_SAY = {
   NOT_PROPOSED: "Nothing to confirm yet. What's the bet?",
   QUOTE_STALE: "Gemini can't price this round anymore. Let's take the next one.",
+  ODDS_PENDING: 'Odds first. Both of you tap Accept on your phones.',
 } as const;
 
 /** "Jake has to accept the challenge on their phone first." (fits the 200-char `say`). */
@@ -404,6 +432,8 @@ export async function confirmAndLock(
     const b = (await loadUserRefs(deps.db, [r.party_b_id])).get(r.party_b_id);
     return { ok: false, fix: 'INVITE_PENDING', say: invitePendingSay(b?.display_name ?? 'They') };
   }
+  if (!r.ok && r.fix === 'ODDS_PENDING')
+    return { ok: false, fix: 'ODDS_PENDING', say: CONFIRM_SAY.ODDS_PENDING };
   if (!r.ok && r.fix === 'REQUOTED') {
     // A market quote too old to lock: re-quoted as new terms (terms.proposed already pushed).
     // If the old round stopped pricing, the re-quote is the NEXT round: say so (new line, end).

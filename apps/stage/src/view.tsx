@@ -9,17 +9,10 @@
 //   right:  Gemini BTC 5-minute odds · the on-chain ticker with Explorer links
 //   bottom: demo health (fee payer SOL, free nonces, RPC / DB ms, REPLAY clips cached)
 // Overlays: the PAID moment, a big Explorer QR (Q), REPLAY clips (1-6), key help (H).
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { recordLine } from '@youre-on/shared/gg';
 import { isCachedRulingModel } from '@youre-on/shared/ruling';
 import { formatPrice } from '@youre-on/shared/settlement';
 import {
@@ -36,19 +29,22 @@ import {
   clock,
   eventLabel,
   groupedCode,
-  hueOf,
   initials,
   lagLabel,
+  rivalryLine,
   shortSig,
   usd,
   usdPrice,
 } from './format';
 import { marketView, type MarketView } from './market';
+import { OddsChip, OddsMoment, showsOdds } from './odds';
 import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from './phase';
 import { qrSvg } from './qr';
 import { healthItems, type DemoHealth, type HealthItem } from './health';
 import { BEAT_TITLES, replayProgress, type ReplayStatus } from './replays';
 import { verifiedChain, type Verification } from './verify';
+import { liveGg, payoutLabel, reviewBannerOn } from './gg';
+import { ReviewBanner } from './gg-moment';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -121,7 +117,7 @@ export function TxQrCard({ tx }: { tx: { label: string; signature: string } }) {
     <figure className="qr-card">
       <QrCode text={explorerTx(tx.signature)} label={`QR: ${tx.label} on Solana Explorer`} />
       <figcaption>
-        <span className="label">SCAN · {tx.label}</span>
+        <span className="label sc">SCAN · {tx.label}</span>
         <span className="muted">Solana Explorer · devnet</span>
       </figcaption>
     </figure>
@@ -140,9 +136,8 @@ export function Avatar({
   size?: 'lg' | 'sm';
 }) {
   const [broken, setBroken] = useState(false);
-  const style = { '--hue': String(hueOf(name)) } as CSSProperties;
   return (
-    <span className={`avatar ${size}`} style={style} aria-hidden="true">
+    <span className={`avatar ${size}`} aria-hidden="true">
       {url && !broken ? (
         <img src={url} alt="" onError={() => setBroken(true)} referrerPolicy="no-referrer" />
       ) : (
@@ -170,9 +165,10 @@ function partyStatus(
   if (won)
     return won === p ? (
       <span className="status win">WINNER</span>
-    ) : (
+    ) : liveGg(b)?.by === p ? (
+      // ./gg: "GG" only once the loser actually said it (before that the ruling is still open)
       <span className="status muted">GG</span>
-    );
+    ) : null;
   if (b.declined === p) return <span className="status bad">declined</span>;
   const a = b.auth[p];
   const locked = b.lock && b.lock.status !== 'failed';
@@ -221,7 +217,7 @@ export function TermsCard({ bet }: { bet: BetView }) {
   if (!env)
     return (
       <section className="terms pending" aria-label="terms">
-        <span className="label">TERMS</span>
+        <span className="label">Terms</span>
         <p className="claim muted">The judge is setting the terms…</p>
       </section>
     );
@@ -230,7 +226,7 @@ export function TermsCard({ bet }: { bet: BetView }) {
   return (
     <section className="terms" aria-label="terms">
       <div className="terms-main">
-        <span className="label">TERMS · {env.presentation.title}</span>
+        <span className="label">Terms · {env.presentation.title}</span>
         <p className="claim">“{t.claim}”</p>
         <div className="stakes">
           {same ? (
@@ -243,6 +239,7 @@ export function TermsCard({ bet }: { bet: BetView }) {
               <span className="chip">
                 {t.party_b.display_name} {usd(t.stakes.b)}
               </span>
+              <OddsChip bet={bet} />
             </>
           )}
           <span className="chip">
@@ -258,7 +255,7 @@ export function TermsCard({ bet }: { bet: BetView }) {
       </div>
       {bet.terms_code && (
         <div className="code-box" aria-label="terms code">
-          <span className="label">TERMS CODE</span>
+          <span className="label sc">TERMS CODE</span>
           <span className="code">{groupedCode(bet.terms_code)}</span>
         </div>
       )}
@@ -345,7 +342,7 @@ function LockLine({ bet }: { bet: BetView }) {
           : 'sending…';
   return (
     <div className="receipt">
-      <span className="label">LOCK</span>
+      <span className="label">Lock</span>
       <span>
         {l.kind === 'atomic_lock'
           ? `1 transaction · ${l.signers} signatures`
@@ -407,7 +404,7 @@ function AppealPanel({ bet }: { bet: BetView }) {
   const r = bet.appeal_result;
   return (
     <div className="appeal-panel">
-      <span className="label">APPEAL · THREE-MODEL PANEL</span>
+      <span className="label sc">APPEAL · THREE-MODEL PANEL</span>
       <ol className="votes">
         {[0, 1, 2].map((seat) => {
           const v = bet.votes.find((x) => x.seat === seat);
@@ -451,7 +448,7 @@ function HearingPanel({ bet, now }: { bet: BetView; now: number }) {
   const h = bet.hearing!;
   return (
     <div className="hearing">
-      <span className="label">HEARING · EACH SIDE ARGUES</span>
+      <span className="label sc">HEARING · EACH SIDE ARGUES</span>
       {h.open && (
         <p className="big">
           {nameOf(bet, h.open.party)} argues ·{' '}
@@ -476,12 +473,12 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
     <div
       className={`ruling ${r.outcome === 'REDO' ? 'redo' : r.outcome === 'VOID' ? 'void' : 'decisive'}`}
     >
-      <span className="label">
+      <span className={r.stage === 'settlement' ? 'label sc' : 'label'}>
         {r.stage === 'settlement'
           ? 'GEMINI SETTLES IT'
           : r.stage === 'hearing'
-            ? 'THE JUDGE RULES · AFTER THE HEARING'
-            : `THE JUDGE RULES${r.attempt_no ? ` · ATTEMPT ${r.attempt_no}` : ''}`}
+            ? 'The judge rules · after the hearing'
+            : `The judge rules${r.attempt_no ? ` · attempt ${r.attempt_no}` : ''}`}
         {/* CACHED_RULING: a stored verdict, no model call (ARCHITECTURE §7.2): say so on screen */}
         {isCachedRulingModel(r.model) && (
           <>
@@ -496,10 +493,19 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
       <div className="ruling-row">
         <div className="ruling-text">
           <p className="reason">{r.reason}</p>
-          {r.outcome !== 'REDO' && <AppealBar bet={bet} now={now} />}
-          {bet.appealed && !bet.payout && !bet.appeal_result && bet.votes.length === 0 && (
-            <span className="countdown">Appealed · the panel is reviewing</span>
-          )}
+          {r.outcome !== 'REDO' &&
+            (reviewBannerOn(bet, now) ? (
+              <ReviewBanner bet={bet} now={now} />
+            ) : (
+              <AppealBar bet={bet} now={now} />
+            ))}
+          {bet.appealed &&
+            !bet.payout &&
+            !bet.appeal_result &&
+            bet.votes.length === 0 &&
+            !reviewBannerOn(bet, now) && (
+              <span className="countdown">Appealed · the panel is reviewing</span>
+            )}
         </div>
         {citedUrl && (
           <figure className="cited">
@@ -580,12 +586,25 @@ function PaidPanel({ bet }: { bet: BetView }) {
     p.event === 'Refund' ||
     bet.state === 'VOIDED' ||
     finalOutcomeOf(bet) === 'VOID';
+  const via = payoutLabel(p.event);
+  const gg = liveGg(bet);
   return (
     <div className="paid">
       <div className="headline">
         <span className="stamp win">{refund ? 'REFUNDED' : 'PAID'}</span>
+        {!refund && via !== 'Paid' && (
+          <span className={`paid-via${via === 'GG' ? ' gg' : ''}`}>{via}</span>
+        )}
         <span className="pot muted">{p.event} · devnet</span>
       </div>
+      {gg && (
+        <p className="paid-record">
+          {nameOf(bet, gg.by)} said GG
+          {gg.record
+            ? ` · ${recordLine(gg.record.after, { A: nameOf(bet, 'A'), B: nameOf(bet, 'B') })}`
+            : ''}
+        </p>
+      )}
       <div className="payouts">
         {(['A', 'B'] as const).map((k) => {
           const amt = k === 'A' ? p.to_a : p.to_b;
@@ -716,6 +735,7 @@ export function MomentPanel({
     );
   else if (phase === 'play') body = <PlayPanel bet={bet} now={now} market={market} />;
   else if (phase === 'lock') body = <LockPhasePanel bet={bet} />;
+  else if (phase === 'terms' && showsOdds(bet)) body = <OddsMoment bet={bet} />;
   else if (phase === 'terms')
     body = bet.envelope ? (
       <RulesPanel bet={bet} />
@@ -738,13 +758,13 @@ export function MomentPanel({
           <LockLine bet={bet} />
           {bet.txs.resolve && (
             <div className="receipt">
-              <span className="label">RULING</span>
+              <span className="label">Ruling</span>
               <ExplorerLink sig={bet.txs.resolve} />
             </div>
           )}
           {bet.payout?.signature && (
             <div className="receipt">
-              <span className="label">PAYOUT</span>
+              <span className="label">Payout</span>
               <ExplorerLink sig={bet.payout.signature} />
             </div>
           )}
@@ -831,11 +851,11 @@ export function MarketPanel({
       </div>
       <div className="odds-grid">
         <div>
-          <span className="label">LINE</span>
+          <span className="label">Line</span>
           <span className="num">{line === null ? 'pending' : formatPrice(line)}</span>
         </div>
         <div>
-          <span className="label">{s ? 'SETTLED' : 'BTC'}</span>
+          <span className="label">{s ? 'Settled' : 'BTC'}</span>
           <span className={`num ${side}`}>
             {s
               ? s.contract.settlementValue === null
@@ -847,7 +867,7 @@ export function MarketPanel({
           </span>
         </div>
         <div>
-          <span className="label">{left > 0 ? 'SETTLES IN' : 'EXPIRED'}</span>
+          <span className="label">{left > 0 ? 'Settles in' : 'Expired'}</span>
           <span className="num">{left > 0 ? clock(left) : m.expiry.slice(11, 16)}</span>
         </div>
       </div>
@@ -891,6 +911,17 @@ export function betTickOf(
   return m && state.market?.eventTicker === m.eventTicker ? state.market : null;
 }
 
+/** Face challenges: the pair's record so far, under VS ("Logan 4–7 Jake · Rivals"). */
+export function RivalryLine({ bet }: { bet: BetView }) {
+  const line = rivalryLine(bet.rivalry, bet.names);
+  if (!line) return null;
+  return (
+    <p className={`rivalry${bet.rivalry?.rival ? ' rivals' : ''}`} aria-label="rivalry">
+      {line}
+    </p>
+  );
+}
+
 /** The whole left column for one bet: players, terms, a Gemini bet's market, the moment, the caption. */
 export function BetCard({
   bet,
@@ -918,9 +949,10 @@ export function BetCard({
     <section className="card" aria-label="bet">
       <div className="versus">
         <PartyCard bet={bet} party="A" online={online('A')} />
-        <span className="vs">VS</span>
+        <span className="vs">vs</span>
         <PartyCard bet={bet} party="B" online={online('B')} />
       </div>
+      <RivalryLine bet={bet} />
       <TermsCard bet={bet} />
       {bet.envelope?.terms.market && (
         <MarketPanel bet={bet} tick={tick} now={now} verification={verification} />
@@ -929,7 +961,7 @@ export function BetCard({
       {bet.caption && bet.caption.text.trim() && (
         <p className={`caption${bet.caption.final ? '' : ' partial'}`} aria-live="polite">
           <span className={`label ${bet.caption.speaker === 'judge' ? 'judge' : 'player'}`}>
-            {bet.caption.speaker === 'judge' ? 'JUDGE' : nameOf(bet, bet.caption.speaker)}
+            {bet.caption.speaker === 'judge' ? 'Judge' : nameOf(bet, bet.caption.speaker)}
           </span>{' '}
           {bet.caption.text}
         </p>
@@ -961,7 +993,8 @@ export function PaidMoment({ bet }: { bet: BetView }) {
         )}
       </span>
       <span className="muted">
-        {p.event} on Solana devnet{p.signature ? ` · ${shortSig(p.signature)}` : ''}
+        {payoutLabel(p.event)} · {p.event} on Solana devnet
+        {p.signature ? ` · ${shortSig(p.signature)}` : ''}
       </span>
     </div>
   );
@@ -993,11 +1026,14 @@ export function QrOverlay({
 
 export const KEYS: Array<[string, string]> = [
   ['1 – 6', 'Play the REPLAY clip of that beat'],
+  ['R', 'Slow-mo of the decisive moment (the bet on screen)'], // slow-mo (feat/slowmo-replay)
   ['Esc', 'Close any overlay'],
   ['F', 'Full screen on / off'],
   ['Q', 'Big QR of the latest transaction'],
   ['M', 'Sound on / off (any key unlocks it); off stops the line being said'],
   ['V', 'Judge voice on / off; off stops the line being said'],
+  ['P', 'Phones: stage only → phones + stage → phones big'],
+  ['O', 'Phone sources: window / camera / test pattern, crop, swap A ⇄ B'],
   ['H or ?', 'This help'],
 ];
 
@@ -1149,7 +1185,16 @@ export function Ticker({ state }: { state: TickerState }) {
   );
 }
 
-function Sparkline({ points, strike }: { points: number[]; strike: number | null }) {
+function Sparkline({
+  points,
+  strike,
+  direction = 'flat',
+}: {
+  points: number[];
+  strike: number | null;
+  /** The line's colour: green while BTC rises, red while it falls. */
+  direction?: MarketView['direction'];
+}) {
   if (points.length < 2) return <div className="spark" />;
   const all = strike !== null ? [...points, strike] : points;
   const lo = Math.min(...all);
@@ -1160,7 +1205,12 @@ function Sparkline({ points, strike }: { points: number[]; strike: number | null
     .map((p, i) => `${((i / (points.length - 1)) * 300).toFixed(1)},${y(p).toFixed(1)}`)
     .join(' ');
   return (
-    <svg className="spark" viewBox="0 -4 300 108" preserveAspectRatio="none" aria-hidden="true">
+    <svg
+      className={`spark ${direction}`}
+      viewBox="0 -4 300 108"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
       {strike !== null && <line x1="0" x2="300" y1={y(strike)} y2={y(strike)} className="strike" />}
       <polyline points={d} fill="none" />
     </svg>
@@ -1191,7 +1241,8 @@ export function OddsWidget({
         }
       : null;
   return (
-    <section className="odds" aria-label="odds">
+    // bet-contract: this is the focused bet's own contract (its market strip drops the repeats)
+    <section className={sides ? 'odds bet-contract' : 'odds'} aria-label="odds">
       <h2>
         BTC 5-min · Gemini <span className="muted">prediction market</span>
       </h2>
@@ -1200,7 +1251,7 @@ export function OddsWidget({
       )}
       <div className="odds-grid">
         <div>
-          <span className="label">LINE</span>
+          <span className="label">Line</span>
           <span className="num">{view.strike ? usdPrice(view.strike) : 'pending'}</span>
         </div>
         <div>
@@ -1208,11 +1259,11 @@ export function OddsWidget({
           <span className={`num ${view.direction}`}>{usdPrice(view.price)}</span>
         </div>
         <div>
-          <span className="label">CLOSES</span>
+          <span className="label">Closes</span>
           <span className="num">{clock(view.msLeft)}</span>
         </div>
         <div>
-          <span className="label">UP</span>
+          <span className="label">Up</span>
           <span className="num">{up !== null ? `${up}%` : '—'}</span>
         </div>
       </div>
@@ -1222,7 +1273,11 @@ export function OddsWidget({
           <span className="d" />
         </div>
       )}
-      <Sparkline points={view.history} strike={view.strike ? Number(view.strike) : null} />
+      <Sparkline
+        points={view.history}
+        strike={view.strike ? Number(view.strike) : null}
+        direction={view.direction}
+      />
       <div className="split">
         {view.split.ok ? (
           <>

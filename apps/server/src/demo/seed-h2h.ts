@@ -14,6 +14,15 @@
 // alternating. Inserts only, so bets_guard (BEFORE UPDATE) never runs; bets_parties_attested
 // exempts seeds.
 //
+// Category records (odds, API-CONTRACT §2.4 `records`): {player, category, made, missed} rows make
+// that player the performer of `made + missed` bets of that kind (a bottle flip, a paper-ball
+// throw), so the judge's suggested odds can quote "Jake is 10 for 12 on bottle flips". Every seed
+// row now carries a real composed Terms row (bet_terms_versions, is_final, drafted_by 'judge',
+// source_tool 'seed'; bets.terms_hash = its hash), which is where the stats read the claim,
+// performer and yes_party from. Record rows count toward the head-to-head: a's made + b's missed
+// <= a_wins, b's made + a's missed <= b_wins (422 otherwise); the remaining wins are the rotating
+// titles (their performer is the row's party B, the yes party). Still "Demo history: …", is_seed.
+//
 // Idempotent: each seeding first deletes every is_seed bet between the pair (either direction),
 // in the same transaction, so re-seeding replaces the old rows (and {0, 0} just clears them).
 // demo-a / demo-b are the users holding the demo wallets (demo/players.ts demoPartyWallets):
@@ -21,13 +30,15 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
-import { auditLog, bets, users } from '@youre-on/db';
+import { auditLog, bets, betTermsVersions, users } from '@youre-on/db';
+import type { PerformerStats } from '@youre-on/shared/odds';
 import { USDC_MINT_DEVNET } from '@youre-on/shared/chain/constants';
 import type { HeadToHead } from '@youre-on/shared/api';
-import { sha256Hex } from '@youre-on/shared/primitives';
 import type { AppDeps } from '../context';
 import { HttpError } from '../errors';
 import { headToHead } from '../face/service';
+import { composeTerms } from '../lock/terms';
+import { performerStats } from '../odds/stats';
 import { demoPartyWallets } from './players';
 
 export const SEED_H2H_DEFAULT = { a_wins: 4, b_wins: 7 } as const;
@@ -38,11 +49,42 @@ export const SeedH2hRequest = z.object({
   /** demo-a's wins (the face-match line on A's phone reads `a_wins-b_wins`). */
   a_wins: z.number().int().min(0).max(SEED_H2H_MAX).optional(),
   b_wins: z.number().int().min(0).max(SEED_H2H_MAX).optional(),
+  /** Odds rehearsal: a player's record on one kind of challenge (labelled demo history). */
+  records: z
+    .array(
+      z.object({
+        player: z.enum(['a', 'b']),
+        category: z.enum(['bottle_flip', 'throw']),
+        made: z.number().int().min(0).max(SEED_H2H_MAX),
+        missed: z.number().int().min(0).max(SEED_H2H_MAX),
+      }),
+    )
+    .max(3)
+    .optional(),
 });
+export type SeedRecord = NonNullable<z.infer<typeof SeedH2hRequest>['records']>[number];
 
 /** Stakes in USD, cycled (DATA-MODEL §11). */
 const STAKES_USD = [1, 2, 5, 3, 5, 1, 2, 5, 4, 5, 2] as const;
 const TITLES = ['Bottle flip', 'Free throw', 'Coin catch', 'Paper ball in the bin'] as const;
+type Title = (typeof TITLES)[number];
+/** Each title's claim (performer's name first) and challenge category. */
+const CLAIMS: Record<Title, { claim: (p: string) => string; category: string }> = {
+  'Bottle flip': {
+    claim: (p) => `${p} lands a water bottle flip upright on the table.`,
+    category: 'bottle_flip',
+  },
+  'Free throw': { claim: (p) => `${p} sinks a free throw.`, category: 'throw' },
+  'Coin catch': {
+    claim: (p) => `${p} catches a spun coin on the back of the hand.`,
+    category: 'other',
+  },
+  'Paper ball in the bin': {
+    claim: (p) => `${p} throws a paper ball into the bin.`,
+    category: 'throw',
+  },
+};
+const RECORD_TITLE = { bottle_flip: 'Bottle flip', throw: 'Paper ball in the bin' } as const;
 /** DATA-MODEL §11: in the default 4-7, demo-a wins bets 2, 5, 7 and 10 (net −$7.00). */
 const DEFAULT_A_WINS_AT = new Set([2, 5, 7, 10]);
 const DAY_MS = 86_400_000;
@@ -62,6 +104,81 @@ export interface SeedH2hResult {
   replaced: number;
   inserted: number;
   head_to_head: { a_vs_b: HeadToHead; b_vs_a: HeadToHead };
+  /** One per requested record: the stats the judge's odds read for that player and category. */
+  performer_stats: PerformerStats[];
+}
+
+/** One seeded bet, before it becomes rows: who challenged, who performed, who won. */
+interface SeedBet {
+  challenger: 'a' | 'b';
+  /** The performer is the row's party B; it is also the yes party. */
+  title: Title;
+  /** The performer (party B) won. */
+  made: boolean;
+}
+
+/** a's made + b's missed <= a_wins (and the mirror): record rows are head-to-head rows too. */
+export function seedPlan(
+  aWins: number,
+  bWins: number,
+  records: readonly SeedRecord[],
+): { ok: true; bets: SeedBet[] } | { ok: false; message: string } {
+  const sum = (p: 'a' | 'b', k: 'made' | 'missed') =>
+    records.filter((r) => r.player === p).reduce((n, r) => n + r[k], 0);
+  const aUsed = sum('a', 'made') + sum('b', 'missed');
+  const bUsed = sum('b', 'made') + sum('a', 'missed');
+  if (aUsed > aWins || bUsed > bWins)
+    return {
+      ok: false,
+      message: `records need ${aUsed}-${bUsed} of the ${aWins}-${bWins} head-to-head`,
+    };
+  // Each record: the player performs (party B of the row), misses spread evenly (seedWinners).
+  const lanes: SeedBet[][] = records.map((r) =>
+    seedWinners(r.made, r.missed).map((made) => ({
+      challenger: r.player === 'a' ? 'b' : 'a',
+      title: RECORD_TITLE[r.category],
+      made,
+    })),
+  );
+  // The rest of the head-to-head: rotating titles, skipping categories a record defines.
+  const taken = new Set(records.map((r) => r.category as string));
+  const titles = TITLES.filter((t) => !taken.has(CLAIMS[t].category));
+  const fill = records.length
+    ? seedWinners(aWins - aUsed, bWins - bUsed)
+    : seedWinners(aWins, bWins);
+  const filler: SeedBet[] = fill.map((aWon, i) => {
+    const k = i + 1;
+    const challenger = k % 2 === 1 ? 'a' : 'b';
+    // party B performs; a won iff (a is party B and made) or (a is party A and B missed).
+    const made = challenger === 'a' ? !aWon : aWon;
+    const pool = titles.length ? titles : (['Coin catch'] as Title[]);
+    return {
+      challenger,
+      title: records.length ? pool[k % pool.length]! : TITLES[k % TITLES.length]!,
+      made,
+    };
+  });
+  // Interleave the lanes and the filler, oldest first.
+  const all = [...lanes, filler].filter((l) => l.length);
+  const out: SeedBet[] = [];
+  const total = all.reduce((n, l) => n + l.length, 0);
+  const idx = all.map(() => 0);
+  while (out.length < total) {
+    // the lane furthest behind its even share goes next
+    let best = 0;
+    let bestScore = Infinity;
+    all.forEach((l, j) => {
+      if (idx[j]! >= l.length) return;
+      const score = (idx[j]! + 1) / l.length;
+      if (score < bestScore) {
+        bestScore = score;
+        best = j;
+      }
+    });
+    out.push(all[best]![idx[best]!]!);
+    idx[best]!++;
+  }
+  return { ok: true, bets: out };
 }
 
 /** Which of bets 1..n demo-a wins: the §11 pattern for 4-7, else spread evenly. */
@@ -109,34 +226,63 @@ export async function seedHeadToHead(
       reason: 'demo_player_missing',
     });
 
-  const winners = seedWinners(aWins, bWins);
-  const n = winners.length;
+  const records = req.records ?? [];
+  const plan = seedPlan(aWins, bWins, records);
+  if (!plan.ok)
+    throw new HttpError('VALIDATION_FAILED', `The records don't fit: ${plan.message}.`, {
+      issues: [{ path: 'records', message: plan.message }],
+    });
+  const n = plan.bets.length;
   const now = deps.now();
   const mint = deps.env.USDC_MINT ?? USDC_MINT_DEVNET;
-  const rows = winners.map((aWon, i) => {
+  const built = plan.bets.map((sb, i) => {
     const k = i + 1;
-    // Alternate the challenger (party A of the row), as the §11 SQL does.
-    const [pa, pb] = k % 2 === 1 ? [A, B] : [B, A];
-    const winnerIsPa = aWon === (pa === A);
+    const [pa, pb] = sb.challenger === 'a' ? [A, B] : [B, A];
+    const winnerIsPa = !sb.made;
     const stake = BigInt(STAKES_USD[i % STAKES_USD.length]!) * 1_000_000n;
     const t0 = now - (n + 1 - k) * DAY_MS - 3 * 3_600_000;
     const at = (s: number) => new Date(t0 + s * 1000);
-    return {
-      id: randomUUID(),
+    const id = randomUUID();
+    const claim = CLAIMS[sb.title].claim(pb.display_name);
+    // A real composed card: the claim, performer B (the yes party) and the stakes the stats read.
+    const composed = composeTerms({
+      bet: { id, mint },
+      a: { pubkey: pa.wallet, display_name: pa.display_name },
+      b: { pubkey: pb.wallet, display_name: pb.display_name },
+      proposal: {
+        type: 'skill',
+        claim,
+        performer: 'B',
+        yes_party: 'B',
+        attempts: { count: 1, rule: 'single' },
+        success_criteria: [claim],
+        failure_criteria: [],
+        edge_cases: [],
+        evidence_source: 'camera',
+        amount: stake.toString(),
+        amount_b: null,
+        market_query: null,
+        deadline_minutes: null,
+      },
+      cluster: deps.env.SOLANA_CLUSTER,
+      nowMs: t0,
+    });
+    const bet = {
+      id,
       room_id: null,
       party_a_id: pa.user_id,
       party_b_id: pb.user_id,
       party_a_wallet: pa.wallet,
       party_b_wallet: pb.wallet,
       challenge_method: 'face' as const,
-      title: `Demo history: ${TITLES[k % TITLES.length]}`,
+      title: `Demo history: ${sb.title}`,
       evidence_source: 'camera' as const,
       state: 'PAID' as const,
       onchain_status: 'settled' as const,
       mint,
       stake_a: stake,
       stake_b: stake,
-      terms_hash: sha256Hex(`seed-h2h:${pa.user_id}:${pb.user_id}:${k}`),
+      terms_hash: composed.terms_hash,
       outcome: winnerIsPa ? ('party_a' as const) : ('party_b' as const),
       payout_a: winnerIsPa ? 2n * stake : 0n,
       payout_b: winnerIsPa ? 0n : 2n * stake,
@@ -149,7 +295,19 @@ export async function seedHeadToHead(
       updated_at: at(92),
       is_seed: true,
     };
+    const version = {
+      bet_id: id,
+      version: 1,
+      schema_version: 1,
+      drafted_by: 'judge' as const,
+      source_tool: 'seed',
+      canonical_json: composed.canonical,
+      terms_hash: composed.terms_hash,
+      is_final: true,
+    };
+    return { bet, version };
   });
+  const rows = built.map((x) => x.bet);
 
   const pair = or(
     and(eq(bets.party_a_id, A.user_id), eq(bets.party_b_id, B.user_id)),
@@ -162,7 +320,10 @@ export async function seedHeadToHead(
       .delete(bets)
       .where(and(eq(bets.is_seed, true), pair))
       .returning({ id: bets.id });
-    if (rows.length) await tx.insert(bets).values(rows);
+    if (rows.length) {
+      await tx.insert(bets).values(rows);
+      await tx.insert(betTermsVersions).values(built.map((x) => x.version));
+    }
     await tx.insert(auditLog).values({
       actor_kind: 'system',
       action: 'demo.seed_h2h',
@@ -172,6 +333,7 @@ export async function seedHeadToHead(
         b_user_id: B.user_id,
         a_wins: aWins,
         b_wins: bWins,
+        records,
         replaced: gone.length,
         inserted: rows.length,
       },
@@ -190,5 +352,17 @@ export async function seedHeadToHead(
       a_vs_b: await headToHead(deps.db, A.user_id, B.user_id),
       b_vs_a: await headToHead(deps.db, B.user_id, A.user_id),
     },
+    performer_stats: await Promise.all(
+      records.map((r) => {
+        const [me, them] = r.player === 'a' ? [A, B] : [B, A];
+        return performerStats(deps.db, {
+          performerId: me.user_id,
+          opponentId: them.user_id,
+          category: r.category,
+          performerParty: 'B',
+          displayName: me.display_name,
+        });
+      }),
+    ),
   };
 }

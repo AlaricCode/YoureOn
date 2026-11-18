@@ -1,5 +1,5 @@
 {
-  "$comment": "ElevenLabs OpenAPI 1.0, read 2026-11-18 from a saved copy of https://api.elevenlabs.io/openapi.json, pruned by scripts/el-openapi-subset.ts to the bodies scripts/el-agent.ts sends. Do not edit by hand.",
+  "$comment": "ElevenLabs OpenAPI 1.0, read 2026-11-18 from https://api.elevenlabs.io/openapi.json, pruned by scripts/el-openapi-subset.ts to the bodies scripts/el-agent.ts sends. Do not edit by hand.",
   "info": { "version": "1.0" },
   "paths": {
     "/v1/convai/secrets": {
@@ -2203,7 +2203,196 @@
                                 "items": { "type": "string" }
                               },
                               "tool_ids_strict": {},
-                              "built_in_tools": {},
+                              "built_in_tools": {
+                                "type": "object",
+                                "title": "BuiltInTools",
+                                "properties": {
+                                  "transfer_to_agent": {},
+                                  "end_call": {},
+                                  "language_detection": {},
+                                  "transfer_to_number": {},
+                                  "skip_turn": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "required": ["name", "params"],
+                                        "title": "SystemToolConfig",
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "const": "system",
+                                            "title": "Type"
+                                          },
+                                          "name": { "type": "string", "title": "Name" },
+                                          "description": {
+                                            "type": "string",
+                                            "title": "Description"
+                                          },
+                                          "response_timeout_secs": {},
+                                          "disable_interruptions": {},
+                                          "interruption_mode": {},
+                                          "force_pre_tool_speech": {},
+                                          "pre_tool_speech": {
+                                            "type": "string",
+                                            "enum": ["auto", "force", "off"],
+                                            "title": "PreToolSpeechMode"
+                                          },
+                                          "assignments": {},
+                                          "tool_call_sound": {},
+                                          "tool_call_sound_behavior": {},
+                                          "tool_error_handling_mode": {},
+                                          "params": {
+                                            "title": "Params",
+                                            "oneOf": [
+                                              {
+                                                "type": "object",
+                                                "title": "EndCallToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "end_call",
+                                                    "title": "System Tool Type"
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "LanguageDetectionToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "language_detection",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "only_at_conversation_start": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "required": ["transfers"],
+                                                "title": "TransferToAgentToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "transfer_to_agent",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "transfers": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "required": ["transfers"],
+                                                "title": "TransferToNumberToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "transfer_to_number",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "transfers": {},
+                                                  "transfer_rules": {},
+                                                  "enable_client_message": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "SkipTurnToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "skip_turn",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "wait_timeout_secs": {
+                                                    "type": "number",
+                                                    "title": "Wait Timeout Secs"
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "PlayDTMFToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "play_keypad_touch_tone",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "use_out_of_band_dtmf": {},
+                                                  "suppress_turn_after_dtmf": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "VoicemailDetectionToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "voicemail_detection",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "voicemail_message": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "KnowledgeBaseRagToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "knowledge_base_rag",
+                                                    "title": "System Tool Type"
+                                                  }
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "KnowledgeBaseToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "knowledge_base",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "enabled_strategies": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "StartProcedureToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "start_procedure",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "procedures": {}
+                                                }
+                                              },
+                                              {
+                                                "type": "object",
+                                                "title": "EndProcedureToolConfig",
+                                                "properties": {
+                                                  "system_tool_type": {
+                                                    "type": "string",
+                                                    "const": "end_procedure",
+                                                    "title": "System Tool Type"
+                                                  },
+                                                  "procedures": {}
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      { "type": "null" }
+                                    ]
+                                  },
+                                  "play_keypad_touch_tone": {},
+                                  "voicemail_detection": {}
+                                }
+                              },
                               "enable_parallel_tool_calls": {
                                 "type": "boolean",
                                 "title": "Enable Parallel Tool Calls"

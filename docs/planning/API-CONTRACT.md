@@ -195,6 +195,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 |---|---|---|---|
 | `auth/*` | 10/min | IP and `device_pubkey` | brute force |
 | `face-match` | 30/min, 1 in flight | user | privacy: no bulk scanning (BRIEF 5e) |
+| `face-match/live` | 60/min; shares the `face-match` in-flight slot | user | the live (panning) scan, `mode:'live'` (§2.4): panning re-matches each face that re-enters the frame, so it gets its own bucket and can't use up the tap / Challenge path. Ceiling 90/min per user across both; still room-scoped, opted-in members only, ≤ 50 candidates, no score. The body is read before the token is taken, so an invalid body (422) spends none; a concurrent call is `429 {bucket:'face-match/in-flight'}` |
 | `face/enrollment` writes | 5/h | user | |
 | `POST /v1/bets` | 6/min, ≤ 3 pre-lock bets per user | user | spam challenges |
 | lock authorization / decline | 10/min | bet + device | |
@@ -248,9 +249,10 @@ Legend: **B** = bearer; **S** = signed write (§1.3); **U** = unauthenticated; *
 | 2.11 | `POST /v1/bets/:bet_id/hearing/turns` | S+P | hearing turn |
 | 2.12 | `GET /v1/bets/:bet_id/appeal` · `POST /v1/bets/:bet_id/appeal` | B+P / S+P | appeal |
 | 2.13 | `GET /v1/markets/btc5m/current` · `GET /v1/markets/btc5m/quote` | B | Gemini closer |
-| 2.14 | `GET /v1/me/balance` · `GET /v1/me/bets` · `GET /v1/bets/:bet_id` · `GET /v1/bets/:bet_id/events` · `GET /v1/users/:user_id/head-to-head` | B | reads, resync |
+| 2.14 | `GET /v1/me/balance` · `GET /v1/me/bets` · `GET /v1/bets/:bet_id` · `GET /v1/bets/:bet_id/events` · `GET /v1/bets/:bet_id/replay` · `GET /v1/users/:user_id/head-to-head` | B | reads, resync, slow-mo replay |
 | 2.15 | `PUT /v1/devices/current/push` · `PATCH /v1/devices/current` | S | push token, device role |
 | 2.17 | `POST /v1/stage/session` · `/v1/demo/*` | stage key / demo | stage and demo controls |
+| 2.19 | `POST /v1/bets/:bet_id/odds/offer` · `POST …/odds/:offer_id/accept` · `POST …/odds/:offer_id/withdraw` · `POST …/odds/suggest` | S | odds offers / counters, the judge's suggested odds |
 
 ### 2.1 Auth and profile
 
@@ -297,7 +299,8 @@ Flows are in §1.3.
 
 **`POST /v1/rooms/:room_id/face-match`** (S, room member)
 
-- Request `FaceMatchRequest`: `{probe: SealedEmbedding (purpose 'probe'), model: {name, version, dim}, capture: {captured_at, eye_distance_px, yaw_deg}}`.
+- Request `FaceMatchRequest`: `{probe: SealedEmbedding (purpose 'probe'), model: {name, version, dim}, capture: {captured_at, eye_distance_px, yaw_deg}, mode?: 'tap'|'live'}`.
+  - `mode` (optional, absent = `'tap'`) only picks the rate-limit bucket (§1.7: `face-match` 30/min for tap, `face-match/live` 60/min for live). Matching, privacy and the reply are the same. An older server strips it and charges the tap bucket; the live client then backs off on 429 silently.
 - Response 200 `FaceMatchResponse`, one of:
   - `{match: {user: UserRef, match_ticket, ticket_expires_at, head_to_head: HeadToHead}}`
   - `{match: null}`
@@ -310,7 +313,7 @@ Flows are in §1.3.
   5. The probe is never written to a row, a log or a cache (DATA-MODEL §10).
   6. Update the matched user's `last_used_at` (day-truncated).
 - `match_ticket` is an opaque 60 s token that binds `{scanner, candidate, room}`. Its only use is `POST /v1/bets` with `challenge_method:'face'`.
-- `head_to_head` serves the Extra beat ("You're 4-7 against Jake") without a second round trip.
+- `head_to_head` serves the Extra beat ("You're 4-7 against Jake") without a second round trip, and the live rivalry overlay (record, streak, "Rivals"; §2.18 `HeadToHead`).
 - Errors: `NOT_IN_ROOM`, `ROOM_EXPIRED`, `FACE_SEAL_INVALID`, `FACE_MODEL_UNSUPPORTED`, `RATE_LIMITED`.
 - Idem: none needed; the call has no side effects beyond `last_used_at`.
 
@@ -384,7 +387,7 @@ Flows are in §1.3.
   - Before `TERMS_PROPOSED` the call returns `409 TERMS_NOT_FINAL`.
   - The client **must** recompute `hashJcs(envelope.terms)` and compare it to `envelope.terms_hash`; `TermsEnvelope.parse` does this (SCHEMAS §2.3).
 
-There is no REST endpoint for editing terms. Edits are spoken, and the judge calls `propose_terms` again. After `AWAITING_AUTHORIZATIONS` any change cancels the bet and continues on a new `bet_id` with `supersedes_bet_id` (SCHEMAS §9.2).
+Odds (unequal stakes) are agreed with the §2.19 offer routes; an accepted offer can recompose the card (a new version). There is no other REST endpoint for editing terms. Edits are spoken, and the judge calls `propose_terms` again. After `AWAITING_AUTHORIZATIONS` any change cancels the bet and continues on a new `bet_id` with `supersedes_bet_id` (SCHEMAS §9.2).
 
 ### 2.8 Authorization: atomic lock (D2, D3)
 
@@ -513,6 +516,17 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
   - `LOCK_SIGNER=server` (custodial demo): the signature may be omitted and the server signs as the appellant's demo key (as for concede). The operator's route is `POST /v1/demo/bets/:bet_id/appeal` (§2.17).
   - finalize (timer and `finalize-due`) skips a `RULED` bet whose appeal is signed / sent, and every `APPEALED` one. The keeper task `appeal-sweep` (also in the boot reconcile) settles 'sent' appeal / `resolve_appeal` txs whose confirm died and re-runs a lost panel (stored votes are reused); an undecided appeal past `appeal_resolve_deadline` is the timeout-refund keeper's (`EXPIRED`, both stakes back).
 
+### 2.12a Spoken review request ("check that again") and the GG moment
+
+Built 2026-11-18 (`feat/gg-moment`, `apps/server/src/review`, `apps/server/src/gg`; types `packages/shared/src/gg.ts`).
+
+- **The review never files an appeal.** Someone in the room asks the voice judge to check the ruling again; the judge calls `request_review` (§4.3) and the server asks the **loser's** phone (whichever phone that is) to confirm. The mic can't tell who spoke, so the loser is always the one asked; a request the winner made just shows the loser a sheet they can dismiss. Confirming is the normal appeal: `GET`/`POST /v1/bets/:bet_id/appeal` (§2.12), tap + Face ID, device policy screen `'appeal'`. Nothing in the review path spends the 3/h bucket.
+- **Window.** `confirm_by = appeal_deadline − 1 s` (the appeal POST's own cutoff). It is never extended: the program refuses an appeal at or after `appeal_deadline` (ESCROW I10), and `appeal_deadline` is fixed by `resolve`. A request is accepted only while `now < confirm_by − 1.5 s` (`REVIEW_MIN_LEAD_MS`, Face ID needs it). Finalize runs at or after `appeal_deadline` (chain clock), so a request and a finalize are ≥ 2.5 s apart. One review per ruling.
+- **`POST /v1/bets/:bet_id/review/decline`** (S, the loser of the open review): "Keep ruling". `200 {status:'closed'}`; idempotent (an already closed review answers the same). Effects: `review.closed {reason:'declined'}` + `judge.cue REVIEW_CLOSED` (speak:false). Errors: `NOT_A_PARTY`, `NOT_LOSER`, `INVALID_STATE {reason:'no_review'}`, `STATE_MOVED_ON` (the ruling moved on). After `confirm_by` it closes as `lapsed`.
+- **Lapse.** At `confirm_by` (in-memory timer) a review still open on a `RULED` bet with no appeal out closes: `review.closed {reason:'lapsed'}` + `judge.cue REVIEW_CLOSED` (speak:false). The original window rules resume: GG or "I appeal!" until the cutoff, else finalize. A timer lost to a restart only means no `review.closed`: clients close at `confirm_by` themselves, and the PAID cue reads the log (an unclosed request counts as `lapsed`).
+- **GG.** A GG (§2.10) accepted under the bet lock also appends `bet.gg` in the commit that moves the bet to `CONCEDED`: `{by, winner, to_a, to_b, record: {before, after} | null, conceded_at}`. `record.before` is the pair's head-to-head in this bet's parties (§2.14 `headToHead`: chain-settled bets plus labelled seed history; the bet being conceded is not settled yet), `after = recordAfter(before, winner)`. A record read that fails gives `record: null` and never fails the GG. A concede that never lands goes back to `RULED` (`reason: concede_failed`); clients drop the GG then (no new event). An open review never blocks a GG (a review is not an appeal) and the GG closes it on the clients.
+- **Order of the races** (all under the bet row lock): request vs GG — whichever takes the lock first wins (GG first → `GG_CALLED`); request vs appeal filing — the appeal answers as always, an open review is "confirmed" by the appeal's `tx.submitted {kind:'appeal'}`; confirm at the cutoff — the appeal answers `APPEAL_WINDOW_CLOSED` and the lapse closes the review; GG vs appeal and finalize vs appeal — unchanged (§2.10, §2.12).
+
 ### 2.13 Gemini market (Beat 6)
 
 - **`GET /v1/markets/btc5m/current`** (B) returns `MarketCurrent`:
@@ -531,10 +545,16 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 
 - **`GET /v1/me/balance`** returns `{wallet_pubkey, usdc: MicroUsdc, usdc_display, in_escrow: MicroUsdc, in_escrow_display, as_of, source:'rpc'}`. `usdc` is the sum of `getTokenAccountsByOwner(mint)` (ESCROW §5.2: payouts may land in a fallback account). The result is cached 2 s and invalidated on this user's terminal events.
 - **`GET /v1/me/bets?status=active|settled&cursor&limit`** returns `{items: BetSummary[], next_cursor}`. `BetSummary = {bet_id, title, opponent: UserRef, my_party, state, my_stake, my_payout|null, outcome: OnchainOutcome|null, settled_at|null, is_seed}`.
-  - Built (`apps/server/src/me/bets.ts`): `title` is the terms' `presentation.title`, else the bet row's own `title` (a `seed-h2h` row has no terms: "Demo history: …", §2.17), else "Challenge".
+  - Built (`apps/server/src/me/bets.ts`): `title` is a `seed-h2h` row's own `title` ("Demo history: …", §2.17, even now that seed rows carry a terms row), else the terms' `presentation.title`, else the bet row's `title`, else "Challenge". Additive (odds): `their_stake: MicroUsdc|null` (the opponent's stake, for "$5 vs $15").
 - **`GET /v1/bets/:bet_id`** (B+P or stage) returns `BetSnapshot` (§2.18), the full current state used for cold start and resync.
+- **`GET /v1/bets/:bet_id/replay`** (B+P or stage) returns `ReplayResponse = {replay: ReplayMoment | null, why, final}` (SCHEMAS §4.1): the slow-mo replay shown after a bet, on the stage (auto-played once after a fresh payout, key R) and behind the phones' "Replay" button on the payout screen.
+  - Built (`apps/server/src/replay/routes.ts`): the same readers as the snapshot and the frame route (`requireSession` + `canRead`: an `app` session of a party, or a `stage` session of the bet's room). A missing bet and a bet that is not yours are both 404 `NOT_FOUND` (no probing); a malformed id is 422. CORS for the stage origin. `Cache-Control: private, no-store` (a confirmed foul can arrive after the ruling). No extra rate limit (a read, like the snapshot).
+  - `why`: `ready` (iff `replay` is set) · `not_ruled` (no ruling yet, or the latest is a REDO) · `no_winner` (VOID, or an appeal upheld a VOID) · `no_frames` (a Gemini settlement, or nothing showable) · `purged` (the attempt's evidence was purged). `final` = the bet is in a terminal state.
+  - The winner is the appeal's `final_outcome` when an appeal of this ruling exists, else the ruling's. A flipped appeal holds on the last frame (`hold_source: 'last_frame'`) and carries no `reason` (the judge argued for the other side). A hearing ruling uses the latest attempt whose `frame_hashes` match its own (else nothing is marked cited).
+  - Frames are not inlined: each `ReplayFrame.path` is the existing `GET /v1/bets/:bet_id/attempts/:n/frames/:idx` (`apps/server/src/stage/routes.ts`: the snapshot's readers, `private, immutable`), fetched with the caller's bearer; `ReplayFrame.url` (a signed, short-lived URL) stays null until object storage lands. `clip` is null until a clip is uploaded.
+  - A foul (`kind: 'foul'`) is served only when `AppDeps.replayFouls` (`apps/server/src/replay/fouls.ts`, the SAM tracking stream) returns a **confirmed** foul for that attempt; it beats the win. Nothing derives a foul from the ruling's free-text `reason`. Unset (today) = never a foul.
 - **`GET /v1/bets/:bet_id/events?after=<seq>&limit=200`** returns `{events: RealtimeEvent[], last_seq}`, replayed from `bet_events` (DATA-MODEL §5.19). This is the gap-recovery endpoint SCHEMAS §10.1 refers to.
-- **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed}`, from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
+- **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed, total, last_result|null, streak|null, rival}` (§2.18), from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
   - Built (`apps/server/src/me/routes.ts`): a phone session's bearer (B, scope `app`; a stage token or the demo key is 401 `AUTH_REQUIRED`). It is always the caller's own record, so any user id may be asked; a stranger gets 0-0-0. A malformed or unknown `user_id` is 404 `NOT_FOUND`. It is the same `headToHead()` (`face/service.ts`) the §2.4 face-match reply carries, computed inline (the view is not migrated). `Cache-Control: private, no-store`.
 
 ### 2.15 Devices and push
@@ -563,7 +583,7 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `POST /v1/demo/toggles {cached_ruling?, gemini_fallback?, voice_fallback?, face_pick_list?}` | The remaining ARCHITECTURE §7.2 toggles; every replay is labelled REPLAY on stage. **Built: `cached_ruling` only** (`apps/server/src/demo/toggles.ts`), body `{cached_ruling?: boolean \| null}`, strict (an unknown key is 422, so a typo can't leave a fallback off). It is a runtime value the judge reads per call, no restart; env `CACHED_RULING` is the boot default and `null` goes back to it. Answers `{ok, toggles, changed: [{toggle, from, to, source}]}`; each named toggle is audited `demo.toggle`. `GET /v1/demo/toggles` returns `{cached_ruling, cached_ruling_source: 'env'\|'runtime', cached_ruling_env, updated_at}`. A cached ruling has `Ruling.model = 'cache/demo-bottle@1'` (shared `CACHED_RULING_MODEL` / `isCachedRuling`), which the stage can label. The others are elsewhere: the Gemini fallback is `POST /v1/demo/gemini {feed: 'live'\|'replay'}`, the voice fallback is the phone's "Type it instead", the face pick list is the phone's room list. |
 | `POST /v1/demo/timers {draft_idle_s, hearing_turn_s, finalize_delay_s}` | Offchain timers only. Onchain windows are snapshotted from `Config` and can't change per bet (ESCROW I11). |
 | `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch (FINDINGS §3.8). **Built** (`apps/server/src/demo/warmup.ts`), no bet and no money: one live judge call through `deps.providers.llm` with the real prompt and output schema on a stored 16×16 JPEG (`judge/fixtures/warmup-16px.jpg`; it ignores `cached_ruling`), `getLatestBlockhash` on the server's RPC, one poll of the Gemini relay and its current contract (no WS: the relay polls REST, §7.3), and voice readiness (config only: a pre-minted token would open a billed session, so none is minted; no panel, it is cut). 200 `{ok, at, modes: {llm, judge_model, cached_ruling, markets_feed, lock_signer}, notes[], checks: {judge, rpc, gemini, voice}}`, each check `{ok, ms, error, …}`; `notes` say when a check hit a mock, the REPLAY feed or the cached ruling. One per 10 s per server: 429 `RATE_LIMITED` + `Retry-After`. Audited `demo.warmup`. |
-| `POST /v1/demo/seed-h2h {a_wins?, b_wins?}` | **Built** (`apps/server/src/demo/seed-h2h.ts`): the DATA-MODEL §11 SQL fallback as a route. Replaces the `is_seed` history between demo-a and demo-b (the users holding the demo wallets) with `a_wins + b_wins` settled bets, default 4-7 (each 0..30); `{0, 0}` clears it. Demo reset keeps them. 200 `{ok, a, b, a_wins, b_wins, replaced, inserted, head_to_head: {a_vs_b, b_vs_a}}`; 409 `INVALID_STATE {reason:'demo_player_missing', party}` before a demo wallet has an account. Audited `demo.seed_h2h`. |
+| `POST /v1/demo/seed-h2h {a_wins?, b_wins?, records?}` | **Built** (`apps/server/src/demo/seed-h2h.ts`): the DATA-MODEL §11 SQL fallback as a route. Replaces the `is_seed` history between demo-a and demo-b (the users holding the demo wallets) with `a_wins + b_wins` settled bets, default 4-7 (each 0..30); `{0, 0}` clears it. Demo reset keeps them. Odds rehearsal: `records: [{player: 'a'\|'b', category: 'bottle_flip'\|'throw', made: 0..30, missed: 0..30}]` (≤ 3) makes that player the performer of `made + missed` of those rows (made = the performer won), for the judge's history-grounded odds (§2.19); they count toward the head-to-head, so a's made + b's missed ≤ `a_wins` and b's made + a's missed ≤ `b_wins` (else 422 `VALIDATION_FAILED`); the other rows rotate titles of other categories. Every seed row now has a real composed terms row (`bet_terms_versions`, final, `source_tool 'seed'`). Example: `{"a_wins": 4, "b_wins": 12, "records": [{"player": "b", "category": "bottle_flip", "made": 10, "missed": 2}]}`. 200 `{ok, a, b, a_wins, b_wins, replaced, inserted, head_to_head: {a_vs_b, b_vs_a}, performer_stats: PerformerStats[]}`; 409 `INVALID_STATE {reason:'demo_player_missing', party}` before a demo wallet has an account. Audited `demo.seed_h2h`. |
 | `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}`. Built (`apps/server/src/chain/health.ts`) with more: also `toggles` (as `GET /v1/demo/toggles`), `judge_llm` (`{provider, model, cached_ruling, calls, failures, last_ok_at, last_ok_ms, last_ok_source, last_ok_model, last_error_at, last_error, last_error_source, window, p50_ms, p95_ms}`, in memory since boot; the warm-up counts) and `llm_last_ok` (= `judge_llm.last_ok_at`). `stream` is `{last_delivery_at, events_last_hour, rpc_poll_last_hour}` (no `status`: that is QuickNode's, read by `scripts/demo-check.ts`): Stream deliveries only (`chain_events.source = 'stream'`, or `chain_txs.stream_seen_at` for a tx `rpc_poll` stored first); `rpc_poll_last_hour` is additive. Warning `stream_silent` (`warn`): `QN_STREAM_SECURITY_TOKEN` is set and server escrow txs (not `nonce_advance`) were sent in the last 10 min (older than 60 s) with no Stream delivery in that time; a dropped send (still `sent`, in `inflight.stuck`) can also trigger it. Judge warnings (level `warn`): `judge_no_success` (no judge success since boot), `judge_failing` (the last call failed after the last success), `cached_ruling_on`. They stay in `warnings`, but alone they never turn the server's health log lines into a WARN (`chain.boot_health` stays info, and the keeper's 10-minute `chain.unhealthy` is not logged): those lines mean a chain or money-path problem (`chain/health.ts` `chainNeedsAttention`). The projector polls it with its own stage token (scope `demo` under `DEMO_MODE`), so `#demo=` is optional in the stage URL. |
 
 **Stage audio** (stage token only; a phone session or no stage scope gets `404`; §4.5). The ElevenLabs key stays on the server; the stage fetches the bytes with its bearer and plays them through its own AudioContext.
@@ -573,6 +593,7 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `GET /v1/stage/audio` | API-owned `StageAudioResponse` `{tts: boolean, tts_off: 'no_key'\|'off'\|'spend_disabled'\|null, model: string\|null, sfx: {gavel, drumroll, buzzer, cheer}\|null}`: is the stage voiced, and the cue clip URLs when the Sound Effects are live |
 | `GET /v1/stage/tts/:clip_id` | One stage line's MP3 (`audio/mpeg`). `clip_id` = sha256 hex of `voice_id \n model \n text`, so the response is `Cache-Control: private, max-age=31536000, immutable` with `ETag` (304 on a match). It waits for a generation in flight. `404` when the TTS is off or the id unknown; `502 UPSTREAM_ERROR` / `504 UPSTREAM_TIMEOUT` when ElevenLabs fails |
 | `GET /v1/stage/sfx/:kind` | One cue's ElevenLabs Sound Effects clip, generated once (at boot) and cached; `404` unless they are live |
+- **`POST /v1/demo/bets/:bet_id/review`** (demo key, built 2026-11-18): the laptop fallback of the spoken review (§2.12a), `source:'demo'`. `200 {ok:true, say, review: ReviewRequestedPayload}` (or `already:true`), `409 {ok:false, fix, say}` with the §4.3 `request_review` fixes. Lets the stage and the phones be tested without voice.
 
 ### 2.18 API-owned types
 
@@ -588,8 +609,24 @@ export const SealedEmbedding = z.object({
   alg: z.enum(['x25519-hkdf-sha256-chacha20poly1305-v1', 'plain-v0']),
   epk_b64: z.string().nullable(), nonce_b64: z.string().nullable(), ct_b64: z.string() });
 
+export const RIVAL_MIN_SETTLED = 3;
+export const H2HResult = z.enum(['win', 'loss', 'push']);
+export const H2HStreak = z.object({ holder: z.enum(['me', 'them']), length: z.number().int().min(1) });
 export const HeadToHead = z.object({ wins: z.number().int(), losses: z.number().int(), pushes: z.number().int(),
-  net: SignedMicroUsdc, net_display: z.string(), last_settled_at: IsoUtc.nullable(), includes_seed: z.boolean() });
+  net: SignedMicroUsdc, net_display: z.string(), last_settled_at: IsoUtc.nullable(), includes_seed: z.boolean(),
+  // additive, optional so older replies still parse; this server always sends them (DATA-MODEL §7.1)
+  total: z.number().int().nonnegative().optional(),     // wins + losses + pushes
+  last_result: H2HResult.nullable().optional(),          // the newest settled bet (settled_at DESC NULLS LAST, id DESC)
+  streak: H2HStreak.nullable().optional(),               // the same-winner run ending at the newest; null if it is a push or none
+  rival: z.boolean().optional() });                      // total >= RIVAL_MIN_SETTLED
+
+/** bet.invited `rivalry` (§3.4): the pair's record before the bet, in party terms (A = challenger). */
+export const StageRivalry = z.object({ challenge_method: ChallengeMethod,
+  a_wins: z.number().int().nonnegative(), b_wins: z.number().int().nonnegative(),
+  pushes: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+  streak: z.object({ party: Party, length: z.number().int().min(1) }).nullable(),
+  rival: z.boolean(), includes_seed: z.boolean() });
+// rivalryOf(h2h, method): h2h is A's view (headToHead(db, aId, bId)); me -> A, them -> B.
 
 /** One single-party Solana message (concede or appeal) for the loser's device. The lock uses SCHEMAS AuthorizeRequest. */
 export const SignRequest = z.object({
@@ -635,6 +672,27 @@ export const BetSnapshot = z.object({
   end_reason: z.string().nullable(), last_seq: z.number().int(),
 });
 ```
+
+### 2.19 Odds (offers, counters, the judge's suggestion)
+
+Odds are unequal stakes on a skill bet: `Terms.stakes.a / .b`, at most 10:1, each within `MIN_STAKE..max_stake` (SCHEMAS §2.1, §3.5). Offers are consent objects in the bet's log (`odds.offered` / `odds.answered` / `odds.agreed`, §3.4) folded by the shared `foldOdds`. Rules (`apps/server/src/odds/service.ts`):
+
+- **Auto-offer.** A composed skill card with unequal stakes that are not yet agreed opens an offer (from A for typed terms, from the judge for voice / demo terms) unless the open offer already has those stakes; a differing open offer is superseded. Even cards open nothing; Gemini (market) bets never have offers.
+- **One open offer.** A new offer while your own is open supersedes it (keeping its parent); while someone else's or the judge's is open, it counters it (`parent_id` = it).
+- **Who accepts.** An A or B offer: the other party (the author counts as accepted). A judge offer: both, one tap each. Agreed = both accepted. If the card's stakes differ, the card is recomposed with them in the same transaction (`proposalOf(card)` with the new stakes, the deadline length kept; a new version, `terms.proposed`, a new `terms_hash`; `source_tool 'odds'`), then `odds.agreed {terms_hash}`.
+- **Confirm gate.** `confirm_terms` and `POST …/terms/confirm` are refused while unequal skill stakes are not agreed or any offer is open: `ODDS_PENDING` (typed: 409 `INVALID_STATE {reason:'odds_pending'}` "Waiting on the odds."), audited `terms.confirm_refused {reason:'odds_pending'}`. Agreement is of a stakes pair, so a re-proposal with the same stakes (an edge-case edit) needs no new consent. Both still hold to lock the final card.
+- **After the freeze** (AWAITING_AUTHORIZATIONS and later) every odds route answers 409 `INVALID_STATE {reason:'locked'}` "Terms are locked in."
+
+All routes: S, the caller must be party A or B (`NOT_A_PARTY` otherwise), one per-(bet, user) bucket (`TYPED_TERMS_BUCKET`, 12/min, key `odds`). Every transaction locks the bet row.
+
+| Route | Body → 200 | Errors |
+|---|---|---|
+| `POST /v1/bets/:bet_id/odds/offer` | `{stakes_usd: {a, b}}` or `{ratio: '1:1'\|'3:2'\|'2:1'\|'3:1'\|'5:1'\|'10:1', favored: 'A'\|'B'\|null, base_usd}` (the underdog stakes `base_usd`, the favourite base × ratio) → `OddsOfferResponse {offer: OddsOffer, agreed: false, terms_hash}`; `judge.cue ODDS_OFFERED` / `ODDS_COUNTERED` (spoken) | 422 `VALIDATION_FAILED {issue: {code: ODDS_TOO_LONG \| STAKE_ABOVE_MAX \| STAKE_BELOW_MIN \| AMBIGUOUS}}`; 409 `INSUFFICIENT_FUNDS {party}` "Jake can't cover $15." (a soft check of the wallet's USDC; skipped when the RPC is down; the lock preflight stays the hard check); 409 `INVALID_STATE {reason: no_terms \| locked \| market_bet}` |
+| `POST /v1/bets/:bet_id/odds/:offer_id/accept` | `{n}` (the offer number the phone showed) → `{offer, agreed, terms_hash}` (`terms_hash` = the card both now confirm) | 409 `INVALID_STATE {reason: not_open \| own_offer \| stale \| already_accepted \| no_terms}`; `INSUFFICIENT_FUNDS` as above |
+| `POST /v1/bets/:bet_id/odds/:offer_id/withdraw` | `{}` → `{offer}` (the author; either party may dismiss the judge's) | 409 `not_open`; 403 `NOT_A_PARTY {reason:'not_author'}` |
+| `POST /v1/bets/:bet_id/odds/suggest` | `{base_usd?, claim?, performer?, attempts?}` (the claim fields only while DRAFTING, party A only; TERMS_PROPOSED reads the card; the base defaults to the smaller stake, else $5) → `OddsSuggestResponse {offer, say}`: a judge offer with `suggestion` | 422 `{fix:'NO_CLAIM'\|'AMBIGUOUS'}`; 409 as above |
+
+**The judge's suggestion** (`apps/server/src/odds/suggest.ts`, the same engine as the `suggest_odds` tool, §4.3). It is grounded in the performer's record (`odds/stats.ts`: settled bets incl. labelled seed history; the challenge category of each final card's claim): overall W–L, made / tries as the performer of this kind of bet, recent results and streak, the head-to-head with this opponent. All numbers are computed in code (SCHEMAS §3.5): a shrunk rate (prior 4 tries at the category base rate: bottle flip 25 %, throw 40 %, other 50 %), the attempt rule, clamped to 10:1, the fair ratio and its band of ladder rungs, and `stakesFor` for each rung. With `LLM_PROVIDER=live` (ALLOW_SPEND) and some history, Claude (`ODDS_LLM_MODEL`, default `claude-opus-5-5`, effort low, 3 s deadline, structured output `{ratio ∈ band, reason ≤ 140}`) writes one sentence and picks a rung of the band; a rung outside it becomes the nearest, and a reason quoting any number not in the facts becomes the template. Spend off, timeout, error or refusal: the nearest rung + the template (`source 'template'`); no history: the category default (`'default'`). Cached per (bet, card hash or draft claim, base, stats) for 10 min; asking again while that judge offer is open returns it with no new event. It is only an offer: both accept, then both hold.
 
 ---
 
@@ -690,7 +748,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 
 | `type` | Payload | Emitted when (state) |
 |---|---|---|
-| `bet.invited` | `{challenger: UserRef, room_id}` | `POST /v1/bets` → B's user channel (→ DRAFTING) |
+| `bet.invited` | `{challenger: UserRef, room_id, rivalry?: StageRivalry}` (**NEW** `rivalry`, §2.18: the pair's record before this bet, A's view, every challenge method; optional, so older phones and stages drop it) | `POST /v1/bets` → B's user channel (→ DRAFTING); in the bet log, so a stage subscribing from `after_seq` 0 replays it |
 | `bet.invite_answered` **NEW** | `{party:'B', answer:'accepted'\|'declined'}` | §2.5 |
 | `bet.state` | `{state, prev, onchain_status, chain_ack, pending_tx, reason}` | every state entry, **and** every `pending_tx` / `chain_ack` change in place (prev = state) |
 | `terms.draft` | `{draft: TermsDraft}` | each `propose_terms` with issues or missing fields (DRAFTING) |
@@ -701,6 +759,9 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | `tx.sign_request` **NEW** | `{request: SignRequest}` | RULED rpc-confirmed (`concede` + `appeal`, loser); rebuilt concede/appeal requests. Never the lock. Built: `LOCK_SIGNER=phones`, decisive rulings only, `concede` first then `appeal` (camera bets; no appeal request for a Gemini bet); under the custodial signer nothing is pushed and the phone GETs on the tap. |
 | `terms.authorized` | `{party, method, authorized_at, count}` | each accepted `PartyAuthorization` (`count` 2 = the lock is being sent) |
 | `terms.declined` | `{party}` | §2.5, §2.8 decline |
+| `odds.offered` **NEW** | `{offer: OddsOffer}` (SCHEMAS §3.5) | §2.19: an auto-offer, an offer / counter, a judge suggestion (TERMS_PROPOSED; a voice suggestion also in DRAFTING) |
+| `odds.answered` **NEW** | `{offer_id, party, answer: accepted\|countered\|withdrawn\|superseded, by_offer_id}` | §2.19 |
+| `odds.agreed` **NEW** | `{offer_id, stakes: {a, b}, ratio_label, terms_hash}` | both accepted (after any recomposed `terms.proposed`) |
 | `judge.line` / `party.line` | SCHEMAS | relayed from A's phone (§2.6) |
 | `judge.cue` **NEW** | `{cue: JudgeCueName, text, speak: boolean}` | see §4.5; one per voice-worthy transition |
 | `attempt.started` | `{attempt_no, performer, max_ms}` **+ NEW** `recorder_device_id`, `go_at` | → ATTEMPT |
@@ -709,6 +770,9 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | `hearing.opened` | `{hearing_id, trigger, order:['A','B'], turn_ms}` | → HEARING |
 | `hearing.turn_open` **NEW** | `{hearing_id, turn_index, party, closes_at}` | each turn's clock starts (after `open_hearing`, or the 5 s fallback) |
 | `hearing.turn` | `{turn: HearingTurn}` | each turn stored |
+| `bet.gg` **NEW** | `{by, winner, to_a, to_b, record: {before, after}\|null, conceded_at}` (`packages/shared/src/gg.ts` `BetGgPayload`) | the loser's GG accepted and sent: same commit as `bet.state CONCEDED` + `tx.submitted {concede}` (§2.12a) |
+| `review.requested` **NEW** | `{review_id, for_party, source:'voice'\|'demo', requested_at, confirm_by}` | `request_review` / the demo route accepted a review (RULED); the loser's phone opens the appeal confirmation. Never the words heard, never who spoke. |
+| `review.closed` **NEW** | `{review_id, reason:'declined'\|'lapsed'}` | the loser kept the ruling, or `confirm_by` passed unconfirmed. A confirmed review is the appeal (`tx.submitted {appeal}`), a GG is `bet.gg`: neither has its own close. |
 | `appeal.vote` | `{vote: AppealVote}` | each panel vote, late votes included (SCHEMAS §7) |
 | `appeal.result` | `{result: AppealResult, ruling_hash}` | → APPEAL_RESOLVED |
 | `market.tick` | `{snapshot: GeminiMarketSnapshot}` | 1 Hz while a gemini bet is in TERMS_PROPOSED…AWAITING_MARKET (persisted; ≤ ~400 rows per bet) |
@@ -729,7 +793,8 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | HEARING | `hearing.opened`, `hearing.turn_open` × 2, `hearing.turn` × 2, `ruling.issued` | `HEARING_REQUIRED`, `HEARING_TURN` (B), `HEARING_RULING` | — |
 | AWAITING_MARKET | `market.tick` | `MARKET_WAITING` (speak=false) | — |
 | RULED | `tx.confirmed(resolve)`, `tx.sign_request` (concede, appeal), `chain.BetResolved` | — (already voiced at `ruling.issued`) | `ruling` (A, B) |
-| CONCEDED / FINALIZED / APPEAL_RESOLVED | `tx.submitted`; `bet.state` at processed (**payout animation**); `tx.confirmed` | — | — |
+| CONCEDED / FINALIZED / APPEAL_RESOLVED | `tx.submitted` (+ `bet.gg` for CONCEDED, same commit); `bet.state` at processed (**payout animation**); `tx.confirmed` | — | — |
+| (RULED, a review asked) | `review.requested`; later `review.closed` (declined / lapsed) unless GG or the appeal came first | `REVIEW_CLOSED` (speak=false) at the close | — |
 | APPEALED | `chain.BetAppealed`, `appeal.vote` × 3, `appeal.result` | `APPEAL_FILED`, `APPEAL_VOTE` × 3 (speak=false; the stage voices them, §4.5), `APPEAL_RESULT` | `appeal_decided` |
 | (built order) | at the filing, still RULED: `tx.submitted {appeal}`, `judge.cue APPEAL_FILED`; at our confirm: `bet.state APPEALED` (`pending_tx` appeal), `tx.confirmed {appeal}`, then `appeal.vote` + `judge.cue APPEAL_VOTE` per seat, `appeal.result` + `judge.cue APPEAL_RESULT`; then `bet.state APPEAL_RESOLVED` + `tx.submitted {resolve_appeal}`, `bet.state` again at processed, `bet.state PAID`/`VOIDED` + `tx.confirmed` + `judge.cue PAID`/`VOIDED` | | not sent (no outbox push yet) |
 | PAID / VOIDED | `chain.BetConceded` \| `BetFinalized` \| `AppealResolved`, `chain.BetClosed` | `PAID` / `VOIDED` | `payout` (A, B) |
@@ -799,7 +864,8 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
                     "items": { "type": "object", "required": ["question", "answer"], "properties": {
                       "question": { "type": "string", "description": "The edge case, e.g. 'Does landing on the cap count?'" },
                       "answer":   { "type": "string", "description": "The rule, e.g. 'No. Only upright on its base counts.'" } } } },
-    "amount_usd":  { "type": "string", "description": "Spoken stake per person in dollars, e.g. '5' or '5.20'. Real_world: the even-money amount." },
+    "amount_usd":  { "type": "string", "description": "Party A's (the challenger's) stake in dollars, e.g. '15'. When stakes are even, the stake per person, e.g. '5' or '5.20'. Real_world: the even-money amount." },
+    "stake_b_usd": { "type": "string", "description": "Party B's stake in dollars when the odds are not even, e.g. '5'. Empty or omitted = same as amount_usd. Real_world: empty." },
     "market_side": { "type": "string", "enum": ["YES", "NO", "none"], "description": "real_world only: A's side, YES = Bitcoin finishes at or above the line. Otherwise 'none'." },
     "deadline_minutes": { "type": "integer", "description": "Minutes to finish the attempt; 0 means the default 10; max 45." }
   }
@@ -810,7 +876,7 @@ Mapping to `TermsProposal`:
 
 - run `normText` on every string;
 - `performer: 'none'` → `null`;
-- `amount = parseUsd(amount_usd)`;
+- `amount = parseUsd(amount_usd)`; `amount_b = stake_b_usd` empty / omitted / equal → `null`, else `parseUsd` (AMBIGUOUS otherwise; real_world must leave it empty). `stake_b_usd` is **not** in `required`, so an agent synced before it keeps working. Each side is checked against the cap and the pair against 10:1 (`ODDS_TOO_LONG` "Ten to one, tops. Pick shorter odds.");
 - `evidence_source = type === 'skill' ? 'camera' : 'gemini'`;
 - `market_query = real_world ? {asset:'BTC', horizon:'5m', a_side: market_side} : null`;
 - `deadline_minutes: 0` → `null`;
@@ -836,6 +902,8 @@ Responses (≤ 300 B):
 {"ok":false,"refused":"alcohol_drugs","say":"Chugging contests? I judge bottle flips, not livers. Pick something else.","next":"end"}
 ```
 
+With odds the reply adds `"odds":"tap_accept"` and the stake sentence names both: `"… Logan puts in fifteen, Jake puts in five; winner takes twenty."` The judge then tells both to tap Accept (§2.19); `[EVENT] ODDS_AGREED` tells it when.
+
 `say` is a server template over `Terms`, so the spoken read-back matches the card word for word. `next` is advisory: `ask` (≤ 2 questions total), `readback`, or `end`.
 
 #### `confirm_terms` (`pre_tool_speech: "off"`)
@@ -851,6 +919,21 @@ Responses (≤ 300 B):
 {"ok":true,"code":"0586·0f0a","say":"Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do."}
 {"ok":false,"fix":"NOT_PROPOSED","say":"Nothing to confirm yet. What's the bet?"}
 {"ok":false,"fix":"INVITE_PENDING","say":"Jake has to accept the challenge on their phone first."}
+{"ok":false,"fix":"ODDS_PENDING","say":"Odds first. Both of you tap Accept on your phones."}
+```
+
+`ODDS_PENDING` (§2.19): unequal stakes not yet accepted on both phones, or an odds offer open. Audited, never replayed; when both accept, `judge.cue ODDS_AGREED` is spoken so the judge calls `confirm_terms` again.
+
+#### `suggest_odds` (`pre_tool_speech: "force"`)
+
+- Params: ids + `claim: string`, `performer: enum ["A","B"]`, `attempts: {count, rule}`, `base_usd: string` ("Per-person amount being discussed").
+- The same prelude as `propose_terms` (secret, the per-conversation bucket, the 10 s dedupe, the binding check, `WRONG_BET` audited), then the §2.19 suggestion engine: in TERMS_PROPOSED it reads the card (the params are ignored), in DRAFTING it uses the params (the offer has `terms_hash: null`; accepting it waits for a card). The judge speaks `say` itself, so the `ODDS_OFFERED` cue is a contextual update.
+- Responses (< 300 B):
+
+```json
+{"ok":true,"ratio":"2:1","a":"$5","b":"$10","pct":69,"say":"Jake is 10 for 12 on bottle flips, and 12-4 against Logan. I'd make it two to one: Logan puts in five, Jake puts in ten. Both agree?"}
+{"ok":false,"fix":"NO_CLAIM","say":"What's the bet? I need the claim before I set odds."}
+{"ok":false,"fix":"NOT_DRAFTING","say":"These terms are already frozen. No new odds now."}
 ```
 
 #### `open_hearing` (`pre_tool_speech: "off"`)
@@ -864,18 +947,30 @@ Responses (≤ 300 B):
 {"ok":false,"fix":"NO_HEARING","say":"There's no dispute on the docket."}
 ```
 
-#### `file_appeal` (`pre_tool_speech: "off"`)
+#### `request_review` (`pre_tool_speech: "off"`; replaces `file_appeal`, built 2026-11-18)
 
-- Params: ids + `party: {type:"string", enum:["A","B"], description:"Who said 'I appeal'."}`.
-- **It never files anything onchain.** It checks loser status and the window, then re-sends `tx.sign_request(appeal)` to that party with a `judge.cue`. The appeal only happens when the loser taps "I appeal!" with Face ID.
-- Responses:
+- Params: ids + `heard: {type:"string", description:"What you heard, a few words, e.g. \"check that again\"."}` (required). There is no `party`: the mic can't tell who spoke (`file_appeal`'s `party` is gone; it was never registered).
+- When: after `[EVENT] RULING`, when anyone asks to check, review, replay or appeal the ruling. Not for "GG" / "good game", not after `[EVENT] PAID` / `VOIDED` (persona `# After the ruling`).
+- **It never files or decides anything.** `ReviewService.request` (§2.12a) checks, under the bet lock, in this order, then appends `review.requested` for the loser. `heard` (≤ 80 chars) is kept only in `audit_log 'review.requested'`.
+- Same conventions as `confirm_terms`: 401 for a bad secret, `WRONG_BET` + audit row, the `el/tools` bucket → `SLOW_DOWN`, a success replayed within 10 s.
+- Responses (`say` speaks the loser's name, ASCII-folded):
 
 ```json
-{"ok":true,"secs_left":7,"say":"Logan, tap I appeal on your phone. Seven seconds."}
-{"ok":false,"fix":"NOT_LOSER","say":"Winners don't appeal."}
+{"ok":true,"say":"Review requested. Jake, confirm on your phone."}
+{"ok":true,"already":true,"say":"Already asked. Jake, it's on your phone."}
+{"ok":false,"fix":"NO_RULING","say":"No ruling to check yet."}
+{"ok":false,"fix":"GG_CALLED","say":"GG was called. The ruling stands."}
+{"ok":false,"fix":"WITH_PANEL","say":"It's already with the panel."}
+{"ok":false,"fix":"FINAL","say":"The ruling is final."}
+{"ok":false,"fix":"MARKET","say":"Gemini settled it. No reviews on the market."}
+{"ok":false,"fix":"NO_LOSER","say":"Nobody lost this one."}
+{"ok":false,"fix":"ONE_REVIEW","say":"One review per ruling. It stands."}
 {"ok":false,"fix":"WINDOW_CLOSED","say":"Too late. The ruling stands."}
-{"ok":false,"fix":"GEMINI_FINAL","say":"Gemini settled it. No appeals on the market."}
+{"ok":false,"fix":"NO_APPEALS_LEFT","say":"No appeals left this hour. It stands."}
 ```
+
+- Fix order: state before RULED (or a REDO) → `NO_RULING`; `CONCEDED` or PAID by concede → `GG_CALLED`; `APPEALED` / `APPEAL_RESOLVED`, or an appeal signed / sent / filed → `WITH_PANEL`; any other non-RULED state → `FINAL`; `evidence_source = gemini` → `MARKET`; outcome not party_a / party_b → `NO_LOSER`; an open review → `already`; an earlier review → `ONE_REVIEW`; `now ≥ confirm_by − 1.5 s` → `WINDOW_CLOSED`; the loser's 3/h appeal bucket empty (read-only `RateLimiter.remaining`) → `NO_APPEALS_LEFT`.
+- `skip_turn` (built-in system tool, `prompt.built_in_tools.skip_turn`, `wait_timeout_secs: -1`): the judge stays silent when the room is only celebrating after a ruling.
 
 #### `get_market_odds` (`pre_tool_speech: "force"`)
 
@@ -918,8 +1013,10 @@ Grammar:
 | `LOCK_FAILED` | `[EVENT] LOCK_FAILED reason=insufficient_funds party=Jake :: Say the lock failed and nothing moved.` |
 | `DECLINED` / `EXPIRED` / `REFUSED` | `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` |
 | `INVITE_ACCEPTED` | `[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.` (only after a refused `INVITE_PENDING` for the same terms) |
+| `ODDS_OFFERED` / `ODDS_COUNTERED` | `[EVENT] ODDS_OFFERED name=Logan ratio="3 to 1" :: Say Logan offers 3 to 1: Logan fifteen, Jake five. Jake taps Accept or Counter.` Spoken for an offer from a phone (a typed card, an offer, the Suggest button: "Say this word for word: <the suggestion>"); a contextual update when the voice judge proposed or suggested it |
+| `ODDS_AGREED` | `[EVENT] ODDS_AGREED a=fifteen b=five :: Say the odds are agreed: Logan fifteen, Jake five. Then call confirm_terms again.` Spoken only after a voiced `confirm_terms` was refused `ODDS_PENDING`; otherwise a contextual update "… Keep these stakes in every propose_terms call." |
 | `ATTEMPT_ARMED` (context) | `[EVENT] ATTEMPT_ARMED attempt=1 performer=Jake :: Stay quiet while the camera counts down.` |
-| `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan he can tap GG.` |
+| `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan to tap GG, or to say "check it again" for a review.` |
 | `REDO` | `[EVENT] REDO attempt=2 max=3 why=unclear :: Say "Run it back" and call request_attempt with attempt_no 2.` |
 | `HEARING_REQUIRED` | `[EVENT] HEARING_REQUIRED trigger=contested first=Logan secs=10 :: Call order in the court, then call open_hearing.` |
 | `HEARING_TURN` | `[EVENT] HEARING_TURN party=B name=Jake said="It ended standing up. Pay me." :: Acknowledge in three words. Do not rule yet.` |
@@ -928,7 +1025,10 @@ Grammar:
 | `APPEAL_VOTE` (context) | `[EVENT] APPEAL_VOTE seat=2 judge=openai vote=A_WINS :: Do not speak; the stage reads the votes.` |
 | `APPEAL_RESULT` | `[EVENT] APPEAL_RESULT final=B_WINS tally=1-1-1 decided_by=upheld_no_majority :: Say the ruling stands: no majority.` |
 | `MARKET_SETTLED` | `[EVENT] MARKET_SETTLED side=yes line=97250.03 settle=97301.12 winner=Logan gg_secs=10 :: Announce Gemini settled UP and Logan wins.` |
-| `PAID` / `VOIDED` | `[EVENT] PAID winner=Jake amount=$10 :: Congratulate Jake in one line.` |
+| `PAID` / `VOIDED` | `[EVENT] PAID winner=Jake amount=$10 to_a=$0 to_b=$10 :: Congratulate Jake in one line.` (after `resolve_appeal`: unchanged) |
+| `PAID` after a GG | `[EVENT] PAID winner=Logan amount=$10 to_a=$10 to_b=$0 via=gg loser=Jake record="Logan 5-7 Jake" :: Jake said GG. Praise the sportsmanship in one short line, then congratulate Logan.` |
+| `PAID` after the clock | `… via=timeout loser=Jake :: No GG from Jake; the clock ran out. Congratulate Logan in one line.`; with `review=lapsed`: `Jake did not confirm the review, so the ruling stands. …`; with `review=declined`: `Jake kept the ruling. …` |
+| `REVIEW_CLOSED` (context) | `[EVENT] REVIEW_CLOSED by=Jake reason=declined :: Do not speak. Jake kept the ruling.` / `reason=lapsed :: Do not speak. The review was not confirmed; the ruling stands.` |
 
 **Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:clip_id` (§2.17). This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
 
@@ -937,7 +1037,7 @@ Grammar:
 | Event | Voice | Line (`packages/shared/src/stage-voice.ts`, the same words on server and stage) |
 |---|---|---|
 | `ruling.issued` | judge | `Jake wins. <reason>`; REDO `Run it back. <reason>` (said once: a reason that already says "Run it back", as the server's own REDO reasons do, is read as it is); VOID why, then `It's void: both stakes go back.`; a Gemini settlement starts `Gemini settles it.` |
-| `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
+| `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` (after a GG, `via=gg`: `Logan says GG. Jake takes $10.00.`) / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
 | `appeal.vote` | `seat_1` … `seat_3` | `Judge 2, GPT, votes Logan. <reason>` / `Judge 3, Gemini, abstains.` |
 
 - **Server.** After each bet event goes out, the line becomes a clip: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128` with `{text, model_id}`, model `STAGE_TTS_MODEL` (default `eleven_v4_turbo`, §4.1). Voices: `ELEVENLABS_JUDGE_VOICE_ID` (else a premade voice) and `ELEVENLABS_PANEL_VOICE_IDS` (three ids, else three premade voices). Then a `stage.voice` frame (§3.1). The clip is cached (memory LRU, plus the OS tmp dir), so a repeated line costs nothing. On only with `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true`; `STAGE_TTS=off` is the kill switch. Nothing is generated with no stage socket on the room, or for a stale event. Lines are capped at 300 characters.
@@ -1417,3 +1517,7 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 - **2026-11-18 (Beat 5 appeal, built without the hearing).** §2.12 gains "Built" notes: the exact GET / POST error set (`SIGNATURE_INVALID` for a signature that does not verify, as concede; the program's 6024 → `APPEAL_WINDOW_CLOSED`), the bucket spent only by an accepted filing, idempotent repeats, the filing written before the send, the failed-appeal path, the decision once all three votes are in (the `AppealResult` carries three votes), finalize skipping an appeal in flight, the `appeal-sweep` keeper task. §2.17 adds `POST /v1/demo/bets/:bet_id/appeal` (custodial, `LOCK_SIGNER=server`). §3.4 pins the push order (concede then appeal) and the built event order; `appeal_decided` push is not sent. §7.2 describes the built panel (abstentions, no 0.8 floor on votes).
 - **2026-11-18, the stage voice (feat/stage-voice):** §2.17 gains the stage audio routes (`GET /v1/stage/audio`, `/v1/stage/tts/:clip_id`, `/v1/stage/sfx/:kind`) and says `GET /v1/demo/health` takes the stage token alone. §3.1 gains the `stage.voice` control frame (stage sessions only) and `stage.cue.audio_url`. §4.5: the TTS route is `/v1/stage/tts/:clip_id` (content-addressed: sha256 of voice, model and text), not `:vote_id`, because the same route also voices the rulings and payouts; the stage voice table and the browser fallback after 800 ms are new. §2.6 / §4.4: the cue clips are live with the key (`SFX_PROVIDER=auto`). §4.5 "One judge at a time": in a bet a voice judge hosts (a relayed `judge.line`), the stage leaves the ruling and the payout to A's phone (no `stage.voice`, no browser voice), so the hall never hears both.
 - **2026-11-19, wave-3 review minors (fix/minors-server):** §2.10: GG is refused with `STATE_MOVED_ON {reason:'appeal_in_flight'}` once the loser's appeal is filed (signed / sent, the bet still `RULED`), so GG and the appeal are mutually exclusive. §2.12: the 3/h bucket token is taken last in the filing's own transaction and given back on a preflight refusal. §2.14: a `seed-h2h` row's `title` is its own ("Demo history: …"). §2.17: the judge / toggle health warnings alone never make the health log lines a WARN. §4.5: a REDO reason that already says "Run it back" is not prefixed again.
+- **2026-11-18, slow-mo replay (feat/slowmo-replay):** §2.0 / §2.14 gain `GET /v1/bets/:bet_id/replay` (`ReplayResponse`, SCHEMAS §4.1): the snapshot's readers, 404 for missing and not-yours, `no-store`, the `why` values, frames by the existing frame route, a foul only from a confirmed `replayFouls` source. Additive: no other route or event changes (no new realtime event).
+- **2026-11-18, live rivalry scan (feat/rivalry-scan; additive, old clients still parse):** §1.7 adds the `face-match/live` bucket (60/min per user, sharing the one-in-flight slot with `face-match`); the face-match body is now read before the token is taken, so an invalid body spends none. §2.4 `FaceMatchRequest` gains optional `mode: 'tap'|'live'` (absent = tap; it only picks the bucket). §2.18 `HeadToHead` gains optional `total`, `last_result`, `streak {holder:'me'|'them', length}` and `rival` (total ≥ `RIVAL_MIN_SETTLED` = 3), always sent by this server on every `headToHead()` reply (face-match, `GET /v1/users/:id/head-to-head`, `seed-h2h`); new `StageRivalry` and `rivalryOf()`. §3.4 `bet.invited` gains optional `rivalry: StageRivalry` (A's view, computed before the challenge transaction); the projector shows "Logan 4–7 Jake · Rivals" under VS for face challenges.
+- **2026-11-18, the GG moment + the spoken review (feat/gg-moment):** new §2.12a (the review request: loser-only confirm through the normal appeal, `confirm_by = appeal_deadline − 1 s`, never extended, once per ruling, lapse / decline, the race order; `bet.gg` with the record before / after). §2.17 adds `POST /v1/demo/bets/:bet_id/review`. §3.4 adds `bet.gg`, `review.requested`, `review.closed` (and `bet.gg` in the CONCEDED row). §4.3: `request_review` replaces `file_appeal` (no `party`: the mic can't tell who spoke) and the built-in `skip_turn`. §4.5: `RULING` tells the loser to tap GG or say "check it again"; `PAID` carries `via` / `loser` / `record` / `review` for a concede or a finalize (resolve_appeal unchanged); new `REVIEW_CLOSED` (speak:false); the stage says "Logan says GG." for `via=gg`.
+- **2026-11-18 (odds, feat/odds):** new §2.19 (offer / accept / withdraw / suggest routes, the protocol rules, the history-grounded suggestion), §2.0 index row. §2.7 note. §2.14 `their_stake`, seed titles. §2.17 `seed-h2h` `records` + `performer_stats`, seed rows carry terms rows. §3.4 `odds.offered`, `odds.answered`, `odds.agreed`. §4.3 `propose_terms` `stake_b_usd` (optional, additive), the odds read-back and `odds: 'tap_accept'`, `confirm_terms` `ODDS_PENDING`, the new `suggest_odds` webhook tool. §4.5 cues `ODDS_OFFERED`, `ODDS_COUNTERED`, `ODDS_AGREED`.

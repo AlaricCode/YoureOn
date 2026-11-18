@@ -1,0 +1,70 @@
+# Money motion on the simulator (design §2-3), through the stand-in design preview: scrub the Home
+# sparkline (the header shows that point, then snaps back; the scrub must not open the operator
+# menu), the payout figure rolling up from +$0.00, and the live market price rolling between
+# ticks (two screenshots 1.5 s apart). Each screen goes through preview-screen.yaml.
+#   maestro --device <udid> test e2e/maestro/sim-money.yaml   (signed in, on home)
+appId: dev.youreon.app
+name: sim-money
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- longPressOn:
+    id: balance-header
+- extendedWaitUntil:
+    visible: App preview
+    timeout: 10000
+- waitForAnimationToEnd
+- tapOn: App preview
+- extendedWaitUntil:
+    visible:
+      id: menu-launch
+    timeout: 10000
+
+# Home: a slow horizontal drag along the sparkline scrubs it.
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: home
+- extendedWaitUntil:
+    visible:
+      id: balance-spark
+    timeout: 5000
+- swipe:
+    from:
+      id: balance-spark
+    direction: RIGHT
+    duration: 1200
+- assertVisible:
+    id: balance-header
+- assertNotVisible: App preview
+- takeScreenshot: money-home-scrubbed
+- tapOn:
+    id: preview-menu
+
+# Payout, won: the figure rolls up from +$0.00 (payout.countUpMs), the balance line rolls too.
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: payoutWon
+- waitForAnimationToEnd:
+    timeout: 3000
+- takeScreenshot: money-payout-won
+- tapOn:
+    id: preview-menu
+
+# Market: the price rolls between the preview's simulated ticks.
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: market
+- takeScreenshot: money-market-1
+# The price keeps ticking, so this waits out its 1.5 s timeout: a plain delay between the shots.
+- waitForAnimationToEnd:
+    timeout: 1500
+- takeScreenshot: money-market-2
+- tapOn:
+    id: preview-menu

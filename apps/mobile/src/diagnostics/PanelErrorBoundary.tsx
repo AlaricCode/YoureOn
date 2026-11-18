@@ -3,6 +3,7 @@
 import { Component, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { palette, radius, space, type } from '../ui/tokens';
 import { describeError } from './runner';
 
 interface Props {
@@ -40,7 +41,7 @@ export class PanelErrorBoundary extends Component<Props, State> {
 }
 
 const styles = StyleSheet.create({
-  box: { padding: 12, borderRadius: 8, backgroundColor: '#fdecea' },
-  title: { fontWeight: '700', color: '#a1281c' },
-  message: { marginTop: 4, color: '#a1281c', fontFamily: 'Menlo' },
+  box: { padding: space.x2, borderRadius: radius.lg, backgroundColor: palette.surface },
+  title: { ...type.labelStrong, color: palette.danger },
+  message: { ...type.small, marginTop: 4 },
 });

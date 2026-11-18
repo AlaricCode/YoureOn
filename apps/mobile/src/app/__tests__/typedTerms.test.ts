@@ -9,6 +9,7 @@ import {
   canConfirm,
   canSubmit,
   confirmTypedTerms,
+  typedStakes,
   DEFAULT_STAKE_USD,
   initialTyped,
   submitTypedTerms,
@@ -144,6 +145,7 @@ describe('restart mid-bet: the form adopts the card already on screen', () => {
       terms_hash: env.terms_hash,
       claim: env.terms.claim,
       stakeUsd: 5,
+      odds: { preset: 'Even', dir: 'give', baseUsd: 5, custom: null },
     });
     const s = restored();
     expect(s).toMatchObject({
@@ -175,7 +177,7 @@ describe('restart mid-bet: the form adopts the card already on screen', () => {
     ).toBe(open);
   });
 
-  it('typedCardOf: nothing for no card, a market card, uneven or unoffered stakes', () => {
+  it('typedCardOf: nothing for no card, a market card, or an even stake the chips lack', () => {
     expect(typedCardOf(null)).toBeNull();
     const btc = btcCloser('Logan');
     expect(typedCardOf({ terms: btc.terms, terms_hash: btc.termsHash })).toBeNull();
@@ -183,8 +185,8 @@ describe('restart mid-bet: the form adopts the card already on screen', () => {
       ...env,
       terms: { ...env.terms, stakes: { a, b, currency: 'USDC' as const } },
     });
-    expect(typedCardOf(stakes('5000000', '1000000'))).toBeNull();
     expect(typedCardOf(stakes('3000000', '3000000'))).toBeNull();
+    expect(typedCardOf(stakes('500000', '500000'))).toBeNull();
     expect(typedCardOf(stakes('1000000', '1000000'))?.stakeUsd).toBe(1);
   });
 });
@@ -372,5 +374,148 @@ describe('typed terms actions', () => {
       outcome: { kind: 'proposed', terms_hash: env.terms_hash, code: 'c' },
     } as TypedEvent);
     expect(canConfirm(sent, m.envelope?.terms_hash ?? null, 'accepted')).toBe(true);
+  });
+});
+
+describe('odds in the typed form', () => {
+  const env = envelope();
+  const stakes = (a: string, b: string) => ({
+    ...env,
+    terms: { ...env.terms, stakes: { a, b, currency: 'USDC' as const } },
+  });
+
+  it('typedCardOf adopts a card at odds: a preset over a chip, or custom stakes', () => {
+    // Logan (A) gives 5 to 1 over a $1 base.
+    expect(typedCardOf(stakes('5000000', '1000000'))).toMatchObject({
+      stakeUsd: 1,
+      odds: { preset: '5:1', dir: 'give', baseUsd: 1, custom: null },
+    });
+    // Logan gets 3 to 1: Jake puts in $15 against Logan's $5.
+    expect(typedCardOf(stakes('5000000', '15000000'))?.odds).toMatchObject({
+      preset: '3:1',
+      dir: 'get',
+    });
+    // The judge's 3:2 ($7.50 vs $5) is no preset: kept as the exact stakes.
+    const c = typedCardOf(stakes('7500000', '5000000'));
+    expect(c?.odds).toMatchObject({
+      preset: 'custom',
+      dir: 'give',
+      custom: { mine: '7500000', theirs: '5000000' },
+    });
+    expect(typedStakes(c!)).toEqual({ ok: true, stakes: { a: '7500000', b: '5000000' } });
+  });
+
+  it('the picker and the stake chip make the stakes; a chip after custom starts over at Even', () => {
+    let s = typedOn();
+    expect(typedStakes(s)).toEqual({ ok: true, stakes: { a: '1000000', b: '1000000' } });
+    s = run(
+      s,
+      { type: 'stake', usd: 5 },
+      { type: 'odds', control: { preset: '3:1', dir: 'give', baseUsd: 5, custom: null } },
+    );
+    expect(typedStakes(s)).toEqual({ ok: true, stakes: { a: '15000000', b: '5000000' } });
+    // A new chip keeps the preset: 3 to 1 over $10, clamped to the $20 cap.
+    s = run(s, { type: 'stake', usd: 10 });
+    expect(typedStakes(s)).toEqual({ ok: true, stakes: { a: '20000000', b: '6660000' } });
+    const custom = run(s, {
+      type: 'odds',
+      control: {
+        preset: 'custom',
+        dir: 'give',
+        baseUsd: 5,
+        custom: { mine: '7500000', theirs: '5000000' },
+      },
+    });
+    expect(custom.stakeUsd).toBe(5);
+    expect(typedStakes(custom)).toEqual({ ok: true, stakes: { a: '7500000', b: '5000000' } });
+    expect(run(custom, { type: 'stake', usd: 20 }).odds).toEqual({
+      preset: 'Even',
+      dir: 'give',
+      baseUsd: 20,
+      custom: null,
+    });
+  });
+
+  it('agreed odds that recompose the sent card are adopted, so Lock it in binds the new hash', () => {
+    const NEW = 'cd'.repeat(32);
+    const sent = run(
+      typedOn(),
+      { type: 'odds', control: { preset: '3:1', dir: 'give', baseUsd: 5, custom: null } },
+      { type: 'submit' },
+      { type: 'submitted', outcome: { kind: 'proposed', terms_hash: HASH, code: 'K7Q2' } },
+    );
+    expect(canConfirm(sent, NEW, 'accepted', true)).toBe(false);
+    // Jake countered 2:1 and Logan accepted: the server recomposed the card at $10 vs $5.
+    const shown = typedCardOf({ ...stakes('10000000', '5000000'), terms_hash: NEW })!;
+    const adopted = run(sent, { type: 'odds_agreed', shown });
+    expect(adopted.proposedHash).toBe(NEW);
+    expect(adopted.odds).toMatchObject({ preset: '2:1', dir: 'give', baseUsd: 5 });
+    expect(canConfirm(adopted, NEW, 'accepted', true)).toBe(true);
+    // Mid-edit or mid-request the form is left alone.
+    const editing = run(sent, { type: 'claim', text: 'Jake flips it twice' });
+    expect(run(editing, { type: 'odds_agreed', shown })).toBe(editing);
+  });
+
+  it('a preset over a base the chips lack is kept as exact stakes', () => {
+    const s = run(typedOn(), {
+      type: 'odds',
+      control: { preset: '2:1', dir: 'get', baseUsd: 3, custom: null },
+    });
+    expect(s.odds.preset).toBe('custom');
+    expect(typedStakes(s)).toEqual({ ok: true, stakes: { a: '3000000', b: '6000000' } });
+  });
+
+  it('submit at odds sends A as amount_usd and B as stake_b_usd; even sends no stake_b_usd', async () => {
+    const bodies: TypedTermsRequest[] = [];
+    const api = {
+      async proposeTypedTerms(_id: string, b: TypedTermsRequest) {
+        bodies.push(b);
+        return { ok: false as const, kind: 'draft' as const, fix: null, missing: [], say: 'x' };
+      },
+    };
+    const claim = bottleFlipClaim('Jake');
+    await submitTypedTerms(
+      { api },
+      { betId: BET, claim, stakeUsd: 5, bName: 'Jake', stakes: { a: '15000000', b: '5000000' } },
+    );
+    await submitTypedTerms(
+      { api },
+      { betId: BET, claim, stakeUsd: 5, bName: 'Jake', stakes: { a: '5000000', b: '5000000' } },
+    );
+    expect(TypedTermsRequest.parse(bodies[0])).toMatchObject({
+      amount_usd: '15',
+      stake_b_usd: '5',
+    });
+    expect(bodies[1]).toMatchObject({ amount_usd: '5' });
+    expect(bodies[1]).not.toHaveProperty('stake_b_usd');
+  });
+
+  it('"Lock it in" waits for the odds: canConfirm needs oddsOk, and the button says waiting', () => {
+    const s = run(
+      typedOn(),
+      { type: 'submit' },
+      { type: 'submitted', outcome: { kind: 'proposed', terms_hash: HASH, code: 'x' } },
+    );
+    expect(canConfirm(s, HASH, 'accepted', false)).toBe(false);
+    expect(waitingForAccept(s, HASH, 'accepted', false)).toBe(true);
+    expect(canConfirm(s, HASH, 'accepted', true)).toBe(true);
+    expect(waitingForAccept(s, HASH, 'accepted', true)).toBe(false);
+  });
+
+  it('confirm refused for the odds: a short note', async () => {
+    const r = await confirmTypedTerms(
+      {
+        api: {
+          async confirmTerms() {
+            throw new ApiClientError('INVALID_STATE', 409, 'Waiting on the odds.', false, {
+              reason: 'odds_pending',
+            });
+          },
+        },
+      },
+      { betId: BET, termsHash: HASH, idempotencyKey: 'k' },
+    );
+    expect(r).toEqual({ ok: false, note: t(COPY.odds.pending), freshKey: true });
+    expect(checkCopy(t(COPY.odds.pending), 'body')).toEqual([]);
   });
 });

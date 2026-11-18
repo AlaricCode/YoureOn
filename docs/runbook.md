@@ -130,6 +130,24 @@ demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 4, "b_wins": 7}'   # the 
 demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 0, "b_wins": 0}'   # remove the history
 ```
 
+**Odds rehearsal ("Judge, what odds are fair?").** Give the performer a category record so the
+judge's suggestion quotes it. demo-b (Jake) 10 for 12 on bottle flips, inside a 4-12 head-to-head:
+
+```sh
+demo -X POST "$SERVER/v1/demo/seed-h2h" \
+  -d '{"a_wins": 4, "b_wins": 12, "records": [{"player": "b", "category": "bottle_flip", "made": 10, "missed": 2}]}' \
+  | jq '{inserted, head_to_head, performer_stats: [.performer_stats[] | {category, in_category, h2h: {wins: .h2h.wins, losses: .h2h.losses}}]}'
+```
+
+Then on a bottle-flip bet (Jake performs, $5 base) "Suggest odds" (or "Judge, what odds are fair?")
+offers **2 to 1**: "Jake is 10 for 12 on bottle flips, and 12-4 against Logan. I'd make it two to
+one: Logan puts in five, Jake puts in ten." For a **3 to 1** moment use Jake 12 for 13
+(`"made": 12, "missed": 1`, `b_wins` ≥ 12) or Logan 1 for 5 on paper-ball throws
+(`{"player": "a", "category": "throw", "made": 1, "missed": 4}`, with `a_wins` ≥ 1, `b_wins` ≥ 4,
+on a "Logan throws a paper ball into the bin" bet). The records count toward the head-to-head
+(422 if they don't fit). Every surface that shows these stats tags them "Demo history". Without
+`ALLOW_SPEND` + `LLM_PROVIDER=live` the sentence is the server template; the numbers are the same.
+
 - The rows are demo history, labelled `is_seed` (titles "Demo history: …"): 11 settled bets with
   no on-chain footprint, one a day in the past, so the record reads 4-7 and −$7.00 for demo-a.
   The phones' history lists them, flagged `is_seed`.
@@ -224,6 +242,68 @@ abstaining) upholds the ruling. The appeal key then pays with `resolve_appeal`, 
 - **If it stalls:** `stuck_bets` lists an `APPEALED` bet; the keeper's `appeal-sweep` re-runs a lost
   panel and resends a failed `resolve_appeal`. Past `appeal_resolve_deadline` (300 s after the
   appeal) the timeout-refund keeper returns both stakes (`EXPIRED`, `appeal_timeout`).
+
+### The GG moment and the spoken review ("check that again")
+
+Built 2026-11-18 (`feat/gg-moment`; API-CONTRACT §2.12a). Two parts:
+
+- **GG.** When the loser taps GG, the server adds `bet.gg` to the CONCEDED commit: who said GG, what
+  it pays, and the pair's record before / after (`headToHead` + the seed history, e.g. 4-7 -> 5-7).
+  The judge's PAID line then knows it was a GG (`via=gg`: praise the sportsmanship, then
+  congratulate the winner); a silent ruling paid by the clock says `via=timeout` (no GG). The stage
+  and the phones animate it from `bet.gg` (their own branches).
+- **Spoken review.** After the ruling anyone can say "check that again", "that's wrong, review it",
+  "I want a replay". The judge calls `request_review`; the server asks the **loser's** phone, which
+  opens the appeal confirmation (tap + Face ID): only that files the appeal, then it is the normal
+  Beat 5 panel. Words alone never file anything (the mic can't tell who spoke). The loser can tap
+  **Keep ruling**; unconfirmed, it lapses at `appeal_deadline − 1 s` and the window rules resume.
+  One review per ruling, none after GG / PAID, none on a Gemini bet, none in the last 1.5 s.
+- **From the laptop:** `demo -X POST "$SERVER/v1/demo/bets/$BET/review" -d '{}'` asks the same as
+  the voice tool (200 `{ok, say, review}` / 409 `{ok:false, fix, say}`). Then the loser confirms on
+  the phone, or (custodial) `demo -X POST "$SERVER/v1/demo/bets/$BET/appeal" -d '{}'`.
+- **Timing (decision D1, Logan).** The appeal window is 10 s (Config `appeal_window_secs`); the
+  program refuses an appeal at or after `appeal_deadline`, so the server can't hold it open. The
+  ruling is spoken ~1-2 s before the window opens and the mic opens after it, so a spoken review
+  only works if someone asks at once. To give it room: `update_config appeal_window_secs 10 -> 20`
+  (admin tx, deployer key, new bets only; a silent ruling then pays at ~T+21 s instead of ~T+11 s),
+  set `APPEAL_WINDOW_S=20` on Fly (the RULING cue's `gg_secs`), and the phones' countdown must use
+  `deadline − resolved_at`. Not done by the feature branch.
+
+#### Updating the live judge after the deploy
+
+The live agent `youre-on-judge` gains the `request_review` webhook tool, the `# After the ruling`
+prompt section and the built-in `skip_turn` tool. Deploy the server first (the route must exist
+before the agent can call it), then:
+
+```
+npm run el-agent -- --dry-run --check-openapi          # the plan: request_review create, agent PATCH
+npm run el-agent -- --check-openapi                    # writes; a second run prints "no changes (no-op)"
+```
+
+It is idempotent (find by name, PATCH only what differs). `skip_turn` changes the judge's silence in
+every phase: run the eval (below) first and check T5. To roll back, check out the previous commit
+and run el-agent again (it PATCHes the prompt back; delete the `request_review` tool in the
+dashboard if wanted).
+
+#### The eval on a throwaway agent (`scripts/el-review-eval.ts`)
+
+```
+npx tsx --env-file-if-exists=apps/server/.env scripts/el-review-eval.ts --dry-run   # bodies vs OpenAPI, no key
+npx tsx --env-file-if-exists=apps/server/.env scripts/el-review-eval.ts             # 11 tests x2, a few cents
+npx tsx --env-file-if-exists=apps/server/.env scripts/el-review-eval.ts --cleanup   # after a crash
+```
+
+It creates its own agent `youre-on-judge-test-gg` (tags `youre-on,test-gg`) and its own
+`request_review` tool (never called: the tests evaluate the call), runs ElevenLabs agent tests
+(the tool is called for "check that again" / "review it" / "I appeal", not for "GG" / cheering /
+after PAID; it speaks the tool's `say`; the GG vs timeout PAID lines), prints pass / fail and the
+credits, then deletes everything it made by id. It never PATCHes and never touches the live agent;
+it refuses to run while the workspace already has a `request_review` tool, so run it before the
+live sync (after it, the eval would duplicate the tool name, which el-agent refuses). Result on 2026-11-18:
+11/11 tests passed on both repeats, 675 credits.
+
+`el-agent --agent-name=<name>` makes a test agent from the shared tools instead (never PATCHing
+them; it stops if one differs from the checkout). Delete that agent in the dashboard when done.
 
 ## 2. Opening the stage
 

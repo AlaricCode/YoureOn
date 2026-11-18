@@ -21,6 +21,7 @@ import {
   stageLineFor,
   type StageVoiceName,
 } from '@youre-on/shared/stage-voice';
+import { oddsCueLine } from './odds-state';
 import { FRESH_MS } from './sound';
 import type { TickerState } from './ticker';
 
@@ -71,7 +72,8 @@ export function freshVoiceLines(
     seen.add(key);
     const age = nowMs - Date.parse(e.ts);
     if (!(Number.isFinite(age) && age <= freshMs && age >= -freshMs)) continue;
-    const line = stageLineFor(e, names);
+    const odds = oddsCueLine(e, s.bets[betId]?.odds ?? null, names);
+    const line = stageLineFor(e, names) ?? (odds ? { voice: 'judge' as const, text: odds } : null);
     if (!line) continue;
     phone ??= o.phoneJudge !== false && hasPhoneJudge(history);
     out.push(leftToPhoneJudge(e.type, phone) ? { key, ...line, phone: true } : { key, ...line });
@@ -136,6 +138,11 @@ export class StageVoice {
     private readonly waitMs = VOICE_WAIT_MS,
     private readonly clipWaitMs = CLIP_WAIT_MS,
   ) {}
+
+  /** No line is being said or waited for (the slow-mo replay waits for this; feat/slowmo-replay). */
+  get idle(): boolean {
+    return this.current === null && this.pending.size === 0;
+  }
 
   /** A voiced event arrived: it will be heard, as a clip if one comes in time, else spoken. */
   expect(line: VoiceLine): void {

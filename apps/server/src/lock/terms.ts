@@ -30,6 +30,7 @@ import {
 } from '@youre-on/shared/judge/market-terms';
 import type { FairRefusal } from '@youre-on/shared/gemini';
 import { readbackSay, type ProposeEvaluation } from '@youre-on/shared/judge/reply';
+import { ratioLabel } from '@youre-on/shared/odds-math';
 import type { GuardrailRefusal, TermsDraft, TermsProposal } from '@youre-on/shared/negotiation';
 import {
   computeTermsHash,
@@ -54,6 +55,7 @@ import {
 import { priorAnswers, recordInvitePending } from '../bets/invite';
 import { loadUserRefs, type BetRow } from '../bets/snapshot';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
+import { autoOffer, oddsGate, recordOddsPending } from '../odds/service';
 import { fanout, iso, lockBet, statePayload, type LifecycleDeps, type Tx } from './common';
 
 /** SCHEMAS §2.2: skill deadline default. */
@@ -100,7 +102,8 @@ export function composeTerms(i: ComposeInput) {
     edge_cases: p.edge_cases,
     evidence_source: p.evidence_source,
     market: q ? q.ref : null,
-    stakes: q ? q.stakes : { a: p.amount, b: p.amount, currency: 'USDC' },
+    // Skill odds: amount = A's stake, amount_b = B's (null = even). Market: Gemini's split.
+    stakes: q ? q.stakes : { a: p.amount, b: p.amount_b ?? p.amount, currency: 'USDC' },
     deadline: new Date(deadline).toISOString(),
     created_at: new Date(i.nowMs).toISOString(),
   });
@@ -119,6 +122,8 @@ export function proposalOf(t: Terms): TermsProposal {
     edge_cases: t.edge_cases,
     evidence_source: t.evidence_source,
     amount: t.stakes.a,
+    // Odds: B's stake when it differs (market terms: Gemini's split is not judge-owned).
+    amount_b: t.type === 'skill' && t.stakes.b !== t.stakes.a ? t.stakes.b : null,
     market_query: null,
     deadline_minutes: null,
   };
@@ -139,11 +144,18 @@ export function presentationOf(t: Terms): TermsPresentation {
       party_a_avatar_url: null,
       party_b_avatar_url: null,
     };
+  const even = t.stakes.a === t.stakes.b;
   return {
     title: titleOf(t.claim),
-    readback: readbackSay(proposalOf(t)).slice(0, 400),
-    stakes_display: `${formatUsd(t.stakes.a)} each`.slice(0, 40),
-    odds_display: null,
+    readback: readbackSay(proposalOf(t), {
+      a: t.party_a.display_name,
+      b: t.party_b.display_name,
+    }).slice(0, 400),
+    stakes_display: (even
+      ? `${formatUsd(t.stakes.a)} each`
+      : `${formatUsd(t.stakes.a)} vs ${formatUsd(t.stakes.b)}`
+    ).slice(0, 40),
+    odds_display: even ? null : ratioLabel(t.stakes.a, t.stakes.b).slice(0, 12),
     party_a_avatar_url: null,
     party_b_avatar_url: null,
   };
@@ -241,146 +253,183 @@ export async function persistEvaluation(
       evaluation = { kind: 'issue', issue: refusalIssue(q.reason), proposal: evaluation.proposal };
     }
   }
-  const now = deps.now();
-  const out = await deps.db.transaction(async (tx) => {
-    const bet = await lockBet(tx, betId);
-    if (!bet) return { res: { kind: 'skipped', reason: 'no_bet' } as PersistResult, bet, envs: [] };
-    if (!PROPOSABLE.includes(bet.state))
-      return {
-        res: { kind: 'skipped', reason: `state ${bet.state}` } as PersistResult,
-        bet,
-        envs: [],
-      };
-
-    if (evaluation.kind === 'refused') {
-      // The voice judge already spoke the quip from the propose_terms reply: the cue only
-      // informs it (contextual update). Typed / demo refusals have it spoken.
-      const speak = o.source !== 'propose_terms';
-      const envs = await cancelRefused(tx, bet, evaluation.refusal, now, o.requestId, speak);
-      return { res: { kind: 'refused' } as PersistResult, bet, envs };
-    }
-
-    const nextVersion = await nextTermsVersion(tx, betId);
-    const draft = (
-      proposal: Partial<TermsProposal>,
-      missing: TermsDraft['missing'],
-      issues: TermsDraft['issues'],
-    ) =>
-      appendBetEvent(tx, {
-        bet_id: betId,
-        type: 'terms.draft',
-        payload: {
-          draft: {
-            bet_id: betId,
-            revision: o.rev ?? nextVersion,
-            proposal,
-            missing,
-            clarifications: [],
-            issues,
-            updated_at: iso(now),
-          },
-        },
-        now,
-      });
-
-    if (evaluation.kind === 'issue') {
-      const e = await draft(evaluation.proposal ?? {}, [], [evaluation.issue]);
-      const res: PersistResult = refusal ? { kind: 'draft', refusal } : { kind: 'draft' };
-      return { res, bet, envs: [e] };
-    }
-    if (evaluation.missing.length) {
-      const e = await draft(evaluation.proposal, evaluation.missing, []);
-      return { res: { kind: 'draft' } as PersistResult, bet, envs: [e] };
-    }
-
-    const refs = await loadUserRefs(tx, [bet.party_a_id, bet.party_b_id]);
-    const a = refs.get(bet.party_a_id)!;
-    const b = refs.get(bet.party_b_id)!;
-    let composed: ReturnType<typeof composeTerms>;
-    try {
-      composed = composeTerms({
-        bet,
-        a: { pubkey: a.pubkey, display_name: a.display_name },
-        b: { pubkey: b.pubkey, display_name: b.display_name },
-        proposal: evaluation.proposal,
-        cluster: deps.env.SOLANA_CLUSTER,
-        nowMs: now,
-        quote,
-        templateClaim: o.templateClaim,
-      });
-    } catch (err) {
-      deps.log.warn('terms.compose_failed', { bet_id: betId, err });
-      const e = await draft(
-        evaluation.proposal,
-        [],
-        [{ code: 'AMBIGUOUS', message: 'the terms did not parse' }],
-      );
-      return { res: { kind: 'draft' } as PersistResult, bet, envs: [e] };
-    }
-
-    await tx.insert(betTermsVersions).values({
-      bet_id: betId,
-      version: nextVersion,
-      schema_version: 1,
-      drafted_by: o.draftedBy ?? 'judge',
-      source_tool: o.source ?? 'propose_terms',
-      canonical_json: composed.canonical,
-      terms_hash: composed.terms_hash,
-    });
-    const envelope: TermsEnvelope = {
-      terms: composed.terms,
-      terms_hash: composed.terms_hash,
-      presentation: presentationOf(composed.terms),
-    };
-    const market = composed.terms.market;
-    const stored = quote && market ? await persistQuote(tx, quote) : null;
-    const [row] = await tx
-      .update(bets)
-      .set({
-        state: 'TERMS_PROPOSED',
-        terms_hash: composed.terms_hash,
-        stake_a: BigInt(composed.terms.stakes.a),
-        stake_b: BigInt(composed.terms.stakes.b),
-        evidence_source: composed.terms.evidence_source,
-        title: envelope.presentation.title,
-        // DATA-MODEL §5.6: the wallet snapshot = Terms.party_a/b.pubkey (bets_wallet_snapshot).
-        party_a_wallet: composed.terms.party_a.pubkey,
-        party_b_wallet: composed.terms.party_b.pubkey,
-        // DATA-MODEL §5.16: Terms.market -> columns (null again if a skill bet replaces it).
-        gemini_market_id: stored?.marketId ?? null,
-        pricing_snapshot_id: stored?.snapshotId ?? null,
-        a_position: market ? (market.side === 'YES' ? 'yes' : 'no') : null,
-        odds_p: market ? market.priceAtLock : null,
-        odds_source: market ? market.priceSource : null,
-        quoted_at: market ? new Date(market.quotedAt) : null,
-      })
-      .where(and(eq(bets.id, betId), eq(bets.version, bet.version)))
-      .returning();
-    if (!row) throw new Error(`terms: bet ${betId} raced`);
-    const envs: BetEventEnvelope[] = [
-      await appendBetEvent(tx, {
-        bet_id: betId,
-        type: 'terms.proposed',
-        payload: { envelope },
-        now,
-      }),
-    ];
-    if (bet.state !== 'TERMS_PROPOSED')
-      envs.push(
-        await appendBetEvent(tx, {
-          bet_id: betId,
-          type: 'bet.state',
-          payload: statePayload(row, bet.state, null),
-          now,
-        }),
-      );
-    const res: PersistResult = { kind: 'proposed', envelope, version: nextVersion };
-    if (stored && quote)
-      res.quote = { snapshot_id: stored.snapshotId.toString(), snapshot_sha256: quote.sha256 };
-    return { res, bet, envs };
-  });
+  const out = await deps.db.transaction((tx) =>
+    persistInTx(deps, tx, betId, evaluation, { ...o, quote, refusal }),
+  );
   if (out.bet) fanout(deps, out.bet, out.envs);
   return out.res;
+}
+
+export type PersistOptions = Parameters<typeof persistEvaluation>[3];
+
+/**
+ * persistEvaluation's transaction body, for a caller that already holds a transaction (the odds
+ * service recomposes the card inside the accept that agreed it). The caller fans out `envs`
+ * after COMMIT. `refusal`: Gemini's reason, when the binding quote was refused.
+ */
+export async function persistInTx(
+  deps: TermsDeps,
+  tx: Tx,
+  betId: string,
+  evaluation: ProposeEvaluation,
+  o: NonNullable<PersistOptions> & { refusal?: FairRefusal | undefined },
+): Promise<{ res: PersistResult; bet: BetRow | null; envs: BetEventEnvelope[] }> {
+  const quote = o.quote;
+  const refusal = o.refusal;
+  const now = deps.now();
+  const bet = await lockBet(tx, betId);
+  if (!bet) return { res: { kind: 'skipped', reason: 'no_bet' } as PersistResult, bet, envs: [] };
+  if (!PROPOSABLE.includes(bet.state))
+    return {
+      res: { kind: 'skipped', reason: `state ${bet.state}` } as PersistResult,
+      bet,
+      envs: [],
+    };
+
+  if (evaluation.kind === 'invalid')
+    return { res: { kind: 'skipped', reason: 'invalid' } as PersistResult, bet, envs: [] };
+  if (evaluation.kind === 'refused') {
+    // The voice judge already spoke the quip from the propose_terms reply: the cue only
+    // informs it (contextual update). Typed / demo refusals have it spoken.
+    const speak = o.source !== 'propose_terms';
+    const envs = await cancelRefused(tx, bet, evaluation.refusal, now, o.requestId, speak);
+    return { res: { kind: 'refused' } as PersistResult, bet, envs };
+  }
+
+  const nextVersion = await nextTermsVersion(tx, betId);
+  const draft = (
+    proposal: Partial<TermsProposal>,
+    missing: TermsDraft['missing'],
+    issues: TermsDraft['issues'],
+  ) =>
+    appendBetEvent(tx, {
+      bet_id: betId,
+      type: 'terms.draft',
+      payload: {
+        draft: {
+          bet_id: betId,
+          revision: o.rev ?? nextVersion,
+          proposal: withoutEvenAmountB(proposal),
+          missing,
+          clarifications: [],
+          issues,
+          updated_at: iso(now),
+        },
+      },
+      now,
+    });
+
+  if (evaluation.kind === 'issue') {
+    const e = await draft(evaluation.proposal ?? {}, [], [evaluation.issue]);
+    const res: PersistResult = refusal ? { kind: 'draft', refusal } : { kind: 'draft' };
+    return { res, bet, envs: [e] };
+  }
+  if (evaluation.missing.length) {
+    const e = await draft(evaluation.proposal, evaluation.missing, []);
+    return { res: { kind: 'draft' } as PersistResult, bet, envs: [e] };
+  }
+
+  const refs = await loadUserRefs(tx, [bet.party_a_id, bet.party_b_id]);
+  const a = refs.get(bet.party_a_id)!;
+  const b = refs.get(bet.party_b_id)!;
+  let composed: ReturnType<typeof composeTerms>;
+  try {
+    composed = composeTerms({
+      bet,
+      a: { pubkey: a.pubkey, display_name: a.display_name },
+      b: { pubkey: b.pubkey, display_name: b.display_name },
+      proposal: evaluation.proposal,
+      cluster: deps.env.SOLANA_CLUSTER,
+      nowMs: now,
+      quote,
+      templateClaim: o.templateClaim,
+    });
+  } catch (err) {
+    deps.log.warn('terms.compose_failed', { bet_id: betId, err });
+    const e = await draft(
+      evaluation.proposal,
+      [],
+      [{ code: 'AMBIGUOUS', message: 'the terms did not parse' }],
+    );
+    return { res: { kind: 'draft' } as PersistResult, bet, envs: [e] };
+  }
+
+  await tx.insert(betTermsVersions).values({
+    bet_id: betId,
+    version: nextVersion,
+    schema_version: 1,
+    drafted_by: o.draftedBy ?? 'judge',
+    source_tool: o.source ?? 'propose_terms',
+    canonical_json: composed.canonical,
+    terms_hash: composed.terms_hash,
+  });
+  const envelope: TermsEnvelope = {
+    terms: composed.terms,
+    terms_hash: composed.terms_hash,
+    presentation: presentationOf(composed.terms),
+  };
+  const market = composed.terms.market;
+  const stored = quote && market ? await persistQuote(tx, quote) : null;
+  const [row] = await tx
+    .update(bets)
+    .set({
+      state: 'TERMS_PROPOSED',
+      terms_hash: composed.terms_hash,
+      stake_a: BigInt(composed.terms.stakes.a),
+      stake_b: BigInt(composed.terms.stakes.b),
+      evidence_source: composed.terms.evidence_source,
+      title: envelope.presentation.title,
+      // DATA-MODEL §5.6: the wallet snapshot = Terms.party_a/b.pubkey (bets_wallet_snapshot).
+      party_a_wallet: composed.terms.party_a.pubkey,
+      party_b_wallet: composed.terms.party_b.pubkey,
+      // DATA-MODEL §5.16: Terms.market -> columns (null again if a skill bet replaces it).
+      gemini_market_id: stored?.marketId ?? null,
+      pricing_snapshot_id: stored?.snapshotId ?? null,
+      a_position: market ? (market.side === 'YES' ? 'yes' : 'no') : null,
+      odds_p: market ? market.priceAtLock : null,
+      odds_source: market ? market.priceSource : null,
+      quoted_at: market ? new Date(market.quotedAt) : null,
+    })
+    .where(and(eq(bets.id, betId), eq(bets.version, bet.version)))
+    .returning();
+  if (!row) throw new Error(`terms: bet ${betId} raced`);
+  const envs: BetEventEnvelope[] = [
+    await appendBetEvent(tx, {
+      bet_id: betId,
+      type: 'terms.proposed',
+      payload: { envelope },
+      now,
+    }),
+  ];
+  if (bet.state !== 'TERMS_PROPOSED')
+    envs.push(
+      await appendBetEvent(tx, {
+        bet_id: betId,
+        type: 'bet.state',
+        payload: statePayload(row, bet.state, null),
+        now,
+      }),
+    );
+  // Odds (odds/service.ts R1): unequal skill stakes not yet agreed open an offer the other
+  // side (or, for the judge's terms, both) must accept before the card can be confirmed.
+  envs.push(
+    ...(await autoOffer(deps, tx, row, envelope, {
+      from: o.draftedBy === 'party_a' ? 'A' : o.draftedBy === 'party_b' ? 'B' : 'judge',
+      now,
+      source: o.source ?? 'propose_terms',
+    })),
+  );
+  const res: PersistResult = { kind: 'proposed', envelope, version: nextVersion };
+  if (stored && quote)
+    res.quote = { snapshot_id: stored.snapshotId.toString(), snapshot_sha256: quote.sha256 };
+  return { res, bet, envs };
+}
+
+/** terms.draft carries amount_b only for odds (older clients parse the draft strictly). */
+function withoutEvenAmountB(p: Partial<TermsProposal>): Partial<TermsProposal> {
+  if (p.amount_b !== null && p.amount_b !== undefined) return p;
+  const { amount_b: _even, ...rest } = p;
+  return rest;
 }
 
 async function nextTermsVersion(tx: Tx, betId: string): Promise<number> {
@@ -451,7 +500,9 @@ export type ConfirmResult =
    * for the log.
    */
   | { ok: false; fix: 'QUOTE_STALE'; reason: string; refusal: FairRefusal | null }
-  | { ok: false; fix: 'INVITE_PENDING'; state: BetState; party_b_id: string };
+  | { ok: false; fix: 'INVITE_PENDING'; state: BetState; party_b_id: string }
+  /** Odds: unequal stakes not yet accepted on both phones, or an odds offer still open. */
+  | { ok: false; fix: 'ODDS_PENDING'; state: BetState };
 
 export interface ConfirmOptions {
   heard?: string;
@@ -560,6 +611,23 @@ export async function confirmTerms(
           state: bet.state,
           party_b_id: bet.party_b_id,
         } as ConfirmResult,
+        bet,
+        envs: [],
+      };
+    }
+    // Odds (odds/service.ts R7): unequal skill stakes must be agreed on both phones, and no
+    // offer may be open, before the card freezes.
+    if (await oddsGate(tx, betId, latest.envelope.terms)) {
+      await recordOddsPending(tx, {
+        betId,
+        termsHash: bet.terms_hash,
+        actor: o.actor ?? 'judge',
+        actorUserId: o.actorUserId,
+        requestId: o.requestId,
+        heard: o.heard,
+      });
+      return {
+        res: { ok: false, fix: 'ODDS_PENDING', state: bet.state } as ConfirmResult,
         bet,
         envs: [],
       };

@@ -244,6 +244,34 @@ describe('RealtimeEvent (§10)', () => {
       expect(r.ok, `${type}: ${r.ok ? '' : r.error.message}`).toBe(true);
     };
     ok('bet.invite_answered', { party: 'B', answer: 'declined' });
+    const challenger = {
+      user_id: '0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d',
+      pubkey: 'E97T44N6hdDS7S8r6vDYGrFPzNb9uKJsg5Eecya3AR4',
+      display_name: 'Logan',
+      avatar_url: null,
+    };
+    const room_id = '2b7d9c41-5e3a-4f60-8a1b-9c0d1e2f3a4b';
+    // bet.invited with and without the rivalry (older servers send none).
+    ok('bet.invited', { challenger, room_id });
+    ok('bet.invited', {
+      challenger,
+      room_id,
+      rivalry: {
+        challenge_method: 'face',
+        a_wins: 4,
+        b_wins: 7,
+        pushes: 0,
+        total: 11,
+        streak: { party: 'B', length: 1 },
+        rival: true,
+        includes_seed: true,
+      },
+    });
+    expect(
+      parseRealtimeEvent(
+        envOf('bet.invited', { challenger, room_id, rivalry: { challenge_method: 'face' } }),
+      ).ok,
+    ).toBe(false);
     ok('judge.cue', { cue: 'DECLINED', text: '[EVENT] cue=DECLINED party=B', speak: true });
     ok('hearing.turn_open', {
       hearing_id: 'c0ffee00-1234-4abc-8def-001122334455',

@@ -177,6 +177,7 @@ export async function resetDemo(
       .returning({ id: bets.id });
     result.deleted_bets = deleted.length;
     lc.payout.forget(deleted.map((d) => d.id));
+    lc.review.forget(deleted.map((d) => d.id));
 
     // 5. re-read the pool from chain: every account that is fine is free again.
     if (rt) {
