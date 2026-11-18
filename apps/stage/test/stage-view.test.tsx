@@ -705,6 +705,7 @@ describe('bet card state', () => {
         signers: 3,
         status: 'failed',
         onchain: false,
+        onchain_via: null,
         slot: null,
         error: 'BlockhashNotFound',
         sent_at: null,
@@ -849,6 +850,53 @@ describe('stage layout', () => {
     expect(html).toContain('BTC 5-min');
     expect(html).toContain('<code>BetResolved</code>');
     expect(html).toContain(explorerTx(SIG_RESOLVE).replace(/&/g, '&amp;'));
+  });
+
+  it('the ticker names its source from observed_via, not source: chain (rpc_poll is not Streams)', () => {
+    type Raw = { type: string; payload: Record<string, unknown> };
+    const via = (frames: unknown[], pick: (type: string) => 'quicknode_stream' | 'rpc_poll') =>
+      (frames as Raw[]).map((f) =>
+        f.type.startsWith('chain.')
+          ? { ...f, payload: { ...f.payload, observed_via: pick(f.type) } }
+          : f,
+      );
+    const html = (frames: unknown[]) =>
+      renderToString(<StageView state={run(frames)} now={T} />).replace(/<!-- -->/g, '');
+
+    // all via the rpc_poll fallback: every chain.* still has source 'chain', the header says RPC
+    const polled = run(via(fullBet(), () => 'rpc_poll'));
+    expect(polled.events.filter((e) => e.source === 'chain').map((e) => e.observed_via)).toEqual([
+      'rpc_poll',
+      'rpc_poll',
+    ]);
+    expect(polled.events.find((e) => e.type === 'ruling.issued')!.observed_via).toBeNull();
+    expect(polled.bets[BET]!.lock).toMatchObject({ onchain: true, onchain_via: 'rpc_poll' });
+    const rpc = html(via(fullBet(), () => 'rpc_poll'));
+    expect(rpc).toContain('via Solana RPC (fallback)');
+    expect(rpc).not.toContain('QuickNode Streams');
+    // no "+X s" for a polled row (that would be the poll interval) and none on the lock line
+    expect(rpc).not.toContain('class="lag"');
+    expect(rpc).not.toContain('Streams +');
+    expect(rpc).toContain('<code>BetCreated</code><span class="via"> rpc</span>');
+
+    // one event from the Stream: Streams, its lag shown; the polled row keeps its tag, no lag
+    const mixed = html(
+      via(fullBet(), (t) => (t === 'chain.BetCreated' ? 'quicknode_stream' : 'rpc_poll')),
+    );
+    expect(mixed).toContain('via QuickNode Streams');
+    expect(mixed).toContain('<code>BetCreated</code><span class="lag"> +1.0 s</span>');
+    expect(mixed).toContain('✓ on-chain · Streams +1.0 s');
+    expect(mixed).toContain('<code>BetResolved</code><span class="via"> rpc</span>');
+
+    // all from the Stream: no rpc tags
+    const streamed = html(fullBet());
+    expect(streamed).toContain('via QuickNode Streams');
+    expect(streamed).not.toContain('class="via"');
+
+    // no chain.* at all: the server's own RPC confirms
+    const none = html((fullBet() as Raw[]).filter((f) => !f.type.startsWith('chain.')));
+    expect(none).toContain('via Solana RPC');
+    expect(none).not.toContain('(fallback)');
   });
 
   it('REPLAY overlay is labelled and points at public/replay/beat{n}.mp4', () => {

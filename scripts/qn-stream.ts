@@ -15,6 +15,10 @@
 // -> activates it. Without --fly-app it prints the exact `fly secrets import` command and stops
 // at the probe if the server does not hold the token yet (a Stream delivering to a server that
 // answers 401/404 auto-pauses after 3 failed retries).
+//
+// Before the demo (activate resumes where the Stream paused and replays the backlog):
+//   npm run qn-stream -- reset-start <id>   (paused only: start_range -> the devnet tip slot)
+//   npm run qn-stream -- resume <id>
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -25,6 +29,7 @@ import {
   buildCreateBody,
   createStream,
   DEFAULT_BASE_URL,
+  DEFAULT_DEVNET_RPC,
   DEFAULT_FLY_APP,
   DEFAULT_TOKEN_FILE,
   describeRequest,
@@ -36,11 +41,14 @@ import {
   redact,
   renderFilterJs,
   req,
+  resetStartPlan,
+  resetStartRange,
   resolveToken,
   resumeStream,
   STREAM_TEMPLATE_PATH,
   streamsOf,
   summarize,
+  tipSlot,
   tokenLine,
   tokenOf,
   TOKEN_ENV,
@@ -58,6 +66,8 @@ commands
   get <id>      show one Stream            [--token-out <file>: save its security token, 0600]
   pause <id>    pause it (do this when idle: ~11 M credits/day at 24/7)
   resume <id>   activate it again (probes the webhook first)
+  reset-start <id>  paused Stream only: start_range -> the devnet tip slot, so the next resume
+                does not replay the backlog since the pause      [--rpc <url>] [--slot <n>]
   delete <id>   delete it (needs --yes)
   test-filter   run filter.js on one devnet block on QuickNode's side   --block <slot>
   probe         POST a delivery signed with the token to the webhook (no QuickNode key needed)
@@ -78,6 +88,10 @@ options
   --full               with --dry-run / --json: include filter_function
   --json               print the (redacted) API response
   --yes                confirm delete
+  --rpc <url>          reset-start: a devnet RPC for getSlot (default $SOLANA_RPC_URL, else
+                       ${DEFAULT_DEVNET_RPC}; any other genesis hash is refused)
+  --slot <n>           reset-start: use this slot instead of the tip (no devnet / backwards check;
+                       -1 = QuickNode's documented "from the tip", unverified)
 
 env
   ${API_KEY_ENV}       QuickNode console API key with Streams enabled (required unless --dry-run / probe)
@@ -99,6 +113,8 @@ const OPTIONS = {
   json: { type: 'boolean' },
   yes: { type: 'boolean' },
   block: { type: 'string' },
+  rpc: { type: 'string' },
+  slot: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
 } as const;
 
@@ -238,6 +254,20 @@ async function cmdResume(v: Values, id: string) {
   console.log(summarize(stream));
 }
 
+async function cmdResetStart(v: Values, id: string) {
+  // || not ??: an empty SOLANA_RPC_URL falls back to public devnet too
+  const rpc = v.rpc || process.env['SOLANA_RPC_URL'] || DEFAULT_DEVNET_RPC;
+  const fixed = v.slot === undefined ? null : Number(v.slot);
+  if (fixed !== null && (!Number.isSafeInteger(fixed) || (fixed <= 0 && fixed !== -1)))
+    throw new Error(`--slot must be a positive integer or -1: ${v.slot}`);
+  if (v['dry-run']) return console.log(resetStartPlan(id, rpc, fixed));
+  const slot = fixed ?? (await tipSlot(fetch, rpc));
+  if (fixed === null) console.log(`devnet tip: slot ${slot} (${new URL(rpc).host})`);
+  const s = await resetStartRange(io(), id, slot, { explicit: fixed !== null });
+  console.log(summarize(s));
+  console.log(`still paused. next: npm run qn-stream -- resume ${id}`);
+}
+
 async function cmdTestFilter(v: Values) {
   const block = Number(v.block);
   if (!Number.isInteger(block) || block <= 0) throw new Error('--block <slot> is required');
@@ -336,6 +366,8 @@ run(async () => {
     case 'resume':
     case 'activate':
       return cmdResume(v, needId());
+    case 'reset-start':
+      return cmdResetStart(v, needId());
     case 'delete': {
       const r = req.delete(needId());
       if (v['dry-run']) return show(v, r);
