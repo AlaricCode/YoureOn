@@ -195,6 +195,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 |---|---|---|---|
 | `auth/*` | 10/min | IP and `device_pubkey` | brute force |
 | `face-match` | 30/min, 1 in flight | user | privacy: no bulk scanning (BRIEF 5e) |
+| `face-match/live` | 60/min; shares the `face-match` in-flight slot | user | the live (panning) scan, `mode:'live'` (§2.4): panning re-matches each face that re-enters the frame, so it gets its own bucket and can't use up the tap / Challenge path. Ceiling 90/min per user across both; still room-scoped, opted-in members only, ≤ 50 candidates, no score. The body is read before the token is taken, so an invalid body (422) spends none; a concurrent call is `429 {bucket:'face-match/in-flight'}` |
 | `face/enrollment` writes | 5/h | user | |
 | `POST /v1/bets` | 6/min, ≤ 3 pre-lock bets per user | user | spam challenges |
 | lock authorization / decline | 10/min | bet + device | |
@@ -297,7 +298,8 @@ Flows are in §1.3.
 
 **`POST /v1/rooms/:room_id/face-match`** (S, room member)
 
-- Request `FaceMatchRequest`: `{probe: SealedEmbedding (purpose 'probe'), model: {name, version, dim}, capture: {captured_at, eye_distance_px, yaw_deg}}`.
+- Request `FaceMatchRequest`: `{probe: SealedEmbedding (purpose 'probe'), model: {name, version, dim}, capture: {captured_at, eye_distance_px, yaw_deg}, mode?: 'tap'|'live'}`.
+  - `mode` (optional, absent = `'tap'`) only picks the rate-limit bucket (§1.7: `face-match` 30/min for tap, `face-match/live` 60/min for live). Matching, privacy and the reply are the same. An older server strips it and charges the tap bucket; the live client then backs off on 429 silently.
 - Response 200 `FaceMatchResponse`, one of:
   - `{match: {user: UserRef, match_ticket, ticket_expires_at, head_to_head: HeadToHead}}`
   - `{match: null}`
@@ -310,7 +312,7 @@ Flows are in §1.3.
   5. The probe is never written to a row, a log or a cache (DATA-MODEL §10).
   6. Update the matched user's `last_used_at` (day-truncated).
 - `match_ticket` is an opaque 60 s token that binds `{scanner, candidate, room}`. Its only use is `POST /v1/bets` with `challenge_method:'face'`.
-- `head_to_head` serves the Extra beat ("You're 4-7 against Jake") without a second round trip.
+- `head_to_head` serves the Extra beat ("You're 4-7 against Jake") without a second round trip, and the live rivalry overlay (record, streak, "Rivals"; §2.18 `HeadToHead`).
 - Errors: `NOT_IN_ROOM`, `ROOM_EXPIRED`, `FACE_SEAL_INVALID`, `FACE_MODEL_UNSUPPORTED`, `RATE_LIMITED`.
 - Idem: none needed; the call has no side effects beyond `last_used_at`.
 
@@ -534,7 +536,7 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
   - Built (`apps/server/src/me/bets.ts`): `title` is the terms' `presentation.title`, else the bet row's own `title` (a `seed-h2h` row has no terms: "Demo history: …", §2.17), else "Challenge".
 - **`GET /v1/bets/:bet_id`** (B+P or stage) returns `BetSnapshot` (§2.18), the full current state used for cold start and resync.
 - **`GET /v1/bets/:bet_id/events?after=<seq>&limit=200`** returns `{events: RealtimeEvent[], last_seq}`, replayed from `bet_events` (DATA-MODEL §5.19). This is the gap-recovery endpoint SCHEMAS §10.1 refers to.
-- **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed}`, from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
+- **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed, total, last_result|null, streak|null, rival}` (§2.18), from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
   - Built (`apps/server/src/me/routes.ts`): a phone session's bearer (B, scope `app`; a stage token or the demo key is 401 `AUTH_REQUIRED`). It is always the caller's own record, so any user id may be asked; a stranger gets 0-0-0. A malformed or unknown `user_id` is 404 `NOT_FOUND`. It is the same `headToHead()` (`face/service.ts`) the §2.4 face-match reply carries, computed inline (the view is not migrated). `Cache-Control: private, no-store`.
 
 ### 2.15 Devices and push
@@ -588,8 +590,24 @@ export const SealedEmbedding = z.object({
   alg: z.enum(['x25519-hkdf-sha256-chacha20poly1305-v1', 'plain-v0']),
   epk_b64: z.string().nullable(), nonce_b64: z.string().nullable(), ct_b64: z.string() });
 
+export const RIVAL_MIN_SETTLED = 3;
+export const H2HResult = z.enum(['win', 'loss', 'push']);
+export const H2HStreak = z.object({ holder: z.enum(['me', 'them']), length: z.number().int().min(1) });
 export const HeadToHead = z.object({ wins: z.number().int(), losses: z.number().int(), pushes: z.number().int(),
-  net: SignedMicroUsdc, net_display: z.string(), last_settled_at: IsoUtc.nullable(), includes_seed: z.boolean() });
+  net: SignedMicroUsdc, net_display: z.string(), last_settled_at: IsoUtc.nullable(), includes_seed: z.boolean(),
+  // additive, optional so older replies still parse; this server always sends them (DATA-MODEL §7.1)
+  total: z.number().int().nonnegative().optional(),     // wins + losses + pushes
+  last_result: H2HResult.nullable().optional(),          // the newest settled bet (settled_at DESC NULLS LAST, id DESC)
+  streak: H2HStreak.nullable().optional(),               // the same-winner run ending at the newest; null if it is a push or none
+  rival: z.boolean().optional() });                      // total >= RIVAL_MIN_SETTLED
+
+/** bet.invited `rivalry` (§3.4): the pair's record before the bet, in party terms (A = challenger). */
+export const StageRivalry = z.object({ challenge_method: ChallengeMethod,
+  a_wins: z.number().int().nonnegative(), b_wins: z.number().int().nonnegative(),
+  pushes: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+  streak: z.object({ party: Party, length: z.number().int().min(1) }).nullable(),
+  rival: z.boolean(), includes_seed: z.boolean() });
+// rivalryOf(h2h, method): h2h is A's view (headToHead(db, aId, bId)); me -> A, them -> B.
 
 /** One single-party Solana message (concede or appeal) for the loser's device. The lock uses SCHEMAS AuthorizeRequest. */
 export const SignRequest = z.object({
@@ -690,7 +708,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 
 | `type` | Payload | Emitted when (state) |
 |---|---|---|
-| `bet.invited` | `{challenger: UserRef, room_id}` | `POST /v1/bets` → B's user channel (→ DRAFTING) |
+| `bet.invited` | `{challenger: UserRef, room_id, rivalry?: StageRivalry}` (**NEW** `rivalry`, §2.18: the pair's record before this bet, A's view, every challenge method; optional, so older phones and stages drop it) | `POST /v1/bets` → B's user channel (→ DRAFTING); in the bet log, so a stage subscribing from `after_seq` 0 replays it |
 | `bet.invite_answered` **NEW** | `{party:'B', answer:'accepted'\|'declined'}` | §2.5 |
 | `bet.state` | `{state, prev, onchain_status, chain_ack, pending_tx, reason}` | every state entry, **and** every `pending_tx` / `chain_ack` change in place (prev = state) |
 | `terms.draft` | `{draft: TermsDraft}` | each `propose_terms` with issues or missing fields (DRAFTING) |
@@ -1417,3 +1435,4 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 - **2026-11-18 (Beat 5 appeal, built without the hearing).** §2.12 gains "Built" notes: the exact GET / POST error set (`SIGNATURE_INVALID` for a signature that does not verify, as concede; the program's 6024 → `APPEAL_WINDOW_CLOSED`), the bucket spent only by an accepted filing, idempotent repeats, the filing written before the send, the failed-appeal path, the decision once all three votes are in (the `AppealResult` carries three votes), finalize skipping an appeal in flight, the `appeal-sweep` keeper task. §2.17 adds `POST /v1/demo/bets/:bet_id/appeal` (custodial, `LOCK_SIGNER=server`). §3.4 pins the push order (concede then appeal) and the built event order; `appeal_decided` push is not sent. §7.2 describes the built panel (abstentions, no 0.8 floor on votes).
 - **2026-11-18, the stage voice (feat/stage-voice):** §2.17 gains the stage audio routes (`GET /v1/stage/audio`, `/v1/stage/tts/:clip_id`, `/v1/stage/sfx/:kind`) and says `GET /v1/demo/health` takes the stage token alone. §3.1 gains the `stage.voice` control frame (stage sessions only) and `stage.cue.audio_url`. §4.5: the TTS route is `/v1/stage/tts/:clip_id` (content-addressed: sha256 of voice, model and text), not `:vote_id`, because the same route also voices the rulings and payouts; the stage voice table and the browser fallback after 800 ms are new. §2.6 / §4.4: the cue clips are live with the key (`SFX_PROVIDER=auto`). §4.5 "One judge at a time": in a bet a voice judge hosts (a relayed `judge.line`), the stage leaves the ruling and the payout to A's phone (no `stage.voice`, no browser voice), so the hall never hears both.
 - **2026-11-19, wave-3 review minors (fix/minors-server):** §2.10: GG is refused with `STATE_MOVED_ON {reason:'appeal_in_flight'}` once the loser's appeal is filed (signed / sent, the bet still `RULED`), so GG and the appeal are mutually exclusive. §2.12: the 3/h bucket token is taken last in the filing's own transaction and given back on a preflight refusal. §2.14: a `seed-h2h` row's `title` is its own ("Demo history: …"). §2.17: the judge / toggle health warnings alone never make the health log lines a WARN. §4.5: a REDO reason that already says "Run it back" is not prefixed again.
+- **2026-11-18, live rivalry scan (feat/rivalry-scan; additive, old clients still parse):** §1.7 adds the `face-match/live` bucket (60/min per user, sharing the one-in-flight slot with `face-match`); the face-match body is now read before the token is taken, so an invalid body spends none. §2.4 `FaceMatchRequest` gains optional `mode: 'tap'|'live'` (absent = tap; it only picks the bucket). §2.18 `HeadToHead` gains optional `total`, `last_result`, `streak {holder:'me'|'them', length}` and `rival` (total ≥ `RIVAL_MIN_SETTLED` = 3), always sent by this server on every `headToHead()` reply (face-match, `GET /v1/users/:id/head-to-head`, `seed-h2h`); new `StageRivalry` and `rivalryOf()`. §3.4 `bet.invited` gains optional `rivalry: StageRivalry` (A's view, computed before the challenge transaction); the projector shows "Logan 4–7 Jake · Rivals" under VS for face challenges.

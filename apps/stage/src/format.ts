@@ -1,5 +1,6 @@
 // Display helpers for the projector: short signatures, countdown clocks, dollars, initials, the
-// grouped terms code, and readable labels for event types.
+// grouped terms code, readable labels for event types, and the face-challenge rivalry line.
+import type { StageRivalry } from '@youre-on/shared/api';
 import { formatUsd } from '@youre-on/shared/money';
 
 export const shortSig = (s: string) => (s.length > 12 ? `${s.slice(0, 4)}…${s.slice(-4)}` : s);
@@ -108,4 +109,25 @@ export function eventLabel(
   if (type === 'appeal.vote') return 'Panel vote';
   if (type === 'appeal.result') return 'Appeal decided';
   return type;
+}
+
+/**
+ * The rivalry line under VS for a face challenge (bet.invited `rivalry`, A's view):
+ * "Logan 4–7 Jake · Rivals · Jake won 3 straight", "Logan vs Jake · First meeting". Pushes show
+ * as a third number ("4–7–1"). Null for list/link challenges and when the server sent none.
+ */
+export function rivalryLine(
+  r: StageRivalry | null | undefined,
+  names: { A: string | null; B: string | null },
+): string | null {
+  if (!r || r.challenge_method !== 'face') return null;
+  const a = names.A ?? 'Player A';
+  const b = names.B ?? 'Player B';
+  if (r.total === 0) return `${a} vs ${b} · First meeting`;
+  const record = [r.a_wins, r.b_wins, ...(r.pushes > 0 ? [r.pushes] : [])].join('–');
+  let line = `${a} ${record} ${b}`;
+  if (r.rival) line += ' · Rivals';
+  if (r.streak && r.streak.length >= 2)
+    line += ` · ${r.streak.party === 'A' ? a : b} won ${r.streak.length} straight`;
+  return line;
 }

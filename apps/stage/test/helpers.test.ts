@@ -8,6 +8,7 @@ import {
   hueOf,
   initials,
   lagLabel,
+  rivalryLine,
   shortSig,
   usd,
   usdPrice,
@@ -91,6 +92,49 @@ describe('format', () => {
     );
     expect(eventLabel('bet.state', { state: 'AWAITING_MARKET' })).toBe('State AWAITING MARKET');
     expect(eventLabel('something.new', null)).toBe('something.new');
+  });
+});
+
+describe('rivalry line (bet.invited rivalry, face challenges only)', () => {
+  const names = { A: 'Logan', B: 'Jake' };
+  const r = (over: Record<string, unknown> = {}) => ({
+    challenge_method: 'face' as const,
+    a_wins: 4,
+    b_wins: 7,
+    pushes: 0,
+    total: 11,
+    streak: { party: 'B' as const, length: 1 },
+    rival: true,
+    includes_seed: true,
+    ...over,
+  });
+  it('face: record A-first, Rivals when rival, a streak of 2 or more', () => {
+    expect(rivalryLine(r(), names)).toBe('Logan 4–7 Jake · Rivals');
+    expect(rivalryLine(r({ streak: { party: 'B', length: 3 } }), names)).toBe(
+      'Logan 4–7 Jake · Rivals · Jake won 3 straight',
+    );
+    expect(
+      rivalryLine(r({ a_wins: 3, b_wins: 0, total: 3, streak: { party: 'A', length: 3 } }), names),
+    ).toBe('Logan 3–0 Jake · Rivals · Logan won 3 straight');
+    expect(
+      rivalryLine(r({ a_wins: 1, b_wins: 1, total: 2, rival: false, streak: null }), names),
+    ).toBe('Logan 1–1 Jake');
+    expect(rivalryLine(r({ pushes: 1, total: 12, streak: null }), names)).toBe(
+      'Logan 4–7–1 Jake · Rivals',
+    );
+  });
+  it('first meeting; names fall back; list/link and missing give null', () => {
+    expect(
+      rivalryLine(
+        r({ a_wins: 0, b_wins: 0, total: 0, rival: false, streak: null, includes_seed: false }),
+        names,
+      ),
+    ).toBe('Logan vs Jake · First meeting');
+    expect(rivalryLine(r(), { A: null, B: null })).toBe('Player A 4–7 Player B · Rivals');
+    expect(rivalryLine(r({ challenge_method: 'list' }), names)).toBeNull();
+    expect(rivalryLine(r({ challenge_method: 'link' }), names)).toBeNull();
+    expect(rivalryLine(null, names)).toBeNull();
+    expect(rivalryLine(undefined, names)).toBeNull();
   });
 });
 
