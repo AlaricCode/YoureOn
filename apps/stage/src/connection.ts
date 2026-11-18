@@ -111,6 +111,8 @@ export interface StageSession {
   room_id: string;
   expires_at: string | null;
   scopes: string[];
+  /** Who signs the lock (LOCK_SIGNER); null from an older server. */
+  lock_signer: 'phones' | 'server' | null;
 }
 
 /**
@@ -136,6 +138,7 @@ export async function openStageSession(
     room_id?: unknown;
     expires_at?: unknown;
     scopes?: unknown;
+    lock_signer?: unknown;
     error?: { code?: string };
   } | null;
   if (!res.ok || typeof body?.token !== 'string')
@@ -147,6 +150,8 @@ export async function openStageSession(
     room_id: typeof body.room_id === 'string' ? body.room_id : room,
     expires_at: typeof body.expires_at === 'string' ? body.expires_at : null,
     scopes: Array.isArray(body.scopes) ? body.scopes.map(String) : [],
+    lock_signer:
+      body.lock_signer === 'server' || body.lock_signer === 'phones' ? body.lock_signer : null,
   };
 }
 

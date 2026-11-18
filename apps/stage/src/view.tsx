@@ -8,7 +8,15 @@
 //   right:  Gemini BTC 5-minute odds · the on-chain ticker with Explorer links
 //   bottom: demo health (fee payer SOL, free nonces, RPC / DB ms, REPLAY clips cached)
 // Overlays: the PAID moment, a big Explorer QR (Q), REPLAY clips (1-6), key help (H).
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   explorerTx,
   finalOutcomeOf,
@@ -37,6 +45,23 @@ import { healthItems, type DemoHealth, type HealthItem } from './health';
 import { BEAT_TITLES, presentCount, readyCount, type ReplayStatus } from './replays';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
+
+/**
+ * Who signs the lock (POST /v1/stage/session `lock_signer`, else GET /v1/demo/health). With
+ * 'server' (the production demo config) the server signs as the demo-a / demo-b keys right after
+ * the build and records the method as faceid_hold, so the projector must not claim Face ID: the
+ * slots read "demo key" instead. null (unknown) keeps the phones wording.
+ */
+export type LockSigner = 'phones' | 'server' | null;
+export const LockSignerContext = createContext<LockSigner>(null);
+const useCustodial = () => useContext(LockSignerContext) === 'server';
+export const normalizeSigner = (v: unknown): LockSigner =>
+  v === 'server' || v === 'phones' ? v : null;
+
+/** How a party's authorization reads: the method (Face ID / Passcode), or the demo key. */
+function authLabel(method: string, custodial: boolean): string {
+  return custodial ? 'demo key' : (AUTH_METHOD[method] ?? method);
+}
 
 /** The winner of a decisive ruling (or of the appeal), else null. */
 export function winnerOf(b: BetView): PartyKey | null {
@@ -121,7 +146,12 @@ export function Avatar({
   );
 }
 
-function partyStatus(b: BetView, p: PartyKey, online: boolean | null): ReactNode {
+function partyStatus(
+  b: BetView,
+  p: PartyKey,
+  online: boolean | null,
+  custodial: boolean,
+): ReactNode {
   const won = winnerOf(b);
   if (b.payout) {
     const amount = p === 'A' ? b.payout.to_a : b.payout.to_b;
@@ -141,11 +171,16 @@ function partyStatus(b: BetView, p: PartyKey, online: boolean | null): ReactNode
   const a = b.auth[p];
   const locked = b.lock && b.lock.status !== 'failed';
   if (a || locked)
-    return (
-      <span className="status good">✓ {a ? (AUTH_METHOD[a.method] ?? a.method) : 'locked'}</span>
-    );
+    return <span className="status good">✓ {a ? authLabel(a.method, custodial) : 'locked'}</span>;
   if (online === false) return <span className="status bad">offline</span>;
-  if (b.envelope) return <span className="status waiting">waiting for Face ID…</span>;
+  if (b.envelope && custodial && p === 'B' && b.invite === 'accepted')
+    return <span className="status good">✓ accepted</span>;
+  if (b.envelope)
+    return (
+      <span className="status waiting">
+        {custodial ? (p === 'A' ? 'confirming terms…' : 'waiting…') : 'waiting for Face ID…'}
+      </span>
+    );
   if (p === 'B' && b.invite === 'accepted') return <span className="status good">✓ accepted</span>;
   return <span className="status muted">{online ? 'online' : ' '}</span>;
 }
@@ -160,13 +195,14 @@ export function PartyCard({
   online: boolean | null;
 }) {
   const won = winnerOf(bet);
+  const custodial = useCustodial();
   const cls = `party party-${party.toLowerCase()}${won === party ? ' winner' : won ? ' loser' : ''}`;
   return (
     <div className={cls}>
       <Avatar name={bet.names[party]} url={bet.avatars[party]} />
       <div className="party-text">
         <span className="name">{nameOf(bet, party)}</span>
-        {partyStatus(bet, party, online)}
+        {partyStatus(bet, party, online, custodial)}
       </div>
     </div>
   );
@@ -248,10 +284,12 @@ export function PhaseRail({ bet }: { bet: BetView | null }) {
 // ---- the moment panel -----------------------------------------------------------------------
 
 /**
- * The three signatures on the one lock transaction (ARCHITECTURE §5.2): A and B each sign on their
- * own phone behind Face ID, the server's fee payer signs last and pays the fees.
+ * The three signatures on the one lock transaction (ARCHITECTURE §5.2): A's and B's (on their own
+ * phone behind Face ID with LOCK_SIGNER=phones; by the server with the custodial demo keys with
+ * LOCK_SIGNER=server), and the server's fee payer, which signs last and pays the fees.
  */
 export function SignerSlots({ bet }: { bet: BetView }) {
+  const custodial = useCustodial();
   const lock = bet.lock && bet.lock.status !== 'failed' ? bet.lock : null;
   const slot = (p: PartyKey) => {
     const a = bet.auth[p];
@@ -264,7 +302,7 @@ export function SignerSlots({ bet }: { bet: BetView }) {
           {bet.declined === p
             ? 'declined'
             : a
-              ? `✓ ${AUTH_METHOD[a.method] ?? a.method}`
+              ? `✓ ${authLabel(a.method, custodial)}`
               : lock
                 ? '✓ signed'
                 : 'waiting…'}
@@ -597,6 +635,7 @@ function ChallengePanel({ bet }: { bet: BetView }) {
 }
 
 function LockPhasePanel({ bet }: { bet: BetView }) {
+  const custodial = useCustodial();
   const n = (bet.auth.A ? 1 : 0) + (bet.auth.B ? 1 : 0);
   return (
     <div className="intro">
@@ -606,14 +645,20 @@ function LockPhasePanel({ bet }: { bet: BetView }) {
           ? "The lock didn't go through"
           : bet.lock
             ? 'Locking both stakes in one transaction…'
-            : n === 0
-              ? 'Hold to confirm + Face ID on both phones'
-              : `${n} of 2 authorized`}
+            : custodial
+              ? n === 0
+                ? 'Signing with the demo keys…'
+                : `${n} of 2 signed`
+              : n === 0
+                ? 'Hold to confirm + Face ID on both phones'
+                : `${n} of 2 authorized`}
       </p>
       <p className="muted">
         {bet.lock?.status === 'failed'
           ? "Couldn't lock it. Nothing moved."
-          : 'Nothing has moved yet: one signature per phone, then a single transaction.'}
+          : custodial
+            ? 'Nothing has moved yet: demo keys sign for both players, then a single transaction.'
+            : 'Nothing has moved yet: one signature per phone, then a single transaction.'}
       </p>
     </div>
   );
@@ -882,6 +927,7 @@ const hhmmss = (iso: string) => {
 };
 
 export function Ticker({ state }: { state: TickerState }) {
+  const custodial = useCustodial();
   const rows = tickerRows(state);
   return (
     <section aria-label="ticker" className="ticker">
@@ -908,7 +954,9 @@ export function Ticker({ state }: { state: TickerState }) {
               >
                 <span className="t">{hhmmss(e.ts)}</span>
                 <span className="what">
-                  <code>{eventLabel(e.type, e.payload, state.bets[e.bet_id]?.names)}</code>
+                  <code>
+                    {eventLabel(e.type, e.payload, state.bets[e.bet_id]?.names, custodial)}
+                  </code>
                   {lag && <span className="lag"> {lag}</span>}
                 </span>
                 {e.explorer ? (
@@ -1101,6 +1149,7 @@ export function StageView({
   replays = null,
   roomLabel = null,
   sound = null,
+  lockSigner = null,
 }: {
   state: TickerState;
   now: number;
@@ -1114,6 +1163,8 @@ export function StageView({
   roomLabel?: string | null;
   /** 'locked' until a key press unlocks audio; 'off' when muted (M). */
   sound?: 'locked' | 'on' | 'off' | null;
+  /** Who signs the lock: 'server' words the signature slots as custodial demo signing. */
+  lockSigner?: LockSigner;
 }) {
   const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
   const mv = useMemo(
@@ -1122,53 +1173,55 @@ export function StageView({
   );
   const live = state.status === 'open';
   return (
-    <div className="stage">
-      <header className="topbar">
-        <h1>
-          You&apos;re <span className="on">On</span>
-        </h1>
-        <PhaseRail bet={bet} />
-        <div className="conn">
-          {preview !== null ? (
-            <span className="badge preview">PREVIEW · sample data</span>
-          ) : (
-            <span className={`badge ${live ? 'live' : 'down'}`}>
-              {live ? 'LIVE' : state.status.toUpperCase()}
-            </span>
-          )}
-        </div>
-      </header>
-      <main className="layout">
-        <div className="left">
-          {bet ? (
-            <BetCard
-              bet={{ ...bet, frame_urls: framesOf(state, bet) }}
-              now={now}
-              market={mv}
-              presence={state.presence?.online_by_user ?? null}
-            />
-          ) : (
-            <section className="card empty">
-              <p className="huge">Waiting for a challenge…</p>
-              <p className="muted">Point a phone at a friend to start a bet.</p>
-            </section>
-          )}
-        </div>
-        <aside className="right">
-          <OddsWidget view={mv} bet={bet} />
-          <Ticker state={state} />
-        </aside>
-      </main>
-      <HealthStrip
-        health={showHealth ? health : null}
-        error={showHealth ? healthError : null}
-        replays={replays}
-        status={state.status}
-        room={roomLabel}
-        online={state.presence}
-        sound={sound}
-        onDisconnect={onDisconnect}
-      />
-    </div>
+    <LockSignerContext.Provider value={lockSigner}>
+      <div className="stage">
+        <header className="topbar">
+          <h1>
+            You&apos;re <span className="on">On</span>
+          </h1>
+          <PhaseRail bet={bet} />
+          <div className="conn">
+            {preview !== null ? (
+              <span className="badge preview">PREVIEW · sample data</span>
+            ) : (
+              <span className={`badge ${live ? 'live' : 'down'}`}>
+                {live ? 'LIVE' : state.status.toUpperCase()}
+              </span>
+            )}
+          </div>
+        </header>
+        <main className="layout">
+          <div className="left">
+            {bet ? (
+              <BetCard
+                bet={{ ...bet, frame_urls: framesOf(state, bet) }}
+                now={now}
+                market={mv}
+                presence={state.presence?.online_by_user ?? null}
+              />
+            ) : (
+              <section className="card empty">
+                <p className="huge">Waiting for a challenge…</p>
+                <p className="muted">Point a phone at a friend to start a bet.</p>
+              </section>
+            )}
+          </div>
+          <aside className="right">
+            <OddsWidget view={mv} bet={bet} />
+            <Ticker state={state} />
+          </aside>
+        </main>
+        <HealthStrip
+          health={showHealth ? health : null}
+          error={showHealth ? healthError : null}
+          replays={replays}
+          status={state.status}
+          room={roomLabel}
+          online={state.presence}
+          sound={sound}
+          onDisconnect={onDisconnect}
+        />
+      </div>
+    </LockSignerContext.Provider>
   );
 }

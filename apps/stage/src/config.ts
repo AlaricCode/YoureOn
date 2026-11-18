@@ -153,6 +153,8 @@ export interface SavedSession {
   /** ISO; the stage token's expiry (12 h). */
   expiresAt: string | null;
   roomLabel?: string;
+  /** POST /v1/stage/session `lock_signer` (who signs the lock). */
+  lockSigner?: 'phones' | 'server' | null;
   /** What the big card showed, and the other bets the page knew (newest first). */
   focusBetId?: string | null;
   bets?: string[];
