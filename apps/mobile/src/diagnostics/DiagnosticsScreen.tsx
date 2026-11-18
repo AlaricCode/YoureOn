@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { importSafely } from '../app/importSafely';
 import { AUTO_CHECKS } from './autoChecks';
 import { CHECKS, type CameraPanel, type CheckId } from './catalog';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
@@ -28,10 +29,10 @@ import {
   type CheckResults,
 } from './runner';
 
-const VisionCameraPanel = lazy(() => import('./VisionCameraPanel'));
-const ExpoCameraPanel = lazy(() => import('./ExpoCameraPanel'));
+const VisionCameraPanel = lazy(() => importSafely(() => import('./VisionCameraPanel')));
+const ExpoCameraPanel = lazy(() => importSafely(() => import('./ExpoCameraPanel')));
 /** Every app screen on stand-in data, until auth (D0-M4), realtime and navigation exist. */
-const PreviewApp = lazy(() => import('../preview/PreviewApp'));
+const PreviewApp = lazy(() => importSafely(() => import('../preview/PreviewApp')));
 
 /** The model is 13.6 MB; over a Metro tunnel the first load can take a while. */
 const TIMEOUTS_MS: Partial<Record<CheckId, number>> = { 'tflite-warmup': 90_000 };
