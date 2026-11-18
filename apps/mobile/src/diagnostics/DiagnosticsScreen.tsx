@@ -30,6 +30,8 @@ import {
 
 const VisionCameraPanel = lazy(() => import('./VisionCameraPanel'));
 const ExpoCameraPanel = lazy(() => import('./ExpoCameraPanel'));
+/** The real face pipeline: crop + embedding + cosine between captures (TASKS D1-M3). */
+const FaceEmbedPanel = lazy(() => import('./FaceEmbedPanel'));
 /** Every app screen on stand-in data, until auth (D0-M4), realtime and navigation exist. */
 const PreviewApp = lazy(() => import('../preview/PreviewApp'));
 
@@ -48,6 +50,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
   const [results, setResults] = useState<CheckResults>({});
   const [running, setRunning] = useState(false);
   const [panel, setPanel] = useState<CameraPanel | null>(null);
+  const [faceEmbed, setFaceEmbed] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const setResult = useCallback((id: CheckId, result: CheckResult) => {
@@ -138,6 +141,13 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
             onPress={() => setPanel((p) => (p === 'expo' ? null : 'expo'))}
           />
           {panel ? <Button title="Close camera" onPress={() => setPanel(null)} /> : null}
+          <Button
+            title={faceEmbed ? 'Close face embed' : 'Face embed'}
+            onPress={() => {
+              setPanel(null);
+              setFaceEmbed((f) => !f);
+            }}
+          />
         </View>
 
         <View style={styles.row}>
@@ -158,6 +168,14 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
             />
           ) : null}
         </View>
+
+        {faceEmbed && !panel ? (
+          <PanelErrorBoundary name="Face embed" onError={() => undefined}>
+            <Suspense fallback={<ActivityIndicator />}>
+              <FaceEmbedPanel />
+            </Suspense>
+          </PanelErrorBoundary>
+        ) : null}
 
         {panel ? (
           <PanelErrorBoundary

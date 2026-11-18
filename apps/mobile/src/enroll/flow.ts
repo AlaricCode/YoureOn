@@ -40,12 +40,21 @@ export function makePrompts(random: () => number = Math.random): Prompt[] {
 // One photo
 // ---------------------------------------------------------------------------------------
 
-/** The fields we read from the on-device face detector (react-native-vision-camera-face-detector). */
+/**
+ * The fields we read from the on-device face detector (react-native-vision-camera-face-detector):
+ * the box is in the photo's upright frame (frameWidth × frameHeight pixels).
+ */
 export interface DetectedFace {
   readonly yawAngle: number;
   readonly pitchAngle: number;
-  readonly bounds: { readonly width: number; readonly height: number };
+  readonly bounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
   readonly frameWidth: number;
+  readonly frameHeight: number;
 }
 
 /** A head turn must reach this yaw (degrees). Verdict's on-device threshold. */

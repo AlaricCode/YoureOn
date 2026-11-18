@@ -13,7 +13,6 @@ import {
   DataText,
   ListRow,
   Page,
-  ReconnectBanner,
   Screen,
   Section,
   StatusHero,
@@ -73,8 +72,7 @@ export function HomeScreen({
   };
 
   return (
-    <Screen>
-      <ReconnectBanner visible={offline} />
+    <Screen offline={offline}>
       <View style={styles.head}>
         <Pressable
           style={styles.flex}

@@ -19,6 +19,7 @@ const pkg = readJson('../../package.json') as unknown as PackageJson;
 type Plugin = string | [string, Record<string, unknown>];
 const app = (readJson('../../app.json') as { expo: Record<string, unknown> }).expo as {
   plugins: Plugin[];
+  userInterfaceStyle?: string;
   ios: { infoPlist: Record<string, string>; deploymentTarget: string };
 };
 const pluginName = (p: Plugin) => (typeof p === 'string' ? p : p[0]);
@@ -85,6 +86,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
       'expo-secure-store',
       'expo-local-authentication',
       'expo-crypto',
+      'expo-splash-screen',
     ]) {
       expect(pkg.dependencies[name], name).toMatch(/^~58\./);
     }
@@ -118,6 +120,7 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
       'expo-audio',
       '@livekit/react-native-expo-plugin',
       '@config-plugins/react-native-webrtc',
+      'expo-splash-screen',
     ]) {
       expect(names, name).toContain(name);
     }
@@ -125,6 +128,14 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
     // expo-notifications config plugin stays out (APNs is on the cut line).
     expect(names).not.toContain('expo-notifications');
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('opens on the dark splash and dark system UI (no white flash before the first screen)', () => {
+    expect(app.userInterfaceStyle).toBe('dark');
+    expect(pluginOptions('expo-splash-screen')).toMatchObject({
+      image: './assets/splash-icon.png',
+      backgroundColor: '#0B0B0C',
+    });
   });
 
   it('passes the same camera and mic strings to every plugin that writes them', () => {
