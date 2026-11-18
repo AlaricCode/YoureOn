@@ -28,7 +28,23 @@ const EXPIRY = at('2026-11-19T00:45:00.000Z');
 const TICKER = 'REPLAY-BTC05M2611190045';
 
 describe('the recording', () => {
-  it('is the recorded fixture, byte for byte', () => {
+  it('is one settled real round: listed, next, active, settled, strike, BTC/USD', () => {
+    const R = REPLAY_RECORDING;
+    const ticker = R.ticker as string;
+    expect(R.listed.ticker).toBe(ticker);
+    expect(R.active.ticker).toBe(ticker);
+    expect(R.settled.ticker).toBe(ticker);
+    expect(RawEvent.parse(R.active).contracts[0]!.expiryDate).toBe(R.expiry);
+    expect(Date.parse(RawEvent.parse(R.next_listed).contracts[0]!.effectiveDate)).toBe(
+      Date.parse(R.expiry),
+    );
+    const settled = RawEvent.parse(R.settled).contracts[0]!;
+    expect(classifyContract(settled).kind).toBe('settled');
+    expect(Date.parse(R.expiry) - Date.parse(R.window_start)).toBe(300_000);
+  });
+
+  it('the shipped round is the recorded test fixture, byte for byte', () => {
+    if (REPLAY_RECORDING.ticker !== 'BTC05M2611180240') return; // re-recorded since
     const listed = (t: string) => F.events_0237.data.find((e) => e.ticker === t);
     expect(REPLAY_RECORDING.active).toEqual(F.event_0240_active);
     expect(REPLAY_RECORDING.settled).toEqual(F.event_0240_settled);

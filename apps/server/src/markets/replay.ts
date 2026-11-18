@@ -25,8 +25,16 @@ export const REPLAY_PREFIX = REPLAY_TICKER_PREFIX;
 
 const WINDOW_MS = 300_000;
 const REC_EXPIRY = Date.parse(R.expiry);
-/** Recorded resolvedAt − expiry. */
-export const REPLAY_SETTLES_AFTER_MS = Date.parse('2026-11-18T02:40:05.521Z') - REC_EXPIRY;
+type RecContract = { resolvedAt?: string; settlementValue?: string; strike?: { value?: string } };
+const REC_SETTLED = (R.settled as { contracts: RecContract[] }).contracts[0]!;
+/** Recorded resolvedAt − expiry (5.521 s for the shipped round). */
+export const REPLAY_SETTLES_AFTER_MS = Math.max(
+  1_000,
+  Date.parse(REC_SETTLED.resolvedAt ?? R.expiry) - REC_EXPIRY,
+);
+/** The recorded line and settlement value: the replayed BTC/USD crosses from one to the other. */
+const REC_LINE = Number(REC_SETTLED.strike?.value ?? R.strike.value);
+const REC_SETTLE = Number(REC_SETTLED.settlementValue ?? REC_LINE);
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -99,14 +107,15 @@ const windowOf = (nowMs: number) => {
 };
 
 /**
- * The replay's BTC/USD: from a little above the line at the window start to Gemini's recorded
- * settlement value at expiry, with a small wiggle (deterministic in time).
+ * The replay's BTC/USD: from the other side of the line at the window start (mirrored) to
+ * Gemini's recorded settlement value at expiry, with a small wiggle (deterministic in time), so
+ * the chart crosses the line and ends exactly where Gemini settled.
  */
 export function replayBtcUsd(nowMs: number): string {
   const w = windowOf(nowMs);
   const p = (nowMs - w.start) / WINDOW_MS;
-  const from = 64_398.4;
-  const to = 64_367.38;
+  const to = REC_SETTLE;
+  const from = 2 * REC_LINE - to;
   const wiggle = 4 * Math.sin(nowMs / 7_000) + 2 * Math.sin(nowMs / 2_300);
   return (from + (to - from) * p + wiggle * (1 - p)).toFixed(2);
 }
