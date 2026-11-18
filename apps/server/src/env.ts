@@ -117,9 +117,8 @@ export const REQUIRED_IN_PRODUCTION = [
   'SOLANA_DEVNET_RPC',
   'FEE_PAYER_SECRET_KEY',
   'JUDGE_AUTHORITY_SECRET_KEY',
-  // the judge's tools and its LLM
+  // the judge's tools (ANTHROPIC_API_KEY is required only with LLM_PROVIDER=live, below)
   'ELEVENLABS_TOOL_SECRET',
-  'ANTHROPIC_API_KEY',
   // /v1/demo/* (src/demo)
   'DEMO_ADMIN_TOKEN',
 ] as const satisfies readonly (keyof Env)[];
@@ -139,7 +138,12 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   }
   const env = r.data;
   if (env.NODE_ENV === 'production') {
-    const missing = REQUIRED_IN_PRODUCTION.filter((k) => env[k] === undefined);
+    const missing: string[] = REQUIRED_IN_PRODUCTION.filter((k) => env[k] === undefined);
+    // A mock LLM refuses every call in production (providers/registry.ts), so without the
+    // key the judge only works with CACHED_RULING=true; the live judge needs both.
+    if (env.LLM_PROVIDER === 'live' && env.ANTHROPIC_API_KEY === undefined) {
+      missing.push('ANTHROPIC_API_KEY');
+    }
     if (missing.length) throw new EnvError(missing.map((k) => `${k}: required in production`));
   }
   return env;
