@@ -2,6 +2,7 @@
 // schema it gives Claude, grading, and the conversation loop against a scripted Messages API.
 import type Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it } from 'vitest';
+import { AGENT_MAX_TOKENS } from '@youre-on/shared/judge/el-config';
 import {
   elToJsonSchema,
   gradeFixture,
@@ -84,12 +85,12 @@ describe('fixture runner (PENDING-KEY live run; deterministic parts)', () => {
       const run = await runFixture(create, f);
       expect(run.stop).toBe(f.kind === 'refusal' ? 'refused' : 'readback');
       expect(gradeFixture(f, run)).toMatchObject({ pass: true, reasons: [] });
-      // mirrors the agent's LLM settings: no temperature, thinking off at low effort, 300 tokens
+      // mirrors the agent's LLM settings: no temperature, thinking off at low effort, its token cap
       const p = seen[0]!;
       expect(p).not.toHaveProperty('temperature');
       expect(p).toMatchObject({
         model: 'claude-haiku-5-5',
-        max_tokens: 300,
+        max_tokens: AGENT_MAX_TOKENS,
         thinking: { type: 'disabled' },
         output_config: { effort: 'low' },
       });

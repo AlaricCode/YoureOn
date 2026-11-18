@@ -7,13 +7,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { auditLog, voiceSessions } from '@youre-on/db';
+import { auditLog, users, voiceSessions } from '@youre-on/db';
 import { VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { REFUSAL_QUIPS } from '@youre-on/shared/judge/guardrails';
 import type { SpokenBetFixture } from '@youre-on/shared/judge/fixture-schema';
 import type { ElevenLabsClient } from '../src/voice/elevenlabs';
 import { UpstreamError } from '../src/voice/elevenlabs';
-import { createVoiceRoutes } from '../src/voice/routes';
+import { createVoiceRoutes, VOICE_TOKENS_BUCKET } from '../src/voice/routes';
+import { RateLimiter } from '../src/http/rate-limit';
 import { routeModules } from '../src/routes';
 import {
   describeDb,
@@ -216,6 +217,59 @@ describeDb('voice: POST /v1/voice/tokens and /el/tools/propose_terms (DB)', () =
     } finally {
       fetchSpy.mockRestore();
       await guarded.server.close();
+    }
+  });
+
+  it('6 tokens per user per 10 min on top of the session bucket (auth-04 / inputs-3)', async () => {
+    el.mode = 'ok';
+    const saved = ctx.deps.rateLimit;
+    ctx.deps.rateLimit = new RateLimiter(); // the suite runs without one
+    try {
+      const A = await signUp(ctx.base, 'Logan');
+      expect(VOICE_TOKENS_BUCKET.limit).toBe(6);
+      for (let i = 0; i < VOICE_TOKENS_BUCKET.limit; i++)
+        expect((await post(ctx, A, '/v1/voice/tokens', { purpose: 'terms' })).status).toBe(201);
+      const before = el.calls.length;
+      const r = await post(ctx, A, '/v1/voice/tokens', { purpose: 'terms' });
+      expect(r.status).toBe(429);
+      expect(r.json!.error).toMatchObject({
+        code: 'RATE_LIMITED',
+        details: { bucket: 'voice/tokens' },
+      });
+      expect(el.calls.length).toBe(before); // ElevenLabs is not asked for the 7th
+      // per user: someone else still mints
+      const B = await signUp(ctx.base, 'Jake');
+      expect((await post(ctx, B, '/v1/voice/tokens', { purpose: 'terms' })).status).toBe(201);
+    } finally {
+      ctx.deps.rateLimit = saved;
+    }
+  });
+
+  it('DEMO_MODE: only the demo players mint judge tokens (auth-04 / inputs-3)', async () => {
+    el.mode = 'ok';
+    const demo = await startTestServer({
+      modules: modules(),
+      env: { ELEVENLABS_AGENT_ID: AGENT, DEMO_MODE: 'true' },
+    });
+    try {
+      const stranger = await signUp(demo.base, 'Mallory');
+      const before = el.calls.length;
+      const r = await post(demo, stranger, '/v1/voice/tokens', { purpose: 'terms' });
+      expect(r.status).toBe(403);
+      expect(r.json!.error).toMatchObject({
+        code: 'NOT_A_PARTY',
+        details: { reason: 'demo_only' },
+      });
+      expect(el.calls.length).toBe(before);
+      // A demo-claim account (is_demo) gets its token.
+      const player = await signUp(demo.base, 'Demo A');
+      await demo.deps.db
+        .update(users)
+        .set({ is_demo: true })
+        .where(eq(users.id, player.session.user.user_id));
+      expect((await post(demo, player, '/v1/voice/tokens', { purpose: 'terms' })).status).toBe(201);
+    } finally {
+      await demo.server.close();
     }
   });
 

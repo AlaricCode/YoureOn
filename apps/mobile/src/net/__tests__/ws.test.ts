@@ -304,6 +304,14 @@ describe('bet hub resync', () => {
   it('fills a gap from GET /events after 2 s, and falls back to the snapshot', async () => {
     let now = 0;
     const calls: string[] = [];
+    // Served like the server: seq > after, oldest first, last_seq = the head. The log holds
+    // 3..5; later the head moves to 9 but 6..9 never reach the log (pruned).
+    const log = [
+      stateEv('AWAITING_AUTHORIZATIONS', 3),
+      stateEv('AWAITING_LOCK', 4),
+      stateEv('LOCKED', 5),
+    ];
+    let head = 5;
     const hub = new BetHub(
       {
         async getBet() {
@@ -312,13 +320,7 @@ describe('bet hub resync', () => {
         },
         async getBetEvents(_id, after) {
           calls.push(`events>${after}`);
-          // First call fills 3..4; the second finds the log already pruned past 5 (last_seq 9).
-          return after === 2
-            ? {
-                events: [stateEv('AWAITING_AUTHORIZATIONS', 3), stateEv('AWAITING_LOCK', 4)],
-                last_seq: 5,
-              }
-            : { events: [], last_seq: 9 };
+          return { events: log.filter((e) => e.seq > after), last_seq: head };
         },
       },
       () => now,
@@ -334,6 +336,7 @@ describe('bet hub resync', () => {
     expect(hub.get(BET)!.state).toBe('LOCKED');
     expect(hub.lastSeq(BET)).toBe(5);
     // A hole the events endpoint can't fill -> snapshot.
+    head = 9;
     hub.push(stateEv('ATTEMPT', 9));
     now += GAP_WAIT_MS;
     await hub.tick();

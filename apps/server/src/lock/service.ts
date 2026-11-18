@@ -16,12 +16,17 @@
 //             a_/b_authorized_device_at = NULL (no device: that NULL marks a custodial row), and an
 //             audit_log 'lock.custodial_signed' row per party.
 //
+// Gemini bets (Beat 6): the lock's accept_deadline is unix(Terms.market.quotedAt) + 60 s (SCHEMAS
+// §8.3; the phones' device policy L3 checks exactly this), so a quote too old to lock is EXPIRED
+// (quote_expired) before a nonce is leased; at landing the bet goes LOCKED -> AWAITING_MARKET in
+// the same transaction (markets/settlement.ts) and the settlement keeper takes over.
+//
 // Projector compatibility (chain/projector.ts betsColumnLockSignatures): at the lock's own RPC
 // `confirmed` the bet gets onchain_pending='locked' + pending_sig=<lock signature> (bets_pending_pair).
 // Later server txs (resolve, payout) do NOT overwrite them, so the stub projector keeps attributing
 // every later event of the bet to our lock (see lockSignaturesFromChainTxs for the chain_txs-based
 // lookup a full projector should switch to).
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   address,
   createNoopSigner,
@@ -57,12 +62,14 @@ import {
   cosignTx,
   customErrorCode,
   cuWithMargin,
+  heightOnce,
   messageB64,
   poolAddress,
   PreflightError,
   readNonce,
   SimulationError,
   TxFailedError,
+  txFate,
   wireOf,
   type ChainRuntime,
   type SendOptions,
@@ -79,7 +86,9 @@ import {
   type LifecycleDeps,
   type Tx,
 } from './common';
-import { acceptDeadlineFor, loadEnvelope } from './terms';
+import { demoWalletsOf, nonDemoPlayers } from '../demo/players';
+import { enterAwaitingMarket, settlementOf } from '../markets/settlement';
+import { acceptDeadlineFor, loadEnvelope, quoteAcceptDeadline } from './terms';
 
 type LockRow = typeof chainTxs.$inferSelect;
 type NonceRow = typeof noncePool.$inferSelect;
@@ -91,6 +100,17 @@ const sigString = (b: Uint8Array) => b58dec.decode(b);
 
 /** SPL Token InsufficientFunds (a party's ATA is short). */
 const TOKEN_INSUFFICIENT_FUNDS = 1;
+/** The sweep stops re-broadcasting a lost lock this long before its expires_at. */
+export const LOCK_RESEND_STOP_MS = 5_000;
+/**
+ * A gemini lock is only built with at least this long to sign and land it before expires_at
+ * (accept_deadline - 5 s); otherwise the quote is EXPIRED (quote_expired) without a lease.
+ */
+export const MIN_LOCK_WINDOW_SECS = 5;
+/** DEMO_MODE: free nonces only a bet between two demo players may lease (assertNonceShare). */
+export const DEMO_RESERVED_NONCES = 2;
+/** DEMO_MODE: leases a non-demo bet's parties may hold at once (assertNonceShare). */
+export const NON_DEMO_LEASES_PER_USER = 1;
 
 export interface LockServiceOptions {
   deps: LifecycleDeps;
@@ -150,6 +170,10 @@ export class LockService {
       await this.ensurePool(rt);
       const built = await this.build(rt, betId);
       if (!built) return;
+      if ('quoteExpired' in built) {
+        await this.expire(betId, null, this.deps.now());
+        return;
+      }
       if (this.o.signer === 'server') await this.custodialSign(rt, betId, built.lockId);
     } catch (err) {
       const reason =
@@ -173,7 +197,10 @@ export class LockService {
     return syncNoncePool(this.deps, rt);
   }
 
-  private async build(rt: ChainRuntime, betId: string): Promise<{ lockId: string } | null> {
+  private async build(
+    rt: ChainRuntime,
+    betId: string,
+  ): Promise<{ lockId: string } | { quoteExpired: true } | null> {
     const now = this.deps.now();
     const out = await this.deps.db.transaction(async (tx) => {
       const bet = await lockBet(tx, betId);
@@ -194,6 +221,18 @@ export class LockService {
       if (!final || final.envelope.terms_hash !== bet.terms_hash)
         throw new HttpError('TERMS_NOT_FINAL');
       const terms = final.envelope.terms;
+      // Gemini: the quote's TTL is the lock window (SCHEMAS §8.3); skill: build time + 300 s.
+      const acceptDeadline = terms.market
+        ? quoteAcceptDeadline(terms.market.quotedAt)
+        : acceptDeadlineFor(now);
+      if (
+        terms.market &&
+        acceptDeadline - LOCK_SUBMIT_MARGIN_SECS < Math.floor(now / 1000) + MIN_LOCK_WINDOW_SECS
+      )
+        return { quoteExpired: true as const };
+
+      // DEMO_MODE: a stranger's bets must not hold the pool hostage (5 nonces, 300 s leases).
+      if (this.deps.env.DEMO_MODE) await this.assertNonceShare(tx, rt, bet);
 
       // 1. lease the least-recently-advanced free nonce (DATA-MODEL §5.20 "Allocate").
       const [nonce] = await tx
@@ -217,7 +256,6 @@ export class LockService {
         });
 
       // 2. build + simulate (sigVerify off) + rebuild with the CU margin; the bytes are final.
-      const acceptDeadline = acceptDeadlineFor(now);
       const parties = {
         s: rt.keys.feePayer,
         a: createNoopSigner(address(terms.party_a.pubkey)),
@@ -307,9 +345,41 @@ export class LockService {
       return { bet, envs, lockId: row!.id };
     });
     if (!out) return null;
+    if ('quoteExpired' in out) {
+      this.deps.log.warn('lock.quote_expired', { bet_id: betId });
+      return out;
+    }
     fanout(this.deps, out.bet, out.envs);
     this.deps.log.info('lock.built', { bet_id: betId, lock_request_id: out.lockId });
     return { lockId: out.lockId };
+  }
+
+  /**
+   * DEMO_MODE nonce shares: a bet that is not between two demo players (demo/players.ts) may not
+   * take one of the last DEMO_RESERVED_NONCES free nonces, and its parties may hold at most
+   * NON_DEMO_LEASES_PER_USER leases between them, so open signup can't lease the whole pool and
+   * fail every demo lock with nonce_pool_exhausted. Demo bets take any free nonce.
+   */
+  private async assertNonceShare(tx: Tx, rt: ChainRuntime, bet: BetRow): Promise<void> {
+    const parties = [bet.party_a_id, bet.party_b_id];
+    const wallets = demoWalletsOf(this.deps.env, rt);
+    if ((await nonDemoPlayers(this.deps, parties, { db: tx, wallets })).length === 0) return;
+    const [free] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(noncePool)
+      .where(eq(noncePool.status, 'free'));
+    if ((free?.n ?? 0) <= DEMO_RESERVED_NONCES) throw new HttpError('NONCE_POOL_EXHAUSTED');
+    const [held] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(noncePool)
+      .innerJoin(bets, eq(bets.id, noncePool.leased_bet_id))
+      .where(
+        and(
+          eq(noncePool.status, 'leased'),
+          or(inArray(bets.party_a_id, parties), inArray(bets.party_b_id, parties)),
+        ),
+      );
+    if ((held?.n ?? 0) >= NON_DEMO_LEASES_PER_USER) throw new HttpError('NONCE_POOL_EXHAUSTED');
   }
 
   private authorizeRequest(
@@ -723,7 +793,8 @@ export class LockService {
       // terminal row move when onchain_status is locked or later in the same UPDATE, so this
       // path writes it (the landed atomic lock is exactly that status).
       const revived =
-        (bet.state === 'EXPIRED' && bet.end_reason === 'accept_timeout') ||
+        (bet.state === 'EXPIRED' &&
+          (bet.end_reason === 'accept_timeout' || bet.end_reason === 'quote_expired')) ||
         (bet.state === 'CANCELLED' && bet.end_reason === 'lock_failed');
       if (bet.state !== 'AWAITING_LOCK' && !revived) return { bet, envs: [] as BetEventEnvelope[] };
       if (revived)
@@ -749,6 +820,7 @@ export class LockService {
       const pot = formatUsd(((bet.stake_a ?? 0n) + (bet.stake_b ?? 0n)).toString());
       const final = await loadEnvelope(tx, betId, { finalOnly: true });
       const performer = final?.envelope.terms.performer;
+      const market = final?.envelope.terms.market ?? null;
       const pending = {
         kind: 'atomic_lock' as const,
         signature,
@@ -781,14 +853,20 @@ export class LockService {
               ...(performer ? { performer: names[performer] } : {}),
               tx: 1,
             },
-            'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.',
+            market
+              ? `Announce both stakes are locked in one transaction at Gemini's odds, and that Gemini settles it at ${market.expiry.slice(11, 16)} UTC.`
+              : 'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.',
           ),
           now,
         }),
       ];
-      return { bet, envs };
+      // Gemini (Beat 6): straight on to AWAITING_MARKET in this same commit.
+      if (market && final)
+        envs.push(...(await enterAwaitingMarket(tx, betId, final.envelope.terms, now)));
+      return { bet, envs, terms: market && final ? final.envelope.terms : null };
     });
     if (out) fanout(this.deps, out.bet, out.envs);
+    if (out?.terms) settlementOf(this.deps).follow(betId, out.terms);
     this.deps.log.info('lock.confirmed', {
       bet_id: betId,
       signature,
@@ -1035,10 +1113,11 @@ export class LockService {
     } catch (err) {
       this.deps.log.warn('nonce.advance_failed', { seed_index: n.seed_index, err });
       await this.deps.db.transaction(async (tx) => {
+        // Only while still 'sent': the sweep may have settled it from the chain meanwhile.
         await tx
           .update(chainTxs)
           .set({ status: 'failed', err: String(err).slice(0, 200) })
-          .where(eq(chainTxs.id, adv.id));
+          .where(and(eq(chainTxs.id, adv.id), eq(chainTxs.status, 'sent')));
         await tx
           .update(noncePool)
           .set({ failures: sql`${noncePool.failures} + 1` })
@@ -1089,6 +1168,60 @@ export class LockService {
     });
   }
 
+  /** Sweep step 2 for one 'sent' lock whose confirm loop is not running (see sweep()). */
+  private async sweepSentLock(
+    rt: ChainRuntime,
+    row: LockRow,
+    nowMs: number,
+    result: { expired: string[]; landed: string[] },
+  ): Promise<void> {
+    const st = await rt.client.signatureStatus(row.signature!, { searchHistory: true });
+    if (
+      st &&
+      !st.err &&
+      (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')
+    ) {
+      await this.onLanded(rt, row.bet_id, row.id, row.signature!, nowMs, nowMs, st.slot);
+      result.landed.push(row.bet_id);
+      return;
+    }
+    if (st?.err) {
+      const why = failureReason(st.err);
+      await this.failLock(row.bet_id, why.reason, why.party, null, { nonceAdvanced: true });
+      return;
+    }
+    if (!row.expires_at || nowMs < row.expires_at.getTime()) {
+      // Unseen and its confirm loop is gone (it timed out, or the server restarted, maybe
+      // before the first send): re-broadcast the exact signed bytes. A durable-nonce tx is
+      // valid until accept_deadline and can land at most once (its ix 0 advances the nonce),
+      // so this is always safe; the next pass sees the status. Not in the last seconds before expires_at, so a re-send
+      // never races the expire + revoke below.
+      if (!st && row.expires_at && nowMs < row.expires_at.getTime() - LOCK_RESEND_STOP_MS)
+        await this.rebroadcastLock(rt, row);
+      return;
+    }
+    // Fate unknown at expires_at. A status lookup can miss a landed tx, so the chain decides:
+    // the Bet PDA (Locked, our terms_hash) means it landed; a consumed nonce without one means
+    // it never can; otherwise expire + revoke, and the next pass settles it either way.
+    const fate = await this.lockFate(rt, row);
+    if (fate === 'landed') {
+      this.deps.log.warn('lock.landed_late', { bet_id: row.bet_id, signature: row.signature });
+      await this.onLanded(rt, row.bet_id, row.id, row.signature!, nowMs, nowMs, st?.slot ?? null);
+      result.landed.push(row.bet_id);
+      return;
+    }
+    if (await this.expire(row.bet_id, row.id, nowMs)) result.expired.push(row.bet_id);
+    if (fate === 'dead') {
+      await this.deps.db
+        .update(chainTxs)
+        .set({ status: 'expired' })
+        .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
+      await this.revokeOrRelease(row.bet_id, row.id, true);
+    } else {
+      await this.revokeOrRelease(row.bet_id, row.id, false);
+    }
+  }
+
   // ---- sweep (keeper) ---------------------------------------------------------------------
 
   /** Keeper task: expire locks past expires_at, settle sent locks, finish/retry nonce advances. */
@@ -1126,41 +1259,15 @@ export class LockService {
       .limit(25);
     for (const row of sent) {
       if (this.confirming.has(row.id) || !row.signature) continue;
-      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
-      if (
-        st &&
-        !st.err &&
-        (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')
-      ) {
-        await this.onLanded(rt, row.bet_id, row.id, row.signature, nowMs, nowMs, st.slot);
-        result.landed.push(row.bet_id);
-        continue;
-      }
-      if (st?.err) {
-        const why = failureReason(st.err);
-        await this.failLock(row.bet_id, why.reason, why.party, null, { nonceAdvanced: true });
-        continue;
-      }
-      if (!row.expires_at || nowMs < row.expires_at.getTime()) continue;
-      // Fate unknown at expires_at. A status lookup can miss a landed tx, so the chain decides:
-      // the Bet PDA (Locked, our terms_hash) means it landed; a consumed nonce without one means
-      // it never can; otherwise expire + revoke, and the next pass settles it either way.
-      const fate = await this.lockFate(rt, row);
-      if (fate === 'landed') {
-        this.deps.log.warn('lock.landed_late', { bet_id: row.bet_id, signature: row.signature });
-        await this.onLanded(rt, row.bet_id, row.id, row.signature, nowMs, nowMs, st?.slot ?? null);
-        result.landed.push(row.bet_id);
-        continue;
-      }
-      if (await this.expire(row.bet_id, row.id, nowMs)) result.expired.push(row.bet_id);
-      if (fate === 'dead') {
-        await this.deps.db
-          .update(chainTxs)
-          .set({ status: 'expired' })
-          .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
-        await this.revokeOrRelease(row.bet_id, row.id, true);
-      } else {
-        await this.revokeOrRelease(row.bet_id, row.id, false);
+      try {
+        await this.sweepSentLock(rt, row, nowMs, result);
+      } catch (e) {
+        // One bad row (undecodable stored bytes, an RPC error) must not stall every other lock.
+        this.deps.log.error('lock.sweep_row_failed', {
+          bet_id: row.bet_id,
+          tx_id: row.id,
+          error: String((e as Error)?.message ?? e).slice(0, 200),
+        });
       }
     }
 
@@ -1204,7 +1311,74 @@ export class LockService {
       }
       await this.revokeNonce(rt, n, adv.bet_id);
     }
+
+    // 4. 'sent' nonce advances no advancing nonce points at any more (the nonce was retired
+    //    after 3 failures, or re-advanced by a later revoke): settle the row from the chain so
+    //    it does not sit 'sent' for good. The nonce itself is already handled.
+    const orphanAdvances = await this.deps.db
+      .select()
+      .from(chainTxs)
+      .where(
+        and(
+          eq(chainTxs.kind, 'nonce_advance'),
+          eq(chainTxs.status, 'sent'),
+          isNotNull(chainTxs.signature),
+          sql`NOT EXISTS (SELECT 1 FROM ${noncePool} p WHERE p.advance_tx_id = ${chainTxs.id})`,
+        ),
+      )
+      .orderBy(asc(chainTxs.sent_at))
+      .limit(25);
+    const height = heightOnce(rt.client);
+    for (const row of orphanAdvances) {
+      // An unknown send time is never declared dead (txFate): such a row just waits.
+      const { fate } = await txFate(rt.client, row.signature!, row.last_valid_block_height, {
+        sentAtMs: row.sent_at?.getTime(),
+        nowMs,
+        height,
+      });
+      if (fate === 'pending') continue;
+      await this.deps.db
+        .update(chainTxs)
+        .set(
+          fate === 'landed'
+            ? { status: 'confirmed', rpc_confirmed_at: now }
+            : { status: fate === 'failed' ? 'failed' : 'expired', err: `orphan advance ${fate}` },
+        )
+        .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
+    }
     return result;
+  }
+
+  /** Re-sends a 'sent' lock's stored bytes (both party signatures + the fee payer's, re-signed). */
+  private async rebroadcastLock(rt: ChainRuntime, row: LockRow): Promise<void> {
+    if (!row.message_b64 || !row.a_signature || !row.b_signature) return;
+    const [bet] = await this.deps.db
+      .select({ a: bets.party_a_wallet, b: bets.party_b_wallet })
+      .from(bets)
+      .where(eq(bets.id, row.bet_id))
+      .limit(1);
+    if (!bet?.a || !bet.b) return;
+    const full = await cosignTx(
+      txFromStored(
+        row.message_b64,
+        new Map([
+          [bet.a, sigBytes(row.a_signature)],
+          [bet.b, sigBytes(row.b_signature)],
+        ]),
+      ),
+      [rt.keys.feePayer],
+    );
+    // ed25519 is deterministic: the re-signed fee payer signature is the stored tx id.
+    if (sigString(full.signatures[rt.keys.feePayer.address]!) !== row.signature) return;
+    // Preflight stays ON (TM-N4: a doomed lock is rejected for free instead of burning the
+    // nonce). A rejection here (already processed, nonce moved, deadline) changes nothing: the
+    // status poll and the expires_at path below decide the lock's fate.
+    await rt.client
+      .send(wireOf(full), false)
+      .then(() => this.deps.log.info('lock.rebroadcast', { bet_id: row.bet_id }))
+      .catch((err: unknown) =>
+        this.deps.log.warn('lock.rebroadcast_failed', { bet_id: row.bet_id, err }),
+      );
   }
 
   /**
@@ -1231,35 +1405,40 @@ export class LockService {
     return 'unknown';
   }
 
-  /** built/signed (or sent, fate unknown) at expires_at -> EXPIRED (accept_timeout). */
-  private async expire(betId: string, lockId: string, nowMs: number): Promise<boolean> {
+  /**
+   * built/signed (or sent, fate unknown) at expires_at -> EXPIRED (accept_timeout; gemini:
+   * quote_expired, SCHEMAS §8.3). `lockId` null: a gemini quote too old to build a lock for.
+   */
+  private async expire(betId: string, lockId: string | null, nowMs: number): Promise<boolean> {
     const out = await this.deps.db.transaction(async (tx) => {
       const bet = await lockBet(tx, betId);
       if (!bet || !['AWAITING_AUTHORIZATIONS', 'AWAITING_LOCK'].includes(bet.state)) return null;
+      const reason = bet.evidence_source === 'gemini' ? 'quote_expired' : 'accept_timeout';
       const [moved] = await tx
         .update(bets)
-        .set({ state: 'EXPIRED', end_reason: 'accept_timeout' })
+        .set({ state: 'EXPIRED', end_reason: reason })
         .where(eq(bets.id, betId))
         .returning();
-      await tx
-        .update(chainTxs)
-        .set({ err: 'expired' })
-        .where(
-          and(
-            eq(chainTxs.id, lockId),
-            or(
-              eq(chainTxs.status, 'built'),
-              eq(chainTxs.status, 'signed'),
-              eq(chainTxs.status, 'sent'),
+      if (lockId)
+        await tx
+          .update(chainTxs)
+          .set({ err: 'expired' })
+          .where(
+            and(
+              eq(chainTxs.id, lockId),
+              or(
+                eq(chainTxs.status, 'built'),
+                eq(chainTxs.status, 'signed'),
+                eq(chainTxs.status, 'sent'),
+              ),
+              isNull(chainTxs.err),
             ),
-            isNull(chainTxs.err),
-          ),
-        );
+          );
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(moved!, bet.state, 'accept_timeout'),
+          payload: statePayload(moved!, bet.state, reason),
           now: nowMs,
         }),
         await appendBetEvent(tx, {
@@ -1267,8 +1446,10 @@ export class LockService {
           type: 'judge.cue',
           payload: judgeCue(
             'EXPIRED',
-            { reason: 'accept_timeout' },
-            'Say the lock window closed before both locked in. Nothing moved.',
+            { reason },
+            reason === 'quote_expired'
+              ? "Say Gemini's quote ran out before both locked in. Nothing moved; ask for a fresh quote."
+              : 'Say the lock window closed before both locked in. Nothing moved.',
           ),
           now: nowMs,
         }),

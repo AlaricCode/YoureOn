@@ -1,0 +1,56 @@
+# Profile -> "Judge cam" without a room (refused with a reason), then in a room: the judge-cam
+# screen ("No camera" in the simulator: no lens, no crash), and back to home
+# with the back arrow (which now also tells the server this device is a phone again).
+# Real server writes: PATCH /v1/devices/current (role judge_cam, then phone). No bet involved.
+#   maestro --device <udid> test e2e/maestro/judge-cam.yaml   (signed in, on home, no room)
+appId: dev.youreon.app
+name: judge-cam
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- runFlow:
+    when:
+      visible:
+        id: room-leave
+    commands:
+      - tapOn:
+          id: room-leave
+- tapOn:
+    id: home-profile
+- extendedWaitUntil:
+    visible: Judge cam
+    timeout: 10000
+- takeScreenshot: 30-profile
+- tapOn: Judge cam
+# No room: a judge cam must be bound to one.
+- extendedWaitUntil:
+    visible: Join room first
+    timeout: 10000
+- takeScreenshot: 31-judge-cam-needs-room
+- tapOn:
+    id: room-create
+- extendedWaitUntil:
+    visible:
+      id: room-code-chip
+    timeout: 20000
+- tapOn:
+    id: home-profile
+- tapOn: Judge cam
+# A phone stands by; the simulator has no camera (no lens), and the stage says so.
+- extendedWaitUntil:
+    visible: Standing by|No camera
+    timeout: 10000
+- extendedWaitUntil:
+    visible: No camera
+    timeout: 10000
+- takeScreenshot: 32-judge-cam-no-camera
+- tapOn:
+    id: top-back
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000
+- takeScreenshot: 33-judge-cam-back-home

@@ -13,7 +13,7 @@ import { AppealResult, AppealVote } from './appeal';
 import { AuthorizationMethod, AuthorizeRequest, TxKind } from './authorization';
 import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
 import { ChainEvents } from './chain-events';
-import { CameraEvidence } from './evidence';
+import { CameraEvidence, GeminiSettlementRecord } from './evidence';
 import { GeminiMarketSnapshot } from './gemini';
 import { HearingRuling, HearingTrigger, HearingTurn } from './hearing';
 import { ClarificationQuestion, GuardrailRefusal, TermsDraft } from './negotiation';
@@ -131,6 +131,16 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
   env('appeal.result', 'server', z.object({ result: AppealResult, ruling_hash: Hex32 })),
   /** 1 Hz per gemini bet; the stage chart uses the stage.market control frame (API-CONTRACT §3.1). */
   env('market.tick', 'server', z.object({ snapshot: GeminiMarketSnapshot })),
+  /**
+   * NEW (Beat 6): Gemini settled (or voided) the bet's contract. The record is the evidence the
+   * settlement ruling commits to (evidence_hash = hashJcs(record)); ruling.issued follows in the
+   * same commit, so clients can show Gemini's numbers next to the outcome.
+   */
+  env(
+    'market.settled',
+    'server',
+    z.object({ record: GeminiSettlementRecord, evidence_hash: Hex32 }),
+  ),
   env('tx.submitted', 'server', z.object({ kind: TxKind, signature: Signature })),
   env(
     'tx.confirmed',
@@ -158,6 +168,21 @@ export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
 export type RealtimeEventType = RealtimeEvent['type'];
 export type RealtimeEventOf<T extends RealtimeEventType> = Extract<RealtimeEvent, { type: T }>;
 export type RealtimePayload<T extends RealtimeEventType> = RealtimeEventOf<T>['payload'];
+
+/**
+ * API-CONTRACT §2.14 GET /v1/bets/:bet_id/events?after=<seq>&limit=<1..200> (betEventsPath in
+ * ./api): the REST resync the client calls when a gap stays open 2 s (§3.3), and on cold start
+ * to rebuild a bet from its log. `events` are the bet_events envelopes with seq > after, oldest
+ * first, at most `limit` of them, exactly as the socket replays them. `last_seq` is the bet's
+ * newest seq when the page was read (as BetSnapshot.last_seq and the WS `subscribed` frame):
+ * while the page's last seq is below it, more follow; ask again with after = that seq.
+ * Defined here rather than in ./api, which must not import this module.
+ */
+export const BetEventsResponse = z.object({
+  events: z.array(RealtimeEvent),
+  last_seq: z.number().int().nonnegative(),
+});
+export type BetEventsResponse = z.infer<typeof BetEventsResponse>;
 
 /**
  * Client-side tolerant parse (§10.1 "Unknown types"): returns { ok: false } for unknown types or

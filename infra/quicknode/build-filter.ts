@@ -5,21 +5,16 @@
 //   npx tsx infra/quicknode/build-filter.ts --check         # exit 1 if filter.js is stale
 //   npx tsx infra/quicknode/build-filter.ts --create-body https://<FLY_APP>.fly.dev
 //        # print stream.json with filter_function = base64(filter.js) and the webhook URL filled
-//        # in, ready for POST https://api.quicknode.com/streams/rest/v1/streams (x-api-key)
+//        # in (no security token), for inspection. To CREATE the Stream use scripts/qn-stream.ts
+//        # (npm run qn-stream -- create), which also sets and verifies the webhook security token.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import * as prettier from 'prettier';
-import { buildFilterConfig, renderFilterSource } from '../../apps/server/src/chain/filter-config';
+import { renderFilterJs } from '../../scripts/lib/quicknode';
 
 const FILTER = fileURLToPath(new URL('./filter.js', import.meta.url));
 const STREAM = fileURLToPath(new URL('./stream.json', import.meta.url));
 
-async function render(): Promise<string> {
-  const src = readFileSync(FILTER, 'utf8');
-  const out = renderFilterSource(src, await buildFilterConfig());
-  const options = (await prettier.resolveConfig(FILTER)) ?? {};
-  return prettier.format(out, { ...options, filepath: FILTER });
-}
+const render = (): Promise<string> => renderFilterJs(readFileSync(FILTER, 'utf8'));
 
 async function main(argv: string[]): Promise<number> {
   const next = await render();

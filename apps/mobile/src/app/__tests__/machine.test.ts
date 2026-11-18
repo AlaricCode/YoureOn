@@ -74,6 +74,10 @@ describe('app reducer', () => {
     expect(selectRoute(s, null)).toBe('home');
     s = appReducer(s, { type: 'overlay', overlay: 'profile' });
     expect(selectRoute(s, null)).toBe('profile');
+    s = appReducer(s, { type: 'overlay', overlay: 'history' });
+    expect(selectRoute(s, null)).toBe('history');
+    s = appReducer(s, { type: 'overlay', overlay: 'none' });
+    expect(selectRoute(s, null)).toBe('home');
     s = appReducer(s, { type: 'signed_out' });
     expect(s.auth).toBe('signedOut');
     expect(s.room).toBeNull();
@@ -95,6 +99,44 @@ describe('app reducer', () => {
     expect(s.members).toHaveLength(0);
     s = appReducer(s, { type: 'room', room: null });
     expect(s.room).toBeNull();
+  });
+
+  it('face overlays: scan needs a room, settings and enrollment open over home', () => {
+    const inRoom = appReducer(signedIn(), {
+      type: 'room',
+      room: { room_id: ROOM, code: 'UBC26X', name: 'Demo room' },
+    });
+    const scanning = appReducer(inRoom, { type: 'overlay', overlay: 'scan' });
+    expect(selectRoute(scanning, null)).toBe('scan');
+    // No room: nothing to scan against.
+    expect(selectRoute(appReducer(signedIn(), { type: 'overlay', overlay: 'scan' }), null)).toBe(
+      'home',
+    );
+    // Leaving the room closes the scan; a judge-cam device never scans.
+    expect(appReducer(scanning, { type: 'room', room: null }).overlay).toBe('none');
+    expect(selectRoute(appReducer(scanning, { type: 'judge_cam', on: true }), null)).toBe(
+      'judgeCam',
+    );
+    // A challenge from the scan (or an incoming invite) takes over the screen.
+    const opened = appReducer(scanning, { type: 'bet_opened', bet_id: BET, force: true });
+    expect(opened.overlay).toBe('none');
+    expect(
+      selectRoute(appReducer(signedIn(), { type: 'overlay', overlay: 'faceSettings' }), null),
+    ).toBe('faceSettings');
+    expect(selectRoute(appReducer(signedIn(), { type: 'overlay', overlay: 'enroll' }), null)).toBe(
+      'enroll',
+    );
+  });
+
+  it('the enrollment offered at signup survives the session landing; other overlays do not', () => {
+    let s = appReducer(initialApp, { type: 'booted', me: null, deviceId: null });
+    s = appReducer(s, { type: 'overlay', overlay: 'enroll' });
+    s = appReducer(s, { type: 'signed_in', me: ME_A, deviceId: DEVICE_A });
+    expect(selectRoute(s, null)).toBe('enroll');
+    let p = appReducer(initialApp, { type: 'booted', me: null, deviceId: null });
+    p = appReducer(p, { type: 'overlay', overlay: 'demoClaim' });
+    p = appReducer(p, { type: 'signed_in', me: ME_A, deviceId: DEVICE_A });
+    expect(p.overlay).toBe('none');
   });
 
   it('keeps one bet on screen: a second invite waits until the first is over', () => {

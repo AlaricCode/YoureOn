@@ -8,12 +8,17 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { MARKET_STAKES_USD, marketSideOf } from '@youre-on/shared/judge/market-terms';
+import { formatUsd, parseUsd } from '@youre-on/shared/money';
+import { splitPot } from '@youre-on/shared/gemini';
+
 import { initialLock, lockReducer, type EndReason } from '../bets/lock';
 import { betView, myResult } from '../bets/view';
 import { authorizeOwner } from '../device/authorize';
 import { feel } from '../device/feedback';
 import { createPreviewFaceApi } from '../enroll/api';
 import { createPreviewEmbedder } from '../enroll/embedder';
+import { detectFacesInPhoto } from '../face/native';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
 import {
   IncomingScreen,
@@ -71,6 +76,7 @@ type Route =
   | 'scan'
   | 'incoming'
   | 'negotiate'
+  | 'marketPanel'
   | 'terms'
   | 'lockEnded'
   | 'live'
@@ -80,6 +86,7 @@ type Route =
   | 'payout'
   | 'hearing'
   | 'appeal'
+  | 'marketPanel'
   | 'market'
   | 'history'
   | 'profile'
@@ -90,7 +97,7 @@ const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
 
 export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const faceApi = useMemo(() => createPreviewFaceApi({ delayMs: 600 }), []);
-  const embedder = useMemo(() => createPreviewEmbedder(), []);
+  const embedder = useMemo(() => createPreviewEmbedder(undefined, detectFacesInPhoto), []);
   const signupApi = useMemo(() => createPreviewSignupApi({ delayMs: 600 }), []);
 
   const [route, setRoute] = useState<Route>('menu');
@@ -99,6 +106,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [inRoom, setInRoom] = useState(true);
   const [balance, setBalance] = useState(startCents);
   const [market, setMarket] = useState(false);
+  // "Bet on Bitcoin" panel (Beat 6): A's call and stake, priced at the sample 62 % Up.
+  const [mSide, setMSide] = useState<'UP' | 'DOWN'>('UP');
+  const [mStake, setMStake] = useState<number>(2);
   const [me, setMe] = useState<'A' | 'B'>('A');
   const [lock, dispatch] = useReducer(lockReducer, initialLock);
   const [lockExpires, setLockExpires] = useState(0);
@@ -320,6 +330,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
           <FaceEnrollFlow
             api={faceApi}
             embedder={embedder}
+            now={Date.now}
             onDone={() => {
               setFaceOn(true);
               setInRoom(false);
@@ -375,19 +386,28 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
           <ScanScreen
             onBack={() => go('home')}
             scan={async () => {
-              // Stand-in for face/scan.ts: the room's server is not here, so Jake always matches.
+              // Stand-in: no model, no server. Every scan finds Jake.
               await new Promise((r) => setTimeout(r, 900));
               const jake = MEMBERS[0];
               return jake
                 ? {
-                    kind: 'match',
-                    user: { user_id: jake.user_id, display_name: jake.display_name },
-                    matchTicket: 'preview',
-                    headToHead: HEAD_TO_HEAD,
+                    kind: 'found',
+                    match: {
+                      user: jake,
+                      ticket: 'preview',
+                      expiresAtMs: Date.now() + 60_000,
+                      headToHead: HEAD_TO_HEAD,
+                    },
                   }
-                : { kind: 'problem', problem: 'no_match', label: 'No match' };
+                : { kind: 'miss', miss: 'no_match' };
             }}
-            onChallenge={() => {
+            onChallenge={async () => {
+              setMarket(false);
+              startNegotiation();
+              return 'ok';
+            }}
+            members={MEMBERS.filter((m) => m.online)}
+            onPickMember={() => {
               setMarket(false);
               startNegotiation();
             }}
@@ -421,6 +441,52 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             }}
           />
         );
+      case 'marketPanel': {
+        const { a, b } = splitPot(2n * BigInt(parseUsd(String(mStake))), marketSideOf(mSide), 62n);
+        return (
+          <NegotiateScreen
+            view={view}
+            captions={[]}
+            speaking={false}
+            hasMic
+            micMuted
+            draft={null}
+            market={{
+              open: true,
+              side: mSide,
+              stakeUsd: mStake,
+              stakes: MARKET_STAKES_USD,
+              quote: {
+                ok: true,
+                refusal: null,
+                upPct: 62,
+                strikeUsd: '$97,250.03',
+                priceUsd: `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                split: `${formatUsd(a.toString())} vs ${formatUsd(b.toString())}`,
+                lockableUntilMs: expiry - 120_000,
+                replay: false,
+                nextWindowMs: null,
+              },
+              sending: false,
+              confirming: false,
+              canSubmit: true,
+              canConfirm: false,
+              waitingFor: null,
+              note: null,
+              onOpen: () => undefined,
+              onClose: () => go('menu'),
+              onSide: setMSide,
+              onStake: setMStake,
+              onSubmit: () => openTerms(false),
+              onConfirm: () => undefined,
+            }}
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      }
       case 'terms':
         return (
           <TermsCardScreen
@@ -558,7 +624,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   })();
 
   function openFromMenu(key: MenuKey) {
-    setMarket(key === 'market' || key === 'termsMarket');
+    setMarket(key === 'market' || key === 'termsMarket' || key === 'marketPanel');
     setMe('A');
     switch (key) {
       case 'launch':
@@ -583,6 +649,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return go('incoming');
       case 'negotiate':
         return startNegotiation();
+      case 'marketPanel':
+        // 3:20 to the contract's expiry: Gemini prices it for another 1:20
+        setExpiry(Date.now() + 200_000);
+        return go('marketPanel');
       case 'terms':
       case 'termsMarket':
         return openTerms(false);
@@ -679,6 +749,7 @@ type MenuKey =
   | 'payoutReverted'
   | 'hearing'
   | 'appeal'
+  | 'marketPanel'
   | 'market'
   | 'history'
   | 'profile'
@@ -748,11 +819,12 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     items: [
       ['hearing', '26  Hearing'],
       ['appeal', '27  Appeal panel'],
-      ['termsMarket', '28  Market terms card'],
-      ['market', '29  Waiting for market'],
+      ['marketPanel', '28  Bet on Bitcoin (odds)'],
+      ['termsMarket', '29  Market terms card'],
+      ['market', '30  Waiting for market'],
     ],
   },
-  { section: 'Demo', items: [['demo', '30  Demo account']] },
+  { section: 'Demo', items: [['demo', '31  Demo account']] },
 ];
 
 function Menu({ onClose, open }: { onClose: () => void; open: (k: MenuKey) => void }) {

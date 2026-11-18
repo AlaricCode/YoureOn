@@ -34,6 +34,9 @@ import {
 import { parseStreamDelivery, StreamPayloadError } from '../src/chain/streams';
 import { attributeEvents, chainOrder, type AttributionRow } from '../src/chain/projector';
 import { isTransientDbError } from '../src/chain/routes';
+import { rpcPollFallbackMs, RPC_POLL_FALLBACK_WITH_STREAM_MS } from '../src/chain/reconciler';
+import { STREAM_FALLBACK_MS } from '@youre-on/shared/constants';
+import { loadEnv } from '../src/env';
 import {
   ALL_EVENT_NAMES,
   block,
@@ -628,7 +631,38 @@ describe('attributeEvents (ESCROW §5.1 / §7.1: bind events to OUR instance of 
       lock,
       new Set([serverSent.signature]),
     );
-    expect([ours(close), ours(serverSent), ours(stranger)]).toEqual([true, true, false]);
+    // the stranger's position is unknown in a contested bet: open (null), never a final "no"
+    expect([ours(close), ours(serverSent), ours(stranger)]).toEqual([true, true, null]);
+  });
+
+  it('contested with an unordered lock (rpc_poll, no block height): open, decided once ordered', () => {
+    // our lock came through rpc_poll without a height; someone else's finalize + close (a
+    // permissionless crank) comes through the Stream, so its own BetClosed contests the bet
+    const polledLock = row('BetCreated', randomSig(), null, null);
+    const crank = randomSig();
+    const fin = row('BetFinalized', crank, 900);
+    const close = row('BetClosed', crank, 900);
+    const open = attributeEvents([polledLock, fin, close], polledLock, new Set());
+    expect([open(fin), open(close)]).toEqual([null, null]);
+    // the reconciler backfilled the lock's height: the crank's payout is ours
+    const ordered = { ...polledLock, block_height: 800 };
+    const ours = attributeEvents([ordered, fin, close], ordered, new Set());
+    expect([ours(fin), ours(close)]).toEqual([true, true]);
+    // ...and with the crank's tx BEFORE our lock it is a final no (an earlier instance)
+    const late = { ...polledLock, block_height: 950 };
+    const theirs = attributeEvents([late, fin, close], late, new Set());
+    expect([theirs(fin), theirs(close)]).toEqual([false, false]);
+  });
+
+  it('an unknown order never hides a relation that is known to fail', () => {
+    const close = row('BetClosed', randomSig(), 200); // our close (after the lock at 100)
+    const after = row('BetRefunded', randomSig(), 250); // known: after our close
+    const unordered = row('BetFinalized', randomSig(), null);
+    const foreign = row('BetCreated', randomSig(), 300);
+    const ours = attributeEvents([lock, close, after, unordered, foreign], lock, new Set());
+    expect(ours(after)).toBe(false);
+    expect(ours(unordered)).toBeNull();
+    expect(ours(foreign)).toBe(false);
   });
 
   it('rejects anything before our lock, after our close, or at/after a later foreign create', () => {
@@ -645,5 +679,28 @@ describe('attributeEvents (ESCROW §5.1 / §7.1: bind events to OUR instance of 
       false,
       false,
     ]);
+  });
+});
+
+describe('rpcPollFallbackMs (how long rpc_poll waits for the Stream)', () => {
+  it('5 s without a Stream, 30 s with one configured, RPC_POLL_FALLBACK_MS wins', () => {
+    expect(rpcPollFallbackMs({})).toBe(STREAM_FALLBACK_MS);
+    expect(STREAM_FALLBACK_MS).toBe(5_000);
+    expect(rpcPollFallbackMs({ QN_STREAM_SECURITY_TOKEN: 'qn_' + 'a'.repeat(64) })).toBe(
+      RPC_POLL_FALLBACK_WITH_STREAM_MS,
+    );
+    expect(RPC_POLL_FALLBACK_WITH_STREAM_MS).toBe(30_000);
+    expect(
+      rpcPollFallbackMs({
+        QN_STREAM_SECURITY_TOKEN: 'qn_' + 'a'.repeat(64),
+        RPC_POLL_FALLBACK_MS: 0,
+      }),
+    ).toBe(0);
+    // from the environment: an integer string; blank = unset
+    const env = (extra: Record<string, string>) =>
+      loadEnv({ DATABASE_URL: 'postgres://x@localhost/x', ...extra });
+    expect(rpcPollFallbackMs(env({ RPC_POLL_FALLBACK_MS: '12000' }))).toBe(12_000);
+    expect(rpcPollFallbackMs(env({ RPC_POLL_FALLBACK_MS: '' }))).toBe(5_000);
+    expect(() => env({ RPC_POLL_FALLBACK_MS: '-1' })).toThrow(/RPC_POLL_FALLBACK_MS/);
   });
 });

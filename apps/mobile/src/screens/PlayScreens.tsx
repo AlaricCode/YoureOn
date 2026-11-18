@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { camRetryAction } from '../attempt/retry';
+import { hasCameraLens } from '../device/camera';
 import { feel } from '../device/feedback';
 import {
   canAppeal,
@@ -167,6 +168,8 @@ export function JudgeCamScreen({
   const [phase, setPhase] = useState<CamPhase>('standby');
   const [count, setCount] = useState(3);
   const [ready, setReady] = useState(false);
+  /** The camera failed to start, or it started with no lens (the simulator). */
+  const [noCamera, setNoCamera] = useState(false);
   const [failed, setFailed] = useState(false);
   const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -269,8 +272,10 @@ export function JudgeCamScreen({
     };
   }, [phase, stop, ready, arm]);
 
-  const bubble =
-    phase === 'standby'
+  // No capture device (the simulator) or one that failed to start: say so on the stage.
+  const bubble = noCamera
+    ? t(COPY.judgeCam.noCamera)
+    : phase === 'standby'
       ? t(COPY.judgeCam.standingBy)
       : phase === 'countdown'
         ? count === 0
@@ -302,9 +307,13 @@ export function JudgeCamScreen({
               mode="video"
               mute
               videoQuality="720p"
-              onCameraReady={() => setReady(true)}
+              onCameraReady={() => {
+                setReady(true);
+                void hasCameraLens(cam.current).then((ok) => setNoCamera(!ok));
+              }}
+              onMountError={() => setNoCamera(true)}
             />
-            <StageBubble prompt={bubble} recording={phase === 'recording'} />
+            <StageBubble prompt={bubble} recording={phase === 'recording' && !noCamera} />
             {phase === 'recording' ? (
               <View style={styles.shutterSlot}>
                 <ShutterButton active label={t(COPY.judgeCam.stop)} onPress={() => void stop()} />
@@ -348,6 +357,7 @@ export function RulingScreen({
   view,
   result,
   reason,
+  judgeLabel,
   appealDeadlineMs,
   busy,
   alert,
@@ -358,6 +368,8 @@ export function RulingScreen({
   view: BetView;
   result: MyResult;
   reason: string;
+  /** Who ruled: "Judge" (default), "Gemini" for a market bet (Beat 6). */
+  judgeLabel?: string | undefined;
   /** BetResolved.appeal_deadline (10 s window). */
   appealDeadlineMs: number;
   busy: boolean;
@@ -379,7 +391,7 @@ export function RulingScreen({
         <StatusHero mark={mark} title={RESULT_TITLE[result]} detail={view.claim} />
         <Card>
           <Label variant="small" style={styles.cardLabel}>
-            {t(COPY.ruling.judge)}
+            {judgeLabel ?? t(COPY.ruling.judge)}
           </Label>
           <DataText>{reason}</DataText>
         </Card>
@@ -651,6 +663,7 @@ export function MarketScreen({
   strikeUsd,
   side,
   expiryMs,
+  replay = false,
   tag,
 }: {
   view: BetView;
@@ -659,6 +672,8 @@ export function MarketScreen({
   /** "Up" or "Down": my side. */
   side: string;
   expiryMs: number;
+  /** A REPLAY-feed bet (a recorded Gemini round): labelled. */
+  replay?: boolean;
   tag?: string | undefined;
 }) {
   const now = useNow(500);
@@ -666,6 +681,7 @@ export function MarketScreen({
     <Screen>
       <TopBar title={t(COPY.market.title)} tag={tag} />
       <Page>
+        {replay ? <Chip label={t(COPY.market.replay)} /> : null}
         <DataText variant="labelStrong">{view.claim}</DataText>
         <View style={styles.priceBlock}>
           <Label variant="small">{t(COPY.market.price)}</Label>

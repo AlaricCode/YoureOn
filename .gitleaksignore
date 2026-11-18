@@ -12,3 +12,5 @@ b9faad80807f43ccf36d02081765ad506c767e26:programs/verdict/src/zk/vk.rs:generic-a
 #   accounts; public keys, not secrets) in the app preview data.
 07cdbd853efe6c1a2f6614e85b8a401c725b3d2f:apps/mobile/src/preview/data.ts:generic-api-key:69
 07cdbd853efe6c1a2f6614e85b8a401c725b3d2f:apps/mobile/src/preview/data.ts:generic-api-key:70
+# - A SecureStore slot name ('youreon.judgecam.v1'), 2026-11-18.
+58992aa249dc9e3dba147ada9d92271c90154960:apps/mobile/src/app/DemoApp.tsx:generic-api-key:96

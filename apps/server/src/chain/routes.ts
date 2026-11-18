@@ -16,8 +16,14 @@
 import type { Context } from 'hono';
 import type { AppEnv, RouteModule } from '../context';
 import { errorBody, HttpError } from '../errors';
+import { isTransientDbError } from './db-errors';
 import { ingestChainEvents, storeUnprojected } from './ingest';
-import { createStubProjector, type ChainProjector, type LockSignatureLookup } from './projector';
+import {
+  createChainProjector,
+  type ChainProjector,
+  type LockSignatureLookup,
+  type ServerSignatureLookup,
+} from './projector';
 import {
   QN_HEADER_BATCH_END,
   QN_HEADER_BATCH_START,
@@ -25,61 +31,27 @@ import {
   QN_HEADER_NONCE,
   QN_HEADER_SIGNATURE,
   QN_HEADER_TIMESTAMP,
+  precheckQuickNodeHeaders,
   verifyQuickNodeSignature,
 } from './quicknode';
 import { parseStreamDelivery, StreamPayloadError } from './streams';
 
 export const QUICKNODE_WEBHOOK_PATH = '/webhooks/quicknode';
-/** A 5-block filtered batch is small, but an unfiltered probe can exceed 1 MiB. */
-export const QUICKNODE_BODY_LIMIT = 8 * 1024 * 1024;
+/**
+ * A filtered 5-block batch is a few KB (the Stream sends compression none). 1 MiB leaves room
+ * for a busy batch; an unfiltered probe (`test_filter --probe`) can be larger and is refused 413.
+ * The body is read only after the cheap header checks (precheckQuickNodeHeaders).
+ */
+export const QUICKNODE_BODY_LIMIT = 1024 * 1024;
+
+export { isTransientDbError } from './db-errors';
 
 export interface ChainRoutesOptions {
-  /** Defaults to the stub projector (projector.ts). */
+  /** Defaults to the chain projector (projector.ts). */
   projector?: ChainProjector;
-  /** Passed to the default stub projector. */
+  /** Passed to the default projector (attribution lookups; chain_txs-based by default). */
   lockSignatures?: LockSignatureLookup;
-}
-
-/** Every `code` on an error and its `cause` chain (Drizzle wraps postgres.js errors). */
-function errorCodes(e: unknown): string[] {
-  const out: string[] = [];
-  for (let x: unknown = e, i = 0; x && typeof x === 'object' && i < 4; i++) {
-    const code = (x as { code?: unknown }).code;
-    if (typeof code === 'string') out.push(code);
-    x = (x as { cause?: unknown }).cause;
-  }
-  return out;
-}
-
-/** postgres.js / Node socket codes for a lost or unreachable database. */
-const TRANSIENT_CONNECTION_CODES = new Set([
-  'CONNECTION_CLOSED',
-  'CONNECTION_DESTROYED',
-  'CONNECTION_ENDED',
-  'CONNECT_TIMEOUT',
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'EPIPE',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'EAI_AGAIN',
-]);
-
-/**
- * True only for errors a retry can fix: SQLSTATE class 08 (connection), 40 (serialization /
- * deadlock), 53 (insufficient resources), 57P01–57P03 (admin / crash shutdown, cannot connect
- * now), 55P03 (lock not available), and postgres.js connection errors. Everything else (a JS
- * exception, P0001 from a trigger RAISE, class 22/23) is deterministic.
- */
-export function isTransientDbError(e: unknown): boolean {
-  return errorCodes(e).some(
-    (c) =>
-      TRANSIENT_CONNECTION_CODES.has(c) ||
-      /^(08|40|53)[0-9A-Z]{3}$/.test(c) ||
-      /^57P0[1-3]$/.test(c) ||
-      c === '55P03',
-  );
+  serverSignatures?: ServerSignatureLookup;
 }
 
 function deliveryIdOf(
@@ -94,7 +66,12 @@ function deliveryIdOf(
 }
 
 export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
-  const projector = o.projector ?? createStubProjector({ lockSignatures: o.lockSignatures });
+  const projector =
+    o.projector ??
+    createChainProjector({
+      lockSignatures: o.lockSignatures,
+      serverSignatures: o.serverSignatures,
+    });
   return {
     name: 'chain',
     bodyLimits: [{ path: /^\/webhooks\/quicknode$/, maxBytes: QUICKNODE_BODY_LIMIT }],
@@ -106,22 +83,29 @@ export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
           d.log.error('chain.webhook_unconfigured', { hint: 'set QN_STREAM_SECURITY_TOKEN' });
           throw new HttpError('NOT_FOUND');
         }
-        // Cheap rejection before buffering the body: headers present.
+        // Cheap rejection before buffering the body: headers present, timestamp fresh,
+        // signature 64 hex. Only then is the body (≤ QUICKNODE_BODY_LIMIT) read for the HMAC.
         const nonce = c.req.header(QN_HEADER_NONCE);
         const timestamp = c.req.header(QN_HEADER_TIMESTAMP);
         const signature = c.req.header(QN_HEADER_SIGNATURE);
-        const raw =
-          nonce && timestamp && signature ? new Uint8Array(await c.req.arrayBuffer()) : null;
-        const v = raw
-          ? await verifyQuickNodeSignature({
-              secret,
-              nonce,
-              timestamp,
-              signature,
-              rawBody: raw,
-              nowMs: d.now(),
-            })
-          : ({ ok: false, reason: 'missing' } as const);
+        const pre = precheckQuickNodeHeaders({
+          secret,
+          nonce,
+          timestamp,
+          signature,
+          nowMs: d.now(),
+        });
+        const v =
+          pre === null && nonce && timestamp && signature
+            ? await verifyQuickNodeSignature({
+                secret,
+                nonce,
+                timestamp,
+                signature,
+                rawBody: new Uint8Array(await c.req.arrayBuffer()),
+                nowMs: d.now(),
+              })
+            : ({ ok: false, reason: pre ?? 'missing' } as const);
         if (!v.ok) {
           // ALERT: QuickNode auto-pauses the Stream after 3 failed retries.
           d.log.error('chain.webhook_rejected', { alert: true, reason: v.reason });
@@ -153,6 +137,11 @@ export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
           d.log.warn('chain.name_hint_mismatch', { count: batch.hintMismatches });
 
         const deliveryId = deliveryIdOf(c, batch);
+        // block time (1 s resolution) -> webhook, for the newest block of the batch
+        let newestBlockS: number | null = null;
+        for (const e of batch.events)
+          if (e.block_time_s !== null && (newestBlockS === null || e.block_time_s > newestBlockS))
+            newestBlockS = e.block_time_s;
         try {
           const r = await ingestChainEvents(d, projector, batch.events, { deliveryId });
           d.log.info('chain.delivery', {
@@ -160,6 +149,7 @@ export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
             ...r,
             in_batch_duplicates: batch.duplicates,
             rejected: batch.rejected.length,
+            block_to_webhook_ms: newestBlockS === null ? null : d.now() - newestBlockS * 1000,
           });
           return c.json(
             {

@@ -47,8 +47,15 @@
     {
       "idx": 6,
       "version": "7",
-      "when": 1795000100000,
+      "when": 1795100000000,
       "tag": "0006_face_enrollments",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795200000000,
+      "tag": "0007_gemini_markets",
       "breakpoints": true
     }
   ]

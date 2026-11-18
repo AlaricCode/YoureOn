@@ -1,27 +1,31 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies are loosely typed in tests */
-// Face enrollment and face match (TASKS D3-M3, D4-M1; API-CONTRACT §2.2, §2.4; DATA-MODEL §5.3,
-// §7.2, §10). Pure parts run everywhere; the routes run against Postgres (DATABASE_URL).
+// Face addressing over HTTP + Postgres (Beat 1; API-CONTRACT §2.2, §2.4, §2.5; DATA-MODEL §5.3,
+// §7.2, §10): consent, enrollment validation and storage, disable / delete, the room-scoped
+// top-2 match with synthetic vectors (thresholds, margin, cross-room isolation, self-exclusion,
+// opt-out), non-member 403, POST /v1/bets with a face ticket (bound, expiring, tamper-proof),
+// head-to-head, the retention sweep and the rate limits. Skips without DATABASE_URL.
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
-import { auditLog, faceEnrollments } from '@youre-on/db';
-import { RoomPresenceResponse } from '@youre-on/shared/api';
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { and, asc, eq, like } from 'drizzle-orm';
+import { auditLog, bets, createDb, faceEnrollments, roomMembers, rooms } from '@youre-on/db';
 import {
-  decideFaceMatch,
-  FACE_CONSENT_V1,
+  embeddingToBytes,
   FACE_CONSENT_V1_SHA256,
+  FACE_CONSENT_V1_TEXT,
+  FACE_MODEL_W600K,
   FaceConsentResponse,
+  FaceEnrollmentStatusResponse,
   FaceMatchResponse,
-  float32ToLe,
-  MeResponse,
+  MATCH_TICKET_TTL_MS,
 } from '@youre-on/shared/face';
-import { issueMatchTicket, verifyMatchTicket } from '../src/bets/match-ticket';
-import { kekEnvName, keyringFrom, openAtRest, sealAtRest } from '../src/face/crypto';
-import { openEmbedding } from '../src/face/probe';
-import { HttpError } from '../src/errors';
+import { buildApp } from '../src/app';
+import { createDeps, startServer } from '../src/server';
+import { routeModules } from '../src/routes';
+import { purgeExpiredEnrollments } from '../src/face/service';
 import {
   describeDb,
   signedHeaders,
+  connectWs,
   signUp,
   startTestServer,
   testEnv,
@@ -29,444 +33,821 @@ import {
   type SignedUp,
 } from './helpers';
 
-const MODEL = { name: 'w600k_mbf', version: 'buffalo_s-fp32', dim: 512 } as const;
+const DIM = 512;
+const MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 
-/** A deterministic unit vector per seed; `mix` blends in another seed's direction. */
-function unit(seed: number, mix?: { seed: number; amount: number }): Float32Array {
-  const v = new Float32Array(512);
-  let x = seed >>> 0 || 1;
-  const next = () => {
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    return ((x >>> 0) / 0xffffffff) * 2 - 1;
-  };
-  for (let i = 0; i < v.length; i++) v[i] = next();
-  if (mix) {
-    const o = unit(mix.seed);
-    for (let i = 0; i < v.length; i++)
-      v[i] = (v[i] as number) * (1 - mix.amount) + (o[i] as number) * mix.amount;
+/** e_i, the i-th standard basis vector: synthetic "faces" whose cosines we control exactly. */
+const basis = (i: number) => {
+  const v = new Float32Array(DIM);
+  v[i] = 1;
+  return v;
+};
+/** A unit vector with cosine `c[i]` against basis(i) for each listed i, the rest on axis 500. */
+function probeWith(c: Record<number, number>): Float32Array {
+  const v = new Float32Array(DIM);
+  let used = 0;
+  for (const [i, x] of Object.entries(c)) {
+    v[Number(i)] = x;
+    used += x * x;
   }
-  let n = 0;
-  for (const y of v) n += y * y;
-  n = Math.sqrt(n);
-  for (let i = 0; i < v.length; i++) v[i] = (v[i] as number) / n;
+  v[500] = Math.sqrt(1 - used);
   return v;
 }
-
-const plain = (v: Float32Array) => ({
+/** A dense unit vector (every value non-zero), so its base64 is distinctive in a log grep. */
+function dense(seed: number): Float32Array {
+  const v = new Float32Array(DIM);
+  let x = seed;
+  for (let i = 0; i < DIM; i++) {
+    x = (x * 1103515245 + 12345) % 2147483648;
+    v[i] = x / 2147483648 - 0.5 || 0.1;
+  }
+  const n = Math.hypot(...v);
+  return v.map((y) => y / n);
+}
+const sealed = (v: Float32Array) => ({
   alg: 'plain-v0' as const,
   epk_b64: null,
   nonce_b64: null,
-  ct_b64: Buffer.from(float32ToLe(v)).toString('base64'),
+  ct_b64: Buffer.from(embeddingToBytes(v)).toString('base64'),
 });
 
-// ---- pure ------------------------------------------------------------------------------
-
-describe('match rule (cos ≥ 0.30, margin ≥ 0.05, else abstain)', () => {
-  const p = unit(1);
-  it('accepts a clear top-1', () => {
-    expect(
-      decideFaceMatch(p, [
-        { id: 'a', embedding: unit(1, { seed: 9, amount: 0.3 }) },
-        { id: 'b', embedding: unit(2) },
-      ]),
-    ).toBe('a');
-  });
-  it('abstains below the threshold', () => {
-    expect(decideFaceMatch(p, [{ id: 'a', embedding: unit(3) }])).toBeNull();
-  });
-  it('abstains when the runner-up is too close', () => {
-    const a = unit(1, { seed: 7, amount: 0.2 });
-    const b = unit(1, { seed: 8, amount: 0.2 });
-    expect(
-      decideFaceMatch(p, [
-        { id: 'a', embedding: a },
-        { id: 'b', embedding: b },
-      ]),
-    ).toBeNull();
-  });
-  it('abstains with no candidates; a lone strong candidate is accepted', () => {
-    expect(decideFaceMatch(p, [])).toBeNull();
-    expect(decideFaceMatch(p, [{ id: 'a', embedding: unit(1) }])).toBe('a');
-  });
-});
-
-describe('match ticket (HMAC, 60 s, bound to scanner + candidate + room)', () => {
-  const b = { scanner_user_id: 'u1', candidate_user_id: 'u2', room_id: 'r1', now_ms: 1_000_000 };
-  const { ticket } = issueMatchTicket(b);
-  it('verifies for its own binding', () => {
-    expect(verifyMatchTicket(ticket, { ...b, now_ms: b.now_ms + 59_000 })).toEqual({ ok: true });
-  });
-  it('expires after 60 s', () => {
-    expect(verifyMatchTicket(ticket, { ...b, now_ms: b.now_ms + 60_000 })).toEqual({
-      ok: false,
-      reason: 'expired',
-    });
-  });
-  it('refuses another scanner, candidate or room', () => {
-    for (const k of ['scanner_user_id', 'candidate_user_id', 'room_id'] as const) {
-      expect(verifyMatchTicket(ticket, { ...b, [k]: 'x' })).toEqual({
-        ok: false,
-        reason: 'invalid',
-      });
-    }
-  });
-  it('refuses a forged or edited ticket, and a missing one', () => {
-    const [p0, payload, mac] = ticket.split('.') as [string, string, string];
-    const edited = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    edited.exp += 3_600_000;
-    const forged = `${p0}.${Buffer.from(JSON.stringify(edited)).toString('base64url')}.${mac}`;
-    expect(verifyMatchTicket(forged, b)).toEqual({ ok: false, reason: 'invalid' });
-    expect(verifyMatchTicket('mt_forged', b)).toEqual({ ok: false, reason: 'invalid' });
-    expect(verifyMatchTicket(null, b)).toEqual({ ok: false, reason: 'missing' });
-  });
-  it('holds no face data', () => {
-    const payload = JSON.parse(Buffer.from(ticket.split('.')[1]!, 'base64url').toString());
-    expect(Object.keys(payload).sort()).toEqual(['c', 'exp', 'n', 'r', 's']);
-  });
-});
-
-describe('encryption at rest (AES-256-GCM, AAD binds user and model)', () => {
-  const env = testEnv();
-  const ring = keyringFrom(env);
-  const v = unit(5);
-  const row = sealAtRest(ring, 'user-1', MODEL, v);
-  it('round-trips, and the ciphertext is not the vector', () => {
-    expect(Buffer.from(row.embedding_ciphertext).length).toBe(512 * 4 + 16);
-    expect(Buffer.from(row.embedding_nonce).length).toBe(12);
-    expect(Buffer.from(row.embedding_ciphertext).subarray(0, 64)).not.toEqual(
-      Buffer.from(float32ToLe(v)).subarray(0, 64),
-    );
-    expect(Array.from(openAtRest(ring, 'user-1', MODEL, row)!)).toEqual(Array.from(v));
-  });
-  it('fails to open under another user (a row swap)', () => {
-    expect(openAtRest(ring, 'user-2', MODEL, row)).toBeNull();
-  });
-  it('uses a configured KEK and refuses to run without one in production', () => {
-    const key = Buffer.alloc(32, 7).toString('base64');
-    const r = keyringFrom(
-      testEnv({ FACE_KEK_ACTIVE: 'face-kek-2026-11-a', FACE_KEK_2026_11_A: key }),
-    );
-    expect(r.active.id).toBe('face-kek-2026-11-a');
-    expect(kekEnvName('face-kek-2026-11-a')).toBe('FACE_KEK_2026_11_A');
-    const prod = { ...testEnv(), NODE_ENV: 'production' as const, FACE_KEK_ACTIVE: undefined };
-    expect(() => keyringFrom(prod)).toThrow(HttpError);
-  });
-});
-
-describe('opening a phone embedding', () => {
-  const env = testEnv();
-  it('accepts plain-v0 unit vectors', () => {
-    expect(openEmbedding(env, plain(unit(4)), MODEL)).toHaveLength(512);
-  });
-  it('refuses sealed, wrong-size, non-unit and (when required) plain embeddings', () => {
-    const bad = [
-      () =>
-        openEmbedding(
-          env,
-          { ...plain(unit(4)), alg: 'x25519-hkdf-sha256-chacha20poly1305-v1' },
-          MODEL,
-        ),
-      () =>
-        openEmbedding(
-          env,
-          { ...plain(unit(4)), ct_b64: Buffer.alloc(100).toString('base64') },
-          MODEL,
-        ),
-      () => openEmbedding(env, plain(new Float32Array(512).fill(1)), MODEL),
-      () => openEmbedding({ FACE_SEAL_REQUIRED: true }, plain(unit(4)), MODEL),
-    ];
-    for (const f of bad) expect(f).toThrow(expect.objectContaining({ code: 'FACE_SEAL_INVALID' }));
-  });
-});
-
-// ---- routes over Postgres --------------------------------------------------------------
-
-describeDb('face routes over Postgres', () => {
+describeDb('face addressing API over Postgres', () => {
   let ctx: Ctx;
+  let clock = Date.now();
+
   beforeAll(async () => {
-    ctx = await startTestServer();
+    ctx = await startTestServer({ now: () => clock });
   });
   afterAll(async () => {
     await ctx?.server.close();
   });
 
-  const send = async (u: SignedUp, method: string, path: string, body?: unknown) => {
-    const raw = body === undefined ? '' : JSON.stringify(body);
-    const res = await fetch(ctx.base + path, {
-      method,
-      headers: signedHeaders(u, method, path, raw),
-      ...(method === 'GET' ? {} : { body: raw }),
-    });
-    const text = await res.text();
-    return { status: res.status, json: text ? (JSON.parse(text) as Record<string, any>) : null };
-  };
-  const get = async (u: SignedUp, path: string) => {
-    const res = await fetch(ctx.base + path, {
-      headers: { Authorization: `Bearer ${u.session.token}` },
-    });
-    const text = await res.text();
-    return { status: res.status, json: text ? (JSON.parse(text) as Record<string, any>) : null };
-  };
   const uid = (u: SignedUp) => u.session.user.user_id;
+  const call = (u: SignedUp, method: string, path: string, body?: unknown) => {
+    const raw = body === undefined ? '' : JSON.stringify(body);
+    return fetch(ctx.base + path, {
+      method,
+      headers: signedHeaders(u, method, path, raw, { ts: clock }),
+      ...(method === 'GET' ? {} : { body: raw }),
+    }).then(async (res) => {
+      const text = await res.text();
+      return {
+        status: res.status,
+        text,
+        json: text ? (JSON.parse(text) as Record<string, any>) : null,
+      };
+    });
+  };
+  const get = (u: SignedUp, path: string) =>
+    fetch(ctx.base + path, { headers: { Authorization: `Bearer ${u.session.token}` } }).then(
+      async (res) => ({ status: res.status, json: (await res.json()) as Record<string, any> }),
+    );
 
   const enrollBody = (v: Float32Array, over: Record<string, unknown> = {}) => ({
     consent: {
-      consent_version: FACE_CONSENT_V1.consent_version,
+      consent_version: 'face-consent-v1',
       consent_text_sha256: FACE_CONSENT_V1_SHA256,
-      consent_at: new Date(Date.now() - 5_000).toISOString(),
+      consent_at: new Date(clock - 30_000).toISOString(),
     },
-    liveness: { method: 'head_turn', passed_at: new Date().toISOString() },
-    model: MODEL,
-    embedding: plain(v),
+    liveness: { method: 'head_turn', passed_at: new Date(clock - 5_000).toISOString() },
+    model: FACE_MODEL_W600K,
+    embedding: sealed(v),
     shots: 3,
     ...over,
   });
-  const probeBody = (v: Float32Array) => ({
-    probe: plain(v),
-    model: MODEL,
-    capture: { captured_at: new Date().toISOString(), eye_distance_px: 120, yaw_deg: 2 },
-  });
-
-  async function room(owner: SignedUp, ...members: SignedUp[]) {
-    const r = await send(owner, 'POST', '/v1/rooms', { name: 'Face room', kind: 'session' });
-    expect(r.status).toBe(201);
-    for (const m of members)
-      expect((await send(m, 'POST', '/v1/rooms/join', { code: r.json!.code })).status).toBe(200);
-    return r.json!.room_id as string;
-  }
-
-  it('GET /v1/face/consent serves the v1 text, its hash and the accepted model', async () => {
-    const A = await signUp(ctx.base, 'Logan');
-    const r = await get(A, '/v1/face/consent');
-    expect(r.status).toBe(200);
-    const body = FaceConsentResponse.parse(r.json);
-    expect(body.consent_version).toBe('face-consent-v1');
-    expect(body.text_sha256).toBe(FACE_CONSENT_V1_SHA256);
-    expect(body.face_seal_pubkey).toBeNull();
-    expect(body.accepted_models).toEqual([MODEL]);
-  });
-
-  it('enroll → GET /v1/me active → disable → enable → delete (twice); audit rows carry no biometrics', async () => {
-    const A = await signUp(ctx.base, 'Logan');
-    expect(MeResponse.parse((await get(A, '/v1/me')).json).face.status).toBe('none');
-
-    const r = await send(A, 'POST', '/v1/face/enrollment', enrollBody(unit(11)));
-    expect(r.status).toBe(201);
-    expect(r.json!.status).toBe('active');
-    const [row] = await ctx.deps.db
-      .select()
-      .from(faceEnrollments)
-      .where(eq(faceEnrollments.user_id, uid(A)));
-    expect(row!.embedding_dim).toBe(512);
-    expect(Buffer.from(row!.embedding_ciphertext).length).toBe(512 * 4 + 16);
-    expect(MeResponse.parse((await get(A, '/v1/me')).json).face).toEqual({
-      status: 'active',
-      consent_version: 'face-consent-v1',
+  const enroll = (u: SignedUp, v: Float32Array, over: Record<string, unknown> = {}) =>
+    call(u, 'POST', '/v1/face/enrollment', enrollBody(v, over));
+  const match = (
+    u: SignedUp,
+    roomId: string,
+    v: Float32Array,
+    over: Record<string, unknown> = {},
+  ) =>
+    call(u, 'POST', `/v1/rooms/${roomId}/face-match`, {
+      probe: sealed(v),
+      model: FACE_MODEL_W600K,
+      capture: { captured_at: new Date(clock).toISOString(), eye_distance_px: 90, yaw_deg: 2 },
+      ...over,
     });
 
-    // Re-enrolling replaces the row.
-    expect((await send(A, 'POST', '/v1/face/enrollment', enrollBody(unit(12)))).status).toBe(201);
+  async function newRoom(owner: SignedUp, ...members: SignedUp[]) {
+    const r = await call(owner, 'POST', '/v1/rooms', { name: 'Face room', kind: 'session' });
+    expect(r.status).toBe(201);
+    for (const m of members) {
+      expect((await call(m, 'POST', '/v1/rooms/join', { code: r.json!.code })).status).toBe(200);
+    }
+    return r.json as { room_id: string; code: string };
+  }
+
+  const rowOf = async (u: SignedUp) =>
+    (
+      await ctx.deps.db
+        .select()
+        .from(faceEnrollments)
+        .where(eq(faceEnrollments.user_id, uid(u)))
+    )[0];
+  const auditsOf = async (u: SignedUp) =>
+    ctx.deps.db
+      .select({ action: auditLog.action, details: auditLog.details })
+      .from(auditLog)
+      .where(and(eq(auditLog.subject_user_id, uid(u)), like(auditLog.action, 'face.%')))
+      .orderBy(asc(auditLog.id));
+
+  // ---- consent ------------------------------------------------------------------------
+
+  it('GET /v1/face/consent serves the exact text, its hash and the accepted models', async () => {
+    const a = await signUp(ctx.base, 'Ana');
+    const r = await get(a, '/v1/face/consent');
+    expect(r.status).toBe(200);
+    const body = FaceConsentResponse.parse(r.json);
+    expect(body.text).toBe(FACE_CONSENT_V1_TEXT);
+    expect(body.text_sha256).toBe(FACE_CONSENT_V1_SHA256);
+    expect(body.consent_version).toBe('face-consent-v1');
+    expect(body.accepted_models).toContainEqual(FACE_MODEL_W600K);
+    expect(body.face_seal_pubkey).toBeNull();
+    const anon = await fetch(`${ctx.base}/v1/face/consent`);
+    expect(anon.status).toBe(401);
+  });
+
+  // ---- enrollment ---------------------------------------------------------------------
+
+  it('enrolls opt-in only: encrypted at rest, audited consent-then-enroll, status readable', async () => {
+    const a = await signUp(ctx.base, 'Bea');
+    expect((await get(a, '/v1/face/enrollment')).json).toEqual({
+      status: 'none',
+      consent_version: null,
+      model: null,
+      enrolled_at: null,
+      disabled_at: null,
+    });
+    const v = basis(1);
+    const r = await enroll(a, v);
+    expect(r.status).toBe(201);
+    expect(r.json).toEqual({ status: 'active', enrolled_at: new Date(clock).toISOString() });
+
+    const st = FaceEnrollmentStatusResponse.parse((await get(a, '/v1/face/enrollment')).json);
+    expect(st).toMatchObject({ status: 'active', consent_version: 'face-consent-v1' });
+    expect(st.model).toEqual(FACE_MODEL_W600K);
+
+    const row = (await rowOf(a))!;
+    expect(row.embedding_ciphertext.length).toBe(DIM * 4 + 16);
+    expect(row.embedding_nonce.length).toBe(12);
+    expect(row.key_id).toBe('face-kek-dev');
+    expect(row.liveness_method).toBe('head_turn');
+    expect(row.consent_text_sha256).toBe(FACE_CONSENT_V1_SHA256);
+    // Not the plaintext: the float32 1.0 at index 1 (00 00 80 3f) is nowhere in the row.
+    const plain = Buffer.from(embeddingToBytes(v));
+    expect(Buffer.from(row.embedding_ciphertext).includes(plain.subarray(0, 12))).toBe(false);
+
+    const audits = await auditsOf(a);
+    expect(audits.map((x) => x.action)).toEqual(['face.consented', 'face.enrolled']);
+    expect(audits[1]!.details).toMatchObject({ model_name: 'w600k_mbf', replaced: false });
+    expect(JSON.stringify(audits)).not.toMatch(/ct_b64|embedding_c|nonce"/);
+  });
+
+  it('rejects bad consent, a capture before consent, unsupported models and bad vectors; stores nothing', async () => {
+    const a = await signUp(ctx.base, 'Cal');
+    const v = basis(2);
+    const cases: Array<[Record<string, unknown>, number, string]> = [
+      [
+        {
+          consent: {
+            consent_version: 'face-consent-v0',
+            consent_text_sha256: FACE_CONSENT_V1_SHA256,
+            consent_at: new Date(clock).toISOString(),
+          },
+        },
+        412,
+        'FACE_CONSENT_REQUIRED',
+      ],
+      [
+        {
+          consent: {
+            consent_version: 'face-consent-v1',
+            consent_text_sha256: 'b'.repeat(64),
+            consent_at: new Date(clock).toISOString(),
+          },
+        },
+        412,
+        'FACE_CONSENT_REQUIRED',
+      ],
+      [
+        {
+          consent: {
+            consent_version: 'face-consent-v1',
+            consent_text_sha256: FACE_CONSENT_V1_SHA256,
+            consent_at: new Date(clock + 120_000).toISOString(),
+          },
+          liveness: { method: 'head_turn', passed_at: new Date(clock + 120_000).toISOString() },
+        },
+        412,
+        'FACE_CONSENT_REQUIRED',
+      ],
+      [
+        { liveness: { method: 'head_turn', passed_at: new Date(clock - 60_000).toISOString() } },
+        412,
+        'FACE_CONSENT_REQUIRED',
+      ],
+      [{ model: { ...FACE_MODEL_W600K, dim: 128 } }, 422, 'FACE_MODEL_UNSUPPORTED'],
+      [{ model: { name: 'arcface_r100', version: 'x', dim: 512 } }, 422, 'FACE_MODEL_UNSUPPORTED'],
+      [{ embedding: sealed(basis(2).subarray(0, 256)) }, 400, 'FACE_SEAL_INVALID'],
+      [{ embedding: { ...sealed(v), ct_b64: '!!!' } }, 400, 'FACE_SEAL_INVALID'],
+      [
+        {
+          embedding: {
+            alg: 'x25519-hkdf-sha256-chacha20poly1305-v1',
+            epk_b64: 'AA==',
+            nonce_b64: 'AA==',
+            ct_b64: 'AA==',
+          },
+        },
+        400,
+        'FACE_SEAL_INVALID',
+      ],
+      [{ embedding: sealed(probeWith({ 2: 0.5 }).map((x) => x * 2)) }, 422, 'VALIDATION_FAILED'],
+      [
+        { embedding: sealed(Float32Array.from(v, (x, i) => (i === 7 ? NaN : x))) },
+        422,
+        'VALIDATION_FAILED',
+      ],
+      [{ shots: 0 }, 422, 'VALIDATION_FAILED'],
+    ];
+    for (const [over, status, code] of cases) {
+      const r = await enroll(a, v, over);
+      expect({ status: r.status, code: r.json?.error?.code }).toEqual({ status, code });
+      // Error bodies never echo the vector.
+      expect(r.text).not.toContain(sealed(v).ct_b64.slice(0, 40));
+    }
+    expect(await rowOf(a)).toBeUndefined();
+    expect(await auditsOf(a)).toEqual([]);
+  });
+
+  it('re-enrolling replaces the row (one row per user)', async () => {
+    const a = await signUp(ctx.base, 'Dee');
+    expect((await enroll(a, basis(3))).status).toBe(201);
+    const first = (await rowOf(a))!;
+    expect((await enroll(a, basis(4))).status).toBe(201);
     const rows = await ctx.deps.db
       .select({ id: faceEnrollments.id })
       .from(faceEnrollments)
-      .where(eq(faceEnrollments.user_id, uid(A)));
-    expect(rows).toHaveLength(1);
+      .where(eq(faceEnrollments.user_id, uid(a)));
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.id).not.toBe(first.id);
+    const audits = await auditsOf(a);
+    expect(audits.at(-1)!.details).toMatchObject({ replaced: true });
+  });
 
-    expect((await send(A, 'PATCH', '/v1/face/enrollment', { status: 'disabled' })).status).toBe(
-      200,
-    );
-    expect(MeResponse.parse((await get(A, '/v1/me')).json).face.status).toBe('disabled');
-    expect((await send(A, 'PATCH', '/v1/face/enrollment', { status: 'active' })).status).toBe(200);
-    expect((await send(A, 'DELETE', '/v1/face/enrollment')).status).toBe(204);
-    expect((await send(A, 'DELETE', '/v1/face/enrollment')).status).toBe(204);
-    expect(MeResponse.parse((await get(A, '/v1/me')).json).face.status).toBe('none');
-    expect(
-      (await send(A, 'PATCH', '/v1/face/enrollment', { status: 'active' })).json!.error.code,
-    ).toBe('FACE_NOT_ENROLLED');
+  it('PATCH disables and re-enables; DELETE really deletes and is idempotent', async () => {
+    const a = await signUp(ctx.base, 'Eli');
+    const none = await call(a, 'PATCH', '/v1/face/enrollment', { status: 'disabled' });
+    expect(none.status).toBe(409);
+    expect(none.json!.error.code).toBe('FACE_NOT_ENROLLED');
 
-    const audit = (
-      await ctx.deps.db
-        .select()
-        .from(auditLog)
-        .where(eq(auditLog.subject_user_id, uid(A)))
-        .orderBy(auditLog.id)
-    ).filter((a) => a.action.startsWith('face.'));
-    expect(audit.map((a) => a.action)).toEqual([
-      'face.consented',
-      'face.enrolled',
+    await enroll(a, basis(5));
+    const off = await call(a, 'PATCH', '/v1/face/enrollment', { status: 'disabled' });
+    expect(off.status).toBe(200);
+    expect(off.json).toMatchObject({
+      status: 'disabled',
+      disabled_at: new Date(clock).toISOString(),
+    });
+    const on = await call(a, 'PATCH', '/v1/face/enrollment', { status: 'active' });
+    expect(on.json).toMatchObject({ status: 'active', disabled_at: null });
+    // Same status again: no change, no audit row.
+    await call(a, 'PATCH', '/v1/face/enrollment', { status: 'active' });
+
+    const del = await call(a, 'DELETE', '/v1/face/enrollment');
+    expect(del.status).toBe(204);
+    expect(del.text).toBe('');
+    expect(await rowOf(a)).toBeUndefined();
+    const again = await call(a, 'DELETE', '/v1/face/enrollment');
+    expect(again.status).toBe(204);
+    const actions = (await auditsOf(a)).map((x) => x.action);
+    expect(actions).toEqual([
       'face.consented',
       'face.enrolled',
       'face.disabled',
       'face.enabled',
       'face.deleted',
     ]);
-    const text = JSON.stringify(audit.map((a) => a.details));
-    expect(text).not.toMatch(/embedding|ciphertext|nonce|probe/);
+    const deleted = (await auditsOf(a)).at(-1)!.details;
+    expect(deleted).toMatchObject({ reason: 'user', model_name: 'w600k_mbf' });
+    expect((await get(a, '/v1/face/enrollment')).json!.status).toBe('none');
   });
 
-  it('refuses enrollment without the current consent, an unknown model, or a bad vector', async () => {
+  // ---- matching -----------------------------------------------------------------------
+
+  it('matches only a confident, opted-in member of the same room, and never reveals scores', async () => {
     const A = await signUp(ctx.base, 'Logan');
-    const cases: [Record<string, unknown>, string][] = [
-      [
-        { consent: { ...enrollBody(unit(1)).consent, consent_text_sha256: 'a'.repeat(64) } },
-        'FACE_CONSENT_REQUIRED',
-      ],
-      [
-        { consent: { ...enrollBody(unit(1)).consent, consent_version: 'face-consent-v0' } },
-        'FACE_CONSENT_REQUIRED',
-      ],
-      [
-        {
-          consent: {
-            ...enrollBody(unit(1)).consent,
-            consent_at: new Date(Date.now() + 3_600_000).toISOString(),
-          },
-        },
-        'FACE_CONSENT_REQUIRED',
-      ],
-      [{ model: { name: 'sface', version: '2021dec', dim: 128 } }, 'FACE_MODEL_UNSUPPORTED'],
-      [{ embedding: plain(new Float32Array(512).fill(0.5)) }, 'FACE_SEAL_INVALID'],
-    ];
-    for (const [over, code] of cases) {
-      const r = await send(A, 'POST', '/v1/face/enrollment', enrollBody(unit(1), over));
-      expect(r.json!.error.code, code).toBe(code);
+    const B = await signUp(ctx.base, 'Jake');
+    const C = await signUp(ctx.base, 'Sam');
+    const D = await signUp(ctx.base, 'Priya'); // enrolled, other room
+    const E = await signUp(ctx.base, 'Noor'); // in the room, never enrolled
+    const room = await newRoom(A, B, C, E);
+    await newRoom(D);
+    for (const [u, i] of [
+      [A, 10],
+      [B, 11],
+      [C, 12],
+      [D, 13],
+    ] as const) {
+      expect((await enroll(u, basis(i))).status).toBe(201);
     }
-    const n = await ctx.deps.db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(faceEnrollments)
-      .where(eq(faceEnrollments.user_id, uid(A)));
-    expect(n[0]!.n).toBe(0);
-  });
 
-  it('face-match: finds the enrolled member, issues a ticket the face challenge accepts, and abstains otherwise', async () => {
-    const [A, B, C, D] = await Promise.all([
-      signUp(ctx.base, 'Logan'),
-      signUp(ctx.base, 'Jake'),
-      signUp(ctx.base, 'Sam'),
-      signUp(ctx.base, 'Priya'),
-    ]);
-    const roomId = await room(A, B, C);
-    const jake = unit(101);
-    const sam = unit(202);
-    expect((await send(B, 'POST', '/v1/face/enrollment', enrollBody(jake))).status).toBe(201);
-    expect((await send(C, 'POST', '/v1/face/enrollment', enrollBody(sam))).status).toBe(201);
-    // D is enrolled but not in the room: never a candidate.
-    expect(
-      (
-        await send(
-          D,
-          'POST',
-          '/v1/face/enrollment',
-          enrollBody(unit(101, { seed: 5, amount: 0.05 })),
-        )
-      ).status,
-    ).toBe(201);
-
-    const presence = RoomPresenceResponse.parse(
-      (await get(A, `/v1/rooms/${roomId}/presence`)).json,
+    // Presence reports who opted in.
+    const presence = await get(A, `/v1/rooms/${room.room_id}/presence`);
+    const enrolled = Object.fromEntries(
+      presence.json.members.map((m: any) => [m.user.display_name, m.face_enrolled]),
     );
-    expect(presence.members.find((m) => m.user.user_id === uid(B))!.face_enrolled).toBe(true);
-    expect(presence.members.find((m) => m.user.user_id === uid(A))!.face_enrolled).toBe(false);
+    expect(enrolled).toMatchObject({ Logan: true, Jake: true, Sam: true, Noor: false });
 
-    const auditBefore = await ctx.deps.db.select({ n: sql<number>`count(*)::int` }).from(auditLog);
-    const path = `/v1/rooms/${roomId}/face-match`;
-    const hit = await send(A, 'POST', path, probeBody(unit(101, { seed: 77, amount: 0.25 })));
+    // Confident: 0.42 vs Jake, 0 vs Sam.
+    const hit = await match(A, room.room_id, probeWith({ 11: 0.42 }));
     expect(hit.status).toBe(200);
     const m = FaceMatchResponse.parse(hit.json).match!;
     expect(m.user.user_id).toBe(uid(B));
     expect(m.user.display_name).toBe('Jake');
+    expect(m.ticket_expires_at).toBe(new Date(clock + MATCH_TICKET_TTL_MS).toISOString());
     expect(m.head_to_head).toMatchObject({ wins: 0, losses: 0, pushes: 0, net: '0' });
-    expect(JSON.stringify(hit.json)).not.toMatch(/score|cos|similar/i);
-    // A match writes nothing but the day-truncated last_used_at.
-    const auditAfter = await ctx.deps.db.select({ n: sql<number>`count(*)::int` }).from(auditLog);
-    expect(auditAfter[0]!.n).toBe(auditBefore[0]!.n);
-    const [jakeRow] = await ctx.deps.db
-      .select()
-      .from(faceEnrollments)
-      .where(eq(faceEnrollments.user_id, uid(B)));
-    expect(jakeRow!.last_used_at!.toISOString()).toMatch(/T00:00:00\.000Z$/);
+    expect(hit.text).not.toMatch(/score|cosine|0\.42/);
+    // last_used_at bumped, truncated to the day.
+    const used = (await rowOf(B))!.last_used_at!;
+    expect(used.getTime() % 86_400_000).toBe(0);
+    expect(clock - used.getTime()).toBeLessThan(86_400_000);
 
-    // The ticket addresses exactly this challenge.
-    const bet = await send(A, 'POST', '/v1/bets', {
-      room_id: roomId,
-      opponent_user_id: uid(B),
-      challenge_method: 'face',
-      match_ticket: m.match_ticket,
+    // Below threshold, and ambiguous between two members: nothing.
+    expect((await match(A, room.room_id, probeWith({ 11: 0.29 }))).json).toEqual({ match: null });
+    expect((await match(A, room.room_id, probeWith({ 11: 0.42, 12: 0.4 }))).json).toEqual({
+      match: null,
     });
-    expect(bet.status).toBe(201);
-    const wrong = await send(A, 'POST', '/v1/bets', {
-      room_id: roomId,
-      opponent_user_id: uid(C),
-      challenge_method: 'face',
-      match_ticket: m.match_ticket,
-    });
-    expect(wrong.status).toBe(422);
-    expect(wrong.json!.error.details.reason).toBe('match_ticket_invalid');
+    // Margin met: 0.5 vs 0.44.
+    expect(
+      (await match(A, room.room_id, probeWith({ 11: 0.5, 12: 0.44 }))).json!.match.user.user_id,
+    ).toBe(uid(B));
 
-    // A stranger's face: nothing.
-    const none = await send(A, 'POST', path, probeBody(unit(999)));
-    expect(FaceMatchResponse.parse(none.json).match).toBeNull();
-
-    // Disabled members drop out at once.
-    expect((await send(B, 'PATCH', '/v1/face/enrollment', { status: 'disabled' })).status).toBe(
-      200,
+    // Someone enrolled in another room is never a candidate, however close.
+    expect((await match(A, room.room_id, probeWith({ 13: 0.95 }))).json).toEqual({ match: null });
+    // Nor is the scanner.
+    expect((await match(A, room.room_id, probeWith({ 10: 0.95 }))).json).toEqual({ match: null });
+    // Another member scanning finds the scanner's own face fine (A is a candidate for B).
+    expect((await match(B, room.room_id, probeWith({ 10: 0.9 }))).json!.match.user.user_id).toBe(
+      uid(A),
     );
-    const off = await send(A, 'POST', path, probeBody(unit(101, { seed: 77, amount: 0.25 })));
-    expect(FaceMatchResponse.parse(off.json).match).toBeNull();
 
-    // Only members may scan.
-    const outsider = await send(D, 'POST', path, probeBody(jake));
-    expect(outsider.json!.error.code).toBe('NOT_IN_ROOM');
+    // Opt-out takes effect on the very next match; opting back in restores it.
+    await call(B, 'PATCH', '/v1/face/enrollment', { status: 'disabled' });
+    expect((await match(A, room.room_id, probeWith({ 11: 0.9 }))).json).toEqual({ match: null });
+    await call(B, 'PATCH', '/v1/face/enrollment', { status: 'active' });
+    expect((await match(A, room.room_id, probeWith({ 11: 0.9 }))).json!.match).not.toBeNull();
+
+    // A member who left is not a candidate.
+    expect((await call(C, 'POST', `/v1/rooms/${room.room_id}/leave`)).status).toBe(204);
+    expect((await match(A, room.room_id, probeWith({ 12: 0.9 }))).json).toEqual({ match: null });
+
+    // After DELETE, gone for good.
+    await call(B, 'DELETE', '/v1/face/enrollment');
+    expect((await match(A, room.room_id, probeWith({ 11: 0.9 }))).json).toEqual({ match: null });
   });
 
-  it('face-match abstains when two members look alike', async () => {
-    const [A, B, C] = await Promise.all([
-      signUp(ctx.base, 'Logan'),
-      signUp(ctx.base, 'Twin'),
-      signUp(ctx.base, 'Twin Two'),
+  it('a scan that finds nobody stores nothing (no audit row, no last_used_at)', async () => {
+    const A = await signUp(ctx.base, 'Ira');
+    const B = await signUp(ctx.base, 'Jun');
+    const room = await newRoom(A, B);
+    await enroll(B, basis(70));
+    const before = (await auditsOf(B)).length;
+    const scannerRows = () =>
+      ctx.deps.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(eq(auditLog.actor_user_id, uid(A)));
+    const scannerBefore = (await scannerRows()).length;
+    for (let i = 0; i < 5; i++) {
+      // Strangers: nobody in the room looks like these.
+      const r = await match(A, room.room_id, probeWith({ [71 + i]: 0.95 }));
+      expect(r.json).toEqual({ match: null });
+    }
+    expect((await auditsOf(B)).length).toBe(before);
+    expect((await scannerRows()).length).toBe(scannerBefore);
+    expect((await rowOf(B))!.last_used_at).toBeNull();
+  });
+
+  it('non-members get 403, unknown rooms 404, closed rooms 410; bad probes are refused', async () => {
+    const A = await signUp(ctx.base, 'Ola');
+    const B = await signUp(ctx.base, 'Pat');
+    const outsider = await signUp(ctx.base, 'Quinn');
+    const room = await newRoom(A, B);
+    await enroll(B, basis(20));
+
+    const no = await match(outsider, room.room_id, probeWith({ 20: 0.9 }));
+    expect(no.status).toBe(403);
+    expect(no.json!.error.code).toBe('NOT_IN_ROOM');
+    expect(no.text).not.toContain('Pat');
+
+    expect((await match(A, randomUUID(), basis(20))).status).toBe(404);
+    expect(
+      (await match(A, room.room_id, basis(20), { model: { ...FACE_MODEL_W600K, version: 'v9' } }))
+        .json!.error.code,
+    ).toBe('FACE_MODEL_UNSUPPORTED');
+    expect(
+      (await match(A, room.room_id, basis(20), { probe: sealed(basis(20).subarray(0, 64)) })).json!
+        .error.code,
+    ).toBe('FACE_SEAL_INVALID');
+    expect(
+      (
+        await match(
+          A,
+          room.room_id,
+          basis(20).map((x) => x * 3),
+        )
+      ).json!.error.code,
+    ).toBe('VALIDATION_FAILED');
+
+    await ctx.deps.db
+      .update(rooms)
+      .set({ closed_at: new Date(clock) })
+      .where(eq(rooms.id, room.room_id));
+    const closed = await match(A, room.room_id, probeWith({ 20: 0.9 }));
+    expect(closed.status).toBe(410);
+    expect(closed.json!.error.code).toBe('ROOM_EXPIRED');
+  });
+
+  // ---- the ticket in POST /v1/bets ------------------------------------------------------
+
+  it("POST /v1/bets accepts challenge_method 'face' only with a bound, unexpired, untampered ticket", async () => {
+    const A = await signUp(ctx.base, 'Rae');
+    const B = await signUp(ctx.base, 'Sol');
+    const C = await signUp(ctx.base, 'Tam');
+    const room = await newRoom(A, B, C);
+    await enroll(B, basis(30));
+    await enroll(C, basis(31));
+    const ticketFor = async (scanner: SignedUp, i: number) =>
+      (await match(scanner, room.room_id, probeWith({ [i]: 0.8 }))).json!.match
+        .match_ticket as string;
+    const challenge = (a: SignedUp, b: SignedUp, ticket: string | undefined) =>
+      call(a, 'POST', '/v1/bets', {
+        room_id: room.room_id,
+        opponent_user_id: uid(b),
+        challenge_method: 'face',
+        ...(ticket === undefined ? {} : { match_ticket: ticket }),
+      });
+    const refused = async (r: Awaited<ReturnType<typeof challenge>>, why: string) => {
+      expect(r.status).toBe(422);
+      expect(r.json!.error.details.reason).toBe('match_ticket_invalid');
+      expect(r.json!.error.details.issues[0].message).toBe(`match_ticket ${why}`);
+    };
+
+    const tB = await ticketFor(A, 30);
+    // The ticket names Sol: it can't address Tam, and Tam can't spend it.
+    await refused(await challenge(A, C, tB), 'invalid');
+    await refused(await challenge(C, B, tB), 'invalid');
+    await refused(await challenge(A, B, undefined), 'missing');
+    await refused(
+      await challenge(A, B, `${tB.slice(0, -3)}${tB.endsWith('AAA') ? 'BBB' : 'AAA'}`),
+      'invalid',
+    );
+
+    // Beat 1 end to end: B's phone is listening when A taps "Challenge Sol?".
+    const b = await connectWs(ctx.wsUrl);
+    try {
+      b.send({ op: 'hello', token: B.session.token, device_id: B.session.device_id });
+      await b.next((f) => f.op === 'welcome');
+      const ok = await challenge(A, B, tB);
+      expect(ok.status).toBe(201);
+      const [row] = await ctx.deps.db.select().from(bets).where(eq(bets.id, ok.json!.bet.bet_id));
+      expect(row!.challenge_method).toBe('face');
+      expect(row!.party_b_id).toBe(uid(B));
+      const invited = await b.next((f) => f.type === 'bet.invited');
+      expect(invited).toMatchObject({
+        bet_id: ok.json!.bet.bet_id,
+        seq: 1,
+        payload: { challenger: { user_id: uid(A), display_name: 'Rae' }, room_id: room.room_id },
+      });
+    } finally {
+      b.close();
+    }
+
+    // Expiry: a ticket for Tam, used 60 s later.
+    const tC = await ticketFor(A, 31);
+    clock += MATCH_TICKET_TTL_MS;
+    try {
+      await refused(await challenge(A, C, tC), 'expired');
+    } finally {
+      clock -= MATCH_TICKET_TTL_MS;
+    }
+    expect((await challenge(A, C, tC)).status).toBe(201);
+  });
+
+  // ---- head-to-head -------------------------------------------------------------------
+
+  it('returns the head-to-head record from settled bets (seed history labelled)', async () => {
+    const A = await signUp(ctx.base, 'Uma');
+    const B = await signUp(ctx.base, 'Vic');
+    const room = await newRoom(A, B);
+    await enroll(B, basis(40));
+    const settled = (a: SignedUp, b: SignedUp, outcome: 'party_a' | 'party_b' | 'split') => ({
+      party_a_id: uid(a),
+      party_b_id: uid(b),
+      room_id: room.room_id,
+      mint: MINT,
+      state: 'PAID' as const,
+      onchain_status: 'settled' as const,
+      terms_hash: 'c'.repeat(64),
+      evidence_source: 'camera' as const,
+      stake_a: 5_000_000n,
+      stake_b: 5_000_000n,
+      outcome,
+      payout_a: outcome === 'party_a' ? 10_000_000n : outcome === 'split' ? 5_000_000n : 0n,
+      payout_b: outcome === 'party_b' ? 10_000_000n : outcome === 'split' ? 5_000_000n : 0n,
+      settled_at: new Date(clock - 3_600_000),
+      is_seed: true,
+    });
+    await ctx.deps.db.insert(bets).values([
+      settled(A, B, 'party_a'), // Uma wins as A
+      settled(B, A, 'party_a'), // Vic wins as A
+      settled(B, A, 'party_a'), // Vic wins as A
+      settled(A, B, 'split'),
     ]);
-    const roomId = await room(A, B, C);
-    expect(
-      (
-        await send(
-          B,
-          'POST',
-          '/v1/face/enrollment',
-          enrollBody(unit(300, { seed: 1, amount: 0.1 })),
-        )
-      ).status,
-    ).toBe(201);
-    expect(
-      (
-        await send(
-          C,
-          'POST',
-          '/v1/face/enrollment',
-          enrollBody(unit(300, { seed: 2, amount: 0.1 })),
-        )
-      ).status,
-    ).toBe(201);
-    const r = await send(A, 'POST', `/v1/rooms/${roomId}/face-match`, probeBody(unit(300)));
-    expect(FaceMatchResponse.parse(r.json).match).toBeNull();
+    const m = (await match(A, room.room_id, probeWith({ 40: 0.7 }))).json!.match;
+    expect(m.head_to_head).toEqual({
+      wins: 1,
+      losses: 2,
+      pushes: 1,
+      net: '-5000000',
+      net_display: '−$5',
+      last_settled_at: new Date(clock - 3_600_000).toISOString(),
+      includes_seed: true,
+    });
   });
 
-  it('a face challenge with a ticket from another room is refused', async () => {
-    const [A, B] = await Promise.all([signUp(ctx.base, 'Logan'), signUp(ctx.base, 'Jake')]);
-    const roomId = await room(A, B);
-    const { ticket } = issueMatchTicket({
-      scanner_user_id: uid(A),
-      candidate_user_id: uid(B),
-      room_id: randomUUID(),
-      now_ms: Date.now(),
+  // ---- retention ----------------------------------------------------------------------
+
+  it('the retention sweep deletes unused and long-disabled enrollments, with audit rows', async () => {
+    const fresh = await signUp(ctx.base, 'Wes');
+    const stale = await signUp(ctx.base, 'Xia');
+    const off = await signUp(ctx.base, 'Yan');
+    for (const u of [fresh, stale, off]) await enroll(u, basis(50));
+    const day = 86_400_000;
+    await ctx.deps.db
+      .update(faceEnrollments)
+      .set({ last_used_at: new Date(clock - 181 * day) })
+      .where(eq(faceEnrollments.user_id, uid(stale)));
+    await ctx.deps.db
+      .update(faceEnrollments)
+      .set({
+        status: 'disabled',
+        disabled_at: new Date(clock - 31 * day),
+        last_used_at: new Date(clock),
+      })
+      .where(eq(faceEnrollments.user_id, uid(off)));
+
+    const scope = { userIds: [uid(fresh), uid(stale), uid(off)] };
+    const r = await purgeExpiredEnrollments(ctx.deps, clock, scope);
+    expect(r.deleted).toBe(2);
+    expect(await rowOf(fresh)).toBeDefined();
+    expect(await rowOf(stale)).toBeUndefined();
+    expect(await rowOf(off)).toBeUndefined();
+    expect((await auditsOf(stale)).at(-1)).toMatchObject({
+      action: 'face.deleted',
+      details: { reason: 'retention_unused' },
     });
-    const r = await send(A, 'POST', '/v1/bets', {
-      room_id: roomId,
-      opponent_user_id: uid(B),
-      challenge_method: 'face',
-      match_ticket: ticket,
+    expect((await auditsOf(off)).at(-1)).toMatchObject({
+      action: 'face.deleted',
+      details: { reason: 'retention_disabled' },
     });
-    expect(r.json!.error.details.reason).toBe('match_ticket_invalid');
+
+    // The hackathon deadline: everything goes (only rows that exist at that point).
+    const late = await purgeExpiredEnrollments(
+      ctx.deps,
+      Date.parse('2026-12-31T00:00:00.000Z'),
+      scope,
+    );
+    expect(late.deleted).toBe(1);
+    expect(await rowOf(fresh)).toBeUndefined();
+    expect((await auditsOf(fresh)).at(-1)).toMatchObject({
+      details: { reason: 'retention_deadline' },
+    });
+    expect(await purgeExpiredEnrollments(ctx.deps, clock, { userIds: [] })).toEqual({ deleted: 0 });
+  });
+});
+
+describeDb('face rate limits (§1.7)', () => {
+  it('face-match: 30/min per user; enrollment writes 5/h, but disable and delete always work', async () => {
+    let clock = Date.now();
+    const env = testEnv();
+    const dbHandle = createDb({ url: env.DATABASE_URL, max: 2 });
+    // Every log line this server writes during the run, to prove no face bytes reach a log.
+    const lines: string[] = [];
+    const capture = (level: string) => (msg: string, fields?: Record<string, unknown>) =>
+      void lines.push(JSON.stringify({ level, msg, ...fields }));
+    const log = {
+      debug: capture('debug'),
+      info: capture('info'),
+      warn: capture('warn'),
+      error: capture('error'),
+    };
+    const { deps } = createDeps({ env, dbHandle, rateLimit: true, now: () => clock, log });
+    const server = await startServer(deps, {
+      port: 0,
+      hostname: '127.0.0.1',
+      modules: routeModules,
+      onClose: () => dbHandle.close(),
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const a = await signUp(base, 'Zed');
+      const b = await signUp(base, 'Ari');
+      const send = (u: SignedUp, method: string, path: string, body?: unknown) => {
+        const raw = body === undefined ? '' : JSON.stringify(body);
+        return fetch(base + path, {
+          method,
+          headers: signedHeaders(u, method, path, raw, { ts: clock }),
+          body: raw,
+        });
+      };
+      const r = await send(a, 'POST', '/v1/rooms', { kind: 'session' });
+      const room = (await r.json()) as { room_id: string; code: string };
+      await send(b, 'POST', '/v1/rooms/join', { code: room.code });
+
+      const enrollOnce = () =>
+        send(a, 'POST', '/v1/face/enrollment', {
+          consent: {
+            consent_version: 'face-consent-v1',
+            consent_text_sha256: FACE_CONSENT_V1_SHA256,
+            consent_at: new Date(clock - 1000).toISOString(),
+          },
+          liveness: { method: 'head_turn', passed_at: new Date(clock).toISOString() },
+          model: FACE_MODEL_W600K,
+          embedding: sealed(dense(60)),
+          shots: 3,
+        });
+      for (let i = 0; i < 5; i++) expect((await enrollOnce()).status).toBe(201);
+      const sixth = await enrollOnce();
+      expect(sixth.status).toBe(429);
+      expect(sixth.headers.get('Retry-After')).toBeTruthy();
+      // Turning it off and deleting are never limited.
+      expect((await send(a, 'PATCH', '/v1/face/enrollment', { status: 'disabled' })).status).toBe(
+        200,
+      );
+      expect((await send(a, 'PATCH', '/v1/face/enrollment', { status: 'active' })).status).toBe(
+        429,
+      );
+      expect((await send(a, 'DELETE', '/v1/face/enrollment')).status).toBe(204);
+
+      const probe = { probe: sealed(dense(61)), model: FACE_MODEL_W600K };
+      const path = `/v1/rooms/${room.room_id}/face-match`;
+      for (let i = 0; i < 30; i++) expect((await send(b, 'POST', path, probe)).status).toBe(200);
+      const over = await send(b, 'POST', path, probe);
+      expect(over.status).toBe(429);
+      expect(((await over.json()) as any).error.details.bucket).toBe('face-match');
+      clock += 60_000; // the bucket refills
+      expect((await send(b, 'POST', path, probe)).status).toBe(200);
+      // Members still listed.
+      const members = await deps.db
+        .select({ u: roomMembers.user_id })
+        .from(roomMembers)
+        .where(eq(roomMembers.room_id, room.room_id));
+      expect(members.length).toBe(2);
+      for (const v of [dense(60), dense(61)]) {
+        const b64 = sealed(v).ct_b64;
+        for (const line of lines) {
+          expect(line).not.toContain(b64.slice(0, 32));
+          expect(line).not.toContain(b64.slice(-32));
+        }
+      }
+      expect(lines.join('\n')).not.toMatch(/ct_b64|embedding_ciphertext/);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describeDb('a replaced face KEK (operator hazard)', () => {
+  it('logs face.candidates_unreadable at error level when no candidate in the room decrypts', async () => {
+    type Line = { level: string; msg: string; fields: Record<string, unknown> };
+    const lines: Line[] = [];
+    const capture =
+      (level: string) =>
+      (msg: string, fields: Record<string, unknown> = {}) =>
+        void lines.push({ level, msg, fields });
+    const log = {
+      debug: capture('debug'),
+      info: capture('info'),
+      warn: capture('warn'),
+      error: capture('error'),
+    };
+    /** A server whose face-kek-2026-11-a is `kek` (the same key_id, as after a rerun one-liner). */
+    async function boot(kek: string) {
+      const env = testEnv({ FACE_KEK_ACTIVE: 'face-kek-2026-11-a', FACE_KEK_2026_11_A: kek });
+      const dbHandle = createDb({ url: env.DATABASE_URL, max: 2 });
+      const { deps } = createDeps({ env, dbHandle, rateLimit: false, log });
+      const server = await startServer(deps, {
+        port: 0,
+        hostname: '127.0.0.1',
+        modules: routeModules,
+        onClose: () => dbHandle.close(),
+      });
+      const base = `http://127.0.0.1:${server.port}`;
+      const send = async (u: SignedUp, method: string, path: string, body: unknown) => {
+        const raw = JSON.stringify(body);
+        const res = await fetch(base + path, {
+          method,
+          headers: signedHeaders(u, method, path, raw),
+          body: raw,
+        });
+        return { status: res.status, json: (await res.json()) as Record<string, any> };
+      };
+      return { server, base, send };
+    }
+    const enrollBody = (v: Float32Array) => ({
+      consent: {
+        consent_version: 'face-consent-v1',
+        consent_text_sha256: FACE_CONSENT_V1_SHA256,
+        consent_at: new Date(Date.now() - 10_000).toISOString(),
+      },
+      liveness: { method: 'head_turn', passed_at: new Date(Date.now() - 1_000).toISOString() },
+      model: FACE_MODEL_W600K,
+      embedding: sealed(v),
+      shots: 3,
+    });
+    const scan = (v: Float32Array) => ({ probe: sealed(v), model: FACE_MODEL_W600K });
+    const unreadableLines = () => lines.filter((l) => l.msg === 'face.candidates_unreadable');
+
+    // Enrolled under the original key.
+    const first = await boot(Buffer.alloc(32, 1).toString('base64'));
+    const uid = (u: SignedUp) => u.session.user.user_id;
+    let A!: SignedUp, B!: SignedUp, C!: SignedUp, roomId!: string;
+    try {
+      A = await signUp(first.base, 'Kai');
+      B = await signUp(first.base, 'Lio');
+      C = await signUp(first.base, 'Mae');
+      const room = await first.send(A, 'POST', '/v1/rooms', { kind: 'session' });
+      roomId = room.json.room_id as string;
+      for (const u of [B, C])
+        expect(
+          (await first.send(u, 'POST', '/v1/rooms/join', { code: room.json.code })).status,
+        ).toBe(200);
+      expect(
+        (await first.send(B, 'POST', '/v1/face/enrollment', enrollBody(basis(80)))).status,
+      ).toBe(201);
+      expect(
+        (await first.send(C, 'POST', '/v1/face/enrollment', enrollBody(basis(81)))).status,
+      ).toBe(201);
+      const ok = await first.send(A, 'POST', `/v1/rooms/${roomId}/face-match`, scan(basis(80)));
+      expect(ok.json.match.user.user_id).toBe(uid(B));
+      expect(unreadableLines()).toEqual([]);
+    } finally {
+      await first.server.close();
+    }
+
+    // The same key_id with a new value: nothing in the room decrypts.
+    const second = await boot(Buffer.alloc(32, 2).toString('base64'));
+    try {
+      const path = `/v1/rooms/${roomId}/face-match`;
+      const miss = await second.send(A, 'POST', path, scan(basis(80)));
+      expect(miss.status).toBe(200);
+      expect(miss.json).toEqual({ match: null });
+      expect(unreadableLines()).toEqual([
+        {
+          level: 'error',
+          msg: 'face.candidates_unreadable',
+          fields: {
+            room_id: roomId,
+            unreadable: 2,
+            candidates: 2,
+            hint: expect.stringMatching(/FACE_KEK/),
+          },
+        },
+      ]);
+      // Re-enrolling under the new key fixes that person; the rest is only a warning now.
+      expect(
+        (await second.send(C, 'POST', '/v1/face/enrollment', enrollBody(basis(81)))).status,
+      ).toBe(201);
+      const hit = await second.send(A, 'POST', path, scan(basis(81)));
+      expect(hit.json.match.user.user_id).toBe(uid(C));
+      expect(unreadableLines().at(-1)).toEqual({
+        level: 'warn',
+        msg: 'face.candidates_unreadable',
+        fields: { room_id: roomId, unreadable: 1, candidates: 2 },
+      });
+      // No key material in any log line.
+      const all = JSON.stringify(lines);
+      expect(all).not.toContain(Buffer.alloc(32, 1).toString('base64'));
+      expect(all).not.toContain(Buffer.alloc(32, 2).toString('base64'));
+    } finally {
+      await second.server.close();
+    }
+  });
+});
+
+describeDb('face retention keeper task', () => {
+  it('the face routes register face-retention on the server keeper', async () => {
+    const env = testEnv();
+    const dbHandle = createDb({ url: env.DATABASE_URL, max: 1 });
+    const { deps } = createDeps({ env, dbHandle, rateLimit: false, keeper: true });
+    try {
+      buildApp(deps, routeModules);
+      expect(deps.keeper?.taskNames).toContain('face-retention');
+    } finally {
+      await dbHandle.close();
+    }
   });
 });

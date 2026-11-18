@@ -1,18 +1,28 @@
 {
   "cli": {
-    "version": ">= 27.5.0",
-    "appVersionSource": "remote"
+    "version": ">= 27.10.0",
+    "appVersionSource": "remote",
+    "promptToConfigurePushNotifications": false
   },
   "build": {
     "base": {
-      "node": "22.23.4"
+      "node": "22.23.4",
+      "ios": {
+        "image": "macos-tahoe-26.5-xcode-26.6"
+      },
+      "env": {
+        "IOS_BUNDLE_ID": "dev.youreon.app.eas"
+      }
     },
     "development": {
       "extends": "base",
       "developmentClient": true,
       "distribution": "internal",
       "environment": "development",
+      "channel": "development",
       "env": {
+        "IOS_BUNDLE_ID": "dev.youreon.app.eas.dev",
+        "IOS_DISPLAY_NAME": "You're On Dev",
         "EXPO_PUBLIC_API_URL": "http://localhost:8080"
       }
     },
@@ -20,16 +30,38 @@
       "extends": "base",
       "distribution": "internal",
       "environment": "preview",
+      "channel": "preview",
+      "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev"
+        "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev",
+        "EXPO_PUBLIC_VOICE": "on",
+        "EXPO_PUBLIC_BUILD": "preview"
+      }
+    },
+    "preview-typed": {
+      "extends": "preview",
+      "channel": "preview-typed",
+      "env": {
+        "EXPO_PUBLIC_VOICE": "off",
+        "EXPO_PUBLIC_BUILD": "preview-typed"
+      }
+    },
+    "pitch": {
+      "extends": "preview",
+      "channel": "pitch",
+      "env": {
+        "EXPO_PUBLIC_BUILD": "pitch"
       }
     },
     "production": {
       "extends": "base",
       "environment": "production",
+      "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev"
+        "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev",
+        "EXPO_PUBLIC_VOICE": "on",
+        "EXPO_PUBLIC_BUILD": "production"
       }
     }
   },

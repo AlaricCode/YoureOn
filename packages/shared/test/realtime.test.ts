@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { BET_EVENTS_LIMIT, betEventsPath } from '../src/api';
 import {
   AuthorizeRequest,
+  BetEventsResponse,
   BetState,
   CameraEvidence,
   CHAIN_EVENT_NAMES,
@@ -263,8 +265,66 @@ describe('RealtimeEvent (§10)', () => {
       false,
     );
   });
+  it('Beat 6 market.settled carries the strict settlement record', () => {
+    const record = {
+      schema_version: 1,
+      kind: 'gemini_settlement',
+      bet_id: BET,
+      terms_hash: DOC_TERMS_HASH,
+      contract: {
+        eventTicker: 'BTC05M2611180240',
+        instrumentSymbol: 'GEMI-BTC05M2611180240-UP',
+        status: 'settled',
+        resolutionSide: 'no',
+        settlementValue: '64367.38366666667',
+        strike: { value: '64389.6', type: 'reference', availableAt: '2026-11-18T02:35:00.000Z' },
+        resolvedAt: '2026-11-18T02:40:05.521Z',
+      },
+      source_url: 'https://api.gemini.com/v1/prediction-markets/events/BTC05M2611180240',
+      response_sha256: sha256Hex('raw body'),
+      fetched_at: '2026-11-18T02:40:08.000Z',
+    };
+    const r = parseRealtimeEvent(
+      envOf('market.settled', { record, evidence_hash: sha256Hex('x') }),
+    );
+    expect(r.ok).toBe(true);
+    expect(
+      parseRealtimeEvent(
+        envOf('market.settled', { record: { ...record, extra: 1 }, evidence_hash: sha256Hex('x') }),
+      ).ok,
+    ).toBe(false);
+  });
   it('strict envelope: extra keys rejected', () => {
     expect(RealtimeEvent.safeParse({ ...betResolvedEvent(), extra: 1 }).success).toBe(false);
+  });
+});
+
+describe('BetEventsResponse (API-CONTRACT §2.14 REST resync)', () => {
+  it('a page of envelopes plus the bet head; every entry is a RealtimeEvent', () => {
+    const page = {
+      events: [
+        { ...envOf('bet.invite_answered', { party: 'B', answer: 'accepted' }), seq: 3 },
+        { ...envOf('terms.declined', { party: 'A' }), seq: 4 },
+      ],
+      last_seq: 9,
+    };
+    const r = BetEventsResponse.parse(page);
+    expect(r.events.map((e) => [e.seq, e.type])).toEqual([
+      [3, 'bet.invite_answered'],
+      [4, 'terms.declined'],
+    ]);
+    expect(r.last_seq).toBe(9);
+    expect(BetEventsResponse.parse({ events: [], last_seq: 0 }).events).toEqual([]);
+    expect(
+      BetEventsResponse.safeParse({ ...page, events: [envOf('future.thing', {})] }).success,
+    ).toBe(false);
+    expect(BetEventsResponse.safeParse({ events: [], last_seq: -1 }).success).toBe(false);
+    expect(BetEventsResponse.safeParse({ events: [] }).success).toBe(false);
+  });
+  it('betEventsPath is the contract path; limit defaults to the printed 200', () => {
+    expect(BET_EVENTS_LIMIT).toBe(200);
+    expect(betEventsPath(BET, 17)).toBe(`/v1/bets/${BET}/events?after=17&limit=200`);
+    expect(betEventsPath(BET, 0, 50)).toBe(`/v1/bets/${BET}/events?after=0&limit=50`);
   });
 });
 

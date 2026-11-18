@@ -311,6 +311,8 @@ export function TextField({
   autoFocus,
   onSubmitEditing,
   testID,
+  autoCapitalize = 'words',
+  textContentType = 'givenName',
 }: {
   label: string;
   value: string;
@@ -320,6 +322,9 @@ export function TextField({
   autoFocus?: boolean;
   onSubmitEditing?: () => void;
   testID?: string;
+  /** Defaults suit a name; a code field wants 'characters' and no autofill ('none'). */
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
+  textContentType?: 'givenName' | 'none';
 }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -336,9 +341,9 @@ export function TextField({
         placeholderTextColor={palette.textSecondary}
         maxLength={maxLength}
         autoFocus={autoFocus}
-        autoCapitalize="words"
+        autoCapitalize={autoCapitalize}
         autoCorrect={false}
-        textContentType="givenName"
+        textContentType={textContentType}
         returnKeyType="done"
         keyboardAppearance="dark"
         selectionColor={palette.accent}

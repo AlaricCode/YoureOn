@@ -10,5 +10,9 @@ keys
 docs
 programs
 apps/mobile
-apps/stage
+# apps/stage is built inside the image (the `stage` build stage); its tests are not needed.
+apps/stage/test
 .git
+# agent worktrees / tool state in the main checkout (each a full copy of the repo)
+.claude
+.gstack

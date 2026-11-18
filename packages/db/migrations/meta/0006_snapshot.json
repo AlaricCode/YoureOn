@@ -1,5 +1,5 @@
 {
-  "id": "278018aa-c05a-4c62-a930-d8f3aa092092",
+  "id": "d534571d-2ca3-4a33-a1aa-19ed9416097d",
   "prevId": "dfc8c499-74e3-4fdd-acdc-9e536dc4c830",
   "version": "7",
   "dialect": "postgresql",
@@ -3829,8 +3829,8 @@
         }
       },
       "indexes": {
-        "face_enrollments_match_idx": {
-          "name": "face_enrollments_match_idx",
+        "face_enrollments_active_model_idx": {
+          "name": "face_enrollments_active_model_idx",
           "columns": [
             {
               "expression": "model_name",
@@ -3843,10 +3843,16 @@
               "isExpression": false,
               "asc": true,
               "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
             }
           ],
           "isUnique": false,
-          "where": "\"face_enrollments\".\"status\" = 'active'",
+          "where": "status = 'active'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3869,8 +3875,8 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "face_enrollments_user_uq": {
-          "name": "face_enrollments_user_uq",
+        "face_enrollments_user_id_uq": {
+          "name": "face_enrollments_user_id_uq",
           "nullsNotDistinct": false,
           "columns": [
             "user_id"
@@ -3881,23 +3887,23 @@
       "checkConstraints": {
         "face_enrollments_nonce_len": {
           "name": "face_enrollments_nonce_len",
-          "value": "octet_length(\"face_enrollments\".\"embedding_nonce\") = 12"
+          "value": "octet_length(embedding_nonce) = 12"
         },
         "face_enrollments_dim": {
           "name": "face_enrollments_dim",
-          "value": "\"face_enrollments\".\"embedding_dim\" BETWEEN 64 AND 1024"
+          "value": "embedding_dim BETWEEN 64 AND 1024"
         },
-        "face_enrollments_ct_len": {
-          "name": "face_enrollments_ct_len",
-          "value": "octet_length(\"face_enrollments\".\"embedding_ciphertext\") = \"face_enrollments\".\"embedding_dim\" * 4 + 16"
+        "face_enrollments_ciphertext_len": {
+          "name": "face_enrollments_ciphertext_len",
+          "value": "octet_length(embedding_ciphertext) = embedding_dim * 4 + 16"
         },
-        "face_enrollments_consent_before": {
-          "name": "face_enrollments_consent_before",
-          "value": "\"face_enrollments\".\"consent_at\" <= \"face_enrollments\".\"created_at\""
+        "face_enrollments_consent_before_capture": {
+          "name": "face_enrollments_consent_before_capture",
+          "value": "consent_at <= created_at"
         },
         "face_enrollments_disabled_at": {
           "name": "face_enrollments_disabled_at",
-          "value": "(\"face_enrollments\".\"status\" = 'disabled') = (\"face_enrollments\".\"disabled_at\" IS NOT NULL)"
+          "value": "(status = 'disabled') = (disabled_at IS NOT NULL)"
         },
         "face_enrollments_consent_text_sha256_fmt": {
           "name": "face_enrollments_consent_text_sha256_fmt",

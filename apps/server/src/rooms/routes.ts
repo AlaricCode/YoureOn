@@ -1,6 +1,7 @@
 // Rooms and presence, API-CONTRACT §2.3 (TASKS D0-J4):
 //   POST /v1/rooms                      (S)          -> 201 {room_id, code, qr_payload, expires_at}
 //   POST /v1/rooms/join                 (S)          -> 200 {room: RoomSummary, members: RoomMember[]}
+//                                                       (DEMO_MODE: the demo room admits demo players only)
 //   POST /v1/rooms/:room_id/leave       (S)          -> 204
 //   GET  /v1/rooms/:room_id/presence    (B, member)  -> 200 {members: RoomMember[]}
 // plus the `room.presence` WS control frame to room:<room_id> on join, leave and every
@@ -21,6 +22,7 @@ import type { AppDeps, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSession, requireSignedRequest } from '../auth/middleware';
+import { demoRoomError, isDemoRoom, nonDemoPlayers } from '../demo/players';
 import {
   assertRoomLive,
   generateRoomCode,
@@ -120,6 +122,8 @@ export const roomsRoutes: RouteModule = {
       if (!room) throw new HttpError('NOT_FOUND', 'No room with that code.');
       const now = deps.now();
       assertRoomLive(room, now);
+      if ((await isDemoRoom(deps, room)) && (await nonDemoPlayers(deps, [me.user_id])).length)
+        throw demoRoomError('This room is for the demo players.');
       // Idem: room_members PK. A re-join clears left_at.
       await deps.db
         .insert(roomMembers)
