@@ -4,7 +4,10 @@
 //   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //   POST /v1/bets/:bet_id/voice/lines (S, A)  transcript relay -> judge.line / party.line (./relay)
 //   POST /v1/bets/:bet_id/cues        (S, A)  `cue` client tool -> stage.cue (./relay)
+//   POST /webhooks/elevenlabs         post-call webhook (API-CONTRACT §4.6), ElevenLabs-Signature
+//                                     HMAC; 404 while ELEVENLABS_WEBHOOK_SECRET is unset (./post-call)
 //   GET  /v1/demo/voice               (demo key) is the judge switched on? (./readiness)
+//   (POST /el/tools/get_market_odds is registered by markets/bet-routes.ts.)
 //
 // createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
 // sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
@@ -31,6 +34,7 @@ import { requireDemo } from '../demo/routes';
 import { createElevenLabsClient, UpstreamError, type ElevenLabsClient } from './elevenlabs';
 import { voiceReadiness } from './readiness';
 import { cuesHandler, LineDedupe, voiceLinesHandler } from './relay';
+import { EL_WEBHOOK_BODY_LIMIT, EL_WEBHOOK_PATH, postCallWebhookHandler } from './post-call';
 import {
   confirmTermsHandler,
   proposeTermsHandler,
@@ -50,6 +54,7 @@ export interface VoiceRoutesOptions {
 export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
   return {
     name: 'voice',
+    bodyLimits: [{ path: /^\/webhooks\/elevenlabs$/, maxBytes: EL_WEBHOOK_BODY_LIMIT }],
     register(app, deps) {
       const el: ElevenLabsClient | null =
         typeof o.elevenlabs === 'function'
@@ -171,6 +176,8 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         voiceLinesHandler(o.lines ?? new LineDedupe()),
       );
       app.post('/v1/bets/:bet_id/cues', requireSignedRequest, cuesHandler());
+
+      app.post(EL_WEBHOOK_PATH, postCallWebhookHandler());
 
       app.get('/v1/demo/voice', requireDemo, (c) =>
         c.json(voiceReadiness(c.get('deps').env, el !== null), 200),
