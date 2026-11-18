@@ -1558,7 +1558,8 @@ const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType
   });
 
 export const RealtimeEvent = z.discriminatedUnion('type', [
-  env('bet.invited',      'server', z.object({ challenger: UserRef, room_id: Uuid })),     // to B's user channel
+  env('bet.invited',      'server', z.object({ challenger: UserRef, room_id: Uuid,
+                                                 rivalry: StageRivalry.optional() })),    // to B's user channel; rivalry: API-CONTRACT §2.18 / §3.4 (the pair's record before the bet, A's view)
   env('bet.state',        'server', z.object({ state: BetState, prev: BetState.nullable(), onchain_status: OnchainStatus.nullable(),
                                                chain_ack: z.enum(['none', 'rpc', 'stream']), pending_tx: PendingTx.nullable(),
                                                reason: z.string().max(80).nullable() })),
@@ -1872,3 +1873,4 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
 - **2026-11-18 (Beat 5 appeal built).** §7: `AppealVote.outcome` is `voteOutcome` (no 0.8 floor; the 0.6 floor is `countVote`'s), and the built decision timing (all three votes in; the result is unchanged). Shared helpers `voteOutcome`, `appellantsOf`, `PANEL_SEATS`, `PANEL_VOTE_TIMEOUT_MS`; API types `AppealSubmitted`, `DemoAppealRequest`.
 - **2026-11-18 (stage voice, from API-CONTRACT §3.1 / §4.5).** §10.1: the control frames gain `stage.voice` (stage sessions only) and `stage.cue.audio_url?`; the `judge.cue` row says the stage voices `PAID` / the payout `VOIDED` too (not A's phone only). Docs only: the shared `WsServerControlFrame` already had both.
 - **2026-11-18, slow-mo replay (feat/slowmo-replay):** new **§4.1** `ReplayMoment` / `ReplayResponse` / `ReplayFoulInput` and the pure builders (`buildWinReplay`, `buildFoulReplay`, `slowmoTimeline`, `clipPlan`) in `packages/shared/src/replay.ts`. Additive; no existing schema changes.
+- **2026-11-18, live rivalry scan (feat/rivalry-scan; additive).** §10.1: `bet.invited` gains optional `rivalry: StageRivalry` (API-CONTRACT §2.18 / §3.4: the pair's record before the bet, A's view, for the projector line). The API-owned `HeadToHead` gains optional `total`, `last_result`, `streak`, `rival`, and `FaceMatchRequest` optional `mode: 'tap'|'live'` (API-CONTRACT §2.4, §2.18). Older payloads still parse.

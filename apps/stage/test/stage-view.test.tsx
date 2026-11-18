@@ -773,6 +773,108 @@ describe('bet card state', () => {
   });
 });
 
+describe('rivalry under VS (bet.invited rivalry)', () => {
+  const challenger = {
+    user_id: '0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d',
+    pubkey: PK.a,
+    display_name: 'Logan',
+    avatar_url: null,
+  };
+  const rivalry = {
+    challenge_method: 'face',
+    a_wins: 4,
+    b_wins: 7,
+    pushes: 0,
+    total: 11,
+    streak: { party: 'B', length: 3 },
+    rival: true,
+    includes_seed: true,
+  };
+  const invited = (payload: Record<string, unknown>) => {
+    seq = 0;
+    return ev('bet.invited', {
+      challenger,
+      room_id: '2b7d9c41-5e3a-4f60-8a1b-9c0d1e2f3a4b',
+      ...payload,
+    });
+  };
+  const html = (frames: unknown[]) =>
+    renderToString(<BetCard bet={run(frames).bets[BET]!} now={0} />).replace(/<!-- -->/g, '');
+
+  it('foldEvent keeps the rivalry; a later snapshot does not clear it', () => {
+    expect(emptyBet(BET).rivalry).toBeNull();
+    const first = invited({ rivalry });
+    const rest = (fullBet() as { seq: number }[]).map((f) => ({ ...f, seq: f.seq + 1 }));
+    let s = run([first, ...rest]);
+    expect(s.dropped).toBe(0);
+    expect(s.bets[BET]!.rivalry).toEqual(rivalry);
+    expect(s.bets[BET]!.names.A).toBe('Logan');
+    // A REST snapshot (no rivalry field) folds on top, older (a rebuild) or fresh.
+    const party = (user_id: string, pubkey: string, display_name: string) => ({
+      user_id,
+      pubkey: pubkey as never,
+      display_name,
+      avatar_url: null,
+    });
+    const snapshot = (last_seq: number): BetSnapshot => ({
+      bet_id: BET,
+      room_id: null,
+      state: 'RULED',
+      prev_state: null,
+      onchain_status: null,
+      chain_ack: 'stream',
+      pending_tx: null,
+      party_a: party('00000000-0000-4000-8000-00000000000a', PK.a, 'Logan'),
+      party_b: party('00000000-0000-4000-8000-00000000000b', PK.b, 'Jake'),
+      my_party: null,
+      envelope: null,
+      draft: null,
+      authorizations: { A: null, B: null },
+      deadlines: {
+        accept_deadline: null,
+        resolve_deadline: null,
+        appeal_deadline: null,
+        appeal_resolve_deadline: null,
+      },
+      attempt_no: null,
+      redo_count: 0,
+      latest_ruling: null,
+      appeal: null,
+      payout: null,
+      signatures: {},
+      end_reason: null,
+      last_seq,
+    });
+    s = applyFrame(s, { kind: 'snapshot', bet: snapshot(2), receivedAt: 2 });
+    expect(s.bets[BET]!.rivalry).toEqual(rivalry);
+    s = applyFrame(s, { kind: 'snapshot', bet: snapshot(99), receivedAt: 3 });
+    expect(s.bets[BET]!.rivalry).toEqual(rivalry);
+  });
+
+  it('renders "Logan 4–7 Jake" right under VS for a face challenge', () => {
+    const out = html([invited({ rivalry }), ev('terms.proposed', { envelope })]);
+    expect(out).toContain(
+      '<p class="rivalry rivals" aria-label="rivalry">Logan 4–7 Jake · Rivals · Jake won 3 straight</p>',
+    );
+    // Straight after the versus row, before the terms.
+    const vs = out.indexOf('class="versus"');
+    const line = out.indexOf('class="rivalry');
+    expect(vs).toBeGreaterThanOrEqual(0);
+    expect(line).toBeGreaterThan(vs);
+    expect(out.indexOf('Bottle flip')).toBeGreaterThan(line);
+  });
+
+  it('no line for a list challenge or an older server (no rivalry)', () => {
+    expect(
+      html([
+        invited({ rivalry: { ...rivalry, challenge_method: 'list' } }),
+        ev('terms.proposed', { envelope }),
+      ]),
+    ).not.toContain('class="rivalry');
+    expect(html([invited({}), ev('terms.proposed', { envelope })])).not.toContain('class="rivalry');
+  });
+});
+
 describe('odds widget', () => {
   it('stage.market frames feed the widget; a rollover resets the chart', () => {
     let s = applyFrame(initialTicker, frame({ op: 'stage.market', snapshot: snap() }, T));

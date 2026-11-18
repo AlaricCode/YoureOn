@@ -7,6 +7,7 @@ import {
   BetInviteAnsweredPayload,
   HearingTurnOpenPayload,
   JudgeCuePayload,
+  StageRivalry,
   TxSignRequestPayload,
 } from './api';
 import { AppealResult, AppealVote } from './appeal';
@@ -43,7 +44,16 @@ const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType
 
 export const RealtimeEvent = z.discriminatedUnion('type', [
   /** To B's user channel. */
-  env('bet.invited', 'server', z.object({ challenger: UserRef, room_id: Uuid })),
+  env(
+    'bet.invited',
+    'server',
+    z.object({
+      challenger: UserRef,
+      room_id: Uuid,
+      /** API-CONTRACT §3.4 NEW: the pair's record before this bet (A = challenger). */
+      rivalry: StageRivalry.optional(),
+    }),
+  ),
   /** API-CONTRACT §3.4 NEW: B tapped accept/decline on the invite (not an authorization). */
   env('bet.invite_answered', 'server', BetInviteAnsweredPayload),
   env(

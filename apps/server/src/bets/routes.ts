@@ -9,12 +9,14 @@
 // bet_id), the voice_sessions binding, bet.invited (seq 1) + bet.state DRAFTING (seq 2) in
 // bet_events, outbox `challenge_received` to B, an audit row. After commit: bet.invited to
 // B's user channel (and the bet channel / room stage), bet.state to the bet channel.
+// bet.invited carries `rivalry` (the pair's head-to-head before this bet, A's view; §3.4).
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { auditLog, bets, outbox, users, voiceSessions } from '@youre-on/db';
 import {
   BetInviteAnsweredPayload,
   CreateBetRequest,
+  rivalryOf,
   type ChallengeReceivedPush,
   type CreateBetResponse,
   type InviteAnswerResponse,
@@ -29,6 +31,7 @@ import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import { demoRoomError, isDemoRoom, nonDemoPlayers } from '../demo/players';
+import { headToHead } from '../face/service';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
 import { declinedCue, inviteAcceptedCue } from './cues';
@@ -141,6 +144,9 @@ export const betsRoutes: RouteModule = {
         }
       }
 
+      // The pair's record before this bet, A's view, for the stage's rivalry line (outside the
+      // transaction: a bet settling concurrently only shifts a display line).
+      const rivalry = rivalryOf(await headToHead(deps.db, aId, bId), body.challenge_method);
       const refs = await loadUserRefs(deps.db, [aId, bId]);
       const refA = refs.get(aId)!;
       const refB = refs.get(bId)!;
@@ -219,7 +225,7 @@ export const betsRoutes: RouteModule = {
         const invited = await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.invited',
-          payload: { challenger: refA, room_id: room.id },
+          payload: { challenger: refA, room_id: room.id, rivalry },
           now,
         });
         const drafting = await appendBetEvent(tx, {

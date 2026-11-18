@@ -3,11 +3,21 @@
 // §7.2, §10): consent, enrollment validation and storage, disable / delete, the room-scoped
 // top-2 match with synthetic vectors (thresholds, margin, cross-room isolation, self-exclusion,
 // opt-out), non-member 403, POST /v1/bets with a face ticket (bound, expiring, tamper-proof),
-// head-to-head, the retention sweep and the rate limits. Skips without DATABASE_URL.
+// head-to-head (with the rivalry fields: total, last_result, streak, rival), the retention sweep
+// and the rate limits (tap 30/min, live 60/min, one in flight across both). Skips without
+// DATABASE_URL.
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { and, asc, eq, like } from 'drizzle-orm';
-import { auditLog, bets, createDb, faceEnrollments, roomMembers, rooms } from '@youre-on/db';
+import {
+  auditLog,
+  betEvents,
+  bets,
+  createDb,
+  faceEnrollments,
+  roomMembers,
+  rooms,
+} from '@youre-on/db';
 import {
   embeddingToBytes,
   FACE_CONSENT_V1_SHA256,
@@ -18,10 +28,11 @@ import {
   FaceMatchResponse,
   MATCH_TICKET_TTL_MS,
 } from '@youre-on/shared/face';
+import { parseRealtimeEvent } from '@youre-on/shared/realtime';
 import { buildApp } from '../src/app';
 import { createDeps, startServer } from '../src/server';
 import { routeModules } from '../src/routes';
-import { purgeExpiredEnrollments } from '../src/face/service';
+import { headToHead, purgeExpiredEnrollments } from '../src/face/service';
 import {
   describeDb,
   signedHeaders,
@@ -567,7 +578,7 @@ describeDb('face addressing API over Postgres', () => {
       settled(A, B, 'split'),
     ]);
     const m = (await match(A, room.room_id, probeWith({ 40: 0.7 }))).json!.match;
-    expect(m.head_to_head).toEqual({
+    expect(m.head_to_head).toMatchObject({
       wins: 1,
       losses: 2,
       pushes: 1,
@@ -575,8 +586,235 @@ describeDb('face addressing API over Postgres', () => {
       net_display: '−$5',
       last_settled_at: new Date(clock - 3_600_000).toISOString(),
       includes_seed: true,
+      // Rivalry fields (all four rows share settled_at, so the latest is decided by id).
+      total: 4,
+      rival: true,
     });
+    expect(Object.keys(m.head_to_head).sort()).toEqual(
+      [
+        'wins',
+        'losses',
+        'pushes',
+        'net',
+        'net_display',
+        'last_settled_at',
+        'includes_seed',
+        'total',
+        'last_result',
+        'streak',
+        'rival',
+      ].sort(),
+    );
+    expect(FaceMatchResponse.safeParse(m === null ? { match: null } : { match: m }).success).toBe(
+      true,
+    );
   });
+
+  // ---- head-to-head rivalry fields (streak, last_result, total, rival) ----------------
+
+  describeH2h();
+  function describeH2h() {
+    type Res = 'W' | 'L' | 'P';
+    /** Settled bets between me and them, oldest first (one minute apart unless `at` is given). */
+    async function history(
+      me: SignedUp,
+      them: SignedUp,
+      results: readonly Res[],
+      opts: { at?: (i: number) => Date | null; ids?: readonly string[]; asB?: boolean } = {},
+    ) {
+      const rows = results.map((res, i) => {
+        // Alternate who challenged, unless asked to keep `me` as party B.
+        const meIsA = opts.asB ? false : i % 2 === 0;
+        const outcome =
+          res === 'P' ? ('split' as const) : (res === 'W') === meIsA ? 'party_a' : 'party_b';
+        return {
+          ...(opts.ids ? { id: opts.ids[i]! } : {}),
+          party_a_id: uid(meIsA ? me : them),
+          party_b_id: uid(meIsA ? them : me),
+          mint: MINT,
+          state: 'PAID' as const,
+          onchain_status: 'settled' as const,
+          terms_hash: 'c'.repeat(64),
+          evidence_source: 'camera' as const,
+          stake_a: 1_000_000n,
+          stake_b: 1_000_000n,
+          outcome: outcome as 'party_a' | 'party_b' | 'split',
+          payout_a: outcome === 'party_a' ? 2_000_000n : outcome === 'split' ? 1_000_000n : 0n,
+          payout_b: outcome === 'party_b' ? 2_000_000n : outcome === 'split' ? 1_000_000n : 0n,
+          settled_at: opts.at ? opts.at(i) : new Date(clock - (results.length - i) * 60_000),
+          is_seed: true,
+        };
+      });
+      if (rows.length) await ctx.deps.db.insert(bets).values(rows);
+    }
+    const pair = async () =>
+      Promise.all([signUp(ctx.base, 'Hal'), signUp(ctx.base, 'Ivy')]) as Promise<
+        [SignedUp, SignedUp]
+      >;
+
+    it("a face challenge's bet.invited carries the rivalry (A's view): B's channel, the log, a replay", async () => {
+      const [A, B] = await Promise.all([signUp(ctx.base, 'Logan'), signUp(ctx.base, 'Jake')]);
+      const room = await newRoom(A, B);
+      await enroll(B, basis(77));
+      // Logan won the first, Jake the last two: 1-2, Jake on a 2-bet streak.
+      await history(A, B, ['W', 'L', 'L']);
+      const m = (await match(A, room.room_id, probeWith({ 77: 0.8 }), { mode: 'live' })).json!
+        .match;
+      expect(m.user.user_id).toBe(uid(B));
+      expect(m.head_to_head).toMatchObject({
+        wins: 1,
+        losses: 2,
+        total: 3,
+        last_result: 'loss',
+        streak: { holder: 'them', length: 2 },
+        rival: true,
+      });
+      const rivalry = {
+        challenge_method: 'face',
+        a_wins: 1,
+        b_wins: 2,
+        pushes: 0,
+        total: 3,
+        streak: { party: 'B', length: 2 },
+        rival: true,
+        includes_seed: true,
+      };
+      const b = await connectWs(ctx.wsUrl);
+      try {
+        b.send({ op: 'hello', token: B.session.token, device_id: B.session.device_id });
+        await b.next((f) => f.op === 'welcome');
+        const ok = await call(A, 'POST', '/v1/bets', {
+          room_id: room.room_id,
+          opponent_user_id: uid(B),
+          challenge_method: 'face',
+          match_ticket: m.match_ticket,
+        });
+        expect(ok.status).toBe(201);
+        const betId = ok.json!.bet.bet_id as string;
+        const invited = await b.next((f) => f.type === 'bet.invited' && f.bet_id === betId);
+        expect(parseRealtimeEvent(invited).ok).toBe(true);
+        expect(invited.payload.rivalry).toEqual(rivalry);
+        // The log holds the same payload (a stage that subscribes late replays it).
+        const [row] = await ctx.deps.db
+          .select()
+          .from(betEvents)
+          .where(and(eq(betEvents.bet_id, betId), eq(betEvents.seq, 1)));
+        expect((row!.envelope as any).payload.rivalry).toEqual(rivalry);
+        b.send({ op: 'subscribe', bet_id: betId, after_seq: 0 });
+        const replayed = await b.next(
+          (f) => f.type === 'bet.invited' && f.bet_id === betId && f !== invited,
+        );
+        expect(replayed.payload.rivalry).toEqual(rivalry);
+      } finally {
+        b.close();
+      }
+    });
+
+    it('0-0: total 0, no last result, no streak, not rivals', async () => {
+      const [me, them] = await pair();
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toEqual({
+        wins: 0,
+        losses: 0,
+        pushes: 0,
+        net: '0',
+        net_display: '$0',
+        last_settled_at: null,
+        includes_seed: false,
+        total: 0,
+        last_result: null,
+        streak: null,
+        rival: false,
+      });
+    });
+
+    it('W, W, W (latest a win): my streak of 3, from both sides', async () => {
+      const [me, them] = await pair();
+      await history(me, them, ['L', 'W', 'W', 'W']);
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toMatchObject({
+        wins: 3,
+        losses: 1,
+        total: 4,
+        last_result: 'win',
+        streak: { holder: 'me', length: 3 },
+        rival: true,
+      });
+      expect(await headToHead(ctx.deps.db, uid(them), uid(me))).toMatchObject({
+        wins: 1,
+        losses: 3,
+        last_result: 'loss',
+        streak: { holder: 'them', length: 3 },
+      });
+    });
+
+    it('a streak spanning every bet counts them all; a push breaks a run', async () => {
+      const [me, them] = await pair();
+      await history(me, them, ['L', 'L'], { asB: true });
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toMatchObject({
+        total: 2,
+        last_result: 'loss',
+        streak: { holder: 'them', length: 2 },
+        rival: false,
+      });
+      const [x, y] = await pair();
+      await history(x, y, ['W', 'W', 'P', 'W']);
+      expect(await headToHead(ctx.deps.db, uid(x), uid(y))).toMatchObject({
+        total: 4,
+        streak: { holder: 'me', length: 1 },
+      });
+    });
+
+    it('latest is a push: streak null, last_result push', async () => {
+      const [me, them] = await pair();
+      await history(me, them, ['W', 'W', 'P']);
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toMatchObject({
+        wins: 2,
+        pushes: 1,
+        total: 3,
+        last_result: 'push',
+        streak: null,
+        rival: true,
+      });
+    });
+
+    it('rival needs 3 settled bets, pushes included', async () => {
+      const [me, them] = await pair();
+      await history(me, them, ['W', 'L']);
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toMatchObject({
+        total: 2,
+        rival: false,
+      });
+      await history(me, them, ['P'], { at: () => new Date(clock) });
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toMatchObject({
+        total: 3,
+        pushes: 1,
+        rival: true,
+        last_result: 'push',
+      });
+    });
+
+    it('equal settled_at is broken by id (DESC); a null settled_at sorts last', async () => {
+      const [me, them] = await pair();
+      const same = new Date(clock - 60_000);
+      // Ids chosen so the loss sorts after the win: the loss is "latest".
+      await history(me, them, ['W', 'L'], {
+        at: () => same,
+        ids: [`0${randomUUID().slice(1)}`, `f${randomUUID().slice(1)}`],
+      });
+      expect(await headToHead(ctx.deps.db, uid(me), uid(them))).toMatchObject({
+        last_result: 'loss',
+        streak: { holder: 'them', length: 1 },
+      });
+      const [x, y] = await pair();
+      await history(x, y, ['W', 'L'], {
+        at: (i) => (i === 0 ? new Date(clock - 60_000) : null),
+      });
+      // NULLS LAST: the dated win is the latest.
+      expect(await headToHead(ctx.deps.db, uid(x), uid(y))).toMatchObject({
+        last_result: 'win',
+        streak: { holder: 'me', length: 1 },
+      });
+    });
+  }
 
   // ---- retention ----------------------------------------------------------------------
 
@@ -714,6 +952,72 @@ describeDb('face rate limits (§1.7)', () => {
         }
       }
       expect(lines.join('\n')).not.toMatch(/ct_b64|embedding_ciphertext/);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describeDb('face-match live bucket (§1.7: live 60/min, tap 30/min, separate)', () => {
+  it("mode:'live' spends face-match/live (60/min), tap keeps its own 30/min, a 422 spends nothing", async () => {
+    let clock = Date.now();
+    const env = testEnv();
+    const dbHandle = createDb({ url: env.DATABASE_URL, max: 2 });
+    const { deps } = createDeps({ env, dbHandle, rateLimit: true, now: () => clock });
+    const server = await startServer(deps, {
+      port: 0,
+      hostname: '127.0.0.1',
+      modules: routeModules,
+      onClose: () => dbHandle.close(),
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const a = await signUp(base, 'Lux');
+      const b = await signUp(base, 'Mo');
+      const send = (u: SignedUp, method: string, path: string, body?: unknown) => {
+        const raw = body === undefined ? '' : JSON.stringify(body);
+        return fetch(base + path, {
+          method,
+          headers: signedHeaders(u, method, path, raw, { ts: clock }),
+          body: raw,
+        });
+      };
+      const r = await send(a, 'POST', '/v1/rooms', { kind: 'session' });
+      const room = (await r.json()) as { room_id: string; code: string };
+      await send(b, 'POST', '/v1/rooms/join', { code: room.code });
+      const path = `/v1/rooms/${room.room_id}/face-match`;
+      const probe = { probe: sealed(dense(71)), model: FACE_MODEL_W600K };
+      const live = { ...probe, mode: 'live' };
+      const bucketOf = async (res: Response) =>
+        ((await res.json()) as any).error.details.bucket as string;
+
+      // Invalid bodies (422 VALIDATION_FAILED) are refused before any token is taken.
+      for (let i = 0; i < 5; i++) {
+        expect((await send(b, 'POST', path, { ...live, model: { name: 'x' } })).status).toBe(422);
+        expect((await send(b, 'POST', path, { ...probe, mode: 'burst' })).status).toBe(422);
+      }
+
+      for (let i = 0; i < 60; i++) expect((await send(b, 'POST', path, live)).status).toBe(200);
+      const overLive = await send(b, 'POST', path, live);
+      expect(overLive.status).toBe(429);
+      expect(overLive.headers.get('Retry-After')).toBeTruthy();
+      expect(await bucketOf(overLive)).toBe('face-match/live');
+
+      // The tap path (and so Challenge's re-scan) is untouched by live panning.
+      for (let i = 0; i < 30; i++) {
+        const tap = i % 2 ? { ...probe, mode: 'tap' } : probe; // absent mode = tap
+        expect((await send(b, 'POST', path, tap)).status).toBe(200);
+      }
+      const overTap = await send(b, 'POST', path, probe);
+      expect(overTap.status).toBe(429);
+      expect(await bucketOf(overTap)).toBe('face-match');
+
+      // Another user has full buckets.
+      expect((await send(a, 'POST', path, live)).status).toBe(200);
+
+      clock += 60_000; // both refill
+      expect((await send(b, 'POST', path, live)).status).toBe(200);
+      expect((await send(b, 'POST', path, probe)).status).toBe(200);
     } finally {
       await server.close();
     }

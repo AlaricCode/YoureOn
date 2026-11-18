@@ -76,6 +76,10 @@ describe('preview sequence', () => {
     );
     const challenge = render('challenge');
     expect(challenge).toContain('Logan challenged Jake');
+    // The bottle flip is a face challenge between rivals: the record sits under VS.
+    expect(challenge.replace(/<!-- -->/g, '')).toContain(
+      'Logan 4–7 Jake · Rivals · Jake won 2 straight',
+    );
     expect(challenge).toContain('PREVIEW · sample data');
 
     const terms = render('terms');

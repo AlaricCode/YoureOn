@@ -25,7 +25,7 @@
 // carry the same values and simply confirm them. Those come from the QuickNode Stream or, when
 // it is off, the server's rpc_poll fallback: each says which in `observed_via` (SCHEMAS §10.2),
 // and only `quicknode_stream` ones may be presented as Streams.
-import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
+import { WsServerControlFrame, type BetSnapshot, type StageRivalry } from '@youre-on/shared/api';
 import { TERMINAL_BET_STATES, type PendingTx } from '@youre-on/shared/bet-state';
 import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
@@ -133,6 +133,8 @@ export interface BetView {
   user_ids: Record<PartyKey, string | null>;
   /** B's answer to the challenge (bet.invite_answered). */
   invite: 'accepted' | 'declined' | null;
+  /** The pair's record before this bet (bet.invited `rivalry`; null from older servers). */
+  rivalry: StageRivalry | null;
   envelope: TermsEnvelope | null;
   terms_code: string | null;
   auth: Record<PartyKey, { method: string; at: string } | null>;
@@ -315,6 +317,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     avatars: { A: null, B: null },
     user_ids: { A: null, B: null },
     invite: null,
+    rivalry: null,
     envelope: null,
     terms_code: null,
     auth: { A: null, B: null },
@@ -498,7 +501,11 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
   const v: BetView = { ...b, updated_at: at };
   switch (e.type) {
     case 'bet.invited':
-      return { ...v, names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name } };
+      return {
+        ...v,
+        names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name },
+        rivalry: e.payload.rivalry ?? v.rivalry,
+      };
     case 'bet.state':
       return foldState(v, e);
     case 'bet.invite_answered':
