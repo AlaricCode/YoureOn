@@ -98,6 +98,7 @@ describe('ticker reducer', () => {
     s = applyFrame(s, frame({ op: 'room.presence', room_id: BET, members: [] }));
     expect(s.presence).toMatchObject({ room_id: BET, members: 0, online: 0 });
     expect(s.cueCount).toBe(1);
+    expect(applyFrame(s, { kind: 'reset' })).toBe(initialTicker);
   });
 
   it('findSignature looks one level down', () => {
