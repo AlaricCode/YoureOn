@@ -240,12 +240,34 @@ describe('authorize(messageBytes, prompt)', () => {
 
   it('other auth failures map to AUTH_FAILED', async () => {
     const { platform, wallet } = await setup();
-    platform.authResults.push({ success: false, error: 'not_enrolled' });
+    platform.authResults.push({ success: false, error: 'authentication_failed' });
     const err = await expectWalletError(
       wallet.authorize(new Uint8Array([1]), PROMPT),
       'AUTH_FAILED',
     );
-    expect(err.authError).toBe('not_enrolled');
+    expect(err.authError).toBe('authentication_failed');
+  });
+
+  it('no Face ID enrolled: the passcode prompt signs, recorded as passcode_hold', async () => {
+    const { platform, wallet } = await setup();
+    platform.authResults.push({ success: false, error: 'not_enrolled' }, { success: true });
+    const r = await wallet.authorize(new Uint8Array([1]), PROMPT);
+    expect(r.method).toBe('passcode_hold');
+    expect(r.prompts).toBe(2);
+  });
+
+  it('no Face ID and no passcode (a bare simulator) is AUTH_FAILED at the passcode stage', async () => {
+    const { platform, wallet } = await setup();
+    platform.authResults.push(
+      { success: false, error: 'not_enrolled' },
+      { success: false, error: 'passcode_not_set' },
+    );
+    const err = await expectWalletError(
+      wallet.authorize(new Uint8Array([1]), PROMPT),
+      'AUTH_FAILED',
+    );
+    expect(err.authError).toBe('passcode_not_set');
+    expect(err.authStage).toBe('passcode');
   });
 
   it('runs the device policy before any prompt; a rejection shows no Face ID', async () => {
