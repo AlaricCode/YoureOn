@@ -8,9 +8,13 @@
 # simulators (apps/mobile/scripts/sim-build.sh, then `xcrun simctl install <udid> <app>`).
 #
 #   apps/mobile/e2e/maestro/two-phones.sh <udid A> <udid B> [output dir]
+#   NAME_A="Local A" NAME_B="Local B" apps/mobile/e2e/maestro/two-phones.sh ...
 #
 # Screenshots and Maestro logs land in the output dir (default: a new temp dir), one folder per
-# flow run.
+# flow run. To run it with no real server at all (and to exercise the voice-failure fallback):
+# start apps/server locally on your own Postgres with mock providers and no keys
+# (DATABASE_URL=... PORT=8787 MARKETS_FEED=off npx tsx apps/server/src/main.ts), then build with
+# EXPO_PUBLIC_API_URL=http://localhost:8787 EXPO_PUBLIC_VOICE=on scripts/sim-build.sh --skip-native.
 set -euo pipefail
 
 A="${1:?usage: two-phones.sh <udid A> <udid B> [output dir]}"
