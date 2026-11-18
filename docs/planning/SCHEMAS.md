@@ -305,7 +305,12 @@ export const TermsV1 = z
       if (t.evidence_source !== 'camera') bad(['evidence_source'], "skill => 'camera'");
       if (t.market !== null) bad(['market'], 'skill => null');
       if (t.performer === null) bad(['performer'], 'skill => required');
-      if (t.stakes.a !== t.stakes.b) bad(['stakes'], 'skill => equal stakes (v1)');
+      // Odds (widened refinement, no version bump, §11): each stake is still a Stake; the larger
+      // is at most MAX_ODDS_RATIO (10) × the smaller. Equal-stake terms hash exactly as before.
+      if (isMicroUsdcString(t.stakes.a) && isMicroUsdcString(t.stakes.b)) {
+        const [hi, lo] = [BigInt(t.stakes.a), BigInt(t.stakes.b)].sort((x, y) => (x > y ? -1 : 1));
+        if (hi > MAX_ODDS_RATIO * lo) bad(['stakes'], 'skill => odds at most 10:1');
+      }
     } else {
       if (t.evidence_source !== 'gemini') bad(['evidence_source'], "real_world => 'gemini'");
       if (t.performer !== null) bad(['performer'], 'real_world => null');
@@ -343,7 +348,7 @@ All fields below are **binding** (they are inside `Terms`, so they are in `terms
 | `edge_cases[]` | judge | `{question, answer, asked_by: 'judge'}`. The answer is written as a crisp rule, not the raw transcript. Holds at most 2 clarifications plus up to 2 defaults the judge states without asking. |
 | `evidence_source` | judge | `camera` ⇔ `skill`, `gemini` ⇔ `real_world`. |
 | `market` | server | Required iff `real_world`. Copied from a `GeminiMarketSnapshot`, never typed by the LLM. See §2.6 and §8. |
-| `stakes` | server | `{a, b, currency: 'USDC'}`, micro-USDC strings. Skill: `a = b = amount`. Real world: fair split of `pot = 2 × amount` (§8). Each side is checked against `MAX_STAKE`. |
+| `stakes` | server | `{a, b, currency: 'USDC'}`, micro-USDC strings. Skill: `a = amount`, `b = amount_b ?? amount` (odds: unequal stakes agreed on both phones, at most 10:1, §3.5). Real world: fair split of `pot = 2 × amount` (§8). Each side is checked against `MAX_STAKE`. |
 | `deadline` | server | Whole-second UTC. Skill: attempt done by `created_at + 10 min` (or + the judge's `deadline_minutes`, ≤ 45), rounded to the nearest whole minute. Real world: `market.expiry + 10 min` (confirmed: spike 05: `resolvedAt` is 5.5–8.8 s after expiry over 173 contracts, and the REST side is visible by ~T+9 s; spike 05 also recommends expiry + 10 min). It is an offchain term, not an onchain deadline. The onchain `resolve_deadline` is `locked_at + Config.resolve_deadline_secs` (3600 s demo, ESCROW §5.2), so the server enforces `deadline + RESOLVE_GRACE_SECS ≤ created_at + resolve_deadline_secs`. That always leaves ≥ 10 min for judging, REDOs and the hearing (§9.3). |
 | `created_at` | server | When the terms were finalized (the instant `terms_hash` is computed). |
 
@@ -514,7 +519,8 @@ export const TermsProposal = z.strictObject({        // judge-owned fields; prop
   failure_criteria: z.array(NText(160)).max(5),
   edge_cases: z.array(EdgeCase).max(4),
   evidence_source: TermsV1.shape.evidence_source,
-  amount: MicroUsdc,                                 // spoken stake per side (parseUsd); real_world: pot = 2 × amount
+  amount: MicroUsdc,                                 // A's stake (parseUsd); with amount_b null the stake per side; real_world: pot = 2 × amount
+  amount_b: MicroUsdc.nullable().default(null),      // odds: B's stake when not even (input optional); real_world: always null
   market_query: z.strictObject({                     // real_world only; the server resolves it to a concrete contract
     asset: z.enum(['BTC']),
     horizon: z.literal('5m'),
@@ -549,7 +555,7 @@ export const GuardrailRefusal = z.strictObject({
 });
 
 export const DraftIssue = z.strictObject({
-  code: z.enum(['STAKE_ABOVE_MAX', 'STAKE_BELOW_MIN', 'NO_MARKET', 'MARKET_UNFAIR', 'DEADLINE_TOO_FAR', 'AMBIGUOUS']),
+  code: z.enum(['STAKE_ABOVE_MAX', 'STAKE_BELOW_MIN', 'NO_MARKET', 'MARKET_UNFAIR', 'DEADLINE_TOO_FAR', 'AMBIGUOUS', 'ODDS_TOO_LONG']),
   message: z.string().max(160),
 });
 export const TermsDraft = z.strictObject({
@@ -619,7 +625,49 @@ Notes:
 - **Refusals** are produced by the server's guardrail check on every `propose_terms` call (and every `TermsStepOutput` in the fallback). A synchronous keyword prefilter returns the `GuardrailRefusal` inline as the tool result, so the agent speaks the `quip`. The LLM guardrail runs asynchronously and fails closed before the lock; a late refusal arrives as `terms.refused` plus `judge.cue REFUSED` (API-CONTRACT §4.3, §7.1). The bet goes to `CANCELLED` with `reason = 'refused:<category>'`. `minors` covers challenges that involve minors; the 18+ check itself happens at signup, not here. `other` is for anything else unsafe, plus harassment and non-consensual dares.
 - **Over-cap amounts are not refusals.** "$50" yields `DraftIssue STAKE_ABOVE_MAX` and the judge counter-proposes the max ("Max is $20. $20 it is?").
 - `TermsStepOutput` and `ClarificationAsk` are LLM-facing in the Speech Engine fallback; generate their JSON Schema with `z.toJSONSchema()` there. The ElevenLabs `propose_terms` schema is hand-written (API-CONTRACT §4.3).
+- **Odds** (§3.5): `amount` is A's stake and `amount_b` B's; `stakeIssue` checks both sides and the 10:1 bound (`ODDS_TOO_LONG`). A `terms.draft` carries `amount_b` only when it is not null (older clients parse the draft strictly).
 - On receipt the server first runs `normText` over every string. It then parses with a stripping variant (`z.object(TermsProposal.shape)`), so a stray key from the agent can't fail a live demo. Finally it composes `Terms` and parses that strictly. A validation error goes back to the agent as the tool result, so the judge can retry.
+
+### 3.5 Odds: offers, the judge's suggestion, the performer's record
+
+Odds are unequal stakes on a skill bet. There is **no new hashed field**: the odds are `Terms.stakes.a / .b` (the larger at most 10 × the smaller, §2.1), and every label ("3 to 1", "$15 vs $5") is derived from them (`odds-math.ts ratioLabel`). The two parties agree on them with **offers**, consent objects in the bet's event log (`odds.offered`, `odds.answered`, `odds.agreed`, §10.1), folded the same way by the server, the phones and the stage (`odds.ts foldOdds`). Agreement is of a stakes pair, so a re-proposal with the same stakes needs no new consent; both still hold to confirm the final card, whose hash binds the stakes. Rules (server `odds/service.ts`): an unequal card that is not yet agreed opens an offer; one offer is open at a time (a new one counters or supersedes it); an A/B offer is accepted by the other party, a judge offer by both; when both accept and the card has other stakes, the card is recomposed with them (a new version and hash); `confirm` is refused (`ODDS_PENDING`) while unequal stakes are not agreed or an offer is open; after the freeze the odds routes answer 409.
+
+```ts
+// packages/shared/src/odds.ts (not hashed)
+export const OddsOffer = z.object({
+  offer_id: Uuid, n: z.number().int().min(1),          // n = 1 + earlier odds.offered (a stale tap is refused)
+  parent_id: Uuid.nullable(),                          // the offer this counters
+  from: z.enum(['A', 'B', 'judge']),
+  stakes: z.object({ a: Stake, b: Stake }),
+  ratio_label: z.string().max(16), favored: Party.nullable(),   // who puts in more
+  terms_hash: Hex32.nullable(),                        // the card then; null = a judge suggestion while DRAFTING
+  suggestion: OddsSuggestion.nullable(), created_at: IsoUtc,
+});
+export const OddsSuggestion = z.object({
+  ratio: OddsRatio,                                    // '1:1' | '3:2' | '2:1' | '3:1' | '5:1' | '10:1'
+  favored: Party.nullable(), stakes: OddsStakes,       // stakesFor(ratio): never the model's
+  chance_pct: z.number().int().min(1).max(99),         // P(claim succeeds) after the attempt rule
+  fair_ratio: z.number(), allowed: z.array(OddsRatio), // the band a model may pick from
+  base_rate_pct: z.number().int(), sample_meaningful: z.boolean(),
+  stats: PerformerStats, reason: NText(160),
+  source: z.enum(['model', 'template', 'default']), model: z.string().nullable(), cache_key: Hex32,
+});
+export const PerformerStats = z.object({
+  performer: z.object({ party: Party, display_name: z.string() }),
+  category: ChallengeCategory, category_label: z.string(),
+  overall: { wins, losses, pushes },                   // every settled bet, any role, incl. seed rows
+  in_category: { made, tries },                        // as the performer, this kind of bet
+  as_performer: { made, tries },                       // as the performer, any kind
+  recent: z.array(z.enum(['W', 'L'])).max(5),          // performer results, newest first
+  streak: z.object({ kind, n }).nullable(),
+  h2h: HeadToHead,                                     // performer vs this opponent (API-CONTRACT §2.18)
+  includes_seed: z.boolean(),                          // any labelled demo-history row: show "Demo history"
+});
+```
+
+- **Challenge category** (`challenge-category.ts`): `bottle_flip | throw | other`, a deterministic keyword classifier over the claim and success criteria (NFKD, ASCII-folded, as the guardrail prefilter), always derived and never stored or hashed (`CATEGORY_RULES_VERSION = 1`). Old rows classify on the fly; legacy seed rows without terms classify by title. Base rates (one try): bottle flip 25 %, throw 40 %, other 50 %.
+- **The math** (`odds-math.ts`, all in code): `p1 = (made + 4·base) / (tries + 4)` (so 1 for 1 is 40 % on flips, not 100 %), the attempt rule (`first_success` 1−(1−p)ⁿ, `all_of` pⁿ, `best_of` the binomial tail), clamped to [1/11, 10/11]; fair ratio `r = max(p,1−p)/min(p,1−p)`; the band = the two ladder rungs that bracket `r` (one when within 2 %). `stakesFor`: the underdog stakes the base, the favourite base × num/den rounded half-up to the cent; a favourite over max_stake stakes max_stake and the underdog max × den/num floored to the cent.
+- **The words**: a model (live LLM only, ≤ 3 s, effort low) writes one sentence and picks a rung **from the band**; a ratio outside it becomes the nearest rung, and a reason quoting any number not in the facts (`guardReason`) becomes the server template. Spend off, a timeout, an error or a refusal: the nearest rung and the template (`source 'template'`); no history: the category default (`'default'`, "That's my default.").
 
 ---
 
@@ -675,6 +723,82 @@ export const GeminiSettlementRecord = z.strictObject({
 
 - Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: spike 02: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). Since D10 the build uses expo-video-thumbnails and the shared sampler `packages/shared/src/judge/frames.ts` (12 frames: 4 spread over the clip, 8 in its last ~1.2 s; plus the landing crop); the server labels the frames inside the landing window and the crop in the prompt. `landing_crop` is optional, so 8-frame records from earlier builds still parse, and an absent flag is not part of the JCS bytes. `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (spike 02 estimate).
 - The settlement record is built from the **event details endpoint** (`GET /v1/prediction-markets/events/{eventTicker}`). Confirmed by spike 05: `resolutionSide` shows there ~7.5–8.7 s after expiry, while `recently-settled` lags 26–36 s. `response_sha256` pins the exact body. What an `invalid` contract looks like is still unseen (0 of 173).
+
+### 4.1 ReplayMoment (the slow-mo replay)
+
+`packages/shared/src/replay.ts`, served by `GET /v1/bets/:bet_id/replay` (API-CONTRACT §2.14). What the stage and the phones play after a bet: the **winning moment** from the judge's own evidence frames (today), the real clip at quarter speed (once a clip URL exists), or a **foul** frozen at the moment a detector confirmed (once one is wired). One builder for the server, the stage and the phones.
+
+```ts
+export const REPLAY_SCHEMA_VERSION = 1 as const;
+export const SLOWMO_RATE = 0.25;            // playback speed of real-time material
+export const SLOWMO_DWELL_MIN_MS = 450;     // a frame's on-screen time: clamp(gap_to_next / SLOWMO_RATE, 450, 900)
+export const SLOWMO_DWELL_MAX_MS = 900;
+export const SLOWMO_XFADE_MS = 220;         // the landing crop fades in over SLOWMO_CROP_MS = 700 (the closing zoom)
+export const SLOWMO_INTRO_MS = 500;
+export const SLOWMO_HOLD_MS = 2600;
+export const SLOWMO_ZOOM = { from: 1, to: 1.08, holdTo: 1.14 } as const;   // reduced motion: no zoom, no cross-fades
+
+export const ReplayKind = z.enum(['win', 'foul']);
+export const ReplayHoldSource = z.enum(['judge_cited', 'last_frame', 'detector']);
+export const ReplayFrame = z.strictObject({
+  idx: FrameIndex.nullable(),               // CameraEvidence.frames index (= attempt_frames.idx); null for a detector still
+  t_ms: z.number().int().nonnegative(),     // ms from clip start (the crop carries the last frame's t_ms)
+  landing_crop: z.boolean(),
+  cited: z.boolean(),                       // in the deciding ruling's cited_frames
+  path: z.string().startsWith('/v1/bets/').max(200),   // server-relative GET with the caller's bearer
+  url: z.url().nullable(),                  // signed, short-lived GET once object storage exists; null today; preferred when set
+});
+export const ReplayClip = z.strictObject({
+  url: z.url(), expires_at: IsoUtc, mime: z.enum(['video/mp4', 'video/quicktime']),
+  source_rate: z.number().positive().max(1),   // 1 = real time (played at SLOWMO_RATE); < 1 = already slowed (played at 1x)
+  from_ms, moment_ms, to_ms,                // in THIS file's timeline; from ≤ moment ≤ to
+  overlays_burned: z.boolean(),             // boxes / line / FOUL text drawn into the video: the player adds no overlay text
+});
+export const ReplayFoul = z.strictObject({
+  label: NText(40),                         // display data, e.g. 'Toe 17 cm over'
+  measure_cm: z.number().nonnegative().nullable(),
+  detector: z.string().min(1).max(80),      // e.g. 'sam3/fal@1'
+});
+export const ReplayMoment = z.strictObject({
+  schema_version: z.literal(1),
+  bet_id: BetId,
+  attempt_no: z.number().int().min(1),
+  kind: ReplayKind,
+  winner: Party,                            // the FINAL winner (appeal final_outcome when there was one)
+  moment_ms: z.number().int().nonnegative(),   // ms from the original clip's start (win: the held frame's t_ms)
+  hold_source: ReplayHoldSource,
+  frames: z.array(ReplayFrame).max(24),     // play order, t_ms non-decreasing; the LAST frame is held
+  clip: ReplayClip.nullable(),
+  foul: ReplayFoul.nullable(),              // set iff kind = 'foul'
+  ruling_hash: Hex32,
+  model: z.string().min(1).max(80),         // isCachedRulingModel(model) keeps the stage's "replay ruling" label
+  reason: NText(280).nullable(),            // the judge's reason (data); null for a foul and for an appeal-flipped win
+});
+// refinements: foul set iff kind = 'foul'; a foul holds on 'detector', a win never does;
+// frames or a clip; t_ms never decreases.
+
+export const ReplayWhy = z.enum(['ready', 'not_ruled', 'no_winner', 'no_frames', 'purged']);
+export const ReplayResponse = z.strictObject({ replay: ReplayMoment.nullable(), why: ReplayWhy, final: z.boolean() });
+// why = 'ready' iff replay !== null
+
+/** What a foul detector hands to buildFoulReplay: ONLY a confirmed foul (confidence ≥ 0.7). */
+export const ReplayFoulInput = z.strictObject({
+  moment_ms: z.number().int().nonnegative(),   // original clip timeline (release ± foul)
+  foul: ReplayFoul,
+  frames: z.array(ReplayFrame.omit({ cited: true })).max(8),   // its stills, or attempt frames; [] = the attempt's frames nearest moment_ms
+  clip: ReplayClip.nullable(),              // its render: source_rate 0.25, overlays_burned true
+});
+```
+
+| Function | Rule |
+|---|---|
+| `buildWinReplay({bet_id, evidence, ruling, ruling_hash, final_outcome, attempt_frame_hashes})` | `null` for REDO, a VOID that stayed VOID (a VOID an appeal turned into a win plays, held on the last frame), a non-decisive final outcome, a Gemini settlement. Frames: the non-crop frames in the landing window (`isLandingFrame`), the one lead-in frame before it, the crop, and any cited lead-in frame (time order). Held: the highest cited index, cut there, with at least 3 frames before it when the attempt has them (`judge_cited`). An appeal-flipped outcome, or nothing cited: the crop (else the last frame), `last_frame`. Citations count only when the ruling's `frame_hashes` equal the attempt's. |
+| `buildFoulReplay(base, foul, evidence?)` | `kind: 'foul'`, `hold_source: 'detector'`, `moment_ms` from the detector, no `reason`. An invalid input is `null`. |
+| `slowmoTimeline(m, {reduceMotion})` | `{steps: {key, at_ms, dwell_ms, xfade_ms, scale_from, scale_to}[], hold_at_ms, total_ms}`; a typical 12-frame upload: 0.5 + 0.9 + 7 × 0.6 + 0.45 + 2.6 ≈ 8.65 s. |
+| `clipPlan(clip)` | `{playbackRate: source_rate === 1 ? 0.25 : 1, seekMs: from_ms, freezeAtMs: moment_ms, endMs: to_ms}`. |
+
+- **Precedence:** a confirmed foul beats a win. **Never a fake foul:** the ruling has no structured foul and its free-text `reason` is never parsed; until a detector supplies a confirmed foul, `kind` is always `'win'`.
+- These are live evidence frames, so the stage does **not** badge them "REPLAY" (ARCHITECTURE §7.1); its badges read `SLOW-MO · WINNING MOMENT` / `SLOW-MO · FOUL`.
 
 ---
 
@@ -1482,7 +1606,8 @@ const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType
   });
 
 export const RealtimeEvent = z.discriminatedUnion('type', [
-  env('bet.invited',      'server', z.object({ challenger: UserRef, room_id: Uuid })),     // to B's user channel
+  env('bet.invited',      'server', z.object({ challenger: UserRef, room_id: Uuid,
+                                                 rivalry: StageRivalry.optional() })),    // to B's user channel; rivalry: API-CONTRACT §2.18 / §3.4 (the pair's record before the bet, A's view)
   env('bet.state',        'server', z.object({ state: BetState, prev: BetState.nullable(), onchain_status: OnchainStatus.nullable(),
                                                chain_ack: z.enum(['none', 'rpc', 'stream']), pending_tx: PendingTx.nullable(),
                                                reason: z.string().max(80).nullable() })),
@@ -1494,6 +1619,12 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
   env('terms.authorized', 'server', z.object({ party: Party, method: AuthorizationMethod, authorized_at: IsoUtc,
                                                count: z.number().int().min(1).max(2) })),    // signatures now held; 2 = lock being sent
   env('terms.declined',   'server', z.object({ party: Party })),
+  env('odds.offered',     'server', z.object({ offer: OddsOffer })),                      // §3.5: a party or the judge offers stakes a/b
+  env('odds.answered',    'server', z.object({ offer_id: Uuid, party: Party,
+                                               answer: z.enum(['accepted', 'countered', 'withdrawn', 'superseded']),
+                                               by_offer_id: Uuid.nullable() })),
+  env('odds.agreed',      'server', z.object({ offer_id: Uuid, stakes: OddsStakes, ratio_label: z.string().max(16),
+                                               terms_hash: Hex32 })),                       // both accepted: the card carries these stakes
   env('judge.line',       'server', z.object({ utterance_id: Uuid, text: z.string().max(400), final: z.boolean() })),
   env('party.line',       'server', z.object({ party: Party, utterance_id: Uuid, text: z.string().max(600), final: z.boolean() })),
   env('attempt.started',  'server', z.object({ attempt_no: z.number().int().min(1), performer: Party, max_ms: z.number().int().positive() })),
@@ -1571,6 +1702,9 @@ export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
 | `hearing.turn_open` | `{hearing_id, turn_index, party, closes_at}` | Starts each hearing turn's clock |
 | `bet.invite_answered` | `{party: 'B', answer}` | B tapped accept/decline on the invite (not an authorization) |
 | `attempt.started` (+ fields) | adds `recorder_device_id`, `go_at` | The judge cam's countdown |
+| `bet.gg` | `BetGgPayload {by, winner, to_a, to_b, record: {before: PairRecord, after: PairRecord} \| null, conceded_at}` (`packages/shared/src/gg.ts`; `by ≠ winner`) | The GG moment: the loser's concede went out (same commit as `bet.state CONCEDED`). `PairRecord {a_wins, b_wins, pushes, total, streak: {party, length} \| null, rival, includes_seed}` in this bet's parties; `= StageRivalry.omit({challenge_method})` after feat/rivalry-scan |
+| `review.requested` | `{review_id, for_party, source: 'voice' \| 'demo', requested_at, confirm_by}` | Someone asked the judge to check the ruling again; the loser's phone opens the appeal confirmation (API §2.12a). No speech text, no speaker. `confirm_by = appeal_deadline − 1 s`, never extended (ESCROW I10) |
+| `review.closed` | `{review_id, reason: 'declined' \| 'lapsed'}` | The loser kept the ruling, or `confirm_by` passed. A confirmed review is the appeal (`tx.submitted {appeal}`); a GG is `bet.gg` |
 
 Not bet-scoped, so not `RealtimeEvent`s: the unsequenced WS control frames `room.presence`, `stage.market` (≤ 2/s chart feed), `stage.cue {bet_id, kind, audio_url?}` (`audio_url`: the cue's ElevenLabs Sound Effects clip; absent, the stage synthesizes it) and `stage.voice {bet_id, seq, type, voice, text, clip_id, audio_url}` (stage sessions only: the TTS clip of the stage line for bet event `(bet_id, seq)`, `packages/shared/src/stage-voice.ts`) (API §3.1, §4.5; `WsServerControlFrame` in `packages/shared/src/api.ts`). Other API-owned types (`PartySignature`, `AuthorizationResult`, `BetSnapshot`, `SignedMicroUsdc`, `SealedEmbedding`, `HeadToHead`) live in API-CONTRACT §2.18 and import from this doc.
 
@@ -1660,6 +1794,7 @@ The Streams filter recognizes our events as `emit_cpi!` **inner instructions**, 
 2. **A hashed record version is frozen once it ships.** Its fields, limits, normalization and canonicalization never change. Any change (add, remove or rename a field; change a limit; change normalization) means `V2` plus `z.discriminatedUnion('schema_version', [V1, V2])`. Readers keep every version they have ever accepted, because old hashes onchain must stay verifiable. Writers emit only the latest.
 3. **Non-hashed wire payloads** (`TermsDraft`, `TermsPresentation`, realtime payloads) can gain optional or nullable fields without a bump; readers use `z.object`, which strips unknown keys. Removing or renaming a field, or changing its meaning, bumps envelope `v`. The server serves `v` and `v-1` for the rest of the hackathon, since phones run EAS builds that lag the server.
 4. **Enums:** adding a realtime `type` is non-breaking, because clients ignore unknown types. Adding a value to `BetState`, `RulingOutcome`, `OnchainOutcome` or any hashed enum is breaking: bump. (`VOID` and the BetState renames were made before anything shipped, so they are still v1.)
+   *Widened refinements:* the skill stakes rule went from "equal" to "at most 10:1" (odds, 2026-11-18) **without a version bump**: no field, limit or normalization changed, every terms_hash that ever validated still validates and hashes the same, and only previously-rejected terms became valid. Older shared builds reject unequal skill terms, so phones and the stage must run a build with the widened rule.
 5. **Onchain:** the Bet account carries `version: u8 = 1`. A program redeploy with a new layout gets a new program id. `Terms.escrow.program_id` makes old terms unmistakably bound to the old program.
 6. **Test vectors** live in `packages/shared/test/vectors/`, as `{name, input, canonical, hash}` JSON. The first is `terms-v1-001`, the §2.5 example with hash `05860f0a…f998f`. Add:
    - the §5.2 ruling (`997ce278…5daa`) and the §6 hearing ruling (`a7721bbc…d368`), both recomputed 2026-11-08 with `frame_hashes`;
@@ -1795,3 +1930,7 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): **§4** `EvidenceFrame.landing_crop` (optional `true`; at most one, last), the `frames` comment (12 + the crop), and `recorded_by` for the two-phone fallback (`recorder:'self'`, API-CONTRACT §2.9). No hash vector changes: the field is absent on every existing record.
 - **2026-11-18 (Beat 5 appeal built).** §7: `AppealVote.outcome` is `voteOutcome` (no 0.8 floor; the 0.6 floor is `countVote`'s), and the built decision timing (all three votes in; the result is unchanged). Shared helpers `voteOutcome`, `appellantsOf`, `PANEL_SEATS`, `PANEL_VOTE_TIMEOUT_MS`; API types `AppealSubmitted`, `DemoAppealRequest`.
 - **2026-11-18 (stage voice, from API-CONTRACT §3.1 / §4.5).** §10.1: the control frames gain `stage.voice` (stage sessions only) and `stage.cue.audio_url?`; the `judge.cue` row says the stage voices `PAID` / the payout `VOIDED` too (not A's phone only). Docs only: the shared `WsServerControlFrame` already had both.
+- **2026-11-18, slow-mo replay (feat/slowmo-replay):** new **§4.1** `ReplayMoment` / `ReplayResponse` / `ReplayFoulInput` and the pure builders (`buildWinReplay`, `buildFoulReplay`, `slowmoTimeline`, `clipPlan`) in `packages/shared/src/replay.ts`. Additive; no existing schema changes.
+- **2026-11-18, live rivalry scan (feat/rivalry-scan; additive).** §10.1: `bet.invited` gains optional `rivalry: StageRivalry` (API-CONTRACT §2.18 / §3.4: the pair's record before the bet, A's view, for the projector line). The API-owned `HeadToHead` gains optional `total`, `last_result`, `streak`, `rival`, and `FaceMatchRequest` optional `mode: 'tap'|'live'` (API-CONTRACT §2.4, §2.18). Older payloads still parse.
+- **2026-11-18, the GG moment + spoken review (feat/gg-moment; API-CONTRACT §2.12a, §3.4, §4.3, §4.5).** §10.1: three API-owned events, `bet.gg`, `review.requested`, `review.closed`, from the new `packages/shared/src/gg.ts` (`PairRecord`, `GgRecord`, `BetGgPayload`, `ReviewRequestedPayload`, `ReviewClosedPayload`, `ReviewFix`, `PayoutVia`, `recordAfter`, `recordLine`, `reviewOpen`, `REVIEW_MIN_LEAD_MS` 1.5 s). `JudgeCueName` gains `REVIEW_CLOSED`. Additive: older clients drop the unknown types (§11 rule 4). O6 note: the appeal window stays 10 s (`config.appeal_window_secs`); with it the spoken review only works when asked at once; `update_config appeal_window_secs 10 → 20` (decision D1, runbook) would give it room.
+- **2026-11-18 (odds).** §2.1: the skill rule "equal stakes (v1)" becomes "odds at most 10:1" (`MAX_ODDS_RATIO`), a widened refinement with no version bump (§11 rule 2 note); golden hashes unchanged. §2.2 `stakes`. §3: `TermsProposal.amount_b` (B's stake, null = even) and `DraftIssue` `ODDS_TOO_LONG`. New §3.5 (OddsOffer, OddsSuggestion, PerformerStats, the derived challenge category, the math). §10.1: `odds.offered`, `odds.answered`, `odds.agreed`.

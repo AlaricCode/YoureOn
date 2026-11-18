@@ -2,7 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { StageErrorBoundary } from './boundary';
+import './fonts.css';
 import './stage.css';
+import './gg.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

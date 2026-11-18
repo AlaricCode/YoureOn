@@ -83,6 +83,15 @@ name: sim-preview
 - runFlow:
     file: preview-screen.yaml
     env:
+      KEY: historyLoading
+# First load: skeleton rows (one element reading "Loading"), not a spinner.
+- assertVisible:
+    id: history-loading
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
       KEY: profile
 - tapOn:
     id: preview-menu
@@ -109,6 +118,18 @@ name: sim-preview
 - runFlow:
     file: preview-screen.yaml
     env:
+      KEY: oddsOffer
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: oddsJudge
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
       KEY: terms
 - assertVisible:
     id: terms-hold
@@ -118,6 +139,18 @@ name: sim-preview
     file: preview-screen.yaml
     env:
       KEY: termsTheyFirst
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: termsLocked
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: termsOdds
 - tapOn:
     id: preview-menu
 - runFlow:
@@ -268,6 +301,41 @@ name: sim-preview
     file: preview-screen.yaml
     env:
       KEY: market
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: ggWinner
+# The GG moment: "Logan" won, Jake said GG; the record ticks 4-7 -> 5-7.
+- extendedWaitUntil:
+    visible: Jake said GG
+    timeout: 4000
+- assertVisible:
+    id: gg-record
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: ggLoser
+- assertVisible: Good game
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: reviewSheet
+# Someone said "check that again": the loser's review sheet opens over the ruling.
+- extendedWaitUntil:
+    visible:
+      id: review-sheet
+    timeout: 4000
+- assertVisible:
+    id: review-check
+- assertVisible:
+    id: review-keep
+- takeScreenshot: preview-review-sheet
 - tapOn:
     id: preview-menu
 - runFlow:

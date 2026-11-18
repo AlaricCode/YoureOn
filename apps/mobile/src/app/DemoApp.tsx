@@ -37,6 +37,7 @@ import type {
   VoiceDynamicVariables,
 } from '@youre-on/shared/api';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { agreedFor } from '@youre-on/shared/odds';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 import { formatPrice } from '@youre-on/shared/settlement';
 
@@ -50,6 +51,8 @@ import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createServerFaceApi, type FaceStatus } from '../enroll/api';
 import { createLazyEmbedder } from '../enroll/embedder';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
+import { GgPayoutScreen, RulingReview } from '../gg/GgScreens';
+import { reviewable } from '../gg/model';
 import type { Balance } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
 import {
@@ -83,7 +86,7 @@ import { Label, PrimaryButton } from '../ui/kit';
 import { setConnectionStatus } from '../ui/connection';
 import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
-import { palette } from '../ui/tokens';
+import { half, palette, radius, space } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
 import { WalletError } from '../wallet/wallet';
 import {
@@ -119,7 +122,7 @@ import {
   waitingForAcceptMarket,
   type MarketStakeUsd,
 } from './marketTerms';
-import { HISTORY_LIMIT, historyFrom } from './history';
+import { balanceSeries, HISTORY_LIMIT, historyFrom, netCents } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { demoLinkLives, parseDeepLink } from './deepLink';
 import {
@@ -148,9 +151,12 @@ import {
   TYPED_STAKES_USD,
   typedCardOf,
   typedReducer,
+  typedStakes,
   waitingForAccept,
   type TypedStakeUsd,
 } from './typedTerms';
+import { oddsApply, oddsSettled } from './odds';
+import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /**
@@ -234,6 +240,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** The judge session's phase and whether the judge is talking (NegotiateScreen's mic/ring). */
   const [voicePhase, setVoicePhase] = useState<SessionPhase>('idle');
   const [judgeSpeaking, setJudgeSpeaking] = useState(false);
+  /** ../gg: the bet whose ruling the judge has finished saying (the RULED mic gate). */
+  const [rulingSpokenBet, setRulingSpokenBet] = useState<string | null>(null);
   const [walletKey, setWalletKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [busy, setBusy] = useState(false);
@@ -594,6 +602,27 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       shown: typedCardOf(bet.envelope),
     });
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
+  // ---- odds (both phones): offers, counters, the judge's suggestion (../odds/useOdds) --------
+  const oddsTheirName =
+    (me === 'A' ? bet?.party_b?.display_name : bet?.party_a?.display_name) ?? '';
+  const oddsPanel = useOddsPanel({ api: rt.api, bet, me, theirName: oddsTheirName });
+  const typedOdds = useTypedOdds({
+    api: rt.api,
+    bet,
+    typed,
+    dispatch: typedDispatch,
+    theirName: opponentName,
+    enabled: negotiating && typed.mode === 'typed',
+  });
+  const oddsOk = bet?.envelope ? oddsSettled(bet.odds, bet.envelope.terms) : true;
+  // Agreed odds that differed from A's typed card recompose it (new hash): the form adopts it.
+  useEffect(() => {
+    if (!negotiating || !bet?.envelope) return;
+    const terms = bet.envelope.terms;
+    const agreed = oddsApply(terms) && !bet.odds.open && agreedFor(bet.odds, terms.stakes);
+    const shown = agreed ? typedCardOf(bet.envelope) : null;
+    if (shown) typedDispatch({ type: 'odds_agreed', shown });
+  }, [negotiating, bet?.envelope?.terms_hash, bet?.odds.agreed.length]);
 
   // ---- Bet on Bitcoin (A only, Beat 6): reset per bet; poll Gemini's odds while it is open ----
   useEffect(() => {
@@ -662,9 +691,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const submitTyped = async () => {
     if (!bet || !canSubmit(typed) || typed.bet_id !== bet.bet_id) return;
     typedDispatch({ type: 'submit' });
+    const picked = typedStakes(typed);
     const outcome = await submitTypedTerms(
       { api: rt.api },
-      { betId: bet.bet_id, claim: typed.claim, stakeUsd: typed.stakeUsd, bName: opponentName },
+      {
+        betId: bet.bet_id,
+        claim: typed.claim,
+        stakeUsd: typed.stakeUsd,
+        bName: opponentName,
+        stakes: picked.ok ? picked.stakes : undefined,
+      },
     );
     typedDispatch({ type: 'submitted', outcome });
     if (outcome.kind !== 'proposed') feel('failed');
@@ -673,7 +709,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const confirmTyped = async () => {
     const hash = bet?.envelope?.terms_hash ?? null;
     // Gated on B's accept too: an early tap would get a 409 replayed for this key for 24h.
-    if (!bet || !hash || !canConfirm(typed, hash, bet.inviteAnswer)) return;
+    if (!bet || !hash || !canConfirm(typed, hash, bet.inviteAnswer, oddsOk)) return;
     typedDispatch({ type: 'confirm' });
     const keyName = `confirm:${bet.bet_id}:${hash}`;
     const r = await confirmTypedTerms(
@@ -1049,6 +1085,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   };
 
+  /**
+   * ../gg review sheet "Check it again": the same appeal as "I appeal!" (same Idempotency-Key),
+   * but it throws, so the sheet can show why and stay up while the window runs.
+   */
+  const checkAgain = async () => {
+    if (!bet) throw new Error('no bet');
+    await appeal(
+      { wallet: rt.wallet, api: rt.api },
+      bet,
+      t(COPY.ruling.appealPrompt),
+      keyFor(`appeal:${bet.bet_id}`),
+    );
+  };
+
   /** Built uploads by Idempotency-Key: the judge cam's retry resends the exact same body. */
   const preparedUploads = useRef(new Map<string, PreparedAttempt>());
   const sendClip = useCallback(
@@ -1141,6 +1191,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const result =
     outcome && me ? (bet?.state === 'VOIDED' ? 'void' : myResult(outcome, me)) : 'void';
   const balanceCents = balance ? Number(BigInt(balance.usdc) / 10_000n) : 0;
+  // Home's sparkline and delta come from the settled history the app already holds (loaded when
+  // History opens); no extra request. Hidden until there is history. No caption: the list is
+  // capped at HISTORY_LIMIT, so "all time" would not be true.
+  const homeSeries = balance ? balanceSeries(balanceCents, history.items) : null;
+  const homeChange = balance && history.items.length ? { cents: netCents(history.items) } : null;
   const waiting = <Loading failed={false} onRetry={() => undefined} />;
 
   const screen = (() => {
@@ -1189,6 +1244,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <HomeScreen
             name={app.me?.display_name ?? ''}
             balanceCents={balanceCents}
+            series={homeSeries}
+            change={homeChange}
             pending={false}
             inBetsUsd={balance && balance.in_escrow !== '0' ? balance.in_escrow_display : null}
             room={app.room ? { code: app.room.code, name: app.room.name } : null}
@@ -1372,11 +1429,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                       typed,
                       bet?.envelope?.terms_hash ?? null,
                       bet?.inviteAnswer ?? null,
+                      oddsOk,
                     ),
                     waitingFor: waitingForAccept(
                       typed,
                       bet?.envelope?.terms_hash ?? null,
                       bet?.inviteAnswer ?? null,
+                      oddsOk,
                     )
                       ? names.theirName
                       : null,
@@ -1387,9 +1446,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     onStake: (usd) => typedDispatch({ type: 'stake', usd: usd as TypedStakeUsd }),
                     onSubmit: () => void submitTyped(),
                     onConfirm: () => void confirmTyped(),
+                    odds: typedOdds,
                   }
                 : undefined
             }
+            odds={oddsPanel}
             market={
               negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id
                 ? {
@@ -1541,18 +1602,32 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             : Date.parse(bet.ruling?.ruling.created_at ?? new Date().toISOString()) +
               10_000 -
               rt.clock.offsetMs;
+        const reason = safeData(bet.ruling?.ruling.reason, FALLBACK_REASON);
+        // ../gg: a spoken "check that again" opens the loser's review sheet over the ruling.
         return (
-          <RulingScreen
-            view={view}
-            result={result}
-            judgeLabel={view.kind === 'market' ? t(COPY.market.gemini) : undefined}
-            reason={safeData(bet.ruling?.ruling.reason, FALLBACK_REASON)}
-            appealDeadlineMs={deadline}
-            busy={busy}
-            alert={alert}
-            onGG={() => void gg()}
-            onAppeal={result === 'lost' ? () => void appealNow() : undefined}
-          />
+          <RulingReview
+            bet={bet}
+            me={me}
+            offsetMs={rt.clock.offsetMs}
+            reason={reason}
+            confirm={checkAgain}
+            decline={() => rt.api.declineReview(bet.bet_id)}
+          >
+            {(tag) => (
+              <RulingScreen
+                view={view}
+                result={result}
+                judgeLabel={view.kind === 'market' ? t(COPY.market.gemini) : undefined}
+                reason={reason}
+                appealDeadlineMs={deadline}
+                busy={busy}
+                alert={alert}
+                onGG={() => void gg()}
+                onAppeal={result === 'lost' ? () => void appealNow() : undefined}
+                tag={tag}
+              />
+            )}
+          </RulingReview>
         );
       }
       case 'appeal': {
@@ -1572,6 +1647,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       case 'payout': {
         if (!view || !bet) return waiting;
         const phase: PayoutPhase = state === 'PAID' ? 'confirmed' : 'processed';
+        // ../gg: the loser said GG ("Jake said GG" / "Good game").
+        if (bet.gg && me)
+          return (
+            <GgPayoutScreen
+              view={view}
+              gg={bet.gg}
+              me={me}
+              balanceCents={balanceCents}
+              phase={phase === 'confirmed' ? 'confirmed' : 'processed'}
+              onHome={dismiss}
+            />
+          );
         return (
           <PayoutScreen
             view={view}
@@ -1586,8 +1673,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   })();
 
+  // One light status bar for the whole app: every screen, moments included, sits on black.
   return (
     <View style={styles.root}>
+      <StatusBar style="light" />
       {screen}
       {voice && voiceBet ? (
         <PanelErrorBoundary
@@ -1604,7 +1693,15 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               betId={voiceBet.bet_id}
               dynamicVariables={voice}
               startAttempt={(n) => startAttemptFor(voiceBet, n, 'A')}
-              micMuted={micMutedFor(voiceBet.state)}
+              micMuted={micMutedFor(voiceBet.state, {
+                reviewable: reviewable(voiceBet),
+                rulingSpoken: rulingSpokenBet === voiceBet.bet_id,
+              })}
+              onRulingSpoken={(spoken) =>
+                setRulingSpokenBet((cur) =>
+                  spoken ? voiceBet.bet_id : cur === voiceBet.bet_id ? null : cur,
+                )
+              }
               onShowTermsCard={() => showTermsCard(voiceBet.bet_id)}
               onPhase={setVoicePhase}
               onSpeaking={setJudgeSpeaking}
@@ -1618,10 +1715,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       ) : null}
       {alert && route !== 'ruling' && route !== 'terms' ? (
         <View style={styles.toast} pointerEvents="none">
-          <Label variant="small">{alert}</Label>
+          <Label variant="labelMedium">{alert}</Label>
         </View>
       ) : null}
-      <StatusBar style="light" />
     </View>
   );
 }
@@ -1650,14 +1746,16 @@ function wonBet(b: BetModel): boolean {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // A raised pill above the home indicator: #0F0F11 fill, no outline, white text.
   toast: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 40,
+    left: space.page,
+    right: space.page,
+    bottom: space.x5,
     alignItems: 'center',
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: palette.background,
+    paddingVertical: half.x15,
+    paddingHorizontal: space.x3,
+    borderRadius: radius.pill,
+    backgroundColor: palette.surface,
   },
 });

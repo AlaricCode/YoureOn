@@ -96,6 +96,12 @@ export const EnvSchema = z.object({
   // --- judge pipeline (src/judge, Beat 4)
   /** Anthropic model for the attempt ruling (12 frames; Opus is too slow for the 10 s cap). */
   JUDGE_MODEL: z.preprocess(unset, str.default('claude-sonnet-5-5')),
+  /**
+   * Odds (src/odds/suggest.ts): the Anthropic model that words the judge's odds suggestion
+   * (default DEFAULT_CHAT_MODELS.anthropic, Opus 5.5 at effort low). claude-haiku-5-5 if the p50
+   * is too slow for the 3 s deadline. Only used with LLM_PROVIDER=live (ALLOW_SPEND).
+   */
+  ODDS_LLM_MODEL: opt(str),
   /** Demo fallback (ARCHITECTURE §7.2 cached_ruling): rule from a stored verdict, no LLM call. */
   CACHED_RULING: z.preprocess(unset, boolStr.default(false)),
   // --- Solana / QuickNode (secret)

@@ -1072,6 +1072,22 @@ GROUP BY user_id, opponent_id;
 SELECT wins, losses, net FROM head_to_head WHERE user_a = $me AND user_b = $them;
 ```
 
+**Rivalry fields (live scan, stage; built inline in `apps/server/src/face/service.ts` `headToHead()`, one statement, no migration).** On top of the aggregate above, each settled bet of the pair gets a `result` from `$me`'s side: `win` (outcome = my side), `loss` (the other side), `push` (`split` / `refund`).
+
+- `total = wins + losses + pushes`; `rival = total >= 3` (`RIVAL_MIN_SETTLED`).
+- `last_result`: the result of the newest bet, ordered `settled_at DESC NULLS LAST, id DESC` (equal times broken by id). Null with no settled bets.
+- `streak`: the run of `last_result` ending at the newest bet: `length` = the rows before the first one (in that order) whose result differs, or all of them. `holder` is `me` for a run of wins, `them` for a run of losses. Null when the newest is a push or there are none.
+- The default 4-7 seed (§11; demo-a wins bets 2, 5, 7, 10) gives demo-a `{total: 11, last_result: 'loss', streak: {holder: 'them', length: 1}, rival: true}`.
+
+```sql
+ordered AS (SELECT result, row_number() OVER (ORDER BY settled_at DESC NULLS LAST, id DESC) AS rn
+            FROM mine WHERE result IS NOT NULL),
+latest  AS (SELECT result FROM ordered WHERE rn = 1)
+-- streak length:
+coalesce((SELECT min(o.rn) - 1 FROM ordered o, latest l WHERE o.result <> l.result),
+         (SELECT count(*) FROM ordered))
+```
+
 ### 7.2 Room-scoped face-match candidates (query, deliberately not a view)
 
 This query runs in the face module only, under the `face_svc` role (§10). Ciphertext never appears in a general-purpose view.
@@ -1282,7 +1298,8 @@ A daily job enforces the schedule and writes audit rows.
 ## 11. Seed data (demo mode)
 
 Preferred: create the demo history **for real**. A `seed:chain` script runs about 11 small devnet bets between the team wallets the day before the demo, which gives real signatures and real `chain_events`. The script builds the same atomic lock (both demo keys sign one tx on a pool nonce) with the **custodial demo seeds the server holds** (`users.demo_seed_ciphertext`, FINDINGS §3.4), not through Face ID, so it records no authorization and marks its rows `is_seed=true` (exempt from `bets_locked_authorized`; the stage view labels them "demo history"). Fund the demo wallets with devnet USDC from faucet.circle.com beforehand. It gives 20 USDC per 2 h per address, so spread the clicks across addresses (spike 07).
-Fallback: the SQL below, where rows have `is_seed=true` and no signatures. The stage view labels them "demo history". **Face enrollments are never seeded.** Each teammate enrolls live on their own phone through the consent screen.
+Fallback: the SQL below, where rows have `is_seed=true` and no signatures. The stage view labels them "demo history".
+**Built as a route** (`POST /v1/demo/seed-h2h`, API-CONTRACT §2.17): each seed row now also has a real composed terms row (`bet_terms_versions`, `version 1`, `is_final`, `drafted_by 'judge'`, `source_tool 'seed'`, `bets.terms_hash` = its hash, so `bet_terms_versions_hash` holds): a skill claim with performer B = the yes party ("Jake lands a water bottle flip upright on the table."). The judge's history-grounded odds (API-CONTRACT §2.19) read the claim, performer and yes party from it; the challenge category is derived from the claim, never stored. Optional `records` make a player the performer of N bets of one category (e.g. Jake 10–2 on bottle flips), still `is_seed` and titled "Demo history: …". Re-seeding deletes the seed bets; their terms rows cascade. No migration: odds offers live in `bet_events` (`odds.*`), the category is derived. **Face enrollments are never seeded.** Each teammate enrolls live on their own phone through the consent screen.
 
 | Seed | Rows |
 |---|---|
@@ -1443,3 +1460,4 @@ The original proposals, kept for the record:
   - **§11.** Demo wallets are custodial and server-generated (no `DEMO_WALLET_*` env); `seed:chain` uses those seeds; `npm run db:demo-reset` (npm workspaces, not pnpm). §13 row updated.
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): `frame_keys` and the §9 frames row say 12 frames + one landing crop per try. No schema change: the crop is one more `attempt_frames` row (idx 12, the 204800 B CHECK holds it), and which row is the crop is read back from `attempts.evidence_canonical` (`frames[i].landing_crop`). `attempts.recorder = 'self'` is now also the two-phone demo's fallback (API-CONTRACT §2.9).
 - **2026-11-18 (Beat 5 appeal built, migration 0008).** §5.15 `appeals` / `appeal_votes` created as specified, plus the CHECKs listed under §5.15 and the deferred FK `rulings.appeal_id → appeals`. No new enum (0000 has them).
+- **2026-11-18, live rivalry scan (feat/rivalry-scan).** §7.1 documents the head-to-head rivalry fields (`total`, `last_result`, `streak`, `rival`), computed inline in the same single `headToHead()` statement. No migration and no schema change.

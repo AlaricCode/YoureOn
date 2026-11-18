@@ -13,6 +13,7 @@ import {
   type ElObjectProperty,
 } from './propose-terms';
 import type { ElReasoningEffort, ElTtsModel } from './el-enums';
+import { SUGGEST_ODDS_BODY_SCHEMA, SUGGEST_ODDS_DESCRIPTION } from './suggest-odds';
 import {
   ASR_KEYWORDS,
   buildJudgePrompt,
@@ -48,20 +49,31 @@ export const TOOL_SECRET_NAME = 'yo-tool-secret';
 export const AGENT_TAGS = ['youre-on'];
 
 export type WebhookToolName =
-  'propose_terms' | 'confirm_terms' | 'open_hearing' | 'file_appeal' | 'get_market_odds';
+  | 'propose_terms'
+  | 'confirm_terms'
+  | 'open_hearing'
+  | 'get_market_odds'
+  | 'request_review'
+  | 'suggest_odds';
 export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
 
 /**
  * Webhook tools registered today. Each name here must have a live `/el/tools/<name>` handler,
  * otherwise a call would hit a 404 mid-conversation (apps/server test/el-agent.test.ts checks the
- * route table). propose_terms (D0-J2), confirm_terms (D1-J1) and get_market_odds (Beat 6,
- * apps/server/src/markets/voice-tool.ts) are live; open_hearing and file_appeal later
- * (FINDINGS §3.10).
+ * route table). propose_terms (D0-J2), confirm_terms (D1-J1), get_market_odds (Beat 6,
+ * apps/server/src/markets/voice-tool.ts) and request_review (the spoken "check that again",
+ * apps/server/src/review/tool.ts) and suggest_odds (odds, apps/server/src/odds/voice-tool.ts) are
+ * live; open_hearing later (FINDINGS §3.10). There is no
+ * file_appeal tool: the mic can't tell who spoke, so the judge only asks the loser's phone
+ * (request_review) and the loser files the appeal there (tap + Face ID).
  */
 export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = [
   'propose_terms',
   'confirm_terms',
   'get_market_odds',
+  'request_review',
+  // Odds (apps/server/src/odds/voice-tool.ts, POST /el/tools/suggest_odds).
+  'suggest_odds',
 ];
 export const CLIENT_TOOLS: readonly ClientToolName[] = [
   'request_attempt',
@@ -111,15 +123,6 @@ export const WEBHOOK_TOOL_SPECS: Record<WebhookToolName, WebhookSpec> = {
     pre_tool_speech: 'off',
     body: idsOnly(),
   },
-  file_appeal: {
-    description:
-      "When the losing party says 'I appeal'. Files nothing; it prompts that party's phone.",
-    pre_tool_speech: 'off',
-    body: idsOnly(
-      { party: { type: 'string', enum: ['A', 'B'], description: "Who said 'I appeal'." } },
-      ['party'],
-    ),
-  },
   get_market_odds: {
     description: 'Quote the Gemini Bitcoin 5-minute odds before proposing a real_world bet.',
     pre_tool_speech: 'force',
@@ -137,7 +140,39 @@ export const WEBHOOK_TOOL_SPECS: Record<WebhookToolName, WebhookSpec> = {
       ['asset', 'horizon', 'a_side', 'amount_usd'],
     ),
   },
+  request_review: {
+    description:
+      'After [EVENT] RULING, when anyone asks to check the ruling again ("check that again", "that\'s wrong, review it", "replay", "I appeal"). Files and decides nothing: the court asks the losing player\'s phone to confirm. Speak the reply\'s "say". Never after [EVENT] PAID or [EVENT] VOIDED: the bet is over.',
+    pre_tool_speech: 'off',
+    body: idsOnly(
+      {
+        heard: {
+          type: 'string',
+          description: 'What you heard, a few words, e.g. "check that again".',
+        },
+      },
+      ['heard'],
+    ),
+  },
+  suggest_odds: {
+    description: SUGGEST_ODDS_DESCRIPTION,
+    pre_tool_speech: 'force',
+    body: SUGGEST_ODDS_BODY_SCHEMA,
+  },
 };
+
+/**
+ * Built-in system tool (prompt.built_in_tools.skip_turn): the judge stays quiet for room noise in
+ * the ruling window. wait_timeout_secs -1: silent until someone speaks again.
+ */
+export const SKIP_TURN_TOOL = {
+  type: 'system',
+  name: 'skip_turn',
+  description:
+    'Stay silent this turn: the room is only celebrating or chatting after a ruling, or the camera is counting down.',
+  pre_tool_speech: 'off',
+  params: { system_tool_type: 'skip_turn', wait_timeout_secs: -1 },
+} as const;
 
 /** API-CONTRACT §4.2 tool settings + §4.3 schema. `baseUrl` = PUBLIC_BASE_URL. */
 export function webhookToolConfig(name: WebhookToolName, baseUrl: string, secretId: string) {
@@ -247,6 +282,12 @@ export interface AgentOptions {
   retentionDays?: number;
   /** Default DEFAULT_TTS_MODEL (A/B: eleven_flash_v2). */
   ttsModel?: ElTtsModel;
+  /**
+   * Default JUDGE_AGENT_NAME / AGENT_TAGS. Only a throwaway test agent sets these
+   * (scripts/el-agent.ts --agent-name, scripts/el-review-eval.ts); the live judge never does.
+   */
+  name?: string;
+  tags?: readonly string[];
 }
 
 /** Body for POST /v1/convai/agents/create and PATCH /v1/convai/agents/{id}. */
@@ -266,6 +307,7 @@ export function agentBody(o: AgentOptions) {
   };
   const effort = o.reasoningEffort === undefined ? DEFAULT_REASONING_EFFORT : o.reasoningEffort;
   if (effort !== null) prompt.reasoning_effort = effort;
+  if (o.promptTools.has('skip_turn')) prompt.built_in_tools = { skip_turn: SKIP_TURN_TOOL };
 
   const tts: Record<string, unknown> = {
     model_id: o.ttsModel ?? DEFAULT_TTS_MODEL,
@@ -275,8 +317,8 @@ export function agentBody(o: AgentOptions) {
   if (o.voiceId) tts.voice_id = o.voiceId;
 
   return {
-    name: JUDGE_AGENT_NAME,
-    tags: AGENT_TAGS,
+    name: o.name ?? JUDGE_AGENT_NAME,
+    tags: [...(o.tags ?? AGENT_TAGS)],
     conversation_config: {
       agent: {
         first_message: FIRST_MESSAGE,

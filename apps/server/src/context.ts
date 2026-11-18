@@ -13,6 +13,7 @@ import type { MarketService } from './markets/service';
 import type { Providers } from './providers/types';
 import type { StageVoice } from './stage/voice';
 import type { Ruling } from '@youre-on/shared/ruling';
+import type { ReplayFoulSource } from './replay/fouls';
 
 /** Who is calling, after `requireSession` (bearer) or the WS hello. */
 export interface AuthContext {
@@ -64,6 +65,11 @@ export interface AppDeps {
    * spoken moments and the cues' Sound Effects. createDeps builds it; absent = off.
    */
   stageVoice?: StageVoice;
+  /**
+   * The slow-mo replay's confirmed-foul source (src/replay/fouls.ts; the SAM tracking stream).
+   * Absent = no foul replay is ever shown (GET /v1/bets/:bet_id/replay serves the win).
+   */
+  replayFouls?: ReplayFoulSource;
 }
 
 export type AppVariables = {

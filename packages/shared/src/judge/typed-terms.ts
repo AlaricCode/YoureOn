@@ -24,7 +24,7 @@ export const typedTermsPath = (betId: string) =>
 export const termsConfirmPath = (betId: string) =>
   `/v1/bets/${encodeURIComponent(betId)}/terms/confirm`;
 
-/** The stakes the phone offers (dollars per person). */
+/** The stakes the phone offers (dollars per person; with odds, the underdog's base stake). */
 export const TYPED_STAKES_USD = [1, 5, 10, 20] as const;
 export type TypedStakeUsd = (typeof TYPED_STAKES_USD)[number];
 
@@ -48,6 +48,7 @@ export function typedTermsArgs(r: TypedTermsRequest): Projection {
     failure_criteria: r.failure_criteria ?? [],
     edge_cases: r.edge_cases ?? [],
     amount_usd: r.amount_usd,
+    ...(r.stake_b_usd !== undefined ? { stake_b_usd: r.stake_b_usd } : {}),
     market_side: r.market_side ?? 'none',
     deadline_minutes: r.deadline_minutes ?? 0,
   };
@@ -84,7 +85,10 @@ const GENERIC = {
  */
 export function typedTermsRequest(i: {
   claim: string;
-  stakeUsd: number;
+  /** A's stake in dollars (with even odds: per person). */
+  stakeUsd: number | string;
+  /** B's stake in dollars when the odds are not even (odds control); omitted = even. */
+  stakeBUsd?: number | string | null;
   bName: string;
 }): TypedTermsRequest {
   const claim = i.claim.replace(/\s+/g, ' ').trim();
@@ -92,6 +96,11 @@ export function typedTermsRequest(i: {
   return {
     claim,
     amount_usd: String(i.stakeUsd),
+    ...(i.stakeBUsd !== undefined &&
+    i.stakeBUsd !== null &&
+    String(i.stakeBUsd) !== String(i.stakeUsd)
+      ? { stake_b_usd: String(i.stakeBUsd) }
+      : {}),
     type: 'skill',
     performer: 'B',
     yes_party: 'B',

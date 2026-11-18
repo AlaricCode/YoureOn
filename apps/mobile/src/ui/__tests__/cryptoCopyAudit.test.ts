@@ -12,7 +12,7 @@ import { CRYPTO_JARGON } from '../copyRule';
 const SRC = join(__dirname, '..', '..');
 
 /** Everything that renders on a party's phone. */
-const SCREEN_DIRS = ['screens', 'enroll', 'signup', 'app', 'face'];
+const SCREEN_DIRS = ['screens', 'enroll', 'signup', 'app', 'face', 'gg', 'odds'];
 const SCREEN_FILES = ['ui/kit.tsx', 'ui/parts.tsx', 'ui/brand.tsx'];
 
 const sources = (): string[] => [

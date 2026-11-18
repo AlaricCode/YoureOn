@@ -1,32 +1,35 @@
 // Beat 3: the terms card and the lock (TASKS D2-M1, D2-M2, D2-M4; SCHEMAS §9.4; ARCHITECTURE
-// §5.2). Both phones show the same card, rendered from the Terms alone. The hold stays off until
-// the device policy passes; a full hold opens Face ID; "Decline" needs no Face ID and works until
-// the second signature. The lock state lives in bets/lock.ts.
+// §5.2). Both phones show the same card, rendered from the Terms alone. The swipe stays off until
+// the device policy passes; a full swipe up (released) opens Face ID; "Decline" needs no Face ID
+// and works until the second signature. The lock state lives in bets/lock.ts.
 import { useRef } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { declineEnabled, END_COPY, holdEnabled, type LockState } from '../bets/lock';
 import { clockLabel, countdownLabel, type BetView } from '../bets/view';
-import { AlertLine, Label, PrimaryButton, QuietButton } from '../ui/kit';
+import { AlertLine, CheckBadge, Label, PrimaryButton, TextButton } from '../ui/kit';
 import {
   Appear,
   Avatar,
   Bullets,
-  CountdownBar,
-  Card,
   DataText,
   DotsLabel,
-  HoldToConfirm,
   InfoRow,
+  MomentGroup,
+  MomentHeadline,
+  MomentScreen,
   Page,
+  Reveal,
   Screen,
   Section,
-  StatusBadge,
   StatusHero,
   TopBar,
   useNow,
 } from '../ui/parts';
-import { color, palette, space } from '../ui/tokens';
+import { DrainBar } from '../ui/DrainBar';
+import { SwipeToConfirm } from '../ui/SwipeToConfirm';
+import { avatarSize, color, half, palette, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
 export function TermsCardScreen({
@@ -56,30 +59,40 @@ export function TermsCardScreen({
   const mine = lock.phase === 'signed' || lock.phase === 'locking';
 
   if (lock.phase === 'locked') {
+    // The moment: the bet is on. Black, the word in thin white, the pot in thin white over a
+    // soft green glow (a pot is not money moving up, so it is not green), "pot" in grey.
+    // Headline and pot rise together (the one reveal); nothing else moves.
     return (
-      <Screen>
-        <TopBar tag={tag} />
-        <Page style={styles.center}>
-          <StatusHero
-            mark="check"
-            title={t(COPY.terms.locked)}
-            detail={`${view.potUsd} pot`}
-            pulse
-          />
-        </Page>
-        <Page style={styles.footer}>
-          <PrimaryButton label={t(COPY.terms.continue)} onPress={onContinue} />
-        </Page>
-      </Screen>
+      <MomentScreen
+        top={<TopBar tag={tag} />}
+        footer={<PrimaryButton label={t(COPY.terms.continue)} onPress={onContinue} />}
+      >
+        {/* The glow is drawn first, behind the headline, so "Locked" stays pure white. */}
+        <MomentGroup glow="in" style={styles.moment}>
+          <MomentHeadline>{t(COPY.terms.locked)}</MomentHeadline>
+          <Reveal style={styles.momentMoney}>
+            <Text
+              style={[type.money, styles.centerText]}
+              accessibilityLabel={`${view.potUsd} pot`}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.5}
+            >
+              {view.potUsd}
+              <Text style={styles.potWord}>{' pot'}</Text>
+            </Text>
+          </Reveal>
+        </MomentGroup>
+      </MomentScreen>
     );
   }
 
   const status = (() => {
     switch (lock.phase) {
       case 'checking':
-        return <DotsLabel text={t(COPY.terms.checking)} variant="label" />;
+        return <DotsLabel text={t(COPY.terms.checking)} variant="value" />;
       case 'locking':
-        return <DotsLabel text={t(COPY.terms.locking)} variant="label" />;
+        return <DotsLabel text={t(COPY.terms.locking)} variant="value" />;
       case 'signed':
         return <DataText style={styles.centerText}>{fill.youreIn(view.theirName)}</DataText>;
       default:
@@ -106,9 +119,9 @@ export function TermsCardScreen({
     <Screen>
       <TopBar title={t(COPY.terms.title)} tag={tag} />
       <ScrollView style={styles.flex} contentContainerStyle={styles.scroll}>
-        <DataText variant="title">{view.claim}</DataText>
+        <DataText variant="statement">{view.claim}</DataText>
 
-        <Card style={styles.parties}>
+        <View style={styles.parties}>
           <Party
             name={view.myName}
             label={t(COPY.terms.you)}
@@ -116,14 +129,21 @@ export function TermsCardScreen({
             signed={mine}
             accent
           />
-          <DataText muted>vs</DataText>
+          <DataText muted style={styles.vs}>
+            vs
+          </DataText>
           <Party
             name={view.theirName}
             label={view.theirName}
             stake={view.theirStakeUsd}
             signed={lock.theirsIn}
           />
-        </Card>
+        </View>
+        {view.toWin ? (
+          <DataText muted style={styles.toWin}>
+            {view.toWin}
+          </DataText>
+        ) : null}
 
         <Section label={t(COPY.terms.counts)}>
           <Bullets items={view.success} />
@@ -145,34 +165,50 @@ export function TermsCardScreen({
         ) : null}
 
         <View style={styles.rows}>
-          {view.mySide ? <InfoRow label={t(COPY.market.side)} value={view.mySide} /> : null}
-          {view.lineUsd ? <InfoRow label={t(COPY.market.line)} value={view.lineUsd} /> : null}
-          <InfoRow label={t(COPY.terms.evidence)} value={view.evidence} />
-          {view.kind === 'skill' ? (
-            <InfoRow label={t(COPY.terms.tries)} value={view.attempts} />
+          {view.mySide ? <InfoRow label={t(COPY.market.side)} value={view.mySide} divider /> : null}
+          {view.lineUsd ? (
+            <InfoRow label={t(COPY.market.line)} value={view.lineUsd} divider />
           ) : null}
-          {view.odds ? <InfoRow label={t(COPY.terms.odds)} value={view.odds} /> : null}
-          <InfoRow label={t(COPY.terms.deadline)} value={clockLabel(view.deadline)} />
+          <InfoRow label={t(COPY.terms.evidence)} value={view.evidence} divider />
+          {view.kind === 'skill' ? (
+            <InfoRow label={t(COPY.terms.tries)} value={view.attempts} divider />
+          ) : null}
+          {view.odds ? <InfoRow label={t(COPY.terms.odds)} value={view.odds} divider /> : null}
+          <InfoRow label={t(COPY.terms.deadline)} value={clockLabel(view.deadline)} divider />
           <InfoRow label={t(COPY.terms.code)} value={view.termsCode} />
         </View>
       </ScrollView>
 
       <View style={styles.dock}>
+        {/* The list fades out under the dock instead of being cut mid-line. */}
+        <View style={styles.fade} pointerEvents="none">
+          <Svg width="100%" height={FADE}>
+            <Defs>
+              <LinearGradient id="dockFade" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={palette.background} stopOpacity={0} />
+                <Stop offset="1" stopColor={palette.background} stopOpacity={1} />
+              </LinearGradient>
+            </Defs>
+            <Rect x="0" y="0" width="100%" height={FADE} fill="url(#dockFade)" />
+          </Svg>
+        </View>
         <InfoRow label={t(COPY.terms.timeLeft)} value={countdownLabel(expiresAtMs - now)} />
-        <CountdownBar fraction={(expiresAtMs - now) / windowMs} />
+        <DrainBar endsAtMs={expiresAtMs} windowMs={windowMs} />
         <View style={styles.status}>{status}</View>
         <AlertLine message={alert} testID="terms-alert" />
         {lock.phase === 'signed' || lock.phase === 'locking' ? null : (
-          <HoldToConfirm
+          <SwipeToConfirm
             testID="terms-hold"
-            label={fill.holdToLock(view.myStakeUsd)}
+            label={fill.swipeToLock(view.myStakeUsd)}
+            hint={t(COPY.terms.swipeHint)}
             disabled={!holdEnabled(lock)}
             onStart={onHoldStart}
             onComplete={onHoldComplete}
           />
         )}
         <View style={styles.gap} />
-        <QuietButton
+        <TextButton
+          tone="muted"
           testID="terms-decline"
           label={t(COPY.terms.decline)}
           disabled={!declineEnabled(lock) && lock.phase !== 'refused'}
@@ -200,15 +236,19 @@ function Party({
   return (
     <View style={styles.party}>
       <View>
-        <Avatar name={name} size={48} accent={accent} />
+        <Avatar name={name} size={avatarSize.vs} accent={accent} />
         {signed ? (
           <Appear style={styles.signedTick}>
-            <StatusBadge mark="check" size={20} />
+            <CheckBadge size={TICK} fill={palette.accent} />
           </Appear>
         ) : null}
       </View>
-      <Label>{label}</Label>
-      <DataText variant="heading">{stake}</DataText>
+      <Label variant="labelMedium" style={styles.partyName}>
+        {label}
+      </Label>
+      <DataText variant="figure" lines={1}>
+        {stake}
+      </DataText>
     </View>
   );
 }
@@ -230,9 +270,11 @@ export function LockEndedScreen({
       <TopBar tag={tag} />
       <Page style={styles.center}>
         <StatusHero
-          mark={r === 'terms_changed' ? 'ring' : 'cross'}
+          mark={r === 'terms_changed' ? undefined : 'cross'}
           title={END_COPY[r]}
           titleRole="contract"
+          end
+          neutral={r !== 'lock_failed'}
         />
       </Page>
       <Page style={styles.footer}>
@@ -246,42 +288,60 @@ export function LockEndedScreen({
   );
 }
 
+const TICK = 20;
+/** The fade at the dock's top edge. */
+const FADE = space.x4;
+/** The black cut-out between the signed tick and the avatar. */
+const TICK_RING = 2;
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
   centerText: { textAlign: 'center' },
   footer: { flex: 0 },
   gap: { height: space.x1 },
-  scroll: { paddingHorizontal: space.page, paddingBottom: space.x3 },
+  moment: { alignSelf: 'stretch', alignItems: 'center', gap: space.x3 },
+  momentMoney: { alignSelf: 'stretch' },
+  // Room under the last line for the dock's fade, so it scrolls clear of it.
+  scroll: { paddingHorizontal: space.page, paddingTop: space.x1, paddingBottom: space.x5 + FADE },
+  // The two sides, flat on black between hairlines.
   parties: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
+    alignItems: 'flex-start',
     marginTop: space.x3,
+    paddingVertical: space.x3,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: color.divider,
   },
-  party: { alignItems: 'center', gap: 4 },
+  party: { flex: 1, alignItems: 'center', gap: half.x05 },
+  /** On the avatars' centre line: 28 (half the 56 pt disc) less half the 22 pt line. */
+  vs: { marginTop: avatarSize.vs / 2 - type.label.lineHeight / 2 },
+  /** "pot" after the white figure: grey 22/400, no negative tracking. */
+  potWord: { ...type.statement, color: palette.textSecondary, letterSpacing: 0 },
+  partyName: { marginTop: half.x15 },
   signedTick: {
     position: 'absolute',
-    right: -4,
-    bottom: -4,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: palette.surface,
+    right: -half.x05,
+    bottom: -half.x05,
+    borderRadius: TICK / 2 + TICK_RING,
+    borderWidth: TICK_RING,
+    borderColor: palette.background,
   },
-  edge: { gap: 2, marginBottom: space.x1 },
+  edge: { gap: half.x05, marginBottom: half.x15 },
+  toWin: { textAlign: 'center', marginTop: space.x1 },
   rows: {
-    marginTop: space.x3,
+    marginTop: space.x4,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: color.divider,
-    paddingTop: space.x1,
   },
+  // No hairline on top: the fade and the countdown bar already separate it from the list.
   dock: {
     paddingHorizontal: space.page,
-    paddingTop: space.x1,
-    paddingBottom: space.x2,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: palette.hairline,
+    paddingTop: half.x05,
+    paddingBottom: space.x1,
     backgroundColor: palette.background,
   },
+  fade: { position: 'absolute', left: 0, right: 0, top: -FADE, height: FADE },
   status: { minHeight: space.x5, alignItems: 'center', justifyContent: 'center' },
 });

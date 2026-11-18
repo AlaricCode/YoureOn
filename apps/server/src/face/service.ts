@@ -14,7 +14,7 @@
 //    ciphertext, in it) so the app's error log never sees face bytes.
 import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { auditLog, faceEnrollments, roomMembers, users, type Db } from '@youre-on/db';
-import { REQUEST_CLOCK_SKEW_MS, type HeadToHead } from '@youre-on/shared/api';
+import { REQUEST_CLOCK_SKEW_MS, RIVAL_MIN_SETTLED, type HeadToHead } from '@youre-on/shared/api';
 import {
   bytesToEmbedding,
   cosineSimilarity,
@@ -513,6 +513,11 @@ const signedUsd = (micro: bigint): string =>
  * `me` vs `them` over chain-confirmed settlements (onchain_status 'settled') plus labelled
  * is_seed history, per the DATA-MODEL §7.1 view (computed inline; the view itself is not
  * migrated). No rows means 0-0.
+ *
+ * Rivalry fields (one statement): `total` = wins + losses + pushes; `last_result` is the newest
+ * settled bet's result (settled_at DESC NULLS LAST, then id DESC); `streak` is the run of that
+ * same result ending there, null when the newest is a push or there is none; `rival` = total >=
+ * RIVAL_MIN_SETTLED.
  */
 export async function headToHead(db: Reader, me: string, them: string): Promise<HeadToHead> {
   const rows = await db.execute<{
@@ -522,37 +527,72 @@ export async function headToHead(db: Reader, me: string, them: string): Promise<
     net: string;
     last_settled_at: Date | string | null;
     includes_seed: boolean;
+    last_result: 'win' | 'loss' | 'push' | null;
+    streak_len: number;
   }>(sql`
     WITH mine AS (
-      SELECT outcome, settled_at, is_seed,
+      SELECT id, outcome, settled_at, is_seed,
              CASE WHEN party_a_id = ${me} THEN 'party_a'::onchain_outcome
                   ELSE 'party_b'::onchain_outcome END AS my_side,
              CASE WHEN party_a_id = ${me} THEN coalesce(payout_a, 0) - coalesce(stake_a, 0)
-                  ELSE coalesce(payout_b, 0) - coalesce(stake_b, 0) END AS my_net
+                  ELSE coalesce(payout_b, 0) - coalesce(stake_b, 0) END AS my_net,
+             CASE WHEN outcome IN ('split','refund') THEN 'push'
+                  WHEN outcome = (CASE WHEN party_a_id = ${me} THEN 'party_a'::onchain_outcome
+                                       ELSE 'party_b'::onchain_outcome END) THEN 'win'
+                  WHEN outcome IN ('party_a','party_b') THEN 'loss' END AS result
       FROM bets
       WHERE onchain_status = 'settled'
         AND ((party_a_id = ${me} AND party_b_id = ${them})
           OR (party_a_id = ${them} AND party_b_id = ${me}))
+    ),
+    ordered AS (
+      SELECT result,
+             row_number() OVER (ORDER BY settled_at DESC NULLS LAST, id DESC) AS rn
+      FROM mine
+      WHERE result IS NOT NULL
+    ),
+    latest AS (SELECT result FROM ordered WHERE rn = 1),
+    agg AS (
+      SELECT count(*) FILTER (WHERE outcome = my_side)::int                       AS wins,
+             count(*) FILTER (WHERE outcome IN ('party_a','party_b')
+                                AND outcome <> my_side)::int                      AS losses,
+             count(*) FILTER (WHERE outcome IN ('split','refund'))::int           AS pushes,
+             coalesce(sum(my_net), 0)::text                                       AS net,
+             max(settled_at)                                                      AS last_settled_at,
+             coalesce(bool_or(is_seed), false)                                    AS includes_seed
+      FROM mine
     )
-    SELECT count(*) FILTER (WHERE outcome = my_side)::int                         AS wins,
-           count(*) FILTER (WHERE outcome IN ('party_a','party_b')
-                              AND outcome <> my_side)::int                        AS losses,
-           count(*) FILTER (WHERE outcome IN ('split','refund'))::int             AS pushes,
-           coalesce(sum(my_net), 0)::text                                         AS net,
-           max(settled_at)                                                        AS last_settled_at,
-           coalesce(bool_or(is_seed), false)                                      AS includes_seed
-    FROM mine`);
+    SELECT agg.*,
+           (SELECT result FROM latest)                                            AS last_result,
+           coalesce(
+             (SELECT min(o.rn) - 1 FROM ordered o, latest l WHERE o.result <> l.result),
+             (SELECT count(*) FROM ordered)
+           )::int                                                                 AS streak_len
+    FROM agg`);
   const r = rows[0];
   const net = BigInt(r?.net ?? '0');
   const last = r?.last_settled_at ?? null;
+  const wins = r?.wins ?? 0;
+  const losses = r?.losses ?? 0;
+  const pushes = r?.pushes ?? 0;
+  const total = wins + losses + pushes;
+  const lastResult = r?.last_result ?? null;
+  const streakLen = r?.streak_len ?? 0;
   return {
-    wins: r?.wins ?? 0,
-    losses: r?.losses ?? 0,
-    pushes: r?.pushes ?? 0,
+    wins,
+    losses,
+    pushes,
     net: net.toString(),
     net_display: signedUsd(net),
     last_settled_at: last === null ? null : new Date(last).toISOString(),
     includes_seed: r?.includes_seed ?? false,
+    total,
+    last_result: lastResult,
+    streak:
+      (lastResult === 'win' || lastResult === 'loss') && streakLen >= 1
+        ? { holder: lastResult === 'win' ? 'me' : 'them', length: streakLen }
+        : null,
+    rival: total >= RIVAL_MIN_SETTLED,
   };
 }
 

@@ -21,6 +21,8 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -45,15 +47,19 @@ import {
 import { feel } from '../device/feedback';
 import { useVisionCameraPresence } from '../device/visionCamera';
 import { countdownLabel, signedUsd, type BetView } from '../bets/view';
+import { TypedOdds, type TypedOddsPanel } from '../odds/OddsControl';
+import { OfferCard, type OddsOfferPanel } from '../odds/OfferCard';
 import type { PreviewUser } from '../preview/data';
 import {
   AlertLine,
+  Hairline,
   Label,
   PrimaryButton,
   QuietButton,
   ShutterButton,
   Stage,
   StageBubble,
+  TextButton,
 } from '../ui/kit';
 import {
   Avatar,
@@ -62,12 +68,17 @@ import {
   DataText,
   DotsLabel,
   InfoRow,
+  MomentHeadline,
+  MomentScreen,
   Page,
+  PresenceDot,
   Screen,
   TopBar,
   useNow,
+  useReduceMotion,
 } from '../ui/parts';
-import { color, palette, radius, space, type } from '../ui/tokens';
+import { StakePicker } from '../ui/StakePicker';
+import { avatarSize, border, color, half, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, SCAN_MISS_COPY, t } from './copy';
 
 /**
@@ -172,7 +183,9 @@ export function ScanScreen({
       <Page>
         {permission.hasPermission && presence !== 'present' ? (
           <Stage style={styles.center}>
-            {presence === 'none' ? <StageBubble prompt={t(COPY.judgeCam.noCamera)} /> : null}
+            {presence === 'none' ? (
+              <StageBubble prompt={t(COPY.judgeCam.noCamera)} centered />
+            ) : null}
           </Stage>
         ) : permission.hasPermission ? (
           <Stage>
@@ -216,10 +229,13 @@ export function ScanScreen({
         />
         {found ? (
           <Card style={styles.matchCard}>
+            <Hairline style={styles.matchRule} />
             <View style={styles.matchHead}>
-              <Avatar name={found.user.display_name} size={48} />
-              <View style={styles.flex}>
-                <DataText variant="heading">{fill.challengeName(found.user.display_name)}</DataText>
+              <Avatar name={found.user.display_name} size={avatarSize.lg} />
+              <View style={styles.matchText}>
+                <DataText variant="subtitle">
+                  {fill.challengeName(found.user.display_name)}
+                </DataText>
                 <DataText muted>
                   {fill.headToHead(
                     found.headToHead.wins,
@@ -236,7 +252,7 @@ export function ScanScreen({
               busy={state.phase === 'challenging'}
               onPress={() => void challenge(found)}
             />
-            <View style={styles.gap} />
+            <View style={styles.stackGap} />
             <QuietButton
               label={t(COPY.scan.notThem)}
               disabled={state.phase === 'challenging'}
@@ -245,26 +261,28 @@ export function ScanScreen({
           </Card>
         ) : fallback ? (
           <View style={styles.fallback}>
-            <Label variant="small" style={styles.fallbackHead}>
+            <Label variant="heading" style={styles.fallbackHead}>
               {t(COPY.scan.pickList)}
             </Label>
             <ScrollView style={styles.fallbackList}>
               {members.length === 0 ? (
                 <DataText muted>{t(COPY.home.empty)}</DataText>
               ) : (
-                members.map((m) => (
-                  <View key={m.user_id} style={styles.member}>
-                    <Avatar name={m.display_name} size={32} online={m.online} />
-                    <DataText style={styles.flex} lines={1}>
+                members.map((m, i) => (
+                  <View
+                    key={m.user_id}
+                    style={[styles.member, i < members.length - 1 && styles.memberRule]}
+                  >
+                    <Avatar name={m.display_name} size={avatarSize.md} online={m.online} />
+                    <DataText variant="heading" style={styles.flex} lines={1}>
                       {m.display_name}
                     </DataText>
-                    <View style={styles.memberAction}>
-                      <QuietButton
-                        testID={`scan-pick-${m.user_id}`}
-                        label={t(COPY.home.challenge)}
-                        onPress={() => onPickMember(m)}
-                      />
-                    </View>
+                    <QuietButton
+                      small
+                      testID={`scan-pick-${m.user_id}`}
+                      label={t(COPY.home.challenge)}
+                      onPress={() => onPickMember(m)}
+                    />
                   </View>
                 ))
               )}
@@ -301,29 +319,37 @@ export function IncomingScreen({
 }) {
   useEffect(() => feel('challengeArrived'), []);
   return (
-    <Screen>
-      <TopBar tag={tag} />
-      <Page style={styles.center}>
-        <Avatar name={challenger} size={112} accent />
-        <DataText variant="display" style={styles.incomingTitle}>
-          {fill.challenged(challenger)}
+    <MomentScreen
+      top={<TopBar tag={tag} />}
+      footer={
+        <>
+          <PrimaryButton
+            testID="incoming-accept"
+            label={t(COPY.incoming.accept)}
+            onPress={onAccept}
+          />
+          <QuietButton
+            testID="incoming-decline"
+            label={t(COPY.incoming.decline)}
+            onPress={onDecline}
+          />
+        </>
+      }
+    >
+      {/* An 88 pt disc so the headline leads; the headline at 44 in a column 32 pt in from each
+          edge, so "challenged you" never runs edge to edge. */}
+      <Avatar name={challenger} size={avatarSize.moment} />
+      <MomentHeadline size="lg" lines={3} inset={space.x4} letterSpacing={-0.8}>
+        {fill.challenged(challenger)}
+      </MomentHeadline>
+      {/* The room, with the green live dot: this is happening now, in the room. */}
+      <View style={styles.live}>
+        <PresenceDot online />
+        <DataText muted lines={1}>
+          {roomName}
         </DataText>
-        <DataText muted>{roomName}</DataText>
-      </Page>
-      <Page style={styles.footer}>
-        <PrimaryButton
-          testID="incoming-accept"
-          label={t(COPY.incoming.accept)}
-          onPress={onAccept}
-        />
-        <View style={styles.gap} />
-        <QuietButton
-          testID="incoming-decline"
-          label={t(COPY.incoming.decline)}
-          onPress={onDecline}
-        />
-      </Page>
-    </Screen>
+      </View>
+    </MomentScreen>
   );
 }
 
@@ -390,6 +416,8 @@ export interface TypedTermsPanel {
   onStake: (usd: number) => void;
   onSubmit: () => void;
   onConfirm: () => void;
+  /** The odds picker and "Suggest odds" (odds/useOdds useTypedOdds). */
+  odds?: TypedOddsPanel | undefined;
 }
 
 export function NegotiateScreen({
@@ -401,6 +429,7 @@ export function NegotiateScreen({
   draft,
   typed,
   market,
+  odds,
   onBack,
   onDecline,
   tag,
@@ -415,12 +444,15 @@ export function NegotiateScreen({
   micMuted: boolean;
   /** The proposed terms, once the judge reads them back; null while still negotiating. */
   draft:
-    | (Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> & Partial<Pick<BetView, 'mySide'>>)
+    | (Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> &
+        Partial<Pick<BetView, 'mySide' | 'ratio'>>)
     | null;
   /** Only on A's phone (only A sets the terms). */
   typed?: TypedTermsPanel | undefined;
   /** Only on A's phone, with the Gemini relay on: Beat 6. */
   market?: MarketTermsPanel | undefined;
+  /** Both phones: the odds offer / counter / judge's suggestion (odds/useOdds useOddsPanel). */
+  odds?: OddsOfferPanel | undefined;
   onBack?: (() => void) | undefined;
   onDecline: () => void;
   tag?: string | undefined;
@@ -439,15 +471,18 @@ export function NegotiateScreen({
         : view.theirName;
 
   const typing = typed?.mode === 'typed';
+  const offerCard = odds ? <OfferCard panel={odds} /> : null;
   const draftCard = draft ? (
     <Card style={styles.draft}>
+      <Hairline />
       <View style={styles.draftHead}>
         <Label variant="small">{t(COPY.negotiate.draft)}</Label>
         {typing || !voice ? null : <DotsLabel text={t(COPY.negotiate.readBack)} variant="small" />}
       </View>
-      <DataText variant="labelStrong">{draft.claim}</DataText>
-      <DataText muted>
-        {`${draft.myStakeUsd} vs ${draft.theirStakeUsd}${draft.mySide ? ` · you ${draft.mySide}` : ''}`}
+      <DataText variant="heading">{draft.claim}</DataText>
+      <Hairline style={styles.draftRule} />
+      <DataText variant="amount">
+        {`${draft.myStakeUsd} vs ${draft.theirStakeUsd}${draft.ratio ? ` · ${draft.ratio}` : ''}${draft.mySide ? ` · you ${draft.mySide}` : ''}`}
       </DataText>
     </Card>
   ) : null;
@@ -473,43 +508,25 @@ export function NegotiateScreen({
               <Label variant="small" style={styles.fieldLabel}>
                 {t(COPY.negotiate.theBet)}
               </Label>
-              <TextInput
+              <ClaimField
                 testID="typed-claim"
-                accessibilityLabel={t(COPY.negotiate.theBet)}
+                label={t(COPY.negotiate.theBet)}
                 value={typed.claim}
                 onChangeText={typed.onClaim}
                 editable={!typed.sending && !typed.confirming}
-                multiline
-                // One paragraph: Return puts the keyboard away instead of adding a line.
-                returnKeyType="done"
-                submitBehavior="blurAndSubmit"
-                maxLength={200}
-                autoCapitalize="sentences"
-                keyboardAppearance="dark"
-                selectionColor={palette.accent}
-                style={styles.claimField}
               />
               <Label variant="small" style={styles.fieldLabel}>
                 {t(COPY.negotiate.stake)}
               </Label>
-              <View style={styles.stakes} accessibilityRole="radiogroup">
-                {typed.stakes.map((usd) => {
-                  const on = usd === typed.stakeUsd;
-                  return (
-                    <Pressable
-                      key={usd}
-                      testID={`typed-stake-${usd}`}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected: on }}
-                      onPress={() => typed.onStake(usd)}
-                      style={[styles.stake, on && styles.stakeOn]}
-                    >
-                      <Text style={[type.labelStrong, !on && styles.stakeOff]}>{`$${usd}`}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+              <StakePicker
+                options={typed.stakes}
+                value={typed.stakeUsd}
+                onChange={typed.onStake}
+                testIDPrefix="typed-stake-"
+              />
+              {typed.odds ? <TypedOdds panel={typed.odds} /> : null}
               {typed.note ? <DataText muted>{typed.note}</DataText> : null}
+              {offerCard}
               {draftCard}
               {market ? (
                 <QuietButton
@@ -519,34 +536,40 @@ export function NegotiateScreen({
                 />
               ) : null}
             </ScrollView>
-            {typed.canConfirm ? (
-              <PrimaryButton
-                testID="typed-confirm"
-                label={t(COPY.negotiate.lockItIn)}
-                busy={typed.confirming}
-                onPress={typed.onConfirm}
+            <View style={styles.actions}>
+              {typed.canConfirm ? (
+                <PrimaryButton
+                  testID="typed-confirm"
+                  label={t(COPY.negotiate.lockItIn)}
+                  busy={typed.confirming}
+                  onPress={typed.onConfirm}
+                />
+              ) : typed.waitingFor !== null ? (
+                <PrimaryButton
+                  testID="typed-waiting"
+                  label={fill.waitingFor(typed.waitingFor)}
+                  disabled
+                  onPress={() => undefined}
+                />
+              ) : (
+                <PrimaryButton
+                  testID="typed-send"
+                  label={t(COPY.negotiate.send)}
+                  busy={typed.sending}
+                  disabled={!typed.canSubmit}
+                  onPress={typed.onSubmit}
+                />
+              )}
+              {typed.canVoice ? (
+                <QuietButton label={t(COPY.negotiate.useVoice)} onPress={typed.onVoice} />
+              ) : null}
+              <TextButton
+                small
+                tone="danger"
+                label={t(COPY.negotiate.decline)}
+                onPress={onDecline}
               />
-            ) : typed.waitingFor !== null ? (
-              <PrimaryButton
-                testID="typed-waiting"
-                label={fill.waitingFor(typed.waitingFor)}
-                disabled
-                onPress={() => undefined}
-              />
-            ) : (
-              <PrimaryButton
-                testID="typed-send"
-                label={t(COPY.negotiate.send)}
-                busy={typed.sending}
-                disabled={!typed.canSubmit}
-                onPress={typed.onSubmit}
-              />
-            )}
-            <View style={styles.gap} />
-            {typed.canVoice ? (
-              <QuietButton label={t(COPY.negotiate.useVoice)} onPress={typed.onVoice} />
-            ) : null}
-            <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
+            </View>
           </Page>
         </KeyboardAvoidingView>
       </Screen>
@@ -557,23 +580,22 @@ export function NegotiateScreen({
       <TopBar onBack={onBack} title={t(COPY.negotiate.title)} tag={tag} />
       <Page>
         <View style={styles.judgeHead}>
-          <View style={[styles.judgeRing, speaking && styles.judgeRingOn]}>
-            <Label variant="heading">{t(COPY.ruling.judge)}</Label>
-          </View>
+          <JudgeDisc speaking={speaking} listening={voice && !speaking} />
           {!voice ? (
             <DotsLabel
               text={draft ? fill.waitingFor(view.theirName) : t(COPY.negotiate.waitingTerms)}
-              variant="label"
+              variant="value"
             />
           ) : speaking ? (
-            <DotsLabel text={t(COPY.negotiate.speaking)} variant="label" />
+            <DotsLabel text={t(COPY.negotiate.speaking)} variant="value" />
           ) : (
-            <DotsLabel text={t(COPY.negotiate.listening)} variant="label" />
+            <DotsLabel text={t(COPY.negotiate.listening)} variant="value" />
           )}
           {hasMic ? (
             <Chip
               label={micMuted ? t(COPY.negotiate.micMuted) : t(COPY.negotiate.micOn)}
               tone={micMuted ? 'muted' : 'accent'}
+              style={styles.chipCentred}
             />
           ) : null}
         </View>
@@ -596,20 +618,65 @@ export function NegotiateScreen({
             </View>
           ))}
         </ScrollView>
+        {offerCard}
         {draftCard}
-        {typed ? (
-          <QuietButton
-            testID="typed-open"
-            label={t(COPY.negotiate.typeIt)}
-            onPress={typed.onOpen}
-          />
-        ) : null}
-        {market ? (
-          <QuietButton testID="market-open" label={t(COPY.market.open)} onPress={market.onOpen} />
-        ) : null}
-        <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
+        <View style={styles.actions}>
+          {typed ? (
+            <QuietButton
+              testID="typed-open"
+              label={t(COPY.negotiate.typeIt)}
+              onPress={typed.onOpen}
+            />
+          ) : null}
+          {market ? (
+            <QuietButton testID="market-open" label={t(COPY.market.open)} onPress={market.onOpen} />
+          ) : null}
+          <TextButton small tone="danger" label={t(COPY.negotiate.decline)} onPress={onDecline} />
+        </View>
       </Page>
     </Screen>
+  );
+}
+
+/**
+ * The judge: a 120 pt #1C1C1F disc (like every other disc) with "Judge" in white 17/500. Green
+ * ring while it speaks; while it listens a faint 1 pt outer ring breathes between full and 0.4
+ * opacity (Reduce Motion: a still ring).
+ */
+function JudgeDisc({ speaking, listening }: { speaking: boolean; listening: boolean }) {
+  const reduced = useReduceMotion();
+  const breath = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!listening || reduced !== false) {
+      breath.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breath, {
+          toValue: 0.4,
+          duration: 1200,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(breath, {
+          toValue: 1,
+          duration: 1200,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [listening, reduced, breath]);
+  return (
+    <View style={styles.judgeWrap}>
+      {listening ? <Animated.View style={[styles.judgeOuter, { opacity: breath }]} /> : null}
+      <View style={[styles.judgeRing, speaking && styles.judgeRingOn]}>
+        <Label variant="rowMedium">{t(COPY.ruling.judge)}</Label>
+      </View>
+    </View>
   );
 }
 
@@ -658,12 +725,17 @@ function MarketPanel({
                   accessibilityState={{ selected: on, disabled: frozen }}
                   disabled={frozen}
                   onPress={() => market.onSide(side)}
-                  style={[styles.sideBox, on && styles.sideOn]}
+                  style={({ pressed }) => [
+                    styles.sideBox,
+                    on && styles.sideOn,
+                    frozen && styles.frozen,
+                    pressed && !frozen && styles.pressed,
+                  ]}
                 >
-                  <Text style={[type.heading, !on && styles.stakeOff]}>
+                  <Text style={[type.labelMedium, !on && styles.offText]}>
                     {t(side === 'UP' ? COPY.market.up : COPY.market.down)}
                   </Text>
-                  <Text style={[type.small, styles.stakeOff]}>
+                  <Text style={[type.display, on ? styles.onPct : styles.offText]}>
                     {pct === null ? '—' : `${pct}%`}
                   </Text>
                 </Pressable>
@@ -673,33 +745,27 @@ function MarketPanel({
           <Label variant="small" style={styles.fieldLabel}>
             {t(COPY.market.stake)}
           </Label>
-          <View style={styles.stakes} accessibilityRole="radiogroup">
-            {market.stakes.map((usd) => {
-              const on = usd === market.stakeUsd;
-              return (
-                <Pressable
-                  key={usd}
-                  testID={`market-stake-${usd}`}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: on, disabled: frozen }}
-                  disabled={frozen}
-                  onPress={() => market.onStake(usd)}
-                  style={[styles.stake, on && styles.stakeOn]}
-                >
-                  <Text style={[type.labelStrong, !on && styles.stakeOff]}>{`$${usd}`}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          <StakePicker
+            options={market.stakes}
+            value={market.stakeUsd}
+            onChange={market.onStake}
+            testIDPrefix="market-stake-"
+            disabled={frozen}
+          />
           <Card style={styles.marketCard}>
+            <Hairline />
             {q === null ? (
               <DotsLabel text={t(COPY.market.pricing)} variant="small" />
             ) : q.ok ? (
               <>
-                {q.replay ? <Chip label={t(COPY.market.replay)} /> : null}
-                <InfoRow label={t(COPY.market.split)} value={q.split ?? '—'} />
-                <InfoRow label={t(COPY.market.line)} value={q.strikeUsd ?? '—'} />
-                <InfoRow label={t(COPY.market.price)} value={q.priceUsd ?? '—'} />
+                {q.replay ? (
+                  <View style={styles.replay}>
+                    <Chip label={t(COPY.market.replay)} />
+                  </View>
+                ) : null}
+                <InfoRow label={t(COPY.market.split)} value={q.split ?? '—'} divider />
+                <InfoRow label={t(COPY.market.line)} value={q.strikeUsd ?? '—'} divider />
+                <InfoRow label={t(COPY.market.price)} value={q.priceUsd ?? '—'} divider />
                 <InfoRow
                   label={t(COPY.market.closesIn)}
                   value={q.lockableUntilMs === null ? '—' : countdownLabel(q.lockableUntilMs - now)}
@@ -720,105 +786,188 @@ function MarketPanel({
           {market.note ? <DataText muted>{market.note}</DataText> : null}
           {draftCard}
         </ScrollView>
-        {market.canConfirm ? (
-          <PrimaryButton
-            testID="market-confirm"
-            label={t(COPY.negotiate.lockItIn)}
-            busy={market.confirming}
-            onPress={market.onConfirm}
-          />
-        ) : market.waitingFor !== null ? (
-          <PrimaryButton
-            testID="market-waiting"
-            label={fill.waitingFor(market.waitingFor)}
-            disabled
-            onPress={() => undefined}
-          />
-        ) : (
-          <PrimaryButton
-            testID="market-send"
-            label={t(COPY.market.propose)}
-            busy={market.sending}
-            disabled={!market.canSubmit}
-            onPress={market.onSubmit}
-          />
-        )}
-        <View style={styles.gap} />
-        <QuietButton label={t(COPY.market.back)} onPress={market.onClose} />
-        <QuietButton label={t(COPY.negotiate.decline)} onPress={onDecline} />
+        <View style={styles.actions}>
+          {market.canConfirm ? (
+            <PrimaryButton
+              testID="market-confirm"
+              label={t(COPY.negotiate.lockItIn)}
+              busy={market.confirming}
+              onPress={market.onConfirm}
+            />
+          ) : market.waitingFor !== null ? (
+            <PrimaryButton
+              testID="market-waiting"
+              label={fill.waitingFor(market.waitingFor)}
+              disabled
+              onPress={() => undefined}
+            />
+          ) : (
+            <PrimaryButton
+              testID="market-send"
+              label={t(COPY.market.propose)}
+              busy={market.sending}
+              disabled={!market.canSubmit}
+              onPress={market.onSubmit}
+            />
+          )}
+          {/* Two quiet exits, close together: "Back" white 17/500, "Back out" red 15/500. */}
+          <View style={styles.exits}>
+            <TextButton dense tone="plain" label={t(COPY.market.back)} onPress={market.onClose} />
+            <TextButton
+              dense
+              small
+              tone="danger"
+              label={t(COPY.negotiate.decline)}
+              onPress={onDecline}
+            />
+          </View>
+        </View>
       </Page>
     </Screen>
   );
 }
 
+/**
+ * The claim well: a #0F0F11 fill, radius 14, no outline; focused, a 1 pt green border (the kit
+ * TextField's treatment, multi-line). Return puts the keyboard away instead of adding a line.
+ */
+function ClaimField({
+  testID,
+  label,
+  value,
+  onChangeText,
+  editable,
+}: {
+  testID: string;
+  label: string;
+  value: string;
+  onChangeText: (text: string) => void;
+  editable: boolean;
+}) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <TextInput
+      testID={testID}
+      accessibilityLabel={label}
+      value={value}
+      onChangeText={onChangeText}
+      editable={editable}
+      multiline
+      // One paragraph: Return puts the keyboard away instead of adding a line.
+      returnKeyType="done"
+      submitBehavior="blurAndSubmit"
+      maxLength={200}
+      autoCapitalize="sentences"
+      keyboardAppearance="dark"
+      selectionColor={palette.accent}
+      cursorColor={palette.accent}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={[styles.claimField, { borderColor: focused ? color.borderFocused : 'transparent' }]}
+    />
+  );
+}
+
+// Obsidian: content sits on black at the 20 pt margin; facts are hairline-divided rows, not boxes.
+// Colour is only the one green action, the live dot and the selected side.
+/** The judge's disc, and the gap to its breathing outer ring. */
+const JUDGE_DISC = 120;
+const JUDGE_HALO = 8;
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
-  gap: { height: space.x1 },
+  stackGap: { height: half.x15 },
+  actions: { gap: half.x15, paddingTop: space.x1, alignItems: 'stretch' },
+  exits: { marginTop: -half.x05 },
   access: { alignSelf: 'stretch', paddingHorizontal: space.x3 },
-  shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x2 },
+  shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x3 },
   matchCard: { marginTop: space.x1 },
-  fallback: { maxHeight: 220 },
-  fallbackHead: { color: palette.textSecondary, marginBottom: space.x1 },
+  matchRule: { marginBottom: space.x3 },
+  matchHead: {
+    flexDirection: 'row',
+    gap: space.x2,
+    alignItems: 'center',
+    marginBottom: space.x3,
+  },
+  matchText: { flex: 1, gap: half.x05 },
+  fallback: { maxHeight: space.x8 * 4 },
+  fallbackHead: { marginBottom: space.x1 },
   fallbackList: { flexGrow: 0 },
-  member: { flexDirection: 'row', alignItems: 'center', gap: space.x2, paddingVertical: 4 },
-  memberAction: { width: 120 },
-  matchHead: { flexDirection: 'row', gap: space.x2, alignItems: 'center', marginBottom: space.x2 },
-  incomingTitle: { marginTop: space.x3, textAlign: 'center' },
-  footer: { flex: 0 },
-  judgeHead: { alignItems: 'center', gap: space.x1, paddingVertical: space.x2 },
-  judgeRing: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 2,
-    borderColor: palette.hairline,
+  member: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: half.x15,
+    minHeight: space.x8,
+  },
+  memberRule: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.divider },
+  live: { flexDirection: 'row', alignItems: 'center', gap: space.x1, maxWidth: '100%' },
+  judgeHead: { alignItems: 'center', gap: half.x15, paddingTop: space.x2, paddingBottom: space.x3 },
+  judgeWrap: {
+    width: JUDGE_DISC + 2 * JUDGE_HALO,
+    height: JUDGE_DISC + 2 * JUDGE_HALO,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: palette.surface,
   },
-  judgeRingOn: { borderColor: palette.accent },
+  judgeOuter: {
+    ...StyleSheet.absoluteFill,
+    borderRadius: (JUDGE_DISC + 2 * JUDGE_HALO) / 2,
+    borderWidth: 1,
+    borderColor: palette.fill,
+  },
+  judgeRing: {
+    width: JUDGE_DISC,
+    height: JUDGE_DISC,
+    borderRadius: JUDGE_DISC / 2,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.fill,
+  },
+  judgeRingOn: { borderColor: color.live },
   captions: { gap: space.x2, paddingVertical: space.x2 },
-  caption: { gap: 2 },
-  judgeName: { color: palette.accent },
-  draft: { marginBottom: space.x1, gap: space.x1, borderRadius: radius.lg },
-  draftHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  form: { gap: space.x1, paddingVertical: space.x2 },
-  fieldLabel: { color: palette.textSecondary, marginTop: space.x1 },
+  caption: { gap: half.x05 },
+  judgeName: { ...type.smallStrong, color: palette.text },
+  draft: { marginTop: space.x1, marginBottom: space.x1, gap: half.x15 },
+  draftHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: half.x15,
+  },
+  draftRule: { marginTop: half.x05 },
+  form: { gap: space.x1, paddingTop: space.x1, paddingBottom: space.x5 },
+  fieldLabel: { marginTop: space.x2 },
   claimField: {
-    ...type.label,
+    ...type.input,
     minHeight: space.control * 2,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
+    borderWidth: border.focused,
+    backgroundColor: palette.surface,
     paddingHorizontal: space.x2,
-    paddingVertical: space.x1,
-    color: palette.text,
+    paddingTop: space.x2,
+    paddingBottom: space.x2,
     textAlignVertical: 'top',
   },
-  stakes: { flexDirection: 'row', gap: space.x1 },
-  stake: {
-    flex: 1,
-    height: space.control,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stakeOn: { borderColor: palette.accent, backgroundColor: palette.surface },
-  stakeOff: { color: palette.textSecondary },
-  sides: { flexDirection: 'row', gap: space.x1 },
+  offText: { color: palette.textSecondary },
+  onPct: { color: color.selected },
+  frozen: { opacity: 0.35 },
+  pressed: { opacity: 0.7 },
+  sides: { flexDirection: 'row', gap: half.x15 },
+  // Up / Down: no outlines. The chosen side is a #1C1C1F tile with its % in green; the other
+  // sits on black with a grey %.
   sideBox: {
     flex: 1,
     height: space.control * 2,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.border,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
+    gap: half.x05,
+    backgroundColor: palette.background,
   },
-  sideOn: { borderColor: palette.accent, backgroundColor: palette.surface },
-  marketCard: { marginTop: space.x2, gap: space.x1, borderRadius: radius.lg },
+  sideOn: { backgroundColor: palette.fill },
+  chipCentred: { alignSelf: 'center' },
+  replay: { alignItems: 'flex-start', paddingVertical: half.x15 },
+  marketCard: { marginTop: space.x3 },
 });

@@ -13,6 +13,7 @@
 import { z } from 'zod/v4';
 import { MAX_STAKE, MIN_STAKE } from '../constants';
 import { parseUsd } from '../money';
+import { checkOddsStakes } from '../odds-math';
 import { normTextDeep } from '../primitives';
 import {
   TermsProposalLoose,
@@ -135,7 +136,13 @@ export const PROPOSE_TERMS_BODY_SCHEMA = {
     amount_usd: {
       type: 'string',
       description:
-        "Spoken stake per person in dollars, e.g. '5' or '5.20'. Real_world: the even-money amount.",
+        "Party A's (the challenger's) stake in dollars, e.g. '15'. When stakes are even, the stake per person, e.g. '5' or '5.20'. Real_world: the even-money amount.",
+    },
+    // Additive (odds): NOT in `required`, so an agent synced before it keeps working.
+    stake_b_usd: {
+      type: 'string',
+      description:
+        "Party B's stake in dollars when the odds are not even, e.g. '5'. Empty or omitted = same as amount_usd. Real_world: empty.",
     },
     market_side: {
       type: 'string',
@@ -167,6 +174,8 @@ export const ProposeTermsArgs = z.object({
   failure_criteria: z.array(z.string()),
   edge_cases: z.array(z.object({ question: z.string(), answer: z.string() })),
   amount_usd: z.string(),
+  /** Additive (odds): B's stake when not even; '' / omitted = even. */
+  stake_b_usd: z.string().optional(),
   market_side: z.enum(['YES', 'NO', 'none']),
   deadline_minutes: z.number().int(),
 });
@@ -223,6 +232,21 @@ export function mapProposeTermsArgs(raw: unknown): MapResult {
     };
   }
 
+  // Odds: B's stake when it differs from A's; '' / omitted / equal = even (null).
+  let amountB: string | null = null;
+  if (a.stake_b_usd !== undefined && a.stake_b_usd !== '') {
+    try {
+      amountB = parseUsd(a.stake_b_usd);
+    } catch {
+      return {
+        ok: false,
+        issues: [{ path: 'stake_b_usd', message: "dollars like '5' or '5.20', or empty" }],
+        draftIssue: { code: 'AMBIGUOUS', message: 'stake_b_usd is not a dollar amount' },
+      };
+    }
+    if (amountB === amount) amountB = null;
+  }
+
   const realWorld = a.type === 'real_world';
   const candidate = {
     type: a.type,
@@ -235,6 +259,7 @@ export function mapProposeTermsArgs(raw: unknown): MapResult {
     edge_cases: a.edge_cases.map((e) => ({ ...e, asked_by: 'judge' as const })),
     evidence_source: realWorld ? 'gemini' : 'camera',
     amount,
+    amount_b: amountB,
     market_query: realWorld
       ? { asset: 'BTC', horizon: '5m', a_side: a.market_side === 'none' ? null : a.market_side }
       : null,
@@ -255,6 +280,8 @@ export function mapProposeTermsArgs(raw: unknown): MapResult {
       cross.push({ path: 'attempts', message: "real_world => count 1, 'single'" });
     if (t.market_query && t.yes_party !== (t.market_query.a_side === 'YES' ? 'A' : 'B'))
       cross.push({ path: 'yes_party', message: 'must be A when market_side is YES, else B' });
+    if (t.amount_b !== null)
+      cross.push({ path: 'stake_b_usd', message: 'real_world => empty (Gemini sets the split)' });
   }
   if (cross.length) return { ok: false, issues: cross };
   return { ok: true, proposal: t };
@@ -263,8 +290,16 @@ export function mapProposeTermsArgs(raw: unknown): MapResult {
 /** SCHEMAS §3 "Over-cap amounts are not refusals": a DraftIssue the judge counter-proposes. */
 export function stakeIssue(p: TermsProposal, maxStake: bigint = MAX_STAKE): DraftIssue | null {
   const amount = BigInt(p.amount);
-  if (amount > maxStake) return { code: 'STAKE_ABOVE_MAX', message: 'stake above max_stake' };
-  if (amount < MIN_STAKE) return { code: 'STAKE_BELOW_MIN', message: 'stake below MIN_STAKE' };
+  const amountB = p.amount_b === null || p.amount_b === undefined ? null : BigInt(p.amount_b);
+  for (const s of amountB === null ? [amount] : [amount, amountB]) {
+    if (s > maxStake) return { code: 'STAKE_ABOVE_MAX', message: 'stake above max_stake' };
+    if (s < MIN_STAKE) return { code: 'STAKE_BELOW_MIN', message: 'stake below MIN_STAKE' };
+  }
+  // Odds (skill): each side within bounds is not enough; the ratio is at most 10:1.
+  if (amountB !== null) {
+    const odds = checkOddsStakes(amount, amountB, maxStake);
+    if (odds) return { code: odds.code, message: odds.message };
+  }
   return null;
 }
 

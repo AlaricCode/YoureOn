@@ -38,6 +38,16 @@ import {
 } from '@youre-on/shared/judge/typed-terms';
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
+import {
+  oddsAcceptPath,
+  oddsOfferPath,
+  OddsOfferResponse,
+  oddsSuggestPath,
+  OddsSuggestResponse,
+  oddsWithdrawPath,
+  type OddsOfferRequest,
+  type OddsSuggestRequest,
+} from '@youre-on/shared/odds';
 import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
 import {
   BetEventsResponse,
@@ -82,6 +92,8 @@ export const FramesResponse = z.object({
     .passthrough()
     .nullish(),
 });
+/** POST /v1/bets/:id/review/decline -> 200 (../gg; tolerant: only `status` is read). */
+export const ReviewDeclined = z.object({ status: z.string() }).passthrough();
 /** §2.10 POST /v1/bets/:id/concede -> 202 */
 export const SubmittedResponse = z.object({ status: z.literal('submitted'), signature: Signature });
 /**
@@ -230,6 +242,20 @@ export function createYoApi(c: ApiClient) {
         idempotencyKey,
       }),
 
+    // Odds (either party, TERMS_PROPOSED; app/odds): offer / counter, accept, withdraw, and
+    // the judge's suggestion.
+    offerOdds: (betId: string, body: OddsOfferRequest) =>
+      c.request('POST', oddsOfferPath(betId), { json: body, schema: OddsOfferResponse }),
+    acceptOdds: (betId: string, offerId: string, n: number) =>
+      c.request('POST', oddsAcceptPath(betId, offerId), {
+        json: { n },
+        schema: OddsOfferResponse,
+      }),
+    withdrawOdds: (betId: string, offerId: string) =>
+      c.request('POST', oddsWithdrawPath(betId, offerId), { json: {} }),
+    suggestOdds: (betId: string, body: OddsSuggestRequest) =>
+      c.request('POST', oddsSuggestPath(betId), { json: body, schema: OddsSuggestResponse }),
+
     // Beat 6: the Gemini BTC 5-minute closer (party A). The quote is a preview; the binding
     // one is taken by POST …/terms/market.
     marketQuote: (amountMicro: string, aSide: 'YES' | 'NO') =>
@@ -306,6 +332,13 @@ export function createYoApi(c: ApiClient) {
         schema: AppealSubmitted,
         idempotencyKey,
       }),
+
+    /**
+     * The loser's "Keep ruling" on a spoken review request (../gg): closes it (review.closed
+     * 'declined'). Signed, no Idempotency-Key needed: the server answers 200 when already closed.
+     */
+    declineReview: (betId: string) =>
+      c.request('POST', `${bet(betId)}/review/decline`, { schema: ReviewDeclined }),
 
     // §2.15 judge-cam role
     setDeviceRole: (role: 'phone' | 'judge_cam', roomId?: string) =>

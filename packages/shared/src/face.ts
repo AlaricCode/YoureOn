@@ -251,10 +251,26 @@ export type FaceEnrollmentStatusResponse = z.infer<typeof FaceEnrollmentStatusRe
 export const FaceEnrollmentPatchRequest = z.object({ status: z.enum(['active', 'disabled']) });
 export type FaceEnrollmentPatchRequest = z.infer<typeof FaceEnrollmentPatchRequest>;
 
+/**
+ * How the scan was taken: `tap` (one photo per tap, the default when absent) or `live` (the
+ * camera re-matching faces as it pans). Each has its own rate-limit bucket (API-CONTRACT §1.7);
+ * the one-in-flight guard is shared.
+ */
+export const FaceMatchMode = z.enum(['tap', 'live']);
+export type FaceMatchMode = z.infer<typeof FaceMatchMode>;
+
+/** §1.7 per-user face-match buckets: `face-match` (tap) and `face-match/live`. */
+export const FACE_MATCH_BUCKETS = {
+  tap: { limit: 30, windowMs: 60_000 },
+  live: { limit: 60, windowMs: 60_000 },
+} as const;
+
 /** POST /v1/rooms/:room_id/face-match */
 export const FaceMatchRequest = z.object({
   probe: SealedEmbedding,
   model: FaceModelRef,
+  /** Absent = 'tap'. Older servers strip it (and charge the tap bucket). */
+  mode: FaceMatchMode.optional(),
   /** Capture metadata for latency and quality logs; never required, never stored. */
   capture: z
     .object({

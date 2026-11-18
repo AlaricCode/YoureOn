@@ -301,6 +301,8 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       'tool:propose_terms:create',
       'tool:confirm_terms:create',
       'tool:get_market_odds:create',
+      'tool:request_review:create',
+      'tool:suggest_odds:create',
       'tool:request_attempt:create',
       'tool:show_terms_card:create',
       'tool:cue:create',
@@ -419,6 +421,8 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         `PATCH /v1/convai/tools/${r.tool_ids.propose_terms}`,
         `PATCH /v1/convai/tools/${r.tool_ids.confirm_terms}`,
         `PATCH /v1/convai/tools/${r.tool_ids.get_market_odds}`,
+        `PATCH /v1/convai/tools/${r.tool_ids.request_review}`,
+        `PATCH /v1/convai/tools/${r.tool_ids.suggest_odds}`,
       ].sort(),
     );
     expect(store.secrets[0]._value).toBe('new');
@@ -454,7 +458,10 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         'conversation_config.agent.prompt.prompt',
       ]),
     );
+    // get_market_odds, request_review (the GG moment's spoken review) and (odds) suggest_odds
     expect(store.writes).toEqual([
+      'POST /v1/convai/tools',
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       `PATCH /v1/convai/agents/${before.agent_id}`,
     ]);
@@ -481,6 +488,8 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     const plan = dryRunPlan(OPTS);
     expect(plan.map((a) => `${a.method} ${a.path}`)).toEqual([
       'POST /v1/convai/secrets',
+      'POST /v1/convai/tools',
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
@@ -521,5 +530,59 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     expect(String(err)).not.toContain('tool-secret');
     expect((seen[0]!.headers as Record<string, string>)['xi-api-key']).toBe('sk_x');
     expect((seen[0]!.headers as Record<string, string>)['content-type']).toBe('application/json');
+  });
+
+  it('the GG moment: request_review is registered, skip_turn is a built-in tool, the prompt says when', async () => {
+    const { http, store } = fakeElevenLabs();
+    const r = await syncAgent(http, OPTS);
+    const rr = store.tools.find((t) => t.tool_config.name === 'request_review').tool_config;
+    expect(rr.api_schema.url).toBe('https://youre-on.fly.dev/el/tools/request_review');
+    expect(rr.pre_tool_speech).toBe('off'); // the reply's "say" is the only line
+    expect(rr.api_schema.request_body_schema.required).toEqual(['heard']);
+    expect(rr.api_schema.request_body_schema.properties).not.toHaveProperty('party'); // no speaker
+    const prompt = store.agents[0].conversation_config.agent.prompt;
+    expect(prompt.tool_ids).toContain(r.tool_ids.request_review);
+    expect(prompt.built_in_tools).toEqual({
+      skip_turn: expect.objectContaining({
+        type: 'system',
+        name: 'skip_turn',
+        params: { system_tool_type: 'skip_turn', wait_timeout_secs: -1 },
+      }),
+    });
+    expect(prompt.prompt).toContain('# After the ruling');
+    expect(prompt.prompt).toContain('call request_review at once');
+    expect(prompt.prompt).toContain('call skip_turn');
+    expect(prompt.prompt).not.toContain('file_appeal');
+  });
+
+  it('--agent-name: a test agent of its own; shared tools and the secret are never PATCHed', async () => {
+    const { http, store } = fakeElevenLabs();
+    const live = await syncAgent(http, OPTS);
+    store.writes.length = 0;
+    const test = await syncAgent(http, { ...OPTS, agentName: 'youre-on-judge-test-gg' });
+    // Only its own agent is written; the live judge's tools are reused by id.
+    expect(store.writes).toEqual(['POST /v1/convai/agents/create']);
+    expect(test.agent_id).not.toBe(live.agent_id);
+    expect(test.tool_ids).toEqual(live.tool_ids);
+    const agent = store.agents.find((a) => a.agent_id === test.agent_id);
+    expect(agent).toMatchObject({ name: 'youre-on-judge-test-gg', tags: ['youre-on', 'test'] });
+    expect(store.agents.find((a) => a.agent_id === live.agent_id).name).toBe('youre-on-judge');
+    // A tool that differs from this checkout stops the run instead of PATCHing the live tool.
+    store.writes.length = 0;
+    await expect(
+      syncAgent(http, {
+        ...OPTS,
+        baseUrl: 'https://elsewhere.example.com',
+        agentName: 'youre-on-judge-test-gg',
+      }),
+    ).rejects.toThrow(/never PATCHes a workspace tool/);
+    expect(store.writes).toEqual([]);
+    await expect(
+      syncAgent(http, { ...OPTS, agentName: 'youre-on-judge-test-gg', rotateSecret: true }),
+    ).rejects.toThrow(/shared with the live judge/);
+    // The live name itself is the normal sync (a no-op here).
+    const again = await syncAgent(http, { ...OPTS, agentName: 'youre-on-judge' });
+    expect(again.agent_id).toBe(live.agent_id);
+    expect(store.writes).toEqual([]);
   });
 });

@@ -25,13 +25,15 @@
 // carry the same values and simply confirm them. Those come from the QuickNode Stream or, when
 // it is off, the server's rpc_poll fallback: each says which in `observed_via` (SCHEMAS §10.2),
 // and only `quicknode_stream` ones may be presented as Streams.
-import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
+import { WsServerControlFrame, type BetSnapshot, type StageRivalry } from '@youre-on/shared/api';
 import { TERMINAL_BET_STATES, type PendingTx } from '@youre-on/shared/bet-state';
 import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
 import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
+import { foldGg, type GgView, type ReviewView } from './gg';
+import { foldOddsEvent, type OddsView } from './odds-state';
 
 export const MAX_EVENTS = 200;
 export const MAX_MARKET_POINTS = 150;
@@ -133,6 +135,8 @@ export interface BetView {
   user_ids: Record<PartyKey, string | null>;
   /** B's answer to the challenge (bet.invite_answered). */
   invite: 'accepted' | 'declined' | null;
+  /** The pair's record before this bet (bet.invited `rivalry`; null from older servers). */
+  rivalry: StageRivalry | null;
   envelope: TermsEnvelope | null;
   terms_code: string | null;
   auth: Record<PartyKey, { method: string; at: string } | null>;
@@ -176,8 +180,14 @@ export interface BetView {
     utterance_id: string;
   } | null;
   last_cue: string | null;
+  /** Skill odds: the shared fold of odds.offered / answered / agreed (odds-state.ts). */
+  odds: OddsView | null;
   /** Other tx signatures by kind (resolve, payout, close …) for Explorer links. */
   txs: Record<string, string>;
+  /** The loser's GG (bet.gg; gg.ts). */
+  gg: GgView | null;
+  /** A spoken review request (review.requested / review.closed; gg.ts). */
+  review: ReviewView | null;
   updated_at: number;
 }
 
@@ -315,6 +325,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     avatars: { A: null, B: null },
     user_ids: { A: null, B: null },
     invite: null,
+    rivalry: null,
     envelope: null,
     terms_code: null,
     auth: { A: null, B: null },
@@ -339,7 +350,10 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     last_judge_line: null,
     caption: null,
     last_cue: null,
+    odds: null,
     txs: {},
+    gg: null,
+    review: null,
     updated_at: at,
   };
 }
@@ -493,12 +507,20 @@ function foldState(b: BetView, e: Extract<RealtimeEvent, { type: 'bet.state' }>)
   return v;
 }
 
-/** Folds one event into its bet's view. */
+/** Folds one event into its bet's view (then the GG / review rules, gg.ts foldGg). */
 export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
+  return foldGg(foldCard(b, e, at), e);
+}
+
+function foldCard(b: BetView, e: RealtimeEvent, at: number): BetView {
   const v: BetView = { ...b, updated_at: at };
   switch (e.type) {
     case 'bet.invited':
-      return { ...v, names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name } };
+      return {
+        ...v,
+        names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name },
+        rivalry: e.payload.rivalry ?? v.rivalry,
+      };
     case 'bet.state':
       return foldState(v, e);
     case 'bet.invite_answered':
@@ -518,6 +540,10 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
       };
     case 'terms.declined':
       return { ...v, declined: e.payload.party };
+    case 'odds.offered':
+    case 'odds.answered':
+    case 'odds.agreed':
+      return { ...v, odds: foldOddsEvent(v.odds, e) };
     case 'tx.submitted':
     case 'tx.confirmed':
     case 'tx.failed': {

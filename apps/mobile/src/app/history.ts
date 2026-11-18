@@ -4,6 +4,7 @@
 // POST /v1/demo/seed-h2h, no on-chain footprint) are titled "Demo history", never like a real bet.
 // Pure TS: tested in node.
 import { MeBetItem } from '@youre-on/shared/api';
+import { formatUsd } from '@youre-on/shared/money';
 
 import type { HistoryItem } from '../preview/data';
 import { COPY, t } from '../screens/copy';
@@ -40,6 +41,9 @@ export function historyItemOf(b: MeBetItem): HistoryItem | null {
   const net = stake === null ? 0n : (payout ?? (b.state === 'VOIDED' ? stake : 0n)) - stake;
   const outcome: HistoryItem['outcome'] =
     b.state === 'VOIDED' || net === 0n ? 'void' : net > 0n ? 'won' : 'lost';
+  // A bet at odds shows both stakes ("$5 vs $15", mine first); an even one does not.
+  const theirs = b.their_stake ?? null;
+  const odds = b.my_stake !== null && theirs !== null && BigInt(theirs) !== stake;
   return {
     bet_id: b.bet_id,
     title: titleOf(b),
@@ -47,6 +51,9 @@ export function historyItemOf(b: MeBetItem): HistoryItem | null {
     net: net.toString(),
     outcome,
     settled_at: b.settled_at ?? '',
+    ...(odds && b.my_stake !== null && theirs !== null
+      ? { stakes: `${formatUsd(b.my_stake)} vs ${formatUsd(theirs)}` }
+      : {}),
   };
 }
 
@@ -60,4 +67,30 @@ export function historyFrom(items: readonly unknown[]): HistoryItem[] {
     const row = p.success ? historyItemOf(p.data) : null;
     return row ? [row] : [];
   });
+}
+
+/** micro-USDC (signed, as a string) -> whole cents, rounded toward zero like the balance. */
+const centsOf = (micro: string) => Number(BigInt(micro) / 10_000n);
+
+/**
+ * The Home sparkline: my balance (cents) after each settled bet, oldest first, ending at today's
+ * balance. Walks back from `balanceCents` through `items` (newest first, as historyFrom returns
+ * them) by each bet's net. Bets still in escrow are not in `items`, so the curve is the settled
+ * balance; that is the line the user's wins and losses moved. Fewer than one item -> [] (the
+ * Sparkline hides itself under two points).
+ */
+export function balanceSeries(balanceCents: number, items: readonly HistoryItem[]): number[] {
+  if (items.length === 0) return [];
+  const out = [balanceCents];
+  let at = balanceCents;
+  for (const it of items) {
+    at -= centsOf(it.net);
+    out.push(at);
+  }
+  return out.reverse();
+}
+
+/** The net (cents) of every loaded settled bet: the "+$12.50" under the balance. */
+export function netCents(items: readonly HistoryItem[]): number {
+  return items.reduce((sum, it) => sum + centsOf(it.net), 0);
 }

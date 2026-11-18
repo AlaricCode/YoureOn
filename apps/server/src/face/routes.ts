@@ -11,13 +11,15 @@
 // authorizes anything. Request and response bodies on these routes are never logged (nothing in
 // this server logs bodies; the face service also strips DB error messages).
 //
-// Rate limits (§1.7): face-match 30/min per user and 1 in flight; enrollment writes 5/h per
-// user. Turning matching off and deleting are never rate limited ("disable or delete it
+// Rate limits (§1.7): face-match 30/min per user (`face-match`, tap scans) plus 60/min for
+// `mode:'live'` scans (`face-match/live`, the panning camera), with 1 in flight per user across
+// both; enrollment writes 5/h per user. Turning matching off and deleting are never rate limited ("disable or delete it
 // anytime", BRIEF 5e).
 import type { Context } from 'hono';
 import {
   ACCEPTED_FACE_MODELS,
   FACE_CONSENT_PATH,
+  FACE_MATCH_BUCKETS,
   FACE_CONSENT_V1_RETENTION,
   FACE_CONSENT_V1_SHA256,
   FACE_CONSENT_V1_TEXT,
@@ -27,6 +29,7 @@ import {
   FaceEnrollmentRequest,
   FaceMatchRequest,
   type FaceConsentResponse,
+  type FaceMatchMode,
 } from '@youre-on/shared/face';
 import type { AppDeps, AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
@@ -42,7 +45,11 @@ import {
   setEnrollmentStatus,
 } from './service';
 
-export const FACE_MATCH_BUCKET = { limit: 30, windowMs: 60_000 } as const;
+/** §1.7 `face-match`: tap scans (and any request without `mode`). */
+export const FACE_MATCH_BUCKET = FACE_MATCH_BUCKETS.tap;
+/** §1.7 `face-match/live`: the live (panning) scan, so it can't use up the tap/Challenge path. */
+export const FACE_MATCH_LIVE_BUCKET = FACE_MATCH_BUCKETS.live;
+export const FACE_MATCH_LIVE_BUCKET_NAME = 'face-match/live';
 export const FACE_ENROLL_BUCKET = { limit: 5, windowMs: 60 * 60_000 } as const;
 
 export function createFaceRoutes(): RouteModule {
@@ -66,8 +73,10 @@ export function createFaceRoutes(): RouteModule {
         deps.log.warn('face.config', { problem });
       // DATA-MODEL §10 retention schedule (hourly; see ./retention.ts).
       deps.keeper?.register(faceRetentionTask(deps));
-      const matchGate = faceMatchGate((userId) =>
-        deps.rateLimit?.take('face-match', userId, FACE_MATCH_BUCKET),
+      const matchGate = faceMatchGate((userId, mode) =>
+        mode === 'live'
+          ? deps.rateLimit?.take(FACE_MATCH_LIVE_BUCKET_NAME, userId, FACE_MATCH_LIVE_BUCKET)
+          : deps.rateLimit?.take('face-match', userId, FACE_MATCH_BUCKET),
       );
 
       app.get(FACE_CONSENT_PATH, requireAppSession, (c) => c.json(consent(), 200));
@@ -101,10 +110,11 @@ export function createFaceRoutes(): RouteModule {
 
       app.post('/v1/rooms/:room_id/face-match', requireSignedRequest, async (c) => {
         const me = appAuth(c);
-        return matchGate(me.user_id, async () => {
-          const body = await readBody(c, FaceMatchRequest);
-          return c.json(await matchInRoom(deps, me.user_id, roomIdOf(c), body), 200);
-        });
+        return matchGate(
+          me.user_id,
+          async (body) => c.json(await matchInRoom(deps, me.user_id, roomIdOf(c), body), 200),
+          () => readBody(c, FaceMatchRequest),
+        );
       });
     },
   };
@@ -127,16 +137,22 @@ export function oneInFlight() {
 }
 
 /**
- * §1.7 face-match: one in flight per user, then the 30/min bucket. The token is taken inside the
- * guard, so a concurrent call refused with "One scan at a time" does not spend one; a call the
- * bucket refuses frees the guard like any other failure.
+ * §1.7 face-match: one in flight per user (tap and live share it), then the bucket of the body's
+ * mode (absent = tap). The body is read inside the guard, before the token: a concurrent call
+ * refused with "One scan at a time" and an invalid body (422 VALIDATION_FAILED) spend none; a call the bucket
+ * refuses frees the guard like any other failure. Without `read`, the call is a tap.
  */
-export function faceMatchGate(take: (userId: string) => void) {
+export function faceMatchGate(take: (userId: string, mode: FaceMatchMode) => void) {
   const oneAtATime = oneInFlight();
-  return <T>(userId: string, f: () => Promise<T>): Promise<T> =>
+  return <T, B extends { mode?: FaceMatchMode | undefined } = { mode?: undefined }>(
+    userId: string,
+    f: (body: B) => Promise<T>,
+    read?: () => Promise<B>,
+  ): Promise<T> =>
     oneAtATime(userId, async () => {
-      take(userId);
-      return f();
+      const body = read ? await read() : ({} as B);
+      take(userId, body.mode ?? 'tap');
+      return f(body);
     });
 }
 

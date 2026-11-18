@@ -8,11 +8,15 @@
 // connects with no typing (config.ts; `&demo=<DEMO_ADMIN_TOKEN>` is optional: the health strip
 // reads /v1/demo/health with the stage session's own bearer); ?preview plays a sample bet with
 // no server (preview.ts), ?preview=gemini walks one Gemini bet (Beat 6) through its clock to
-// Gemini's result (preview-market.ts). A ruled Gemini bet's evidence chain is fetched and
-// re-checked here (verify.ts), and the projector says whether it verified. The judge is heard
+// Gemini's result (preview-market.ts), ?preview=gg / ?preview=review the GG moment and the spoken
+// review request (preview-gg.ts), ?preview=odds walks two players agreeing the odds
+// (preview-odds.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
+// (verify.ts), and the projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
-// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, M mute, V voice, H help.
+// Keys: 1-6 REPLAY clips, R slow-mo, Esc closes, F full screen, Q big Explorer QR, M mute, V voice,
+// H help, P phone layout (stage only / phones + stage / phones big), O the phone sources
+// (PhonePanes.tsx).
 import {
   useCallback,
   useEffect,
@@ -57,7 +61,11 @@ import {
 import { seedBet } from './seed';
 import { DemoHealthError, fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
+import { isGgPreview, previewGgAt } from './preview-gg';
+import { ggCoversPayout, ggMomentOn } from './gg';
+import { GgMoment, useGgSounds } from './gg-moment';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
+import { isOddsPreview, previewOddsAt } from './preview-odds';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import { browserSpeech, cancelSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
 import { settlementFetches, verifyEvidence, type Verification } from './verify';
@@ -80,6 +88,11 @@ import {
   StageView,
   type LockSigner,
 } from './view';
+// --- slow-mo (feat/slowmo-replay) ---
+import { useSlowMo } from './SlowMoPlayer';
+import type { SlowmoOverlay } from './slowmo';
+// --- end slow-mo ---
+import { OperatorPanel, PhoneStage, usePhonePanes } from './PhonePanes';
 
 export {
   BetCard,
@@ -336,7 +349,7 @@ export function App() {
   const [form, setForm] = useState<FormState>(() => initialForm(launch));
   const [state, dispatch] = useReducer(applyFrame, initialTicker);
   const [overlay, setOverlay] = useState<
-    { kind: 'replay'; beat: number } | { kind: 'qr' | 'help' } | null
+    { kind: 'replay'; beat: number } | { kind: 'qr' | 'help' } | SlowmoOverlay | null
   >(null);
   const [live, setLive] = useState<Live | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -380,13 +393,29 @@ export function App() {
         ? null
         : marketPv
           ? { state: marketPv, now }
-          : previewAt(previewStart, now, launch.preview || null),
+          : isGgPreview(launch.preview)
+            ? previewGgAt(previewStart, now, launch.preview)
+            : isOddsPreview(launch.preview)
+              ? previewOddsAt(previewStart, now, launch.preview)
+              : previewAt(previewStart, now, launch.preview || null),
     [launch.preview, marketPv, previewStart, now],
   );
   const shown = pv ? pv.state : state;
   const shownNow = pv ? pv.now : now;
   const focus = shown.focusBetId ? (shown.bets[shown.focusBetId] ?? null) : null;
   const paidMoment = usePaidMoment(focus, shownNow);
+  // the phones on the projector: P cycles the layout, O picks each phone's source
+  const [search] = useState(() => {
+    try {
+      return globalThis.location?.search ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const panes = usePhonePanes(focus, search);
+  const { cycle: cyclePanes, toggleOperator } = panes;
+  // the GG moment (gg.ts): in the PAID moment's place, which it covers for the GG's payout
+  const ggMoment = ggMomentOn(focus, shownNow);
 
   // Secrets never stay in the address bar (or the browser history) on a projector.
   useEffect(() => {
@@ -736,13 +765,33 @@ export function App() {
     }
   }, [state.voiceClips]);
   const heard = useRef(new Set<string>());
+  const ggSounds = useGgSounds(shown, shownNow, audio);
   useEffect(() => {
     const fresh: Sfx[] = [];
     for (const id of Object.keys(shown.bets))
       fresh.push(...freshSounds(shown, id, heard.current, shownNow));
     // one sound per update: the newest moment wins
-    if (fresh.length) audio.current?.play(fresh[fresh.length - 1]!);
-  }, [shown, shownNow]);
+    if (fresh.length && audio.current?.play(fresh[fresh.length - 1]!))
+      ggSounds.played(fresh[fresh.length - 1]!);
+  }, [shown, shownNow, ggSounds]);
+
+  // --- slow-mo (feat/slowmo-replay) ---
+  // The slow-mo replay of the focused bet (SlowMoPlayer.tsx): R toggles it; it plays once on its own
+  // after a fresh payout's PAID moment, once the judge's line is over. One overlay slot with 1-6.
+  const slowmo = useSlowMo({
+    bet: focus,
+    now: shownNow,
+    conn: live ? { serverUrl: live.serverUrl, token: live.token } : null,
+    preview: pv !== null,
+    frameBlobs: shown.frameBlobs,
+    overlay,
+    setOverlay,
+    operatorOpen: panes.state.operator,
+    voiceIdle: () => voice.current?.idle !== false,
+  });
+  const slowmoRef = useRef(slowmo);
+  slowmoRef.current = slowmo;
+  // --- end slow-mo ---
 
   // Stage cues (gavel, drumroll, …): a flash on the projector, and the sound (the ElevenLabs
   // clip once it is loaded; a cue naming one the page has not loaded loads it for next time).
@@ -751,7 +800,7 @@ export function App() {
     if (!shown.cueCount || !shown.lastCue) return;
     const { kind, audio_url } = shown.lastCue;
     setFlash(kind);
-    if (isSfx(kind)) audio.current?.play(kind);
+    if (isSfx(kind) && ggSounds.cueAllowed(kind)) audio.current?.play(kind);
     const l = liveRef.current;
     if (audio_url && l && !audio.current?.hasGenerated(kind as CueKind))
       fetchAudio(l.serverUrl, l.token, audio_url).then(
@@ -760,7 +809,7 @@ export function App() {
       );
     const t = setTimeout(() => setFlash(null), 900);
     return () => clearTimeout(t);
-  }, [shown.cueCount, shown.lastCue]);
+  }, [shown.cueCount, shown.lastCue, ggSounds]);
 
   useEffect(() => {
     const unlock = () => {
@@ -780,10 +829,17 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === 'escape') setOverlay(null);
-      else if (k === 'f') toggleFullscreen();
+      if (k === 'escape') {
+        setOverlay(null);
+        toggleOperator(false);
+      } else if (k === 'f') toggleFullscreen();
+      else if (k === 'r')
+        slowmoRef.current.toggle(); // slow-mo (feat/slowmo-replay)
+      else if (k === 'p') cyclePanes();
+      else if (k === 'o') toggleOperator();
       else if (k === 'q') setOverlay((o) => (o?.kind === 'qr' ? null : { kind: 'qr' }));
       else if (k === 'h' || k === '?')
         setOverlay((o) => (o?.kind === 'help' ? null : { kind: 'help' }));
@@ -805,7 +861,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [cyclePanes, toggleOperator]);
 
   const field = (
     k: keyof FormState,
@@ -835,22 +891,35 @@ export function App() {
   return (
     <>
       {pv || live ? (
-        <StageView
-          state={shown}
-          now={shownNow}
-          preview={pv ? launch.preview : null}
-          onDisconnect={live ? disconnect : undefined}
-          health={pv ? PREVIEW_HEALTH : health}
-          healthError={pv ? null : healthError}
-          showHealth={
-            pv ? true : !!live && (health !== null || healthError !== null || !!live.demoKey)
+        <PhoneStage
+          panes={panes}
+          bet={focus}
+          badge={
+            pv
+              ? { text: 'PREVIEW', cls: 'preview' }
+              : shown.status === 'open'
+                ? { text: 'LIVE', cls: 'live' }
+                : { text: shown.status.toUpperCase(), cls: 'down' }
           }
-          replays={replays}
-          roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
-          sound={sound}
-          voice={voiceLabel(voiceOn, !pv && !!audioCaps?.tts, voiceHow)}
-          lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
-          verifications={pv ? undefined : verifications}
+          stage={
+            <StageView
+              state={shown}
+              now={shownNow}
+              preview={pv ? launch.preview : null}
+              onDisconnect={live ? disconnect : undefined}
+              health={pv ? PREVIEW_HEALTH : health}
+              healthError={pv ? null : healthError}
+              showHealth={
+                pv ? true : !!live && (health !== null || healthError !== null || !!live.demoKey)
+              }
+              replays={replays}
+              roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
+              sound={sound}
+              voice={voiceLabel(voiceOn, !pv && !!audioCaps?.tts, voiceHow)}
+              lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
+              verifications={pv ? undefined : verifications}
+            />
+          }
         />
       ) : (
         <div className="stage connect">
@@ -893,8 +962,8 @@ export function App() {
           </form>
           <ReplayLine replays={replays} off={launch.noPreload} />
           <p className="muted small">
-            Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}
-            <a href="?preview">open the preview</a>
+            Keys: 1–6 REPLAY clips · R slow-mo · F full screen · Q big QR · P phones · O phone
+            sources · H help · <a href="?preview">open the preview</a>
           </p>
           <p className="muted small tip">
             No typing on the projector: open <code>/stage/?room=ABC234#key=STAGE_KEY</code> (the
@@ -902,7 +971,12 @@ export function App() {
           </p>
         </div>
       )}
-      {paidMoment && focus?.payout && <PaidMoment bet={focus} />}
+      {ggMoment && focus?.gg ? (
+        <GgMoment bet={focus} now={shownNow} />
+      ) : (
+        paidMoment && focus?.payout && !ggCoversPayout(focus) && <PaidMoment bet={focus} />
+      )}
+      {slowmo.node /* slow-mo (feat/slowmo-replay) */}
       {flash && <div className={`flash ${flash}`} aria-hidden="true" />}
       {overlay?.kind === 'replay' && (
         <ReplayOverlay
@@ -916,6 +990,7 @@ export function App() {
         <QrOverlay tx={focus ? featuredTx(focus) : null} onClose={() => setOverlay(null)} />
       )}
       {overlay?.kind === 'help' && <HelpOverlay onClose={() => setOverlay(null)} />}
+      {panes.state.operator && <OperatorPanel panes={panes} bet={focus} />}
     </>
   );
 }
