@@ -1331,6 +1331,51 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     );
   });
 
+  /** The appellant's 3/h bucket holds exactly `n` tokens now (takes them, then one is refused). */
+  function expectAppealTokens(limiter: RateLimiter, userId: string, n: number) {
+    for (let i = 0; i < n; i++) limiter.take('appeal', userId, APPEAL_BUCKET);
+    expect(() => limiter.take('appeal', userId, APPEAL_BUCKET)).toThrow(
+      expect.objectContaining({ code: 'RATE_LIMITED' }),
+    );
+  }
+
+  it('the 3/h appeal bucket (a live limiter): refused taps spend nothing, only the accepted filing does', async () => {
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8); // B_WINS: A appeals
+    await expectRuled(betId, r);
+    const code = (x: { json: Record<string, any> | null }) => x.json?.error?.code;
+    const limiter = new RateLimiter(now);
+    ctx.deps.rateLimit = limiter;
+    try {
+      panel = { anthropic: vote('MET'), openai: vote('MET', 0.8), google: vote('NOT_MET') };
+      const { body, msg } = await appealBody(betId, 'A', r);
+      // More refused taps than the bucket holds (a stale message, the wrong key's signature):
+      // each is refused for what it is, never RATE_LIMITED, and costs nothing.
+      for (let i = 0; i <= APPEAL_BUCKET.limit; i++) {
+        const stale = i % 2 === 0;
+        const refused = await signed(
+          A,
+          'POST',
+          `/v1/bets/${betId}/appeal`,
+          stale
+            ? { ...body, message_sha256: sha256Hex(`stale message ${i}`) }
+            : { ...body, party_signature: b58.decode(ed.sign(msg, keyB.secret)) },
+        );
+        expect(code(refused)).toBe(stale ? 'MESSAGE_MISMATCH' : 'SIGNATURE_INVALID');
+      }
+      const filed = await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body);
+      expect(filed.status, JSON.stringify(filed.json)).toBe(202);
+      // the same filing again (a lost 202): answered from the filing, no token
+      expect((await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body)).json).toEqual(filed.json);
+      await lc.idle();
+      expectAppealTokens(limiter, A.session.user.user_id, APPEAL_BUCKET.limit - 1);
+    } finally {
+      ctx.deps.rateLimit = null;
+    }
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+  });
+
   it('APPEAL_WINDOW_CLOSED at appeal_deadline − 1 s: GET and POST refused, then finalize pays', async () => {
     const betId = await lockedBet();
     syncClock();
@@ -1362,7 +1407,16 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     // The server's clock says the window is open; the chain's is already at appeal_deadline.
     const deadline = (await onchainBet(betId))!.appealDeadline;
     setNow(svm.svm, deadline);
-    const refused = await signed(B, 'POST', `/v1/bets/${betId}/appeal`, body);
+    // A live limiter: the chain's refusal gives the filing's token back.
+    const limiter = new RateLimiter(now);
+    ctx.deps.rateLimit = limiter;
+    let refused: Awaited<ReturnType<typeof signed>>;
+    try {
+      refused = await signed(B, 'POST', `/v1/bets/${betId}/appeal`, body);
+    } finally {
+      ctx.deps.rateLimit = null;
+    }
+    expectAppealTokens(limiter, B.session.user.user_id, APPEAL_BUCKET.limit);
     expect(refused.status).toBe(409);
     expect(refused.json!.error).toMatchObject({
       code: 'APPEAL_WINDOW_CLOSED',
