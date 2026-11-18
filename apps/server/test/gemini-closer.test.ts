@@ -133,7 +133,10 @@ describeDb(
       // Its own database: gemini_markets rows (one per contract) are global, and this suite
       // re-uses the recorded contract every test.
       const url = await ownDatabase(DB_URL!, 'gemini');
-      ctx = await startTestServer({ now, env: { DEMO_MODE: 'true', DATABASE_URL: url } });
+      ctx = await startTestServer({
+        now,
+        env: { DEMO_MODE: 'true', DATABASE_URL: url, DEMO_ADMIN_TOKEN: 'demo-admin-closer' },
+      });
       await ctx.deps.db.execute(sql`TRUNCATE gemini_markets, market_snapshots CASCADE`);
       // The payout seam: record the ruling and move the bet on, as resolve -> RULED would.
       ctx.deps.onRuling = async (betId, ruling) => {
@@ -697,6 +700,32 @@ describeDb(
       expect([a, b]).toEqual(['settled', 'settled']);
       expect(await settlementRows(betId)).toHaveLength(1);
       expect(ruled).toHaveLength(1);
+    });
+
+    it('GET /v1/demo/health reports the Gemini relay, the live contract and the waiting bets', async () => {
+      await lockedBet('UP');
+      const res = await fetch(`${ctx.base}/v1/demo/health`, {
+        headers: { 'X-YO-Demo-Key': 'demo-admin-closer' },
+      });
+      expect(res.status).toBe(200);
+      const h = (await res.json()) as any;
+      expect(h.gemini).toEqual({
+        feed: true,
+        real_world_enabled: true,
+        last_ok_at: new Date(T0237).toISOString(),
+        last_error: null,
+        rollovers: 0,
+        current: {
+          event_ticker: TICKER,
+          expiry: '2026-11-18T02:40:00.000Z',
+          strike: '64389.6',
+          lockable: true,
+          lockable_until: '2026-11-18T02:38:00.000Z',
+          refusal: null,
+        },
+        next_window_start: '2026-11-18T02:40:00.000Z',
+        awaiting_market: 1,
+      });
     });
 
     it('a bet that left AWAITING_MARKET (e.g. RULED) is skipped and forgotten', async () => {
