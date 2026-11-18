@@ -2,6 +2,8 @@
 //   POST /v1/voice/tokens       (S)  mint an ElevenLabs conversation token (API-CONTRACT §2.6)
 //   POST /el/tools/propose_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
+//   POST /v1/bets/:bet_id/voice/lines (S, A)  transcript relay -> judge.line / party.line (./relay)
+//   POST /v1/bets/:bet_id/cues        (S, A)  `cue` client tool -> stage.cue (./relay)
 //
 // createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
 // sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
@@ -25,6 +27,7 @@ import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import { createElevenLabsClient, UpstreamError, type ElevenLabsClient } from './elevenlabs';
+import { cuesHandler, LineDedupe, voiceLinesHandler } from './relay';
 import {
   confirmTermsHandler,
   proposeTermsHandler,
@@ -38,6 +41,7 @@ export interface VoiceRoutesOptions {
   elevenlabs?: ElevenLabsClient | ((deps: AppDeps) => ElevenLabsClient);
   sink?: ProposalSink;
   state?: ToolState;
+  lines?: LineDedupe;
 }
 
 export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
@@ -155,6 +159,13 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         proposeTermsHandler({ state, sink: o.sink ?? termsSink }),
       );
       app.post('/el/tools/confirm_terms', confirmTermsHandler({ state }));
+
+      app.post(
+        '/v1/bets/:bet_id/voice/lines',
+        requireSignedRequest,
+        voiceLinesHandler(o.lines ?? new LineDedupe()),
+      );
+      app.post('/v1/bets/:bet_id/cues', requireSignedRequest, cuesHandler());
     },
   };
 }
