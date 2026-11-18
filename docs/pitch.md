@@ -111,11 +111,12 @@ scan the QR."
 
 ### 2:25–3:20 · Beat 4: the attempt
 
-> **Presenter:** "Now B flips. The judge cam is that third phone."
+> **Presenter:** "Now B flips. The judge cam is that third phone." (Two phones only: "A's phone is
+> the camera now", and A films; [`runbook.md`](runbook.md#phones-and-room).)
 
-| Judge cam                                 | Phone A / Phone B                                                       | Stage                                                                                 |
-| ----------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| 3-2-1, records the flip, uploads 8 frames | "Judging…" → the ruling and the reason → the loser's phone shows **GG** | Attempt → Ruling on the phase rail; the evidence frames; the ruling and reason; gavel |
+| Judge cam (or phone A)                                      | Phone A / Phone B                                                       | Stage                                                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 3-2-1, records the flip, uploads 12 frames + a landing crop | "Judging…" → the ruling and the reason → the loser's phone shows **GG** | Attempt → Ruling on the phase rail; the evidence frames; the ruling and reason; gavel |
 
 > **Presenter:** "Claude looked at the frames and ruled in about three seconds. The ruling's hash,
 > which commits to every frame it saw, is on chain. Now the loser has two choices: GG, or appeal

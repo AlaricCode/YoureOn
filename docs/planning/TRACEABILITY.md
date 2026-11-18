@@ -212,7 +212,7 @@ Every requirement in BRIEF.md (as amended, plus D1–D7) mapped to the spec sect
 | J1 | Claude via the Anthropic API, structured JSON outputs validated by Zod | 5c | FND §3.8; API §7.1 | D2-J4, D3-J1, D1-J1 | covered (terms extraction runs on Claude inside the ElevenLabs agent, D6; the server validates it with Zod) |
 | J2 | Terms schema: claim, type, attempts, criteria, edge_cases, evidence_source, stakes, deadline | 5c | SCH §2.1 | D0-J1 | covered |
 | J3 | At most 2 clarifying questions, then read the terms back | 5c | SCH §0.1 `MAX_CLARIFICATIONS`, §3 | D2-J1 | covered |
-| J4 | Ruling: a short clip, ~8 frames including the final ones, sent with the terms | 5c | SCH §4; FND §3.3 | D3-M1, D3-J1 | covered |
+| J4 | Ruling: a short clip, ~8 frames including the final ones, sent with the terms | 5c | SCH §4; FND §3.3; README D10 | D3-M1, D3-J1 | covered (D10: 12 frames, 8 of them on the landing, + one landing crop) |
 | J5 | Output A_WINS / B_WINS / REDO, confidence, reason; confidence < 0.8 → REDO | 5c | SCH §5.1–§5.2 | D3-J1, D3-J2 | covered (deliberate shape: the model emits `claim_result` and the server maps it, FND §2.3; `MAX_REDOS` = 2 then HEARING, D7) |
 | J6 | Hash the clip → `evidence_hash` onchain | 5c | SCH §4 table; ESC `resolve` | D3-M1, D3-L1 | covered (plus `frame_hashes` in `ruling_hash`, D7) |
 | J7 | Hearing: push-to-talk turns, one phone each; the ruling cites the evidence | 5c | SCH §6; API §2.11 | D4-J1, D4-M3 | covered |
@@ -416,3 +416,4 @@ Bounty rows H19–H21 cover "core", "filter + destination" and the README.
 ## Changelog
 
 - **2026-11-08:** first version (completeness critic pass). 207 requirements from BRIEF (as amended) and D1–D7, mapped to spec and task. 33 rows fixed in place in TASKS, SETUP-CHECKLIST and ARCHITECTURE; 5 rows are deliberately out of scope; 11 contradictions checked (7 fixed or recorded, 2 kept or stale with no action, 2 checks found none).
+- **2026-11-18:** J4 points at D10 (12 frames + the landing crop, branch `feat/attempt-capture`).

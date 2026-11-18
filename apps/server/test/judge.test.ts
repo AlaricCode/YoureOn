@@ -11,6 +11,11 @@ import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
 import { Ruling } from '@youre-on/shared/ruling';
+import {
+  FRAME_END_GUARD_MS,
+  judgeFrameTimesMs,
+  MAX_UPLOAD_IMAGES,
+} from '@youre-on/shared/judge/frames';
 import { computeTermsHash, type Terms } from '@youre-on/shared/terms';
 import { issueAppSession } from '../src/auth/sessions';
 import { MockLlm, type MockReply, type MockResponder } from '../src/providers/mock/llm';
@@ -18,9 +23,9 @@ import type { ChatRequest } from '../src/providers/types';
 import { routeModules } from '../src/routes';
 import { compareChecks, isBottleFlip } from '../src/judge/checks';
 import { rulingCue } from '../src/judge/cues';
-import { JUDGE_TIMEOUT_MS } from '../src/judge/prompt';
+import { buildJudgeParts, JUDGE_SYSTEM_PROMPT, JUDGE_TIMEOUT_MS } from '../src/judge/prompt';
 import { buildRuling, cachedVerdict, CACHED_RULING_MODEL, type Judged } from '../src/judge/ruling';
-import { createJudgeRoutes, MAX_FRAME_BYTES } from '../src/judge/routes';
+import { createJudgeRoutes, FRAMES_BODY_LIMIT, MAX_FRAME_BYTES } from '../src/judge/routes';
 import { loadFinalTerms } from '../src/judge/terms';
 import { RateLimiter } from '../src/http/rate-limit';
 import { buildApp } from '../src/app';
@@ -158,6 +163,79 @@ describe('cues (§4.5)', () => {
   });
 });
 
+describe('judge prompt labels (D10: the landing frames and the landing crop)', () => {
+  const terms = {
+    claim: 'Jake lands a bottle flip upright on its base.',
+    attempts: { count: 1, rule: 'single' },
+    success_criteria: ['The bottle comes to rest standing upright on its base.'],
+    failure_criteria: [],
+    edge_cases: [],
+  } as unknown as Terms;
+  const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+  const texts = (parts: ReturnType<typeof buildJudgeParts>) =>
+    parts.flatMap((p) => (p.kind === 'text' ? [p.text] : []));
+
+  it('12 frames + the crop: frames 4-11 are LANDING, image 12 is the crop of frame 11', () => {
+    const times = judgeFrameTimesMs(6000);
+    const frames = [
+      ...times.map((t_ms) => ({ t_ms, bytes: jpg })),
+      { t_ms: times.at(-1)!, bytes: jpg, landing_crop: true },
+    ];
+    const parts = buildJudgeParts(terms, 'Jake', frames, 6000);
+    expect(parts.filter((p) => p.kind === 'image')).toHaveLength(13);
+    const t = texts(parts);
+    expect(t[1]).toContain('13 images follow, numbered 0 to 12');
+    expect(t[1]).toContain('Frames 4 to 11 are marked LANDING: the last 1.2 s of the clip');
+    expect(t[1]).toContain('Image 12 is the LANDING CROP: frame 11 again');
+    expect(t).toContain('Frame 3/12 at t=3.54s:');
+    expect(t).toContain('Frame 4/12 at t=4.87s, LANDING:');
+    expect(t).toContain('Frame 11/12 at t=5.92s, LANDING:');
+    expect(t).toContain(
+      'Frame 12/12, LANDING CROP of frame 11 (t=5.92s, the middle of the picture at full resolution):',
+    );
+    // each label sits right before its image
+    const i = parts.findIndex((p) => p.kind === 'text' && p.text.startsWith('Frame 12/12'));
+    expect(parts[i + 1]).toMatchObject({ kind: 'image' });
+  });
+
+  it("an older phone's 8 u4d4 frames: its dense last second is LANDING; no crop", () => {
+    const end = 6000 - FRAME_END_GUARD_MS;
+    const dense = end - 1000;
+    const times = [0, 1, 2, 3].map((i) => Math.round((dense * i) / 4));
+    times.push(...[1, 2, 3, 4].map((i) => Math.round(dense + (1000 * i) / 4)));
+    const t = texts(
+      buildJudgeParts(
+        terms,
+        'Jake',
+        times.map((t_ms) => ({ t_ms, bytes: jpg })),
+        6000,
+      ),
+    );
+    expect(t[1]).toContain('8 images follow, numbered 0 to 7, in time order');
+    expect(t[1]).toContain('Frames 4 to 7 are marked LANDING');
+    expect(t[1]).not.toContain('CROP');
+    expect(t.filter((x) => x.endsWith(', LANDING:'))).toHaveLength(4);
+  });
+
+  it('without a duration, the landing window ends at the last frame', () => {
+    const times = judgeFrameTimesMs(4000);
+    const t = texts(
+      buildJudgeParts(
+        terms,
+        'Jake',
+        times.map((t_ms) => ({ t_ms, bytes: jpg })),
+      ),
+    );
+    expect(t.filter((x) => x.endsWith(', LANDING:'))).toHaveLength(8);
+  });
+
+  it('the system prompt says what LANDING and the LANDING CROP are', () => {
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/frames marked LANDING/);
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/LANDING CROP/);
+    expect(JUDGE_SYSTEM_PROMPT).not.toMatch(/The LAST frames decide/);
+  });
+});
+
 // ---- HTTP + DB -------------------------------------------------------------------------
 
 describeDb('judge pipeline (DB)', () => {
@@ -256,8 +334,11 @@ describeDb('judge pipeline (DB)', () => {
     };
   }
 
-  /** A bet A→B in the room, frozen + LOCKED directly in the DB (the lock stream's job). */
-  async function lockedBet(): Promise<string> {
+  /**
+   * A bet A→B in the room, frozen + LOCKED directly in the DB (the lock stream's job). B performs
+   * (the demo's bottle flip) unless `performer` says A.
+   */
+  async function lockedBet(performer: 'A' | 'B' = 'B'): Promise<string> {
     const created = await post(A, '/v1/bets', {
       room_id: roomId,
       opponent_user_id: uid(B),
@@ -274,9 +355,9 @@ describeDb('judge pipeline (DB)', () => {
       party_a: { pubkey: A.wallet.pubkey, display_name: 'Logan' },
       party_b: { pubkey: B.wallet.pubkey, display_name: 'Jake' },
       type: 'skill',
-      claim: 'Jake lands a bottle flip upright on its base.',
-      performer: 'B',
-      yes_party: 'B',
+      claim: `${performer === 'A' ? 'Logan' : 'Jake'} lands a bottle flip upright on its base.`,
+      performer,
+      yes_party: performer,
       attempts: { count: 1, rule: 'single' },
       success_criteria: [
         'The bottle rotates at least once in the air.',
@@ -326,18 +407,41 @@ describeDb('judge pipeline (DB)', () => {
     expect(r.status).toBe(204);
   }
 
+  /** Two phones: the room has no judge cam on the server. */
+  async function unbindCam() {
+    await ctx.deps.db
+      .update(devices)
+      .set({ role: 'phone', judge_room_id: null })
+      .where(eq(devices.id, CAM.session.device_id));
+  }
+
   function jpeg(i: number): Uint8Array {
     return new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...randomBytes(64), i & 0xff, 0xff, 0xd9]);
   }
 
-  /** Signed multipart upload of `n` frames; `tamper` corrupts one frame after hashing. */
+  /**
+   * Signed multipart upload of `n` frames; `tamper` corrupts one frame after hashing. `crops`
+   * flags those indexes as landing crops; `durationMs` samples the frames' times as the phone
+   * does (judgeFrameTimesMs, a crop at the last frame's time).
+   */
   async function uploadFrames(
     u: SignedUp,
     betId: string,
     attemptNo: number,
-    o: { n?: number; tamper?: number; clipHash?: string; frames?: Uint8Array[] } = {},
+    o: {
+      n?: number;
+      tamper?: number;
+      clipHash?: string;
+      frames?: Uint8Array[];
+      crops?: number[];
+      durationMs?: number;
+      recordedBy?: 'A' | 'B';
+    } = {},
   ) {
     const frames = o.frames ?? Array.from({ length: o.n ?? 8 }, (_, i) => jpeg(i));
+    const crops = new Set(o.crops ?? []);
+    const times = o.durationMs ? judgeFrameTimesMs(o.durationMs, frames.length - crops.size) : null;
+    let r = 0;
     const evidence = {
       schema_version: 1,
       kind: 'camera',
@@ -346,10 +450,15 @@ describeDb('judge pipeline (DB)', () => {
       clip_sha256: o.clipHash ?? H(`clip ${betId} ${attemptNo}`),
       clip_bytes: 5_500_000,
       mime: 'video/quicktime',
-      duration_ms: 4200,
-      recorded_by: 'A',
+      duration_ms: o.durationMs ?? 4200,
+      recorded_by: o.recordedBy ?? 'A',
       recorded_at: new Date().toISOString(),
-      frames: frames.map((f, i) => ({ index: i, t_ms: 2000 + i * 250, sha256: sha256Hex(f) })),
+      frames: frames.map((f, i) => ({
+        index: i,
+        t_ms: times ? (crops.has(i) ? times.at(-1)! : times[r++]!) : 2000 + i * 250,
+        sha256: sha256Hex(f),
+        ...(crops.has(i) ? { landing_crop: true } : {}),
+      })),
     };
     const form = new FormData();
     form.append('evidence', new Blob([JSON.stringify(evidence)], { type: 'application/json' }));
@@ -903,6 +1012,239 @@ describeDb('judge pipeline (DB)', () => {
       await judge.idle();
     } finally {
       ctx.deps.rateLimit = null;
+    }
+  });
+
+  // ---- D10: 12 frames + the landing crop ----
+
+  it('12 frames + the landing crop: 202; the model sees 13 labelled images; the ruling commits to all 13', async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    replies = [met({ cited_frames: [10, 11, 12] })];
+    const calls0 = llm.calls.length;
+    const up = await uploadFrames(CAM, betId, 1, { n: 13, crops: [12], durationMs: 6000 });
+    expect(up.status).toBe(202);
+    expect(up.json!.frame_hashes).toHaveLength(13);
+    await judge.idle();
+
+    expect(llm.calls.length - calls0).toBe(1);
+    const call = llm.calls.at(-1)! as ChatRequest<unknown>;
+    expect(call.parts.filter((p) => p.kind === 'image')).toHaveLength(13);
+    const text = call.parts.flatMap((p) => (p.kind === 'text' ? [p.text] : [])).join('\n');
+    expect(text).toContain('Frames 4 to 11 are marked LANDING');
+    expect(text).toContain('Frame 12/12, LANDING CROP of frame 11');
+
+    const [r] = await rulingRows(betId);
+    expect(r).toMatchObject({ outcome: 'B_WINS', cited_frames: [10, 11, 12] });
+    expect(r!.frame_hashes).toEqual(up.frames.map((f) => sha256Hex(f)));
+    const [att] = await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId));
+    expect(JSON.parse(att!.evidence_canonical!).frames.at(-1)).toMatchObject({
+      index: 12,
+      landing_crop: true,
+    });
+    const stored = await ctx.deps.db
+      .select()
+      .from(attemptFrames)
+      .where(eq(attemptFrames.attempt_id, att!.id));
+    expect(stored).toHaveLength(13);
+  });
+
+  it('frame limits: 8..12 frames, at most one landing crop and last; 200 KB per JPEG, crop included', async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    const refused: [string, Parameters<typeof uploadFrames>[3]][] = [
+      ['7 frames + a crop', { n: 8, crops: [7] }],
+      ['13 frames', { n: 13 }],
+      ['13 frames + a crop', { n: 14, crops: [13] }],
+      ['two crops', { n: 14, crops: [12, 13] }],
+      ['a crop that is not last', { n: 13, crops: [4] }],
+    ];
+    for (const [what, o] of refused) {
+      const r = await uploadFrames(CAM, betId, 1, o);
+      expect(r.status, what).toBe(422);
+      expect(r.json!.error.code, what).toBe('VALIDATION_FAILED');
+    }
+    const big = new Uint8Array(MAX_FRAME_BYTES + 1).fill(7);
+    big.set([0xff, 0xd8, 0xff, 0xe0]);
+    const frames = [...Array.from({ length: 12 }, (_, i) => jpeg(i)), big];
+    expect((await uploadFrames(CAM, betId, 1, { frames, crops: [12] })).status).toBe(413);
+    expect((await betRow(betId)).state).toBe('ATTEMPT'); // nothing was accepted
+
+    // an older phone's 8 frames + a crop is fine too
+    replies = [met()];
+    expect((await uploadFrames(CAM, betId, 1, { n: 9, crops: [8], durationMs: 4200 })).status).toBe(
+      202,
+    );
+    await judge.idle();
+    expect((await rulingRows(betId)).map((x) => x.outcome)).toEqual(['B_WINS']);
+  });
+
+  it('a full-size upload (12 frames + the crop, each at the 200 KB cap) fits the body limit', async () => {
+    expect(MAX_UPLOAD_IMAGES * MAX_FRAME_BYTES + 64 * 1024).toBeLessThanOrEqual(FRAMES_BODY_LIMIT);
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    const frames = Array.from({ length: MAX_UPLOAD_IMAGES }, (_, i) => {
+      const f = new Uint8Array(randomBytes(MAX_FRAME_BYTES));
+      f.set([0xff, 0xd8, 0xff, 0xe0, i]);
+      return f;
+    });
+    replies = [met()];
+    const up = await uploadFrames(CAM, betId, 1, { frames, crops: [12], durationMs: 6000 });
+    expect(up.status).toBe(202);
+    await judge.idle();
+    expect((await rulingRows(betId)).map((x) => x.outcome)).toEqual(['B_WINS']);
+  });
+
+  it('a lost job re-run from the DB labels the landing crop again', async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    let restore = () => {};
+    hook = () => {
+      restore = failTransactions(2);
+      return met();
+    };
+    let up: Awaited<ReturnType<typeof uploadFrames>>;
+    try {
+      up = await uploadFrames(CAM, betId, 1, { n: 13, crops: [12], durationMs: 6000 });
+      expect(up.status).toBe(202);
+      await judge.idle();
+    } finally {
+      restore();
+      hook = null;
+    }
+    replies = [met()];
+    const calls0 = llm.calls.length;
+    const replay = await uploadFrames(CAM, betId, 1, {
+      frames: up.frames,
+      crops: [12],
+      durationMs: 6000,
+      clipHash: up.evidence.clip_sha256,
+    });
+    expect(replay.status).toBe(202);
+    await judge.idle();
+    expect(llm.calls.length - calls0).toBe(1);
+    const call = llm.calls.at(-1)! as ChatRequest<unknown>;
+    expect(call.parts.filter((p) => p.kind === 'image')).toHaveLength(13);
+    const text = call.parts.flatMap((p) => (p.kind === 'text' ? [p.text] : [])).join('\n');
+    expect(text).toContain('Frames 4 to 11 are marked LANDING');
+    expect(text).toContain('Frame 12/12, LANDING CROP of frame 11');
+    expect((await rulingRows(betId)).map((r) => r.outcome)).toEqual(['B_WINS']);
+  });
+
+  // ---- two phones: no judge cam, the non-performer's own phone records (§2.9 'self') ----
+
+  it("two phones: 'judge_cam' is refused, the non-performer's own phone records; the performer never does", async () => {
+    await unbindCam();
+    try {
+      const betId = await lockedBet(); // B performs, A films
+      const cam = await post(A, `/v1/bets/${betId}/attempts`, {
+        attempt_no: 1,
+        recorder: 'judge_cam',
+      });
+      expect(cam.status).toBe(409);
+      expect(cam.json!.error.details).toMatchObject({ reason: 'no_judge_cam' });
+      const performer = await post(B, `/v1/bets/${betId}/attempts`, {
+        attempt_no: 1,
+        recorder: 'self',
+      });
+      expect(performer.status).toBe(403);
+      expect(performer.json!.error.details).toMatchObject({ reason: 'performer_cannot_record' });
+      expect(await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId))).toEqual(
+        [],
+      );
+
+      const mine = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+      expect(mine.status).toBe(201);
+      expect(mine.json).toMatchObject({
+        performer: 'B',
+        recorder_device_id: A.session.device_id,
+      });
+      // the voice tool and Start both firing: the second start replays the same attempt
+      const again = await post(A, `/v1/bets/${betId}/attempts`, {
+        attempt_no: 1,
+        recorder: 'judge_cam',
+      });
+      expect(again).toMatchObject({ status: 201, json: mine.json });
+      const [att] = await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId));
+      expect(att).toMatchObject({ recorder: 'self', recorded_by_user_id: uid(A) });
+
+      // only A's phone uploads, as A
+      expect((await uploadFrames(B, betId, 1, { recordedBy: 'B' })).status).toBe(403);
+      expect((await uploadFrames(CAM, betId, 1)).status).toBe(403);
+      const wrongParty = await uploadFrames(A, betId, 1, { recordedBy: 'B' });
+      expect(wrongParty.status).toBe(422);
+      replies = [met()];
+      expect(
+        (await uploadFrames(A, betId, 1, { n: 13, crops: [12], durationMs: 6000 })).status,
+      ).toBe(202);
+      await judge.idle();
+      expect((await rulingRows(betId)).map((r) => r.outcome)).toEqual(['B_WINS']);
+    } finally {
+      await bindCam();
+    }
+  });
+
+  it("two phones, A performs: B's own phone records and uploads as B; A's 'self' is refused", async () => {
+    await unbindCam();
+    try {
+      const betId = await lockedBet('A');
+      const own = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+      expect(own.status).toBe(403);
+      expect(own.json!.error.details).toMatchObject({ reason: 'performer_cannot_record' });
+      expect(
+        (await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'judge_cam' }))
+          .json!.error.details,
+      ).toMatchObject({ reason: 'no_judge_cam' });
+      const theirs = await post(B, `/v1/bets/${betId}/attempts`, {
+        attempt_no: 1,
+        recorder: 'self',
+      });
+      expect(theirs.status).toBe(201);
+      expect(theirs.json).toMatchObject({
+        performer: 'A',
+        recorder_device_id: B.session.device_id,
+      });
+      expect((await uploadFrames(A, betId, 1)).status).toBe(403);
+      replies = [met()];
+      const up = await uploadFrames(B, betId, 1, {
+        n: 13,
+        crops: [12],
+        durationMs: 6000,
+        recordedBy: 'B',
+      });
+      expect(up.status).toBe(202);
+      await judge.idle();
+      expect((await rulingRows(betId)).map((r) => r.outcome)).toEqual(['A_WINS']);
+    } finally {
+      await bindCam();
+    }
+  });
+
+  it("a 'no_judge_cam' refusal spends none of the bet's 6/min bucket (the two-phone fallback is free)", async () => {
+    await unbindCam();
+    ctx.deps.rateLimit = new RateLimiter(); // the suite runs without one
+    try {
+      const betId = await lockedBet();
+      for (let i = 0; i < 8; i++) {
+        const r = await post(A, `/v1/bets/${betId}/attempts`, {
+          attempt_no: 1,
+          recorder: 'judge_cam',
+        });
+        expect(r.json!.error.details).toMatchObject({ reason: 'no_judge_cam' });
+      }
+      expect(
+        (await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
+      ).toBe(201);
+      replies = [met()];
+      expect((await uploadFrames(A, betId, 1)).status).toBe(202);
+      await judge.idle();
+    } finally {
+      ctx.deps.rateLimit = null;
+      await bindCam();
     }
   });
 

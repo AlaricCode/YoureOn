@@ -60,6 +60,16 @@ export class RateLimiter {
     if (this.buckets.size > this.maxBuckets) this.sweep(now, spec.windowMs);
   }
 
+  /**
+   * Gives back the token a request took when it turned out to change nothing (the judge cam
+   * lookup that finds none, before a phone falls back to recording itself). Never above the
+   * limit; a bucket that is gone (swept) is left alone.
+   */
+  refund(name: string, key: string, spec: BucketSpec): void {
+    const b = this.buckets.get(`${name}\u0000${key}`);
+    if (b) b.tokens = Math.min(spec.limit, b.tokens + 1);
+  }
+
   private sweep(now: number, windowMs: number) {
     for (const [k, b] of this.buckets) if (now - b.updated > windowMs) this.buckets.delete(k);
     // Still over the cap (a flood of fresh keys): drop the least recently used ones, down to

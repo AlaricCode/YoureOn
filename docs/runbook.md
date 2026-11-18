@@ -171,7 +171,16 @@ free nonces are enough for the demo. If `free` is low:
 - Force-quit and reopen A's app before the pitch (a second voice session in one app launch can come
   up with a silent mic). Face ID permission accepted, Low Power Mode off, Wi-Fi off (cellular),
   passcodes known, B's app in the foreground.
-- Judge cam on its tripod, 1–1.5 m from the landing spot, the bottle's cap taped.
+- Judge cam on its tripod, 1–1.5 m from the landing spot, the bottle's cap taped. It is a third
+  iPhone claimed as party `a` with Profile → Judge cam on (`docs/IOS-BUILD.md`).
+- **Two phones only:** decide before the pitch. With no working third phone, leave Judge cam off
+  (or turn it off on that phone in Profile). The non-performer's phone films instead: A's in the
+  demo, since B flips. A's Start, or the voice judge's `request_attempt`, arms A's camera with the
+  same 3-2-1; A holds it landscape, 1–1.5 m from the landing spot with the whole table in the
+  shot, and taps Stop a beat after it lands. The recording has no audio, so the voice judge keeps
+  A's mic. Camera permission must already be granted on A's phone (the face scan asks for it). If
+  A performs, B's phone has Start and films. A judge cam left on but dead still gets the attempt
+  (the server has no liveness check on it): turn it off on that phone, or play REPLAY `4`.
 - Phone A creates the room; its 6-character code goes into the stage URL.
 - Pick the pitch start time for the Bitcoin closer: about 1:05 after a five-minute mark
   ([`pitch.md`](pitch.md#timing-the-closer-beat-6)).

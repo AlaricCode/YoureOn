@@ -1,6 +1,7 @@
 // The judge session's phone-side logic (API-CONTRACT §4.4, §4.5, §2.6), pure so it is tested in
 // node; ./session.ts drives it and ./JudgeVoice.tsx binds that to the ElevenLabs RN SDK.
-//   client tools: request_attempt -> POST /attempts ("armed: …" | "error: <code>"),
+//   client tools: request_attempt -> POST /attempts ("armed: …" | "error: <code>"; with two
+//                 phones A's own phone may be the camera, ../attempt/recorder),
 //                 show_terms_card -> bring the card forward, cue -> POST /cues (stage plays it)
 //   judge.cue:    speak ? sendUserMessage(text) : sendContextualUpdate(text), verbatim
 //   transcript:   agent / user messages batched every <= 250 ms to POST /voice/lines
@@ -9,7 +10,8 @@ import type { JudgeCueName } from '@youre-on/shared/api';
 export type CueKind = 'gavel' | 'drumroll' | 'buzzer' | 'cheer';
 
 export interface ToolDeps {
-  startAttempt(attemptNo: number): Promise<void>;
+  /** Resolves with who films: the judge cam, or (two phones) this phone itself. */
+  startAttempt(attemptNo: number): Promise<'judge_cam' | 'self' | void>;
   showTermsCard(): void;
   cue(kind: CueKind): Promise<void>;
   /** request_attempt is allowed only after [EVENT] LOCKED or [EVENT] REDO (§4.4). */
@@ -17,8 +19,11 @@ export interface ToolDeps {
 }
 
 const errCode = (e: unknown) => {
-  const c = (e as { code?: unknown } | null)?.code;
-  return typeof c === 'string' ? c : 'INTERNAL';
+  const err = e as { code?: unknown; details?: { reason?: unknown } } | null;
+  // A performs and the room has no judge cam: only B's phone can film, so B taps Start.
+  if (err?.code === 'INVALID_STATE' && err.details?.reason === 'no_judge_cam')
+    return 'NO_JUDGE_CAM';
+  return typeof err?.code === 'string' ? err.code : 'INTERNAL';
 };
 
 export function judgeClientTools(d: ToolDeps) {
@@ -28,8 +33,10 @@ export function judgeClientTools(d: ToolDeps) {
       if (!Number.isInteger(n) || n < 1) return 'error: VALIDATION_FAILED';
       if (!d.canAttempt()) return 'error: INVALID_STATE';
       try {
-        await d.startAttempt(n);
-        return 'armed: judge cam counting down';
+        const recorder = await d.startAttempt(n);
+        return recorder === 'self'
+          ? 'armed: this phone films, counting down'
+          : 'armed: judge cam counting down';
       } catch (e) {
         return `error: ${errCode(e)}`;
       }

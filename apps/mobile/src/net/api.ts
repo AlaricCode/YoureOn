@@ -45,6 +45,7 @@ import {
 } from '@youre-on/shared/realtime';
 import { z } from 'zod/v4';
 
+import type { Recorder } from '../attempt/recorder';
 import { boundaryFor, buildMultipart } from './multipart';
 import type { ApiClient } from './signedFetch';
 
@@ -254,10 +255,11 @@ export function createYoApi(c: ApiClient) {
     declineLock: (d: PartyDecline) =>
       c.request('POST', `${bet(d.bet_id)}/lock/decline`, { json: d }),
 
-    // §2.9 attempts and evidence
-    startAttempt: (betId: string, attemptNo: number) =>
+    // §2.9 attempts and evidence. 'self' = this phone films (two phones, never the performer's);
+    // ../attempt/recorder picks it.
+    startAttempt: (betId: string, attemptNo: number, recorder: Recorder = 'judge_cam') =>
       c.request('POST', `${bet(betId)}/attempts`, {
-        json: { attempt_no: attemptNo, recorder: 'judge_cam' },
+        json: { attempt_no: attemptNo, recorder },
         schema: AttemptStartedResponse,
       }),
     uploadFrames: (

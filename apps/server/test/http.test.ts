@@ -316,6 +316,27 @@ describe('RateLimiter', () => {
     rl.take('auth', 'ip', spec);
   });
 
+  it('refund gives one token back, never above the limit, and only to a bucket that exists', () => {
+    const t = 0;
+    const rl = new RateLimiter(() => t);
+    const spec = { limit: 2, windowMs: 60_000 };
+    rl.take('attempts', 'bet', spec);
+    rl.take('attempts', 'bet', spec);
+    rl.refund('attempts', 'bet', spec);
+    rl.take('attempts', 'bet', spec);
+    expect(() => rl.take('attempts', 'bet', spec)).toThrow(HttpError);
+    // a full bucket stays at its limit
+    rl.take('attempts', 'full', spec);
+    rl.refund('attempts', 'full', spec);
+    rl.refund('attempts', 'full', spec);
+    rl.take('attempts', 'full', spec);
+    rl.take('attempts', 'full', spec);
+    expect(() => rl.take('attempts', 'full', spec)).toThrow(HttpError);
+    // nothing taken, nothing to give back
+    rl.refund('attempts', 'never', spec);
+    expect(rl.size).toBe(2);
+  });
+
   it('holds at most maxBuckets keys: a flood of fresh keys evicts the least recently used', () => {
     const t = 0;
     const rl = new RateLimiter(() => t, 10);
