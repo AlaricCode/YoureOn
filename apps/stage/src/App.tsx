@@ -3,9 +3,11 @@
 // origin: POST /v1/stage/session (STAGE_KEY + room code -> stage token), then one /v1/ws socket
 // for the room. Opening
 //
-//   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
+//   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>
 //
-// connects with no typing (config.ts); ?preview plays a sample bet with no server (preview.ts),
+// connects with no typing (config.ts; `&demo=<DEMO_ADMIN_TOKEN>` is optional: the health strip
+// reads /v1/demo/health with the stage session's own bearer); ?preview plays a sample bet with
+// no server (preview.ts),
 // ?preview=gemini walks one Gemini bet (Beat 6) through its clock to Gemini's result
 // (preview-market.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
 // (verify.ts), and the projector says whether it verified.
@@ -49,7 +51,7 @@ import {
   type SavedSession,
 } from './config';
 import { seedBet } from './seed';
-import { fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
+import { DemoHealthError, fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
@@ -217,30 +219,42 @@ function useReplays(enabled: boolean, hold: { readonly current: boolean }): Repl
   return s;
 }
 
+/**
+ * GET /v1/demo/health every 10 s with the stage session's bearer (its 'demo' scope under
+ * DEMO_MODE), plus the #demo= admin key when the page has one. Without a demo key, a 404 (DEMO_MODE
+ * off) just means there is no health strip: polling stops and nothing is shown.
+ */
 function useDemoHealth(live: Live | null) {
   const [health, setHealth] = useState<DemoHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    if (!live?.demoKey) {
-      setHealth(null);
-      setError(null);
-      return;
-    }
+    setHealth(null);
+    setError(null);
+    if (!live) return;
     let stop = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
     const poll = () =>
-      fetchDemoHealth(live.serverUrl, live.demoKey!).then(
+      fetchDemoHealth(live.serverUrl, { token: live.token, demoKey: live.demoKey }).then(
         (h) => {
           if (stop) return;
           setHealth(h);
           setError(null);
         },
-        (err: unknown) => !stop && setError(err instanceof Error ? err.message : String(err)),
+        (err: unknown) => {
+          if (stop) return;
+          if (err instanceof DemoHealthError && err.status === 404 && !live.demoKey) {
+            if (timer) clearInterval(timer); // no demo scope here: no strip, no more polls
+            setHealth(null);
+            return;
+          }
+          setError(err instanceof Error ? err.message : String(err));
+        },
       );
     void poll();
-    const i = setInterval(poll, HEALTH_POLL_MS);
+    timer = setInterval(poll, HEALTH_POLL_MS);
     return () => {
       stop = true;
-      clearInterval(i);
+      if (timer) clearInterval(timer);
     };
   }, [live]);
   return { health, error };
@@ -709,7 +723,9 @@ export function App() {
           onDisconnect={live ? disconnect : undefined}
           health={pv ? PREVIEW_HEALTH : health}
           healthError={pv ? null : healthError}
-          showHealth={pv ? true : !!live?.demoKey}
+          showHealth={
+            pv ? true : !!live && (health !== null || healthError !== null || !!live.demoKey)
+          }
           replays={replays}
           roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
           sound={sound}
@@ -729,7 +745,9 @@ export function App() {
               {field('serverUrl', 'Server', { placeholder: `this server (${origin()})` })}
               {field('token', 'or a stage token', { type: 'password' })}
               {field('betId', 'Bet id (optional)')}
-              {field('demoKey', 'Demo admin key (health strip)', { type: 'password' })}
+              {field('demoKey', 'Demo admin key (optional: the health strip)', {
+                type: 'password',
+              })}
             </details>
             {otherServer && (
               <p className="warn server-note">
@@ -759,9 +777,8 @@ export function App() {
             <a href="?preview">open the preview</a>
           </p>
           <p className="muted small tip">
-            No typing on the projector: open{' '}
-            <code>/stage/?room=ABC234#key=STAGE_KEY&amp;demo=DEMO_ADMIN_TOKEN</code> (the part after
-            # never leaves this laptop, and is cleared from the address bar).
+            No typing on the projector: open <code>/stage/?room=ABC234#key=STAGE_KEY</code> (the
+            part after # never leaves this laptop, and is cleared from the address bar).
           </p>
         </div>
       )}

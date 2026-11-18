@@ -389,23 +389,33 @@ describe('demo health strip', () => {
     expect(healthItems(h).length).toBeGreaterThan(0);
   });
 
-  it('fetchDemoHealth sends the admin key header; 404 explains itself', async () => {
+  it('fetchDemoHealth sends the stage bearer, plus the admin key only when the page has one', async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     const ok = (async (u: string, i?: RequestInit) => {
       calls.push([u, i]);
       return new Response(JSON.stringify(healthy), { status: 200 });
     }) as unknown as typeof fetch;
-    await expect(fetchDemoHealth('https://h.dev', 'dk', ok)).resolves.toMatchObject({
-      rpc_ms: 142,
-    });
+    // the projector's own stage session: no #demo= needed
+    await expect(
+      fetchDemoHealth('https://h.dev', { token: 'yo_s_stage' }, ok),
+    ).resolves.toMatchObject({ rpc_ms: 142 });
     expect(calls[0]![0]).toBe('https://h.dev/v1/demo/health');
-    expect((calls[0]![1]!.headers as Record<string, string>)[DEMO_KEY_HEADER]).toBe('dk');
+    expect(calls[0]![1]!.headers).toEqual({ authorization: 'Bearer yo_s_stage' });
+    // a #demo= key is still sent (an older server, or a stage token without the demo scope)
+    await fetchDemoHealth('https://h.dev', { token: 'yo_s_stage', demoKey: 'dk' }, ok);
+    expect(calls[1]![1]!.headers).toEqual({
+      authorization: 'Bearer yo_s_stage',
+      [DEMO_KEY_HEADER]: 'dk',
+    });
     const nf = (async () => new Response('{}', { status: 404 })) as unknown as typeof fetch;
-    await expect(fetchDemoHealth('https://h.dev', 'wrong', nf)).rejects.toThrow(
-      /demo key or DEMO_MODE/,
-    );
+    await expect(fetchDemoHealth('https://h.dev', { token: 't' }, nf)).rejects.toMatchObject({
+      status: 404,
+      message: expect.stringMatching(/demo key or DEMO_MODE/),
+    });
     const boom = (async () => new Response('{}', { status: 502 })) as unknown as typeof fetch;
-    await expect(fetchDemoHealth('https://h.dev', 'dk', boom)).rejects.toThrow(/HTTP 502/);
+    await expect(fetchDemoHealth('https://h.dev', { demoKey: 'dk' }, boom)).rejects.toThrow(
+      /HTTP 502/,
+    );
   });
 });
 
