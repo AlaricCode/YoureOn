@@ -45,6 +45,16 @@ export class ChallengeStore {
     return { ok: true, challenge: ch };
   }
 
+  /**
+   * Consumes the newest challenge issued for `device_pubkey` (demo-claim bodies may omit
+   * challenge_id, API-CONTRACT §1.3). Same single-use / expiry rules as consume().
+   */
+  consumeLatestFor(device_pubkey: string): ConsumeResult {
+    let latest: Challenge | undefined;
+    for (const ch of this.map.values()) if (ch.device_pubkey === device_pubkey) latest = ch;
+    return latest ? this.consume(latest.challenge_id) : { ok: false, reason: 'unknown' };
+  }
+
   get size() {
     return this.map.size;
   }

@@ -10,14 +10,18 @@
 //                                        propose_terms args (the LLM projection) overriding the fixture.
 //   POST /v1/demo/bets/:bet_id/confirm   the confirm_terms step (freeze + LockService.start).
 //   GET  /v1/demo/bets/:bet_id           state + chain_txs summary (scripts/cp1-drive.ts polls it).
+//   POST /v1/demo/claim-tokens           {party: 'a'|'b', display_name?} -> one-time QR for
+//                                        POST /v1/auth/demo-claim (claim-tokens.ts; 10 min, single
+//                                        use). scripts/demo-claim-qr.ts prints it.
 import { desc, inArray, sql } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { auditLog, bets, chainTxs, noncePool } from '@youre-on/db';
+import { DemoClaimTokenRequest, type DemoClaimTokenResponse } from '@youre-on/shared/api';
 import { MAX_STAKE } from '@youre-on/shared/constants';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import type { AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
-import { readJsonBody } from '../http/body';
+import { readBody, readJsonBody } from '../http/body';
 import { betIdParam } from '../lock/routes';
 import { lifecycleOf } from '../lock/runtime';
 import { readBet } from '../lock/common';
@@ -25,6 +29,7 @@ import { syncNoncePool } from '../lock/service';
 import { displayCode } from '../lock/terms';
 import { confirmAndLock, termsSink } from '../voice/tools';
 import { toolSecretOk } from '../voice/tool-auth';
+import { claimTokensOf, demoPartyKey } from './claim-tokens';
 
 export const DEMO_KEY_HEADER = 'X-YO-Demo-Key';
 
@@ -255,6 +260,46 @@ export const demoRoutes: RouteModule = {
         },
         200,
       );
+    });
+
+    app.post('/v1/demo/claim-tokens', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const body = await readBody(c, DemoClaimTokenRequest);
+      const key = demoPartyKey(deps.env, body.party);
+      if (!key) {
+        throw new HttpError(
+          'INVALID_STATE',
+          `Demo party ${body.party} has no key on this server.`,
+          {
+            reason: 'demo_key_missing',
+            party: body.party,
+          },
+        );
+      }
+      key.seed.fill(0);
+      const t = claimTokensOf(deps).issue({ party: body.party, display_name: body.display_name });
+      await deps.db.insert(auditLog).values({
+        actor_kind: 'system',
+        action: 'demo.claim_token_issued',
+        request_id: c.get('requestId'),
+        details: {
+          party: body.party,
+          pubkey: key.pubkey,
+          word: t.word,
+          display_name: body.display_name ?? null,
+          expires_at: new Date(t.entry.expires_at).toISOString(),
+        },
+      });
+      const res: DemoClaimTokenResponse = {
+        token: t.token,
+        word: t.word,
+        qr: t.qr,
+        expires_at: new Date(t.entry.expires_at).toISOString(),
+        party: body.party,
+        pubkey: key.pubkey,
+      };
+      c.header('Cache-Control', 'no-store');
+      return c.json(res, 201);
     });
 
     app.post('/v1/demo/bets/:bet_id/confirm', requireDemo, async (c) => {
