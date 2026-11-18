@@ -305,10 +305,13 @@ export function agentBody(o: AgentOptions) {
       auth: { enable_auth: true },
       call_limits: { bursting_enabled: false },
       privacy: { record_voice: false, retention_days: o.retentionDays ?? 1 },
+      // No client overrides: the app sends only the token and dynamic variables, and a token
+      // holder must not pick a costlier LLM / TTS model or rewrite the opening line. Explicit
+      // false, so a sync also turns them off on the existing agent.
       overrides: {
         conversation_config_override: {
-          agent: { first_message: true, prompt: { llm: true } },
-          tts: { model_id: true },
+          agent: { first_message: false, prompt: { llm: false } },
+          tts: { model_id: false },
         },
       },
     },
