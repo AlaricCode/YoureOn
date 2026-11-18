@@ -122,6 +122,14 @@ export const CHECKS = [
     hint: 'Reads the pubkey item (never creates a wallet), probes getRandomValues, pre-warms noble (D0-M3).',
   },
   {
+    id: 'face-embed-pipeline',
+    label: 'Face pipeline: upright still, ML Kit, align, embed',
+    required: false,
+    kind: 'interactive',
+    panel: 'vision',
+    hint: 'Tap "Capture still + embed" twice: stage timings, then the same-person cosine (want > 0.30).',
+  },
+  {
     id: 'jcs-vectors',
     label: 'JCS + terms hash vectors on Hermes',
     required: false,
