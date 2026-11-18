@@ -10,14 +10,23 @@
 //                                        propose_terms args (the LLM projection) overriding the fixture.
 //   POST /v1/demo/bets/:bet_id/confirm   the confirm_terms step (freeze + LockService.start).
 //   GET  /v1/demo/bets/:bet_id           state + chain_txs summary (scripts/cp1-drive.ts polls it).
-import { desc, inArray, sql } from 'drizzle-orm';
+//   POST /v1/demo/users/:user_id/devices {device_pubkey} registers a further device key of a user:
+//                                        the judge-cam iPhone is a device of A (API-CONTRACT §2.9,
+//                                        ARCHITECTURE C5) and there is no other way to add one yet
+//                                        (demo-claim is not served). The device then signs in with
+//                                        POST /v1/auth/session and binds itself with PATCH
+//                                        /v1/devices/current. 201 {device_id, user_id}; a repeat for
+//                                        the same user answers 200 with the same device.
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { z } from 'zod/v4';
 import type { MiddlewareHandler } from 'hono';
-import { auditLog, bets, chainTxs, noncePool } from '@youre-on/db';
+import { auditLog, bets, chainTxs, devices, noncePool, users } from '@youre-on/db';
 import { MAX_STAKE } from '@youre-on/shared/constants';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
+import { Pubkey, Uuid } from '@youre-on/shared/primitives';
 import type { AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
-import { readJsonBody } from '../http/body';
+import { readBody, readJsonBody } from '../http/body';
 import { betIdParam } from '../lock/routes';
 import { lifecycleOf } from '../lock/runtime';
 import { readBet } from '../lock/common';
@@ -47,6 +56,8 @@ export const DEMO_TERMS_ARGS = {
   market_side: 'none',
   deadline_minutes: 0,
 } as const;
+
+const DemoDeviceRequest = z.object({ device_pubkey: Pubkey });
 
 export const requireDemo: MiddlewareHandler<AppEnv> = async (c, next) => {
   const env = c.get('deps').env;
@@ -255,6 +266,47 @@ export const demoRoutes: RouteModule = {
         },
         200,
       );
+    });
+
+    app.post('/v1/demo/users/:user_id/devices', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const userId = c.req.param('user_id');
+      if (!Uuid.safeParse(userId).success) throw new HttpError('NOT_FOUND', 'No such user.');
+      const body = await readBody(c, DemoDeviceRequest);
+      const [user] = await deps.db
+        .select({ id: users.id, wallet_pubkey: users.wallet_pubkey })
+        .from(users)
+        .where(and(eq(users.id, userId), isNull(users.deleted_at)))
+        .limit(1);
+      if (!user) throw new HttpError('NOT_FOUND', 'No such user.');
+      if (user.wallet_pubkey === body.device_pubkey)
+        throw new HttpError('VALIDATION_FAILED', 'The device key must differ from the wallet.', {
+          issues: [{ path: 'device_pubkey', message: 'must differ from wallet_pubkey' }],
+        });
+      const [existing] = await deps.db
+        .select({ id: devices.id, user_id: devices.user_id })
+        .from(devices)
+        .where(eq(devices.device_pubkey, body.device_pubkey))
+        .limit(1);
+      if (existing) {
+        if (existing.user_id !== user.id)
+          throw new HttpError('INVALID_STATE', 'That device key belongs to someone else.', {
+            reason: 'device_registered',
+          });
+        return c.json({ device_id: existing.id, user_id: user.id }, 200);
+      }
+      const [d] = await deps.db
+        .insert(devices)
+        .values({ user_id: user.id, platform: 'ios', device_pubkey: body.device_pubkey })
+        .returning({ id: devices.id });
+      await deps.db.insert(auditLog).values({
+        actor_kind: 'system',
+        action: 'demo.device_added',
+        subject_user_id: user.id,
+        request_id: c.get('requestId'),
+        details: { device_id: d!.id },
+      });
+      return c.json({ device_id: d!.id, user_id: user.id }, 201);
     });
 
     app.post('/v1/demo/bets/:bet_id/confirm', requireDemo, async (c) => {
