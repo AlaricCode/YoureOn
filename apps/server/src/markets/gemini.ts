@@ -30,6 +30,8 @@ export const RawContract = z.object({
   label: Str,
   status: Str,
   instrumentSymbol: Str,
+  /** e.g. "UP" */
+  ticker: NullishStr,
   marketState: NullishStr,
   effectiveDate: Str,
   expiryDate: Str,
@@ -41,6 +43,10 @@ export const RawContract = z.object({
       lastTradePrice: NullishStr,
     })
     .nullish(),
+  // Settlement (present once Gemini settles the contract, ~5-9 s after expiry).
+  resolutionSide: NullishStr,
+  settlementValue: z.union([z.string(), z.number()]).nullish(),
+  resolvedAt: NullishStr,
 });
 export type RawContract = z.infer<typeof RawContract>;
 
@@ -75,9 +81,20 @@ export interface GeminiClientOptions {
   timeoutMs?: number;
 }
 
+/** An event body as received: what the settlement record pins (response_sha256 of `bytes`). */
+export interface RawEventResponse {
+  event: RawEvent;
+  /** The URL fetched (GeminiSettlementRecord.source_url). */
+  url: string;
+  /** The exact response body bytes. */
+  bytes: Uint8Array;
+}
+
 export interface GeminiClient {
   listActiveCrypto(): Promise<RawEvent[]>;
   getEvent(eventTicker: string): Promise<RawEvent>;
+  /** getEvent plus the raw body, for settlement evidence. */
+  getEventRaw(eventTicker: string): Promise<RawEventResponse>;
   getStrike(eventTicker: string): Promise<z.infer<typeof RawStrike>>;
   getBtcUsd(): Promise<string>;
 }
@@ -87,7 +104,15 @@ export function createGeminiClient(o: GeminiClientOptions = {}): GeminiClient {
   const base = o.baseUrl ?? GEMINI_API;
   const timeoutMs = o.timeoutMs ?? GEMINI_TIMEOUT_MS;
 
-  async function getJson(path: string): Promise<unknown> {
+  const fail = (path: string, err: unknown): never => {
+    const name = (err as { name?: string } | null)?.name;
+    if (name === 'TimeoutError' || name === 'AbortError')
+      throw new GeminiError(`gemini ${path}: timeout`, 'timeout');
+    throw new GeminiError(`gemini ${path}: ${String(err)}`, 'network');
+  };
+
+  /** One GET; the body is read inside the deadline too (a stalled body is a timeout). */
+  async function getBytes(path: string): Promise<Uint8Array> {
     let res: Response;
     try {
       res = await doFetch(base + path, {
@@ -95,14 +120,20 @@ export function createGeminiClient(o: GeminiClientOptions = {}): GeminiClient {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
-      const name = (err as { name?: string } | null)?.name;
-      if (name === 'TimeoutError' || name === 'AbortError')
-        throw new GeminiError(`gemini ${path}: timeout`, 'timeout');
-      throw new GeminiError(`gemini ${path}: ${String(err)}`, 'network');
+      return fail(path, err);
     }
     if (!res.ok) throw new GeminiError(`gemini ${path}: HTTP ${res.status}`, 'http');
     try {
-      return await res.json();
+      return new Uint8Array(await res.arrayBuffer());
+    } catch (err) {
+      return fail(path, err);
+    }
+  }
+
+  async function getJson(path: string): Promise<unknown> {
+    const bytes = await getBytes(path);
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
     } catch {
       throw new GeminiError(`gemini ${path}: non-JSON body`, 'shape');
     }
@@ -132,6 +163,17 @@ export function createGeminiClient(o: GeminiClientOptions = {}): GeminiClient {
         await getJson(`/v1/prediction-markets/events/${encodeURIComponent(ticker)}`),
         'event',
       );
+    },
+    async getEventRaw(ticker) {
+      const path = `/v1/prediction-markets/events/${encodeURIComponent(ticker)}`;
+      const bytes = await getBytes(path);
+      let raw: unknown;
+      try {
+        raw = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+      } catch {
+        throw new GeminiError(`gemini ${path}: non-JSON body`, 'shape');
+      }
+      return { event: parse(RawEvent, raw, 'event'), url: base + path, bytes };
     },
     async getStrike(ticker) {
       return parse(

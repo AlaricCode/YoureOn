@@ -67,4 +67,4 @@ const MESSAGES: Record<string, string> = {
   STAKE_ABOVE_MAX: 'That stake is above the limit.',
   STAKE_BELOW_MIN: 'That stake is below the minimum.',
 };
-const marketMessage = (reason: string) => MESSAGES[reason] ?? 'The market is unavailable.';
+export const marketMessage = (reason: string) => MESSAGES[reason] ?? 'The market is unavailable.';

@@ -4,6 +4,7 @@
 // register here.
 import type { AppDeps } from '../context';
 import { lifecycleOf } from '../lock/runtime';
+import { settlementTask } from '../markets/settlement';
 import { resolveDueTask } from '../payout/resolve-due';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
 import { Keeper, type KeeperOptions, type KeeperTask } from './keeper';
@@ -43,5 +44,8 @@ export function createServerKeeper(
   if (env) for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
   // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
   if (env) keeper.register(resolveDueTask(deps));
+  // market-settlement (Beat 6): reads deps.markets / deps.onRuling at run time too. The same
+  // deps object as the routes', so it shares their SettlementService (settlementOf).
+  if (env) keeper.register(settlementTask(deps as typeof deps & { env: NonNullable<typeof env> }));
   return keeper;
 }

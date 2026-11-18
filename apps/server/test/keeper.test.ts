@@ -437,6 +437,7 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
       'lock-sweep',
       'finalize-due',
       'resolve-due',
+      'market-settlement',
     ]);
     expect(deps.keeper?.isStarted).toBe(false);
     const running = await startServer(deps, {
