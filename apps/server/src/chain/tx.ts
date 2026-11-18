@@ -137,8 +137,9 @@ export class PreflightError extends Error {
     message: string,
     readonly err: unknown,
     readonly logs: readonly string[],
+    options?: { cause?: unknown },
   ) {
-    super(message);
+    super(message, options);
     this.name = 'PreflightError';
   }
 }
@@ -659,6 +660,7 @@ export function rpcChainClient(
           `preflight rejected: ${jsonSafe(d.err)}`,
           d.err,
           d.logs,
+          { cause: e },
         );
         // An instruction failed in simulation: the program refused THIS tx (a doomed lock, a
         // closed window). A duplicate of our own landed tx never gets that far: the age and
@@ -671,7 +673,11 @@ export function rpcChainClient(
         // ours by definition; anything else, ask the chain (twice, a node may lag). A known
         // signature returns normally and the caller's status poll takes over; a failed lookup
         // is an unknown fate, never a rejection.
-        if (jsonSafe(d.err).includes('AlreadyProcessed')) return;
+        const text = jsonSafe(d.err);
+        if (text.includes('AlreadyProcessed')) return;
+        // Only BlockhashNotFound (or an error we could not read) can be our own duplicate;
+        // InsufficientFundsForFee, AccountNotFound, ... are this tx's own rejection.
+        if (d.err !== null && !text.includes('BlockhashNotFound')) throw rejection;
         const sig = signatureOfWire(wire);
         for (let i = 0; i < 2; i++) {
           let st: unknown;
@@ -1075,29 +1081,41 @@ export async function txFate(
   client: ChainClient,
   signature: string,
   lastValidBlockHeight: bigint | null,
-  o: { sentAtMs?: number | null; nowMs?: number; maxAgeMs?: number } = {},
+  o: {
+    /** When it was sent (lvbh-less txs only). Unknown -> never declared dead (pending). */
+    sentAtMs?: number;
+    nowMs?: number;
+    maxAgeMs?: number;
+    /** A height getter shared across one pass (one getBlockHeight per sweep, not per row). */
+    height?: () => Promise<bigint>;
+  } = {},
 ): Promise<{ fate: TxFate; status: SigStatus | null }> {
   const look = () => client.signatureStatus(signature, { searchHistory: true });
+  const classify = (st: SigStatus): { fate: TxFate; status: SigStatus } => ({
+    fate: st.err
+      ? 'failed'
+      : st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized'
+        ? 'landed'
+        : 'pending',
+    status: st,
+  });
   const st = await look();
-  if (st?.err) return { fate: 'failed', status: st };
-  if (st)
-    return {
-      fate:
-        st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized'
-          ? 'landed'
-          : 'pending',
-      status: st,
-    };
+  if (st) return classify(st);
   let past: boolean;
-  if (lastValidBlockHeight != null) past = (await client.blockHeight()) > lastValidBlockHeight;
-  else {
-    const nowMs = o.nowMs ?? Date.now();
-    past = o.sentAtMs == null || nowMs - o.sentAtMs > (o.maxAgeMs ?? 10 * 60_000);
-  }
+  if (lastValidBlockHeight != null)
+    past = (await (o.height ?? (() => client.blockHeight()))()) > lastValidBlockHeight;
+  else if (o.sentAtMs === undefined) past = false;
+  else past = (o.nowMs ?? Date.now()) - o.sentAtMs > (o.maxAgeMs ?? 10 * 60_000);
   if (!past) return { fate: 'pending', status: null };
   const again = await look();
-  if (!again) return { fate: 'dead', status: null };
-  return txFate(client, signature, lastValidBlockHeight, o); // it showed up: classify that
+  // Classify the second read itself: a re-query could hit a lagging node and miss it again.
+  return again ? classify(again) : { fate: 'dead', status: null };
+}
+
+/** A memoized getBlockHeight for one sweep pass (txFate `height`). */
+export function heightOnce(client: ChainClient): () => Promise<bigint> {
+  let h: Promise<bigint> | null = null;
+  return () => (h ??= client.blockHeight());
 }
 
 // ---------------------------------------------------------------------------------------------
