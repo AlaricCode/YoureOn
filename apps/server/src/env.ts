@@ -102,6 +102,11 @@ export const EnvSchema = z.object({
    * is too slow for the 3 s deadline. Only used with LLM_PROVIDER=live (ALLOW_SPEND).
    */
   ODDS_LLM_MODEL: opt(str),
+  /**
+   * Anthropic model for compile_checks (judge/compile-checks.ts: terms -> SAM CheckSpec). Off the
+   * webhook's critical path, so the stronger model.
+   */
+  CHECKS_MODEL: z.preprocess(unset, str.default('claude-opus-5-5')),
   /** Demo fallback (ARCHITECTURE §7.2 cached_ruling): rule from a stored verdict, no LLM call. */
   CACHED_RULING: z.preprocess(unset, boolStr.default(false)),
   // --- Solana / QuickNode (secret)
