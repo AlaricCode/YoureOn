@@ -48,6 +48,7 @@ import { logChainHealth } from '../src/chain/health';
 import { bootReconcile } from '../src/chain/reconcile';
 import {
   instrumentChainClient,
+  PreflightError,
   RpcStats,
   type ChainClient,
   type ChainRuntime,
@@ -495,6 +496,42 @@ run('money path hardening over LiteSVM', () => {
     expect(await lc.payout.finalizeDue(now())).toContain(betId);
     await lc.idle();
     expect((await betRow(betId))!.state).toBe('PAID');
+  });
+
+  it('resolve rejected at preflight for an unknown blockhash (lagging RPC node): rebuilt once at once', async () => {
+    const betId = await lockedBet();
+    let rejected = 0;
+    const c: ChainClient = {
+      ...rt.client,
+      send: async (wire, skip) => {
+        if (!skip && rejected === 0) {
+          rejected++;
+          svm.svm.expireBlockhash(); // the node moved on: the next build gets a new blockhash
+          throw new PreflightError(
+            'preflight rejected: "BlockhashNotFound"',
+            'BlockhashNotFound',
+            [],
+          );
+        }
+        return rt.client.send(wire, skip);
+      },
+    };
+    install('server', { client: c });
+    try {
+      const rul = ruling(betId, (await betRow(betId))!.terms_hash!, 'B_WINS');
+      const r = await lc.payout.onRuling(betId, rul);
+      expect(r.already).toBe(false);
+      expect(rejected).toBe(1);
+      expect((await betRow(betId))!.state).toBe('RULED');
+      const rows = await txRows(betId, 'resolve');
+      expect(rows.map((t) => t.status).sort()).toEqual(['confirmed', 'failed']);
+      await lc.idle();
+    } finally {
+      install('server');
+    }
+    advance(12_000);
+    expect(await lc.payout.finalizeDue(now())).toContain(betId);
+    await lc.idle();
   });
 
   it('lock sweep re-broadcasts a dropped lock (durable nonce: same bytes) before expires_at -> LOCKED', async () => {

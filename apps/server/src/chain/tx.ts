@@ -138,6 +138,14 @@ export class PreflightError extends Error {
   }
 }
 
+/**
+ * The preflight saw a recent blockhash its node does not know (a lagging or load-balanced RPC
+ * node). Nothing landed, so rebuilding on a fresh blockhash is safe.
+ */
+export function isBlockhashNotFound(err: unknown): boolean {
+  return err instanceof PreflightError && jsonSafe(err.err).includes('BlockhashNotFound');
+}
+
 /** The tx landed and failed onchain, or never confirmed. */
 export class TxFailedError extends Error {
   constructor(
