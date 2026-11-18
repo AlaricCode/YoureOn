@@ -481,11 +481,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     setAlert(null);
     const b = rt.hub.get(req.bet_id);
     if (b?.authorized[otherParty(me)]) lockDispatch({ type: 'their_signature' });
-    if (!walletKey) return;
+    // A restart after this phone's hold (resume): the snapshot has our signature, so the card
+    // is "signed", not "Hold to lock" again. After the policy, so a refusal still wins.
+    const mine = b?.authorized[me] === true;
+    if (!walletKey) {
+      if (mine) lockDispatch({ type: 'already_signed' });
+      return;
+    }
     // Refuse when the lock's terms aren't the terms this phone was shown (recomputed hashes).
     const ok = !mismatch && checkLockPolicy(req, walletKey, Date.now()).ok;
     lockDispatch({ type: 'policy', ok });
     if (!ok) feel('failed');
+    if (mine) lockDispatch({ type: 'already_signed' });
     if (b?.state === 'AWAITING_LOCK') lockDispatch({ type: 'submitted' });
   }, [rt, lockId, walletKey, mismatch, me]);
 

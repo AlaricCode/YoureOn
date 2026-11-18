@@ -105,4 +105,25 @@ describe('terms card lock state (SCHEMAS §9.4)', () => {
     expect(lockReducer(ended, { type: 'confirmed' }).phase).toBe('ended');
     expect(lockReducer(ended, { type: 'reset' })).toEqual(initialLock);
   });
+
+  it('a restart after this phone signed comes back signed, not "Hold to lock" again', () => {
+    // The card effect's order after a cold start: policy, then the snapshot's own signature.
+    const s = run({ type: 'policy', ok: true }, { type: 'already_signed' });
+    expect(s.phase).toBe('signed');
+    expect(holdEnabled(s)).toBe(false);
+    expect(declineEnabled(s)).toBe(true);
+    // Before the wallet key is known (no policy yet) it is signed too; the late policy is moot.
+    const early = run({ type: 'already_signed' }, { type: 'policy', ok: true });
+    expect(early.phase).toBe('signed');
+    // Both signatures in (AWAITING_LOCK) moves on to locking.
+    expect(lockReducer(s, { type: 'submitted' }).phase).toBe('locking');
+  });
+
+  it('already_signed never overrides a refused card or one further along', () => {
+    expect(run({ type: 'policy', ok: false }, { type: 'already_signed' }).phase).toBe('refused');
+    const authorizing = run({ type: 'policy', ok: true }, { type: 'hold_complete' });
+    expect(lockReducer(authorizing, { type: 'already_signed' }).phase).toBe('authorizing');
+    const locking = run({ type: 'policy', ok: true }, { type: 'submitted' });
+    expect(lockReducer(locking, { type: 'already_signed' }).phase).toBe('locking');
+  });
 });
