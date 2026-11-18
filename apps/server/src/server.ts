@@ -21,6 +21,8 @@ import { createProviders } from './providers/registry';
 import type { Providers } from './providers/types';
 import { dbHubAccess } from './realtime/access';
 import { RealtimeHub } from './realtime/hub';
+import { StageVoice } from './stage/voice';
+import { ClipCache, createStageTts, DEFAULT_CLIP_DIR, type StageTts } from './voice/tts';
 
 export interface CreateDepsOptions {
   env: Env;
@@ -38,6 +40,14 @@ export interface CreateDepsOptions {
   /** The Gemini BTC 5-min relay: a ready service (tests: fake fetch), true/false, or default
    *  MARKETS_FEED (unset: on, except NODE_ENV=test). */
   markets?: MarketService | boolean;
+  /**
+   * The stage TTS (src/voice/tts.ts): a ready service (tests: a fake ElevenLabs client), null for
+   * off, or default from the env (on with ELEVENLABS_API_KEY + ALLOW_SPEND, not STAGE_TTS=off).
+   */
+  stageTts?: StageTts | null;
+  /** Where stage clips are cached on disk; null = memory only. Default: the OS tmp dir, except
+   *  NODE_ENV=test (memory only, so runs never share a cache). */
+  clipDir?: string | null;
 }
 
 export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbHandle } {
@@ -69,6 +79,14 @@ export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbH
     if (ruling.outcome === 'REDO') return;
     await createPayoutService(deps).onRuling(betId, ruling);
   };
+  // The projector's ElevenLabs voice: a clip per spoken moment, after each event goes out.
+  const clips = new ClipCache({
+    dir: o.clipDir !== undefined ? o.clipDir : o.env.NODE_ENV === 'test' ? null : DEFAULT_CLIP_DIR,
+    log,
+  });
+  const tts = o.stageTts !== undefined ? o.stageTts : createStageTts(o.env, { log, cache: clips });
+  deps.stageVoice = new StageVoice(deps, tts, clips);
+  hub.onBetEvent(deps.stageVoice.onBetEvent);
   if (o.keeper ?? o.env.NODE_ENV !== 'test') deps.keeper = createServerKeeper(deps);
   if (o.markets instanceof MarketService) deps.markets = o.markets;
   else if (
@@ -120,6 +138,7 @@ export async function startServer(
   deps.hub.start();
   deps.keeper?.start();
   deps.markets?.start();
+  deps.stageVoice?.prewarm(); // the cue clips, when ElevenLabs Sound Effects are live
   const port = (server.address() as AddressInfo).port;
 
   let closing: Promise<void> | null = null;
