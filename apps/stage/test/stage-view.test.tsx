@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { hashJcs } from '@youre-on/shared/jcs';
+import { CACHED_RULING_MODEL } from '@youre-on/shared/ruling';
 import type { BetSnapshot } from '@youre-on/shared/api';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { BetCard, OddsWidget, ReplayOverlay, StageView, clock, shortSig } from '../src/App';
@@ -197,6 +198,28 @@ describe('bet card state', () => {
     expect(b.appeal_deadline).toBe(1795284435);
     expect(b.txs.resolve).toBe(SIG_RESOLVE);
     expect(b.payout).toBeNull();
+  });
+
+  it('a CACHED_RULING ruling (stored verdict, no model call) is labelled "replay ruling"', () => {
+    const now = (1795284435 - 8) * 1000;
+    const live = renderToString(<BetCard bet={run(fullBet()).bets[BET]!} now={now} />);
+    expect(live).toContain('Jake wins');
+    expect(live).not.toContain('replay ruling');
+    const cached = fullBet().map((e) =>
+      (e as { type: string }).type === 'ruling.issued'
+        ? {
+            ...(e as object),
+            payload: {
+              ruling: { ...ruling, model: CACHED_RULING_MODEL },
+              ruling_hash: 'ab'.repeat(32),
+            },
+          }
+        : e,
+    );
+    const html = renderToString(<BetCard bet={run(cached).bets[BET]!} now={now} />);
+    expect(html).toContain('Jake wins');
+    expect(html).toContain('replay ruling');
+    expect(html).toContain(`title="${CACHED_RULING_MODEL}"`);
   });
 
   it('money moves in BetFinalized (no BetPaid): payout + Explorer; appeal countdown ends', () => {
