@@ -244,7 +244,13 @@ build, but installing it everywhere keeps all phones on one build.
   `scripts/eas-update.sh --profile pitch …`. Updates to `preview` do not reach it.
 - The dev client (`eas build -p ios --profile development`, then `npm start -w apps/mobile`)
   installs beside the demo build as "You're On Dev". It loads JS from Metro, and its API URL
-  comes from `apps/mobile/.env.local`.
+  comes from `apps/mobile/.env.local`. It has its own bundle ID, so it also has its own keychain
+  and does not share the demo build's wallet. `preview`, `pitch` and `production` share one
+  bundle ID, so they replace each other on a phone and keep the wallet.
+- **iOS Simulator:** on an Apple-silicon Mac, a simulator build does not link. The face
+  detector's ML Kit frameworks (`MLImage`, `MLKitFaceDetection`) ship only x86_64 and
+  arm64-device slices, so `ld` reports "building for 'iOS-simulator', but linking in object file
+  … MLImage … built for 'iOS'". Use a phone.
 
 ### 9. Troubleshooting
 
