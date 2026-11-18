@@ -1,0 +1,29 @@
+# Restart mid-bet with the terms on screen, challenger side: after 06-send-terms.yaml ($5 each,
+# B has accepted), kill and relaunch A. The bet comes back from its event log with the $5 card,
+# and the typed form starts on that card: "Lock it in" again, not "Send terms" at $1 (which made
+# A propose again, at the wrong stake). Never taps Lock it in (with LOCK_SIGNER=server it locks).
+# Then 07-b-sees-terms-and-backs-out.yaml on B and 08-a-sees-decline.yaml on A end the bet.
+#   maestro --device <udid A> test e2e/maestro/resume-terms.yaml
+appId: dev.youreon.app
+name: resume-terms
+---
+- assertVisible:
+    id: typed-confirm
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: typed-claim
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: typed-confirm
+    timeout: 10000
+- assertNotVisible:
+    id: typed-send
+- assertVisible: Draft terms
+- assertVisible: \$5 vs \$5
+- assertVisible:
+    id: typed-stake-5
+    selected: true
+- takeScreenshot: 72-challenger-resumed-on-terms
