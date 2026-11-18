@@ -48,6 +48,7 @@ import {
   createDb,
   devices,
   noncePool,
+  roomMembers,
   rulings,
   runMigrations,
 } from '@youre-on/db';
@@ -267,10 +268,17 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
     const room = await signed(A, 'POST', '/v1/rooms', { name: 'E2E room', kind: 'session' });
     expect(room.status).toBe(201);
     roomId = room.json!.room_id;
-    for (const m of [B, C])
-      expect((await signed(m, 'POST', '/v1/rooms/join', { code: room.json!.code })).status).toBe(
-        200,
-      );
+    expect((await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code })).status).toBe(200);
+    // C is no demo account: under DEMO_MODE the demo room (A's) refuses it (demo/players.ts), so
+    // this third member, whose cam must never record, is put in the room directly.
+    const cJoin = await signed(C, 'POST', '/v1/rooms/join', { code: room.json!.code });
+    expect(cJoin.json!.error).toMatchObject({
+      code: 'NOT_IN_ROOM',
+      details: { reason: 'demo_room' },
+    });
+    await ctx.deps.db
+      .insert(roomMembers)
+      .values({ room_id: roomId, user_id: C.session.user.user_id, joined_via: 'code' });
 
     // The judge-cam iPhone: a fresh device key registered as a second device of A (demo op),
     // signed in like any registered device, then bound to the room by itself.
