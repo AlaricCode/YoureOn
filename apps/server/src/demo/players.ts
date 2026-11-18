@@ -7,6 +7,7 @@
 // (the same values in production; tests install a runtime with their own).
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { apiSessions, users, type Db } from '@youre-on/db';
+import type { ChainRuntime } from '../chain/tx';
 import type { AppDeps } from '../context';
 import { HttpError } from '../errors';
 import type { LifecycleDeps } from '../lock/common';
@@ -34,14 +35,19 @@ function envWallets(env: AppDeps['env']): string[] {
   return wallets;
 }
 
+/** The demo-a / demo-b wallet pubkeys from env and from a chain runtime's custodial keys. */
+export function demoWalletsOf(env: AppDeps['env'], rt: ChainRuntime | null): Set<string> {
+  const out = new Set(envWallets(env));
+  for (const k of [rt?.keys.demoA, rt?.keys.demoB]) if (k) out.add(k.address);
+  return out;
+}
+
 /** The demo-a / demo-b wallet pubkeys this server knows. */
 export async function demoWallets(deps: LifecycleDeps): Promise<Set<string>> {
-  const out = new Set(envWallets(deps.env));
   const rt = await lifecycleOf(deps)
     .runtime()
     .catch(() => null);
-  for (const k of [rt?.keys.demoA, rt?.keys.demoB]) if (k) out.add(k.address);
-  return out;
+  return demoWalletsOf(deps.env, rt);
 }
 
 export function isDemoPlayer(
@@ -51,19 +57,22 @@ export function isDemoPlayer(
   return u.is_demo || (u.wallet_pubkey !== null && wallets.has(u.wallet_pubkey));
 }
 
-/** The ids among `userIds` that are not demo players (an unknown id counts as not one). */
+/**
+ * The ids among `userIds` that are not demo players (an unknown id counts as not one). `o.wallets`
+ * when the caller already has them (the lock service has its runtime), `o.db` inside a transaction.
+ */
 export async function nonDemoPlayers(
   deps: LifecycleDeps,
   userIds: readonly string[],
-  db: Pick<Db, 'select'> = deps.db,
+  o: { db?: Pick<Db, 'select'>; wallets?: ReadonlySet<string> } = {},
 ): Promise<string[]> {
   if (userIds.length === 0) return [];
   const [rows, wallets] = await Promise.all([
-    db
+    (o.db ?? deps.db)
       .select({ id: users.id, is_demo: users.is_demo, wallet_pubkey: users.wallet_pubkey })
       .from(users)
       .where(inArray(users.id, [...userIds])),
-    demoWallets(deps),
+    o.wallets ?? demoWallets(deps),
   ]);
   const demo = new Set(rows.filter((u) => isDemoPlayer(u, wallets)).map((u) => u.id));
   return userIds.filter((id) => !demo.has(id));

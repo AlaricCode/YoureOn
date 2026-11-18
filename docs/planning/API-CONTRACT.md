@@ -172,7 +172,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 | `FACE_SEAL_INVALID` | 400 | no | Sealed embedding failed to open (AAD, key or format) |
 | `STAKE_OUT_OF_RANGE` | 422 | no | Outside `[MIN_STAKE, max_stake]` or not whole cents |
 | `MARKET_UNAVAILABLE` | 409 | maybe | `details.reason` ∈ SCHEMAS `FairRefusal` |
-| `NONCE_POOL_EXHAUSTED` | 503 | yes (1 s) | All leased; the server adds the next seed index, up to `NONCE_SEED_MAX` = 16 (DATA-MODEL §5.20) |
+| `NONCE_POOL_EXHAUSTED` | 503 | yes (1 s) | All leased; the server adds the next seed index, up to `NONCE_SEED_MAX` = 16 (DATA-MODEL §5.20). Under `DEMO_MODE` also when a bet that is not between two demo accounts would take one of the last 2 free nonces, or its parties already hold a lease (the lock fails `nonce_pool_exhausted`) |
 | `ESCROW_PAUSED` | 503 | no | `Config.paused` (ESCROW 6003) |
 | `RPC_UNAVAILABLE` | 503 | yes | QuickNode RPC down or 429 |
 | `UPSTREAM_TIMEOUT` / `UPSTREAM_ERROR` | 504 / 502 | yes | ElevenLabs token mint, STT, Gemini REST |
