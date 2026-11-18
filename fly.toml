@@ -15,7 +15,7 @@ primary_region = "dfw"
   DEMO_MODE = "false"
   # Non-secret, filled at deploy once known (PENDING):
   # PUBLIC_BASE_URL = "https://<app>.fly.dev"
-  # PROGRAM_ID = "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm" # = packages/shared ESCROW_ID; env.ts rejects any other value
+  # PROGRAM_ID = "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp" # = packages/shared ESCROW_ID; env.ts rejects any other value
   # USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   # ELEVENLABS_AGENT_ID = "<agent id>"
 

@@ -1,5 +1,5 @@
 {
-  "address": "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm",
+  "address": "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp",
   "metadata": {
     "name": "escrow",
     "version": "0.1.0",
@@ -586,7 +586,7 @@
         },
         {
           "name": "escrow_program",
-          "address": "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm"
+          "address": "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp"
         },
         {
           "name": "program_data"

@@ -23,8 +23,8 @@
 // and ESCROW_ID). apps/server/test/chain-unit.test.ts fails if it drifts.
 /*__CONFIG_START__*/
 var CONFIG = {
-  programId: 'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm',
-  eventAuthority: '9j8rLku2jyJ11H4cgPXoEK2ea3cQdKp6XW5Kx1pWs8ME',
+  programId: 'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp',
+  eventAuthority: '2R3N7HdDrqP4nteeBL88v7EESXabbcrLCPasi88F5i7m',
   eventIxTag: [228, 69, 165, 46, 81, 203, 154, 29],
   events: {
     '820c89bfbdd91abd': 'AppealResolved',

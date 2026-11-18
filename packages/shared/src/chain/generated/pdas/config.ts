@@ -19,7 +19,7 @@ export async function findConfigPda(
 ): Promise<ProgramDerivedAddress> {
   const {
     programAddress:
-      programAddressInput = 'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm' as Address<'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm'>,
+      programAddressInput = 'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp' as Address<'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp'>,
   } = config;
   const programAddress =
     typeof programAddressInput === 'string' ? programAddressInput : programAddressInput.address;
