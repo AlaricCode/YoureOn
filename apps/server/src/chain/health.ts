@@ -14,6 +14,7 @@ import type { BetState } from '@youre-on/shared/bet-state';
 import { findConfigPda, getConfigDecoder, type Config } from '@youre-on/shared/escrow-client';
 import { formatUsd } from '@youre-on/shared/money';
 import type { AppDeps } from '../context';
+import type { Logger } from '../log';
 import type { KeeperStatus } from '../keeper/keeper';
 import { lifecycleOf } from '../lock/runtime';
 import { APPEAL_FAMILY, LOCKED_FAMILY, type OrphanSummary } from '../payout/refund';
@@ -572,12 +573,44 @@ export function healthLine(r: ChainHealthReport): Record<string, unknown> {
 /** Every 10 min: log only when something is wrong (the boot line is always logged). */
 export const HEALTH_LOG_MS = 10 * 60_000;
 
+/**
+ * The judge (LLM) and toggle codes. They stay in the report (GET /v1/demo/health `warnings`,
+ * demo-check) and in every log line's warning list, but alone they never make a log line a WARN:
+ * judge_no_success shows on every boot until the first judge call and cached_ruling_on the whole
+ * time the fallback is on, while `chain.unhealthy` means a chain or money-path problem.
+ */
+export const JUDGE_WARNING_CODES: ReadonlySet<string> = new Set([
+  'judge_no_success',
+  'judge_failing',
+  'cached_ruling_on',
+]);
+
+/** Does the chain / money path need a human? Any warning but a warn-level judge one. */
+export function chainNeedsAttention(r: Pick<ChainHealthReport, 'warnings'>): boolean {
+  return r.warnings.some((w) => w.level === 'critical' || !JUDGE_WARNING_CODES.has(w.code));
+}
+
+/**
+ * Logs one report: the boot line (`chain.boot_health`, always; WARN only when the chain needs
+ * attention), else the periodic one (`chain.unhealthy` when it does; `chain.healthy` only with
+ * `always`). Every line lists every warning code, the judge's included.
+ */
+export function logHealthReport(
+  log: Logger,
+  r: ChainHealthReport,
+  o: { boot?: boolean; always?: boolean } = {},
+): void {
+  const bad = chainNeedsAttention(r);
+  if (o.boot) log[bad ? 'warn' : 'info']('chain.boot_health', healthLine(r));
+  else if (bad) log.warn('chain.unhealthy', healthLine(r));
+  else if (o.always) log.info('chain.healthy', healthLine(r));
+}
+
 export async function logChainHealth(
   deps: Parameters<typeof chainHealth>[0],
   o: { always?: boolean } = {},
 ): Promise<ChainHealthReport> {
   const r = await chainHealth(deps);
-  if (r.warnings.length) deps.log.warn('chain.unhealthy', healthLine(r));
-  else if (o.always) deps.log.info('chain.healthy', healthLine(r));
+  logHealthReport(deps.log, r, o);
   return r;
 }
