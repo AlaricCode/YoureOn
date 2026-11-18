@@ -46,8 +46,11 @@ reads `GET /health` (reachable, latency, clock skew) and, with `DEMO_ADMIN_TOKEN
 `cached_ruling` toggle. With `--warmup` it first calls `POST /v1/demo/warmup` (see "Warm-up"
 below) and adds one `warmup.*` line per dependency. With `SOLANA_RPC_URL` set it also checks the
 chain directly: the program is deployed, Config exists and is not paused, the fee payer's SOL, the
-nonce accounts, the demo wallets' USDC, and live bets past a deadline. With `QN_API_KEY` and
-`QN_STREAM_ID` set it reads the Stream's status. Every failed check prints its fix.
+nonce accounts, the demo wallets' USDC, and live bets past a deadline. With `QUICKNODE_API_KEY`
+(the key `qn-stream` uses; `QN_API_KEY` still works) and `QN_STREAM_ID` set it reads the Stream's
+status: a paused Stream is NO-GO, fixed by `npm run qn-stream -- reset-start <id>` then
+`npm run qn-stream -- resume <id>` (resume alone replays every block since the pause). Every
+failed check prints its fix.
 
 | Check                  | GO                              | Warn                                    | What to do                                                                          |
 | ---------------------- | ------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -77,6 +80,15 @@ demo "$SERVER/v1/demo/health" | jq '{ok, warnings, lock_signer, fee_payer_sol, n
 - `nonce_pool`: `size`, `free`, `leased`, `advancing`, `retired`. `inflight.stuck` lists sent
   transactions older than 2 minutes; `stuck_bets` lists bets that are not moving.
 - `escrow`: orphaned escrow (bets on chain whose row is gone or terminal). See section 5.
+- `stream`: the QuickNode Stream's own deliveries only. `last_delivery_at` is the newest Stream
+  copy (a chain event the Stream stored, or a tx it delivered after `rpc_poll` had stored it);
+  `null` means the Stream never delivered. `events_last_hour` counts Stream events,
+  `rpc_poll_last_hour` the `rpc_poll` ones. `stream_silent` (a warning) means
+  `QN_STREAM_SECURITY_TOKEN` is set, the server sent escrow transactions (nonce advances do not
+  count) in the last 10 minutes and the Stream delivered nothing in that time: events then arrive
+  through `rpc_poll`, 30 s late. A send that never landed also triggers it: check
+  `inflight.stuck` first. Check the Stream with `npm run qn-stream -- list`; a paused one:
+  `reset-start <id>`, then `resume <id>`.
 - `build`: which image and machine answered, to confirm the deploy you expect.
 - `toggles`: `cached_ruling` and whether it comes from the env (`CACHED_RULING`, the boot default)
   or was set at runtime. `judge_llm`: the judge's calls since boot (rulings and warm-ups): the last
@@ -242,8 +254,9 @@ https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>
 | `Esc`     | Close any overlay                                                                      |
 
 The bottom strip shows demo health: fee-payer SOL, free nonces, RPC and DB latency, and how many
-REPLAY clips are cached. The ticker header says "via QuickNode Streams" only for events the Stream
-delivered.
+REPLAY clips are cached. The ticker header says "via QuickNode Streams" only once an event came from
+the Stream; chain events that all came from `rpc_poll` read "via Solana RPC (fallback)". Polled rows
+are tagged `rpc` and show no "+X s" lag (that lag is the Streams latency, so only Stream rows get it).
 
 **Press any key once the page is up**: browsers keep audio locked until then, and the judge's voice
 is part of the show. The projector speaks every ruling, payout and appeal vote, except in a bet the
@@ -418,6 +431,8 @@ npm run crank -- --url "$SOLANA_RPC_URL" --devnet --payer <funded-keypair.json> 
 
 - `demo -X POST "$SERVER/v1/demo/reset" -d '{"rebalance": true}'`.
 - Pause the Stream once it exists, to save credits: `npm run qn-stream -- pause <stream id>`.
+  Before the next show, `npm run qn-stream -- reset-start <stream id>` (start_range -> the devnet
+  tip; paused Streams only), then `npm run qn-stream -- resume <stream id>`.
 - Switch the Gemini relay back to live if you used the replay.
 - Turn the cached ruling off if you switched it on
   (`demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": null}'`), and put

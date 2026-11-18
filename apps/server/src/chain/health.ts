@@ -44,6 +44,10 @@ export const HEALTH = {
   stuckNonceMs: 15 * 60_000,
   /** Keeper errors newer than this count. */
   keeperErrorWindowMs: 10 * 60_000,
+  /** stream_silent: no Stream delivery for this long while server txs were sent in it. */
+  streamSilentMs: 10 * 60_000,
+  /** A send newer than this may simply not be delivered yet (the Stream lands in ~1-5 s). */
+  streamGraceMs: 60_000,
 } as const;
 
 export type HealthLevel = 'warn' | 'critical';
@@ -99,7 +103,13 @@ export interface ChainHealthReport {
   inflight: { sent_txs: number; oldest_sent_at: string | null; stuck: StuckTx[] };
   stuck_bets: StuckBet[];
   escrow: OrphanSummary | null;
-  stream: { last_delivery_at: string | null; events_last_hour: number };
+  /**
+   * The Stream's own deliveries only (source = 'stream'): rpc_poll copies never make it look
+   * alive. last_delivery_at = the newest Stream-source row or chain_txs.stream_seen_at (a Stream
+   * copy of a tx rpc_poll stored first); null = the Stream never delivered. events_last_hour
+   * counts Stream-source rows; rpc_poll_last_hour (additive) the rpc_poll ones.
+   */
+  stream: { last_delivery_at: string | null; events_last_hour: number; rpc_poll_last_hour: number };
   markets: { last_ok_at: string | null; last_error: string | null } | null;
   /** The demo runtime toggles (demo/toggles.ts; POST /v1/demo/toggles). */
   toggles: DemoTogglesView;
@@ -132,6 +142,56 @@ async function settle<T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: fals
   } catch (e) {
     return { ok: false, err: rpcErrorText(e) };
   }
+}
+
+/** The Stream row of the health query (chainHealth); timestamps come back as Date or string. */
+export interface StreamCounts extends Record<string, unknown> {
+  stream_last: Date | string | null;
+  seen_last: Date | string | null;
+  stream_hour: number | string | null;
+  rpc_poll_hour: number | string | null;
+  /**
+   * Server escrow txs (signature set, sent / confirmed, not nonce_advance: a System-program tx the
+   * Stream filter never delivers) sent in (now - 10 min, now - 60 s].
+   */
+  sent_window: number | string | null;
+}
+
+const msOf = (d: Date | string | null | undefined): number | null =>
+  d === null || d === undefined ? null : new Date(d).getTime();
+
+/**
+ * The report's `stream` block and the stream_silent warning, no DB. stream_silent (warn): a
+ * Stream is expected (QN_STREAM_SECURITY_TOKEN set) but none delivered for > 10 min although
+ * server txs were sent in that window (an idle server never warns): events then arrive only
+ * through rpc_poll, 30 s late (reconciler.ts rpcPollFallbackMs). Known false positive: a send that
+ * never landed (dropped, blockhash expired) still counts while 'sent'; it shows in inflight.stuck.
+ */
+export function streamHealth(
+  row: StreamCounts | undefined,
+  o: { nowMs: number; streamExpected: boolean },
+): { stream: ChainHealthReport['stream']; warning: HealthWarning | null } {
+  const at = [msOf(row?.stream_last), msOf(row?.seen_last)].filter((x): x is number => x !== null);
+  const last = at.length ? Math.max(...at) : null;
+  const sent = Number(row?.sent_window ?? 0);
+  const silent =
+    o.streamExpected && sent > 0 && (last === null || o.nowMs - last > HEALTH.streamSilentMs);
+  return {
+    stream: {
+      last_delivery_at: iso(last),
+      events_last_hour: Number(row?.stream_hour ?? 0),
+      rpc_poll_last_hour: Number(row?.rpc_poll_hour ?? 0),
+    },
+    warning: silent
+      ? {
+          code: 'stream_silent',
+          level: 'warn',
+          message: `QN_STREAM_SECURITY_TOKEN is set but no Stream delivery ${
+            last === null ? 'ever' : `since ${iso(last)}`
+          } while ${sent} escrow tx(s) were sent in the last 10 min: chain events arrive only by rpc_poll (30 s late). A dropped send can also cause this: check inflight.stuck. npm run qn-stream -- list (paused: reset-start <id>, then resume <id>).`,
+        }
+      : null,
+  };
 }
 
 /** The escrow Config account, or null when it does not exist. */
@@ -252,12 +312,30 @@ export async function chainHealth(
   for (const b of pendingPayout)
     stuck_bets.push({ bet_id: b.id, state: b.state, why: `in ${b.state} for > 2 min` });
 
-  const [stream] = await deps.db
-    .select({
-      last: sql<Date | null>`max(${chainEvents.received_at})`,
-      hour: sql<number>`count(*) FILTER (WHERE ${chainEvents.received_at} > ${new Date(nowMs - 3_600_000).toISOString()}::timestamptz)::int`,
-    })
-    .from(chainEvents);
+  // One round trip, each subquery on an indexed column (chain_events_recent; chain_txs is small).
+  const [streamRow] = await deps.db.execute<StreamCounts>(sql`
+    SELECT
+      (SELECT max(${chainEvents.received_at}) FROM ${chainEvents}
+        WHERE ${chainEvents.source} = 'stream') AS stream_last,
+      (SELECT max(${chainTxs.stream_seen_at}) FROM ${chainTxs}) AS seen_last,
+      (SELECT count(*)::int FROM ${chainEvents}
+        WHERE ${chainEvents.received_at} > ${iso(nowMs - 3_600_000)}::timestamptz
+          AND ${chainEvents.source} = 'stream') AS stream_hour,
+      (SELECT count(*)::int FROM ${chainEvents}
+        WHERE ${chainEvents.received_at} > ${iso(nowMs - 3_600_000)}::timestamptz
+          AND ${chainEvents.source} = 'rpc_poll') AS rpc_poll_hour,
+      (SELECT count(*)::int FROM ${chainTxs}
+        WHERE ${chainTxs.signature} IS NOT NULL
+          AND ${chainTxs.status} IN ('sent', 'confirmed')
+          AND ${chainTxs.kind} <> 'nonce_advance'
+          AND ${chainTxs.sent_at} > ${iso(nowMs - HEALTH.streamSilentMs)}::timestamptz
+          AND ${chainTxs.sent_at} <= ${iso(nowMs - HEALTH.streamGraceMs)}::timestamptz) AS sent_window
+  `);
+  const streamReport = streamHealth(streamRow, {
+    nowMs,
+    streamExpected: !!deps.env.QN_STREAM_SECURITY_TOKEN,
+  });
+  if (streamReport.warning) warnings.push(streamReport.warning);
 
   // ---- chain ----
   const lc = lifecycleOf(deps);
@@ -539,10 +617,7 @@ export async function chainHealth(
     },
     stuck_bets,
     escrow,
-    stream: {
-      last_delivery_at: iso(stream?.last ? new Date(stream.last) : null),
-      events_last_hour: stream?.hour ?? 0,
-    },
+    stream: streamReport.stream,
     markets: deps.markets
       ? { last_ok_at: iso(deps.markets.lastOkAt), last_error: deps.markets.lastError }
       : null,

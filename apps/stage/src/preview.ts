@@ -121,7 +121,10 @@ export function bottleFrame(attempt: 1 | 2, i: number): string {
 
 interface Entry {
   at: number;
-  /** A chain.* event (QuickNode Streams); `previewAt(…, { chain: false })` leaves them out. */
+  /**
+   * A chain.* event (QuickNode Streams); `previewAt(…, { chain: false })` leaves them out and
+   * `{ via: 'rpc_poll' }` replays them as the fallback observed them.
+   */
   chain?: boolean;
   action: (base: number) => TickerAction;
 }
@@ -761,6 +764,13 @@ export interface PreviewFrame {
   t: number;
 }
 
+/** A chain.* frame as the other observer would have sent it (`opts.via`: rpc_poll, the fallback). */
+function observedBy(a: TickerAction, via: 'quicknode_stream' | 'rpc_poll'): TickerAction {
+  if (a.kind !== 'frame') return a;
+  const raw = a.raw as { payload: Record<string, unknown> };
+  return { ...a, raw: { ...raw, payload: { ...raw.payload, observed_via: via } } };
+}
+
 /**
  * The stage at a moment of the sample sequence. `step` freezes it; otherwise it loops, with the
  * loop anchored at `startMs` (so the first frame is the challenge).
@@ -769,7 +779,7 @@ export function previewAt(
   startMs: number,
   nowMs: number,
   step: string | null = null,
-  opts: { chain?: boolean } = {},
+  opts: { chain?: boolean; via?: 'quicknode_stream' | 'rpc_poll' } = {},
 ): PreviewFrame {
   const frozen = step && isPreviewStep(step) ? PREVIEW_STEPS[step] : null;
   const t = frozen ?? (((nowMs - startMs) % LOOP_MS) + LOOP_MS) % LOOP_MS;
@@ -779,7 +789,7 @@ export function previewAt(
   for (const e of SEQUENCE) {
     if (e.at > t) break;
     if (e.chain && opts.chain === false) continue;
-    s = applyFrame(s, e.action(base));
+    s = applyFrame(s, e.chain && opts.via ? observedBy(e.action(base), opts.via) : e.action(base));
   }
   // 80 s of the BTC index (one point every 2 s), the newest at `now`
   for (let i = 40; i >= 0; i--) {

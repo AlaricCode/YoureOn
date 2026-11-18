@@ -124,6 +124,34 @@ describe('the preview without chain.* events (QuickNode Streams off)', () => {
   });
 });
 
+describe('the preview with every chain.* event from the rpc_poll fallback (Stream off)', () => {
+  const polled = (step: keyof typeof PREVIEW_STEPS) =>
+    previewAt(START, START, step, { via: 'rpc_poll' });
+  const html = (step: keyof typeof PREVIEW_STEPS) => {
+    const f = polled(step);
+    return text(renderToString(<StageView state={f.state} now={f.now} preview={step} />));
+  };
+
+  it('the chain events still fold (source chain), each marked observed_via rpc_poll', () => {
+    const f = polled('paid');
+    const chain = f.state.events.filter((e) => e.source === 'chain');
+    expect(chain.length).toBeGreaterThan(0);
+    expect(chain.every((e) => e.observed_via === 'rpc_poll')).toBe(true);
+    expect(focusOf(f.state).lock).toMatchObject({ onchain: true, onchain_via: 'rpc_poll' });
+    expect(focusOf(f.state).payout).toEqual(focusOf(previewAt(START, START, 'paid').state).payout);
+  });
+
+  it('the ticker does not claim QuickNode Streams, and shows no Streams lag', () => {
+    const paid = html('paid');
+    expect(paid).toContain('via Solana RPC (fallback)');
+    expect(paid).not.toContain('QuickNode Streams');
+    expect(paid).not.toContain('class="lag"');
+    expect(paid).toContain('<span class="via"> rpc</span>');
+    expect(html('locked')).not.toContain('Streams +');
+    expect(html('locked')).toContain('✓ on-chain');
+  });
+});
+
 // ---- the rules ---------------------------------------------------------------------------------
 
 const BET = '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f';

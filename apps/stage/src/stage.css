@@ -1002,6 +1002,10 @@ code,
   color: var(--good);
   font-family: var(--mono);
 }
+.ticker .via {
+  color: var(--dim);
+  font-family: var(--mono);
+}
 .errors {
   color: var(--bad);
   font-size: 0.6em;

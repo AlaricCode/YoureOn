@@ -333,7 +333,8 @@ export function SignerSlots({ bet }: { bet: BetView }) {
 
 function LockLine({ bet }: { bet: BetView }) {
   const l = bet.lock!;
-  const streams = lagLabel(l.sent_at, l.onchain_at);
+  // the lag is the Streams proof only when the Stream saw it; rpc_poll's is the poll interval
+  const streams = l.onchain_via === 'quicknode_stream' ? lagLabel(l.sent_at, l.onchain_at) : null;
   const status =
     l.status === 'failed'
       ? `failed${l.error ? `: ${l.error}` : ''}`
@@ -1059,9 +1060,12 @@ export function tickerRows(state: TickerState, max = 14): TickerEvent[] {
     .slice(0, max);
 }
 
-/** chain.* lag after the tx.submitted of the same signature: the Streams proof. */
+/**
+ * chain.* lag after the tx.submitted of the same signature: the Streams proof. Only for events
+ * the Stream delivered; an rpc_poll row's lag would be the poll interval, so it gets none.
+ */
 function streamsLag(state: TickerState, e: TickerEvent): string | null {
-  if (e.source !== 'chain') return null;
+  if (e.observed_via !== 'quicknode_stream') return null;
   const sig = (e.payload as { signature?: string } | null)?.signature;
   if (!sig) return null;
   const sent = state.events.find(
@@ -1086,13 +1090,22 @@ const hhmmss = (iso: string) => {
 export function Ticker({ state }: { state: TickerState }) {
   const custodial = useCustodial();
   const rows = tickerRows(state);
-  // the header names the source truthfully: Streams only once a chain event actually came
-  const streamed = state.events.some((e) => e.source === 'chain');
+  // the header names the source truthfully: every chain.* event has source 'chain', so Streams
+  // only once one says observed_via quicknode_stream; chain events all via rpc_poll are the
+  // fallback; none at all, the server's own RPC confirms
+  const streamed = state.events.some((e) => e.observed_via === 'quicknode_stream');
+  const polled = !streamed && state.events.some((e) => e.source === 'chain');
   return (
     <section aria-label="ticker" className="ticker">
       <h2>
         On-chain · devnet{' '}
-        <span className="muted">{streamed ? 'via QuickNode Streams' : 'via Solana RPC'}</span>
+        <span className="muted">
+          {streamed
+            ? 'via QuickNode Streams'
+            : polled
+              ? 'via Solana RPC (fallback)'
+              : 'via Solana RPC'}
+        </span>
       </h2>
       {state.errors.length > 0 && (
         <ul className="errors">
@@ -1118,6 +1131,7 @@ export function Ticker({ state }: { state: TickerState }) {
                     {eventLabel(e.type, e.payload, state.bets[e.bet_id]?.names, custodial)}
                   </code>
                   {lag && <span className="lag"> {lag}</span>}
+                  {e.observed_via === 'rpc_poll' && <span className="via"> rpc</span>}
                 </span>
                 {e.explorer ? (
                   <a className="explorer" href={e.explorer} target="_blank" rel="noreferrer">

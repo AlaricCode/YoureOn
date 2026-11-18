@@ -6,7 +6,12 @@
 // API: https://api.quicknode.com/streams/rest/v1/streams, header `x-api-key` (a console API key
 // with Streams enabled). Endpoints (openapi.json, checked 2026-11-18): POST /streams (create),
 // GET /streams?limit&offset (list), GET|PATCH|DELETE /streams/{id}, POST /streams/{id}/pause,
-// POST /streams/{id}/activate, POST /streams/test_filter. The webhook destination's
+// POST /streams/{id}/activate, POST /streams/test_filter. start_range / end_range are slots on
+// Solana; -1 is documented as "from the tip" / "open-ended" (docs/reference/verdict/README.md
+// §QuickNode, not checked against the live API). create omits both (unverified: we assume that
+// means the same as -1). reset-start PATCHes start_range to the devnet tip slot read from the RPC
+// (explicit, checkable; `--slot -1` sends the sentinel instead), because `activate` resumes where
+// the Stream paused and replays the backlog (API-CONTRACT §5.1, SETUP-CHECKLIST). The webhook destination's
 // `security_token` (>= 32 chars) is optional on create (QuickNode generates one when omitted) and
 // is returned in destination_attributes; we always send our own so the Fly secret can be set
 // BEFORE the Stream delivers anything.
@@ -31,6 +36,10 @@ export const DEFAULT_FLY_APP = 'youre-on';
 export const DEFAULT_TOKEN_FILE = '~/.config/solana/youre-on/qn-stream.env';
 export const TOKEN_ENV = 'QN_STREAM_SECURITY_TOKEN';
 export const API_KEY_ENV = 'QUICKNODE_API_KEY';
+/** reset-start reads the tip slot here unless --rpc / SOLANA_RPC_URL (no key in the URL). */
+export const DEFAULT_DEVNET_RPC = 'https://api.devnet.solana.com';
+/** devnet's genesis hash (= scripts/lib/chain.ts GENESIS.devnet): tipSlot asks only devnet. */
+export const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 /** QuickNode's minimum security_token length. */
 export const MIN_TOKEN_LENGTH = 32;
 
@@ -66,6 +75,10 @@ export interface StreamBody {
   destination_attributes: WebhookAttributes;
   fix_block_reorgs: number;
   keep_distance_from_tip: number;
+  /** first slot to stream; omitted on create (QuickNode: the tip). */
+  start_range?: number;
+  /** last slot; -1 = keep following the tip. */
+  end_range?: number;
   status: 'active' | 'paused';
 }
 
@@ -617,5 +630,92 @@ export async function resumeStream(
   } else if (!(await ensureServerToken(io, token, o)))
     throw new Error('not resuming: the server would reject the deliveries');
   await call(req.activate(id));
+  return (await call(req.get(id))) as Record<string, unknown>;
+}
+
+/**
+ * The devnet tip reset-start uses: getGenesisHash (refused unless devnet: SOLANA_RPC_URL is often
+ * localnet, whose slot would move start_range ~500 M devnet slots back), then getSlot (confirmed).
+ */
+export async function tipSlot(fetchImpl: FetchLike, rpcUrl: string): Promise<number> {
+  // only the host is ever printed: a QuickNode RPC URL carries its token in the path
+  const host = new URL(rpcUrl).host;
+  const rpc = async (method: string, params: unknown[]) => {
+    const res = await fetchImpl(rpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    if (!res.ok) throw new Error(`${method} on ${host}: HTTP ${res.status}`);
+    const j = (await res.json()) as { result?: unknown; error?: { message?: string } };
+    if (j.result === undefined)
+      throw new Error(`${method} on ${host}: ${j.error?.message ?? 'no result in the answer'}`);
+    return j.result;
+  };
+  const genesis = await rpc('getGenesisHash', []);
+  if (genesis !== DEVNET_GENESIS)
+    throw new Error(
+      `${host} is not devnet (genesis ${String(genesis)}): pass --rpc ${DEFAULT_DEVNET_RPC} or --slot <n>`,
+    );
+  const slot = await rpc('getSlot', [{ commitment: 'confirmed' }]);
+  if (!Number.isSafeInteger(slot) || (slot as number) <= 0)
+    throw new Error(`getSlot on ${host}: not a slot: ${String(slot)}`);
+  return slot as number;
+}
+
+/** reset-start --dry-run: what would run, sends nothing (RPC host only, API key redacted). */
+export function resetStartPlan(id: string, rpcUrl: string, slot: number | null): string {
+  const r = req.update(id, { start_range: slot ?? 0 });
+  return [
+    '# 1. the Stream must be paused',
+    describeRequest(req.get(id)),
+    ...(slot === null
+      ? [
+          '',
+          `# 2. the tip: getGenesisHash (devnet only) + getSlot (confirmed) on ${new URL(rpcUrl).host}`,
+        ]
+      : []),
+    '',
+    `# ${slot === null ? 3 : 2}. move start_range`,
+    describeRequest(slot === null ? { ...r, body: { start_range: '<tip slot>' } } : r),
+    '',
+    `next: npm run qn-stream -- resume ${id}`,
+  ].join('\n');
+}
+
+/**
+ * Moves a PAUSED Stream's start_range to `slot` (PATCH), so the next `activate` starts at the tip
+ * instead of replaying everything since the pause (~30 credits per devnet block). Refuses an
+ * active Stream: QuickNode updates paused Streams only, and pausing here would silently stop
+ * deliveries. Leaves it paused; the caller resumes it (resumeStream probes the webhook first).
+ * The slots skipped are covered by the server's reconciler / startup sweep (ARCHITECTURE "Gaps").
+ */
+export async function resetStartRange(
+  io: Pick<StreamIo, 'fetch' | 'apiKey' | 'log'>,
+  id: string,
+  slot: number,
+  o: { explicit?: boolean } = {},
+): Promise<Record<string, unknown>> {
+  // -1 = "from the tip" (Verdict reference, unverified), only when asked for with --slot -1
+  if (!Number.isSafeInteger(slot) || (slot <= 0 && !(slot === -1 && o.explicit)))
+    throw new Error(`not a slot: ${slot}`);
+  const call = (r: QnRequest) => qnCall(io.fetch, io.apiKey, r);
+  const before = (await call(req.get(id))) as Record<string, unknown>;
+  const status = String(before['status'] ?? '?');
+  if (status !== 'paused')
+    throw new Error(
+      `${id} is ${status}: QuickNode only updates a paused Stream. ` +
+        `Pause it first (npm run qn-stream -- pause ${id}), then reset-start again.`,
+    );
+  const prev = before['start_range'];
+  // a tip below the current start would replay history: a wrong RPC, unless --slot said so
+  if (!o.explicit && typeof prev === 'number' && prev > 0 && slot < prev)
+    throw new Error(
+      `start_range ${prev} -> ${slot} would move it back: wrong RPC? Pass --slot ${slot} to force.`,
+    );
+  io.log(
+    `start_range ${String(before['start_range'] ?? '?')} -> ${slot} (end_range ${String(before['end_range'] ?? '?')} kept)`,
+  );
+  await call(req.update(id, { start_range: slot }));
   return (await call(req.get(id))) as Record<string, unknown>;
 }

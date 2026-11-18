@@ -166,7 +166,21 @@ server's boot reconcile re-reads all of them.
 
 ## 10. QuickNode Stream
 
-Point the Stream filter at the program ID (D1-L4, `scripts/qn-stream.ts` and the Streams doc).
+Needs `QUICKNODE_API_KEY` (a console key with Streams) and the deployed server (§8). The filter
+is regenerated from the IDL + program ID on every call (`infra/quicknode/filter.js`).
+
+```bash
+npm run qn-stream -- test-filter --block <devnet slot with an escrow tx>  # filter runs on QuickNode's side
+npm run qn-stream -- create --fly-app youre-on   # token -> Fly secret (only if unset) -> probe -> create paused -> activate
+npm run qn-stream -- list                        # note the id; export QN_STREAM_ID=<id> for demo-check
+npm run qn-stream -- pause <id>                  # when idle: ~11 M credits/day at 24/7
+npm run qn-stream -- reset-start <id>            # before the demo: start_range -> the devnet tip (paused only)
+npm run qn-stream -- resume <id>                 # probes the webhook, then activates
+```
+
+Verify with §11 (`--database-url` waits for the Stream's `chain_events` rows) or
+`fly logs -a youre-on | grep chain.delivery`. Without `reset-start`, `resume` replays every block
+since the pause. Every command takes `--dry-run` (prints the requests, needs no key).
 
 ## 11. Smoke
 

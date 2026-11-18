@@ -1123,6 +1123,7 @@ run('money path hardening over LiteSVM', () => {
         const env = { ...process.env };
         // Never reach a real RPC / QuickNode from a test.
         delete env.SOLANA_RPC_URL;
+        delete env.QUICKNODE_API_KEY;
         delete env.QN_API_KEY;
         delete env.QN_STREAM_ID;
         delete env.DEMO_ADMIN_TOKEN;
