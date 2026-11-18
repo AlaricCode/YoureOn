@@ -2,7 +2,8 @@
 //   POST /v1/stage/session {stage_key, room_id | room_code} -> 201 StageSessionResponse (scope
 //        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code phone A shows (or
 //        its QR payload). 404 unless STAGE_KEY is configured. The key is compared in constant
-//        time; 10/min per client IP.
+//        time; 10/min per client IP. Also says who signs the lock (LOCK_SIGNER), so the
+//        projector words the signature slots truthfully ('server': custodial demo keys).
 //   GET  /v1/bets/:bet_id -> BetSnapshot, for a party of the bet or a stage session of its room
 //        (cold start / resync).
 //   GET  /v1/bets/:bet_id/attempts/:n/frames/:idx -> the evidence JPEG the judge was sent (the
@@ -72,6 +73,8 @@ export const StageSessionResponse = z.object({
   room_id: Uuid,
   scopes: z.array(z.enum(['stage', 'demo'])),
   expires_at: z.string(),
+  /** Additive: 'server' = the server signs the lock as demo-a / demo-b (lock/service.ts). */
+  lock_signer: z.enum(['phones', 'server']),
 });
 export type StageSessionResponse = z.infer<typeof StageSessionResponse>;
 
@@ -236,6 +239,7 @@ export const stageRoutes: RouteModule = {
         room_id: room.id,
         scopes,
         expires_at: expires_at.toISOString(),
+        lock_signer: deps.env.LOCK_SIGNER,
       };
       return c.json(out, 201);
     });
