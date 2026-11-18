@@ -13,7 +13,7 @@
 // This suite runs in its OWN database (<DATABASE_URL db>_qnproj): it owns nonce_pool, like
 // lifecycle.test.ts / e2e-beats.test.ts. Skips without DATABASE_URL or escrow.so.
 import { randomBytes, randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
@@ -128,12 +128,14 @@ run('QuickNode Stream path on LiteSVM transactions (filter -> webhook -> project
   let blockHeight = 410_000_000;
   const filter = loadQnFilter();
 
-  const install = (o: { client?: ChainClient; timeoutMs?: number } = {}) => {
+  const install = (
+    o: { client?: ChainClient; timeoutMs?: number; signer?: 'server' | 'phones' } = {},
+  ) => {
     lc = installLifecycle(
       ctx.deps,
       createLifecycle(ctx.deps, {
         runtime: async () => (o.client ? { ...rt, client: o.client } : rt),
-        signer: 'server',
+        signer: o.signer ?? 'server',
         send: { pollMs: 5, resendMs: 50, timeoutMs: o.timeoutMs ?? 2_000 },
         timers: false,
       }),
@@ -496,6 +498,71 @@ run('QuickNode Stream path on LiteSVM transactions (filter -> webhook -> project
       expect((await txRow(betId, 'finalize')).status).toBe('confirmed');
       expect((await cues(betId)).filter((c) => c === 'PAID')).toHaveLength(1);
       expect((await betRow(betId)).state).toBe('PAID');
+    } finally {
+      install();
+    }
+  });
+
+  it('Stream before our resolve confirm: the chain rules first, the confirm still arms finalize + the GG prompt', async () => {
+    const betId = await confirmedBet();
+    const lockSig = (await txRow(betId, 'atomic_lock')).signature!;
+    await stream(lockSig);
+    // the resolve lands; the Stream delivers it (chain wins: LOCKED -> RULED) before the
+    // PayoutService's own confirm comes back
+    let streamFirst = true;
+    const client: ChainClient = {
+      ...rt.client,
+      signatureStatus: async (sig, opts) => {
+        const st = await rt.client.signatureStatus(sig, opts);
+        if (st && streamFirst) {
+          streamFirst = false;
+          expect((await stream(sig)).json).toMatchObject({ ok: true, inserted: 1 });
+          expect((await betRow(betId)).state).toBe('RULED');
+        }
+        return st;
+      },
+    };
+    install({ client, signer: 'phones' }); // phones mode: the loser gets the concede prompt
+    try {
+      const arm = vi.spyOn(lc.payout, 'armFinalize');
+      const seq0 = (await log(betId)).length;
+      const ruled = ruling(betId, (await betRow(betId)).terms_hash!, 'B_WINS');
+      const r = await lc.payout.onRuling(betId, ruled);
+      await lc.idle();
+      expect(streamFirst).toBe(false);
+      const resolveSig = (await txRow(betId, 'resolve')).signature!;
+      expect(r).toMatchObject({ signature: resolveSig, already: false });
+      expect((await txRow(betId, 'resolve')).status).toBe('confirmed');
+      const row = await betRow(betId);
+      expect(row).toMatchObject({ state: 'RULED', onchain_status: 'resolved' });
+      // the finalize fast path is armed at appeal_deadline + 1 s
+      expect(arm).toHaveBeenCalledWith(betId, row.appeal_deadline!.getTime() + 1_000);
+      // one RULED (the projector's), then what our confirm still owes the phones
+      const after = (await log(betId)).slice(seq0);
+      expect(after.map((e) => e.type)).toEqual([
+        'chain.BetResolved',
+        'bet.state',
+        'tx.confirmed',
+        'tx.sign_request',
+      ]);
+      expect((after[2]!.envelope as any).payload).toMatchObject({
+        kind: 'resolve',
+        signature: resolveSig,
+      });
+      // the same ruling again (the judge retries, resolve-due): nothing is redone
+      arm.mockClear();
+      expect(await lc.payout.onRuling(betId, ruled)).toMatchObject({ already: true });
+      await lc.payout.reconcile(rt, now());
+      await lc.idle();
+      expect(arm).not.toHaveBeenCalled();
+      expect((await log(betId)).length).toBe(seq0 + after.length);
+      // the appeal window closes: paid as usual (and nothing left RULED for later tests)
+      advance(12_000);
+      expect(await lc.payout.finalizeDue(now())).toEqual([betId]);
+      await lc.idle();
+      expect((await betRow(betId)).state).toBe('PAID');
+      await stream((await txRow(betId, 'finalize')).signature!); // the Stream confirms it
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', onchain_status: 'settled' });
     } finally {
       install();
     }
