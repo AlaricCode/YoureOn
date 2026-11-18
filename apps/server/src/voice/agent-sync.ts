@@ -8,6 +8,11 @@
 //   3. the private agent  GET /v1/convai/agents?search=  GET/PATCH /v1/convai/agents/{id}  POST /v1/convai/agents/create
 // A resource is PATCHed only when the desired JSON is not already a subset of what ElevenLabs
 // returns, so an unchanged config sends no writes.
+//
+// A throwaway test agent (SyncOptions.agentName != JUDGE_AGENT_NAME, el-agent --agent-name): the
+// secret and the tools are workspace-wide and shared with the live judge, so that mode never
+// PATCHes them (a tool that differs from this checkout stops the run, --rotate-secret is refused):
+// it only creates what is missing and creates / updates its own agent, tagged 'test'.
 import {
   agentBody,
   CLIENT_TOOLS,
@@ -128,9 +133,22 @@ export interface SyncOptions {
   toolSecret: string;
   rotateSecret?: boolean;
   webhookTools?: readonly WebhookToolName[];
-  agent?: Omit<AgentOptions, 'toolIds' | 'promptTools'>;
+  agent?: Omit<AgentOptions, 'toolIds' | 'promptTools' | 'name' | 'tags'>;
+  /**
+   * Default JUDGE_AGENT_NAME (the live judge). Any other name is a throwaway test agent: shared
+   * workspace resources are never PATCHed (see the header).
+   */
+  agentName?: string;
   log?: (line: string) => void;
 }
+
+/** Tags of a test agent (el-agent --agent-name): never the live judge's alone. */
+export const TEST_AGENT_TAGS = ['youre-on', 'test'] as const;
+
+/** Is this sync for a throwaway test agent (never PATCH shared resources)? */
+export const isTestAgent = (o: Pick<SyncOptions, 'agentName'>): boolean =>
+  o.agentName !== undefined && o.agentName !== JUDGE_AGENT_NAME;
+const agentNameOf = (o: Pick<SyncOptions, 'agentName'>) => o.agentName ?? JUDGE_AGENT_NAME;
 
 export type SyncAction = {
   resource: 'secret' | 'tool' | 'agent';
@@ -169,12 +187,22 @@ export function desiredTools(o: Pick<SyncOptions, 'baseUrl' | 'webhookTools'>, s
   return [...webhooks, ...clients];
 }
 
-export function desiredAgent(o: Pick<SyncOptions, 'webhookTools' | 'agent'>, toolIds: string[]) {
+export function desiredAgent(
+  o: Pick<SyncOptions, 'webhookTools' | 'agent' | 'agentName'>,
+  toolIds: string[],
+) {
   const promptTools = new Set<JudgeToolName>([
     ...(o.webhookTools ?? DEFAULT_WEBHOOK_TOOLS),
     ...CLIENT_TOOLS,
+    // Built-in system tool (prompt.built_in_tools): silent through the room's celebration.
+    'skip_turn',
   ]);
-  return agentBody({ ...(o.agent ?? {}), toolIds, promptTools });
+  return agentBody({
+    ...(o.agent ?? {}),
+    toolIds,
+    promptTools,
+    ...(isTestAgent(o) ? { name: agentNameOf(o), tags: TEST_AGENT_TAGS } : {}),
+  });
 }
 
 /**
@@ -204,7 +232,7 @@ export function dryRunPlan(o: SyncOptions): SyncAction[] {
     })),
     {
       resource: 'agent',
-      name: JUDGE_AGENT_NAME,
+      name: agentNameOf(o),
       action: 'create',
       method: 'POST',
       path: '/v1/convai/agents/create',
@@ -216,6 +244,10 @@ export function dryRunPlan(o: SyncOptions): SyncAction[] {
 export async function syncAgent(http: ElHttp, o: SyncOptions): Promise<SyncResult> {
   const log = o.log ?? (() => {});
   const actions: SyncAction[] = [];
+  const testAgent = isTestAgent(o);
+  const AGENT_NAME = agentNameOf(o);
+  if (testAgent && o.rotateSecret)
+    throw new Error('--rotate-secret with --agent-name: the secret is shared with the live judge');
 
   // 1. workspace secret
   const secrets = arr(
@@ -285,6 +317,12 @@ export async function syncAgent(http: ElHttp, o: SyncOptions): Promise<SyncResul
     } else {
       toolIds[want.name] = String(have.id);
       const changed = diffPaths(want, have.tool_config);
+      if (changed.length && testAgent)
+        throw new Error(
+          `tool ${want.name} differs from this checkout [${changed.join(', ')}]: a test agent ` +
+            '(--agent-name) never PATCHes a workspace tool the live judge shares. Sync the live ' +
+            'judge first, or use scripts/el-review-eval.ts (its own throwaway tool).',
+        );
       if (changed.length) {
         const path = `/v1/convai/tools/${q(String(have.id))}`;
         await http.request('PATCH', path, body);
@@ -308,11 +346,11 @@ export async function syncAgent(http: ElHttp, o: SyncOptions): Promise<SyncResul
   // 3. agent
   const body = desiredAgent(o, Object.values(toolIds));
   const agents = arr(
-    obj(await http.request('GET', `/v1/convai/agents?search=${q(JUDGE_AGENT_NAME)}&page_size=100`))
+    obj(await http.request('GET', `/v1/convai/agents?search=${q(AGENT_NAME)}&page_size=100`))
       .agents,
   )
     .map(obj)
-    .filter((a) => a.name === JUDGE_AGENT_NAME && a.archived !== true);
+    .filter((a) => a.name === AGENT_NAME && a.archived !== true);
   const summary = exactlyOne(agents, 'agents');
   let agentId: string;
   if (!summary) {
@@ -320,7 +358,7 @@ export async function syncAgent(http: ElHttp, o: SyncOptions): Promise<SyncResul
     agentId = String(r.agent_id);
     actions.push({
       resource: 'agent',
-      name: JUDGE_AGENT_NAME,
+      name: AGENT_NAME,
       action: 'create',
       method: 'POST',
       path: '/v1/convai/agents/create',
@@ -335,18 +373,18 @@ export async function syncAgent(http: ElHttp, o: SyncOptions): Promise<SyncResul
       await http.request('PATCH', path, body);
       actions.push({
         resource: 'agent',
-        name: JUDGE_AGENT_NAME,
+        name: AGENT_NAME,
         action: 'update',
         method: 'PATCH',
         path,
         body,
         changed,
       });
-    } else actions.push({ resource: 'agent', name: JUDGE_AGENT_NAME, action: 'noop' });
+    } else actions.push({ resource: 'agent', name: AGENT_NAME, action: 'noop' });
   }
   const a = actions.at(-1)!;
   log(
-    `agent ${JUDGE_AGENT_NAME}: ${a.action}${a.changed ? ` [${a.changed.join(', ')}]` : ''} (${agentId})`,
+    `agent ${AGENT_NAME}: ${a.action}${a.changed ? ` [${a.changed.join(', ')}]` : ''} (${agentId})`,
   );
 
   return { secret_id: secretId, tool_ids: toolIds, agent_id: agentId, actions };

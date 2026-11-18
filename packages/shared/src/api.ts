@@ -598,6 +598,8 @@ export const JudgeCueName = z.enum([
   'VOIDED',
   // Additive: B tapped accept after a voiced confirm_terms was refused INVITE_PENDING (§2.5).
   'INVITE_ACCEPTED',
+  // Additive (./gg): the review the judge asked for closed unconfirmed / kept (speak:false).
+  'REVIEW_CLOSED',
 ]);
 export type JudgeCueName = z.infer<typeof JudgeCueName>;
 

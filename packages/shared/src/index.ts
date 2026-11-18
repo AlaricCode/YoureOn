@@ -14,4 +14,5 @@ export * from './appeal';
 export * from './authorization';
 export * from './bet-state';
 export * from './chain-events';
+export * from './gg';
 export * from './realtime';

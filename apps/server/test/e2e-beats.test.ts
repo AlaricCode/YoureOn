@@ -59,6 +59,7 @@ import {
   roomMembers,
   rulings,
   runMigrations,
+  voiceSessions,
 } from '@youre-on/db';
 import {
   authChallengeMessage,
@@ -85,7 +86,9 @@ import {
 } from '@youre-on/shared/escrow-client';
 import { hashJcs } from '@youre-on/shared/jcs';
 import { betIdToBytes, sha256Hex } from '@youre-on/shared/primitives';
+import { recordAfter } from '@youre-on/shared/gg';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
+import { stageLineFor } from '@youre-on/shared/stage-voice';
 import { CACHED_RULING_MODEL, isCachedRuling, Ruling } from '@youre-on/shared/ruling';
 import { AppealResult, type PanelProvider } from '@youre-on/shared/appeal';
 import { renderSignCard } from '@youre-on/shared/sign-card';
@@ -126,6 +129,7 @@ import {
 const run = DB_URL && HAVE_SO ? describe : describe.skip;
 const ADMIN = 'demo-admin-token-for-e2e';
 const STAGE_KEY = 'stage-key-for-e2e';
+const TOOL_SECRET = 'tool-secret-for-e2e';
 const b58 = getBase58Decoder();
 
 /** A database of our own next to DATABASE_URL's, created and migrated on first use. */
@@ -248,6 +252,8 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
         DEMO_ADMIN_TOKEN: ADMIN,
         STAGE_KEY,
         CACHED_RULING: 'false',
+        // The voice judge's webhook tools (request_review: the spoken "check that again").
+        ELEVENLABS_TOOL_SECRET: TOOL_SECRET,
       },
     });
     llm = new MockLlm((req) => {
@@ -900,6 +906,8 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
   const PAID_BY = (via: 'FINALIZED' | 'CONCEDED') => [
     `bet.state:${via}`,
     'tx.submitted',
+    // The GG moment: bet.gg rides the CONCEDED commit (src/gg/service.ts).
+    ...(via === 'CONCEDED' ? ['bet.gg'] : []),
     'bet.state:PAID',
     'tx.confirmed',
     'judge.cue:PAID',
@@ -1262,6 +1270,107 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
       ...TO_LOCKED('phones'),
       ...ATTEMPT_TO_RULING('RULING'),
       ...RULED('phones'),
+      ...APPEAL_TO('PAID'),
+    ]);
+  });
+
+  it('the GG moment: A_WINS -> Jake GGs -> bet.gg (record before/after) on the stage + both phones, PAID cue via=gg', async () => {
+    const betId = await lockedBet();
+    const r = await judged(betId, 1, NOT_MET, 10);
+    expect(r.ruling.outcome).toBe('A_WINS');
+    await expectRuled(betId, r);
+    await concede(betId, 'B', r);
+    const gg = await wsStage.next((f) => f.type === 'bet.gg' && f.bet_id === betId);
+    expect(gg.payload).toMatchObject({ by: 'B', winner: 'A', to_a: String(2n * USDC), to_b: '0' });
+    const { before, after } = gg.payload.record;
+    expect(after).toEqual(recordAfter(before, 'A'));
+    for (const ws of [wsA, wsB])
+      expect(received(ws, betId).find((f) => f.type === 'bet.gg')!.payload).toEqual(gg.payload);
+    const paid = await wsStage.next(
+      (f) => f.type === 'judge.cue' && f.bet_id === betId && f.payload.cue === 'PAID',
+    );
+    expect(paid.payload.text).toBe(
+      `[EVENT] PAID winner=Logan amount=$2 to_a=$2 to_b=$0 via=gg loser=Jake ` +
+        `record="Logan ${after.a_wins}-${after.b_wins} Jake" :: Jake said GG. Praise the ` +
+        'sportsmanship in one short line, then congratulate Logan.',
+    );
+    expect(stageLineFor(paid, { A: 'Logan', B: 'Jake' })?.text).toBe(
+      'Jake says GG. Logan takes $2.',
+    );
+    await expectFanout(betId, [
+      ...TO_LOCKED('phones'),
+      ...ATTEMPT_TO_RULING('RULING'),
+      ...RULED('phones'),
+      ...PAID_BY('CONCEDED'),
+    ]);
+  });
+
+  it('"check that again" (request_review webhook) -> the loser\'s phone confirms (appeal, device policy) -> panel -> resolve_appeal', async () => {
+    const a0 = await usdc(signerA.address);
+    const betId = await lockedBet();
+    syncClock();
+    const r = await judged(betId, 1, MET, 8);
+    expect(r.ruling.outcome).toBe('B_WINS'); // Logan (A) lost: only his phone is asked
+    await expectRuled(betId, r);
+    // The voice judge runs on A's phone; the conversation is bound to this bet.
+    const conv = `conv_${randomUUID()}`;
+    await ctx.deps.db.insert(voiceSessions).values({
+      bet_id: betId,
+      user_id: A.session.user.user_id,
+      purpose: 'terms',
+      el_agent_id: 'agent_e2e',
+      el_conversation_id: conv,
+    });
+    const tool = (heard: string) =>
+      postJson(
+        ctx.base,
+        '/el/tools/request_review',
+        { conversation_id: conv, bet_id: betId, heard },
+        { 'X-YO-Tool-Secret': TOOL_SECRET },
+      );
+    const asked = await tool("nah that's wrong, check that again");
+    expect(asked.status).toBe(200);
+    expect(asked.json).toEqual({
+      ok: true,
+      say: 'Review requested. Logan, confirm on your phone.',
+    });
+    // The loser's phone (A) and the stage get it; nothing was filed by the voice.
+    const onA = await wsA.next((f) => f.type === 'review.requested' && f.bet_id === betId);
+    expect(onA.payload).toMatchObject({ for_party: 'A', source: 'voice' });
+    expect(Date.parse(onA.payload.confirm_by)).toBe(
+      (await betRow(betId)).appeal_deadline!.getTime() - 1_000,
+    );
+    await wsStage.next((f) => f.type === 'review.requested' && f.bet_id === betId);
+    expect(JSON.stringify(onA.payload)).not.toContain('check that again'); // heard: audit only
+    expect(await ctx.deps.db.select().from(appeals).where(eq(appeals.bet_id, betId))).toEqual([]);
+    expect((await betRow(betId)).state).toBe('RULED');
+    // A second phrase: already asked, no second event.
+    expect((await tool('review it')).json).toMatchObject({ ok: true, already: true });
+
+    // A taps "Check it again" (= the appeal: device policy 'appeal', Face ID) inside the window.
+    panel = {
+      anthropic: vote('NOT_MET', 0.86),
+      openai: vote('NOT_MET', 0.8),
+      google: vote('MET', 0.7),
+    };
+    const { body } = await appealBody(betId, 'A', r);
+    const post = await signed(A, 'POST', `/v1/bets/${betId}/appeal`, body);
+    expect(post.status, JSON.stringify(post.json)).toBe(202);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'resolve_appeal' });
+    expect(await usdc(signerA.address)).toBe(a0 + 1n * USDC);
+    // After PAID the judge is told the ruling is final.
+    expect((await tool('wait, check that again')).json).toMatchObject({
+      ok: false,
+      fix: 'FINAL',
+      say: 'The ruling is final.',
+    });
+
+    await expectFanout(betId, [
+      ...TO_LOCKED('phones'),
+      ...ATTEMPT_TO_RULING('RULING'),
+      ...RULED('phones'),
+      'review.requested',
       ...APPEAL_TO('PAID'),
     ]);
   });

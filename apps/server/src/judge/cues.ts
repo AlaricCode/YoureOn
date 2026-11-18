@@ -47,6 +47,8 @@ export function rulingCue(r: Ruling, names: CueNames, ggSecs: number): JudgeCue 
       reason: r.reason,
       gg_secs: ggSecs,
     },
-    `Deliver the ruling in two short sentences using the reason, then tell ${asciiFold(loser)} he can tap GG.`,
+    // The GG moment: the loser GGs on the phone, or anyone asks for a review out loud
+    // (request_review: the loser's phone confirms it). The reason is a kv value, so this fits.
+    `Deliver the ruling in two short sentences using the reason, then tell ${asciiFold(loser)} to tap GG, or to say "check it again" for a review.`,
   );
 }

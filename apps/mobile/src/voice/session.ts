@@ -50,8 +50,19 @@ export const LIVE_MIC_STATES: ReadonlySet<BetState> = new Set([
 export const MUTED_STATES: ReadonlySet<BetState> = new Set(
   BetState.options.filter((s) => !LIVE_MIC_STATES.has(s)),
 );
-export const micMutedFor = (state: BetState | null): boolean =>
-  state !== null && MUTED_STATES.has(state);
+/**
+ * Muted in every state but LIVE_MIC_STATES, with one exception (../gg): in RULED the room may ask
+ * the judge to check a decisive camera ruling again (request_review), so the mic opens there once
+ * the ruling has been spoken (`rulingSpoken`, ./rulingGate: the room can't talk over it). Two
+ * mute tones only (LiveKit #344): on after the ruling line, off again when the bet moves on.
+ */
+export const micMutedFor = (
+  state: BetState | null,
+  o?: { reviewable: boolean; rulingSpoken: boolean },
+): boolean => {
+  if (state === 'RULED' && o?.reviewable && o.rulingSpoken) return false;
+  return state !== null && MUTED_STATES.has(state);
+};
 
 /** What the controller needs from the SDK conversation (useConversation's return value). */
 export interface ConversationPort {

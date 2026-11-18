@@ -111,9 +111,10 @@ export const auditOnlySink: ProposalSink = {
   },
 };
 
-const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 200);
+/** Always HTTP 200, the body fitted under 300 B (§4.2). Shared by every webhook tool. */
+export const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 200);
 
-const SAY = {
+export const SAY = {
   WRONG_BET: "That's not this bet's docket.",
   NOT_DRAFTING: 'These terms are already frozen. Start a new bet to change them.',
   SLOW_DOWN: 'One at a time. Say that again.',
@@ -187,7 +188,11 @@ export class ToolState {
 export const toolDedupeKey = (conversationId: string, name: string, body: unknown): string =>
   sha256Hex(`${conversationId}\n${name}\n${jcs(body)}`);
 
-async function loadBinding(deps: AppDeps, conversationId: string): Promise<BoundSession | null> {
+/** conversation_id -> the active voice session's bet (§4.1 binding check); null = WRONG_BET. */
+export async function loadBinding(
+  deps: AppDeps,
+  conversationId: string,
+): Promise<BoundSession | null> {
   const [row] = await deps.db
     .select({
       voice_session_id: voiceSessions.id,

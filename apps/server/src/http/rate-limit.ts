@@ -61,6 +61,17 @@ export class RateLimiter {
   }
 
   /**
+   * Whole tokens `name:key` has right now, without taking one or touching the bucket's recency
+   * (read-only: the request_review tool tells the judge "no appeals left" before the loser taps).
+   */
+  remaining(name: string, key: string, spec: BucketSpec): number {
+    const b = this.buckets.get(`${name}\u0000${key}`);
+    if (!b) return spec.limit;
+    const rate = spec.limit / spec.windowMs;
+    return Math.floor(Math.min(spec.limit, b.tokens + (this.now() - b.updated) * rate));
+  }
+
+  /**
    * Gives back the token a request took when it turned out to change nothing (the judge cam
    * lookup that finds none, before a phone falls back to recording itself). Never above the
    * limit; a bucket that is gone (swept) is left alone.

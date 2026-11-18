@@ -15,6 +15,7 @@ import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
 import { ChainEvents } from './chain-events';
 import { CameraEvidence, GeminiSettlementRecord } from './evidence';
 import { GeminiMarketSnapshot } from './gemini';
+import { BetGgPayload, ReviewClosedPayload, ReviewRequestedPayload } from './gg';
 import { HearingRuling, HearingTrigger, HearingTurn } from './hearing';
 import { ClarificationQuestion, GuardrailRefusal, TermsDraft } from './negotiation';
 import { BetId, Hex32, IsoUtc, Party, Signature, UserRef, Uuid } from './primitives';
@@ -127,6 +128,12 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
   /** API-CONTRACT §3.4 NEW: each hearing turn's clock starts. */
   env('hearing.turn_open', 'server', HearingTurnOpenPayload),
   env('hearing.turn', 'server', z.object({ turn: HearingTurn })),
+  /** NEW (./gg): the loser's GG went out (bet.state CONCEDED in the same commit). */
+  env('bet.gg', 'server', BetGgPayload),
+  /** NEW (./gg): a review was asked for (voice / demo); the loser's phone opens the appeal confirm. */
+  env('review.requested', 'server', ReviewRequestedPayload),
+  /** NEW (./gg): the loser kept the ruling, or confirm_by passed unconfirmed. */
+  env('review.closed', 'server', ReviewClosedPayload),
   env('appeal.vote', 'server', z.object({ vote: AppealVote })),
   env('appeal.result', 'server', z.object({ result: AppealResult, ruling_hash: Hex32 })),
   /** 1 Hz per gemini bet; the stage chart uses the stage.market control frame (API-CONTRACT §3.1). */

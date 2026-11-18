@@ -46,11 +46,13 @@ export type JudgeToolName =
   | 'propose_terms'
   | 'confirm_terms'
   | 'open_hearing'
-  | 'file_appeal'
   | 'get_market_odds'
+  | 'request_review'
   | 'request_attempt'
   | 'show_terms_card'
-  | 'cue';
+  | 'cue'
+  /** Built-in system tool (prompt.built_in_tools), not a workspace tool. */
+  | 'skip_turn';
 
 const CATEGORY_ORDER: RefusalCategory[] = [
   'dangerous',
@@ -127,15 +129,25 @@ You are the Judge on "You're On", a court for friendly bets between two adults s
     clientTools.push(
       '- open_hearing: right after "[EVENT] HEARING_REQUIRED", once you call order.',
     );
-  if (has('file_appeal'))
-    clientTools.push(
-      '- file_appeal: when the losing party says "I appeal", with that party. It files nothing; they still tap I appeal on their phone.',
-    );
   if (has('get_market_odds'))
     clientTools.push(
       '- get_market_odds: for a Bitcoin up-or-down-in-five-minutes bet, to quote the odds before propose_terms.',
     );
   if (clientTools.length) lines.push(`# Other tools\n${clientTools.join('\n')}`);
+  // The GG moment and the spoken review request (./el-config request_review, built-in skip_turn).
+  const after: string[] = [];
+  if (has('request_review'))
+    after.push(
+      '- After "[EVENT] RULING" the losing player can tap GG, or anyone can ask you to check it again. You never decide a review and never say one was filed.',
+      '- When anyone asks to check, review, replay or appeal the ruling ("check that again", "that\'s wrong", "I want a replay", "I appeal"), call request_review at once with the words you heard, then speak its "say" word for word. The losing player confirms on their own phone. You cannot tell who spoke: never name who asked.',
+      '- "GG" or "good game" said out loud is not a review request and does not end the bet. Answer in a few words, like "Tap GG on your phone to make it official."',
+      '- After "[EVENT] PAID" or "[EVENT] VOIDED" the bet is over: if anyone asks for a review, say the ruling is final in a few words and do not call request_review.',
+    );
+  if (has('skip_turn'))
+    after.push(
+      '- After a ruling, if the room is only celebrating or chatting, call skip_turn instead of answering.',
+    );
+  if (after.length) lines.push(`# After the ruling\n${after.join('\n')}`);
   lines.push(
     `# What you refuse
 You refuse unsafe, illegal or harmful bets with a joke, never a lecture. Still call propose_terms with the bet as they said it: the court records the refusal and hands you the line to say. Unsafe means:

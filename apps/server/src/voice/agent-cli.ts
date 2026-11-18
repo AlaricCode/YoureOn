@@ -35,6 +35,7 @@ const KNOWN_FLAGS = [
   'tts-model',
   'retention-days',
   'check-openapi',
+  'agent-name',
 ] as const;
 
 export const USAGE = `usage: npx tsx --env-file-if-exists=apps/server/.env scripts/el-agent.ts [flags]
@@ -57,7 +58,12 @@ env: ELEVENLABS_API_KEY, ELEVENLABS_TOOL_SECRET, PUBLIC_BASE_URL (https),
                             must be in ElevenLabs' LLM enum unless --llm-unchecked
   --reasoning-effort=<e>    ${EL_REASONING_EFFORTS.join('|')}|omit (default ${DEFAULT_REASONING_EFFORT})
   --tts-model=<id>          ${EL_TTS_MODELS.join('|')} (default ${DEFAULT_TTS_MODEL})
-  --retention-days=<n>      conversation retention (default 1)`;
+  --retention-days=<n>      conversation retention (default 1)
+  --agent-name=<name>       a throwaway TEST agent of that name (default ${JUDGE_AGENT_NAME}, the live
+                            judge). Tools and the secret are shared with the live judge, so this
+                            never PATCHes them (a tool that differs stops the run); it creates only
+                            what is missing plus its own agent (tags youre-on,test). Delete it
+                            in the dashboard when done. Never set ELEVENLABS_AGENT_ID to it.`;
 
 export interface AgentCli {
   dryRun: boolean;
@@ -157,6 +163,18 @@ export function parseAgentCli(
     if (!toolSecret) return fail('ELEVENLABS_TOOL_SECRET is not set (openssl rand -base64 32)');
   }
 
+  const agentName = f['agent-name'];
+  if (agentName === true) return fail('--agent-name needs a value');
+  if (agentName !== undefined && !/^[a-z0-9][a-z0-9-]{2,63}$/.test(agentName))
+    return fail('--agent-name: lowercase letters, digits and dashes (3-64)');
+  if (agentName !== undefined && agentName !== JUDGE_AGENT_NAME) {
+    if (f['rotate-secret'] === true)
+      return fail('--rotate-secret with --agent-name: the secret is shared with the live judge');
+    notes.push(
+      `--agent-name ${agentName}: a TEST agent; shared tools / the secret are never PATCHed`,
+    );
+  }
+
   const check = f['check-openapi'];
   return {
     ok: true,
@@ -170,6 +188,7 @@ export function parseAgentCli(
         baseUrl,
         toolSecret,
         rotateSecret: f['rotate-secret'] === true,
+        ...(agentName !== undefined ? { agentName } : {}),
         webhookTools: tools as WebhookToolName[] | undefined,
         agent: {
           llm,
