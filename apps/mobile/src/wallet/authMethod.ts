@@ -5,6 +5,10 @@
 //   1. First prompt with disableDeviceFallback: true (biometrics-only policy). Success -> 'faceid_hold'.
 //   2. On 'user_fallback' (the user tapped "Use Passcode") or 'lockout', prompt again with the
 //      passcode allowed. Success -> 'passcode_hold' ("the fallback prompt succeeded").
+//      Also on 'not_enrolled' (no Face ID set up) and 'not_available' (Face ID off for this app:
+//      the person tapped "Don't Allow" on the Face ID permission): without the second prompt such
+//      a phone could never authorize, and D2 is "Face ID, then passcode" (O8: a Face ID problem
+//      must not end Beat 3). This goes beyond O8's literal list; the method is still recorded.
 //   3. Anything else (cancel, not enrolled, ...) fails without a second prompt.
 // ESTIMATED behaviour: check it on a device (FINDINGS §6 step 8, TASKS D1-M2).
 import type { LocalAuthenticationError, LocalAuthLike } from './platform';
@@ -16,6 +20,8 @@ export type AuthorizationMethod = 'faceid_hold' | 'passcode_hold';
 export const PASSCODE_RETRY_ERRORS: readonly LocalAuthenticationError[] = [
   'user_fallback',
   'lockout',
+  'not_enrolled',
+  'not_available',
 ];
 
 export type AuthPrompt = {

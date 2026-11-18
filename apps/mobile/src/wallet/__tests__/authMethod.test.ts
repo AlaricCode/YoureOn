@@ -64,21 +64,44 @@ describe('runAuthorizationGate (SCHEMAS O8)', () => {
     expect(calls).toHaveLength(2);
   });
 
-  it.each([
-    'user_cancel',
-    'system_cancel',
-    'not_enrolled',
-    'authentication_failed',
-    'not_available',
-  ] as const)('%s fails with no second prompt', async (error) => {
-    const { auth, calls } = scriptedAuth([{ success: false, error }]);
+  it.each(['not_enrolled', 'not_available'] as const)(
+    '%s (no Face ID set up, or Face ID denied for the app) offers the passcode',
+    async (error) => {
+      const { auth, calls } = scriptedAuth([{ success: false, error }, { success: true }]);
+      await expect(runAuthorizationGate(auth, PROMPT)).resolves.toEqual({
+        ok: true,
+        method: 'passcode_hold',
+        prompts: 2,
+      });
+      expect(calls.map((c) => c?.disableDeviceFallback)).toEqual([true, false]);
+    },
+  );
+
+  it('no Face ID and no passcode (a bare simulator) fails at the passcode stage', async () => {
+    const { auth, calls } = scriptedAuth([
+      { success: false, error: 'not_enrolled' },
+      { success: false, error: 'passcode_not_set' },
+    ]);
     await expect(runAuthorizationGate(auth, PROMPT)).resolves.toEqual({
       ok: false,
-      error,
-      stage: 'faceid',
+      error: 'passcode_not_set',
+      stage: 'passcode',
     });
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
   });
+
+  it.each(['user_cancel', 'system_cancel', 'authentication_failed', 'passcode_not_set'] as const)(
+    '%s fails with no second prompt',
+    async (error) => {
+      const { auth, calls } = scriptedAuth([{ success: false, error }]);
+      await expect(runAuthorizationGate(auth, PROMPT)).resolves.toEqual({
+        ok: false,
+        error,
+        stage: 'faceid',
+      });
+      expect(calls).toHaveLength(1);
+    },
+  );
 
   it('a failed passcode prompt fails at the passcode stage', async () => {
     const { auth } = scriptedAuth([
