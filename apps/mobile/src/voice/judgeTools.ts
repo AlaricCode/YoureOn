@@ -53,6 +53,55 @@ export function cueAction(c: { cue: JudgeCueName; text: string; speak: boolean }
   return { send: c.speak ? 'user' : 'context', text: c.text };
 }
 
+/** How many cues wait for the session to connect; older ones are dropped first. */
+export const CUE_QUEUE_MAX = 8;
+
+export interface CueSink {
+  sendUserMessage(text: string): void;
+  sendContextualUpdate(text: string): void;
+}
+
+/**
+ * Delivers [EVENT] cues to the voice session without ever throwing. The ElevenLabs SDK's send
+ * calls throw synchronously when there is no live conversation (not started yet, the token was
+ * refused, or the connection dropped); those calls run inside realtime listeners, so a throw
+ * there was a fatal crash in Release (it killed A's phone when B declined, voice token
+ * refused). A cue that cannot be sent waits (up to CUE_QUEUE_MAX) and goes out on flush(),
+ * called when the session connects.
+ */
+export function createCueOutbox(
+  sink: () => CueSink,
+  log: (msg: string, extra?: unknown) => void = () => undefined,
+) {
+  const queue: { send: 'user' | 'context'; text: string }[] = [];
+  const trySend = (a: { send: 'user' | 'context'; text: string }): boolean => {
+    try {
+      const s = sink();
+      if (a.send === 'user') s.sendUserMessage(a.text);
+      else s.sendContextualUpdate(a.text);
+      return true;
+    } catch (err) {
+      log('voice.cue_deferred', err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  };
+  return {
+    push(a: { send: 'user' | 'context'; text: string }): void {
+      if (queue.length === 0 && trySend(a)) return;
+      queue.push(a);
+      if (queue.length > CUE_QUEUE_MAX) queue.shift();
+    },
+    /** Sends what waited, in order; stops at the first failure (still not connected). */
+    flush(): void {
+      while (queue.length > 0 && trySend(queue[0] as { send: 'user' | 'context'; text: string }))
+        queue.shift();
+    },
+    get pending(): number {
+      return queue.length;
+    },
+  };
+}
+
 /** request_attempt is legal after these cues (§4.4). */
 export const ATTEMPT_CUES: ReadonlySet<JudgeCueName> = new Set(['LOCKED', 'REDO']);
 

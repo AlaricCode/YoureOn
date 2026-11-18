@@ -103,9 +103,17 @@ export const MarketCurrentResponse = z.object({
 
 const bet = (id: string) => `/v1/bets/${encodeURIComponent(id)}`;
 
+/** §2.14 GET /v1/me/bets: items stay unparsed here (app/history parses each one on its own). */
+export const MeBetsPage = z.object({
+  items: z.array(z.unknown()),
+  next_cursor: z.string().nullable(),
+});
+
 export function createYoApi(c: ApiClient) {
   return {
     balance: () => c.request('GET', '/v1/me/balance', { schema: Balance }),
+    myBets: (status: 'active' | 'settled' | 'all', limit: number) =>
+      c.request('GET', `/v1/me/bets?status=${status}&limit=${limit}`, { schema: MeBetsPage }),
 
     // §2.3 rooms
     createRoom: (name?: string) =>

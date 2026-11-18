@@ -1,0 +1,43 @@
+# youreon:// links (app/deepLink), what the stage QRs carry when scanned with the Camera app:
+#   youreon://room/<CODE> joins that room (here: phone A's room, so A shows up);
+#   a demo-claim link opens the Demo account screen with the code ready and claims NOTHING until
+#   "Use this account" is tapped (this flow never taps it: the token is a dummy, and the claim
+#   would replace this phone's wallet). iOS asks "Open in You're On?" first.
+#   maestro --device <udid> test -e ROOM_CODE=ABC123 -e OPPONENT="Sim A" e2e/maestro/links.yaml
+appId: dev.youreon.app
+name: links
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- openLink: youreon://room/${ROOM_CODE}
+- runFlow:
+    when:
+      visible: Open
+    commands:
+      - tapOn: Open
+- extendedWaitUntil:
+    visible: ${OPPONENT}
+    timeout: 20000
+- assertVisible: ${ROOM_CODE}
+- takeScreenshot: 90-room-link-joined
+- openLink: youreon://claim/yo_dc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+- runFlow:
+    when:
+      visible: Open
+    commands:
+      - tapOn: Open
+- extendedWaitUntil:
+    visible:
+      id: demo-use-link
+    timeout: 10000
+- assertVisible: Demo account
+- takeScreenshot: 91-demo-claim-link
+- tapOn:
+    id: top-back
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000

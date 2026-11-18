@@ -171,6 +171,18 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
   const send = (f: WsClientFrameInput) => {
     if (ws && ws.readyState === OPEN) ws.send(JSON.stringify(f));
   };
+  /**
+   * The app's handlers run inside the socket's message callback: an exception there is a fatal
+   * crash in a Release build, and it would also skip the rest of this frame's handling. One
+   * failing handler is logged; the socket and the next frame carry on.
+   */
+  const guarded = (what: string, f: () => void) => {
+    try {
+      f();
+    } catch (err) {
+      log('ws.handler_failed', { what, err: err instanceof Error ? err.message : String(err) });
+    }
+  };
   const armDead = () => {
     if (deadTimer !== null) timers.clearTimeout(deadTimer);
     deadTimer = timers.setTimeout(() => {
@@ -235,9 +247,9 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
         if (c.data.op === 'ping') send({ op: 'pong', t: c.data.t });
         if (c.data.op === 'welcome') {
           attempt = 0;
-          setStatus('live');
+          guarded('status', () => setStatus('live'));
         }
-        d.onControl?.(c.data);
+        guarded(c.data.op, () => d.onControl?.(c.data));
         return;
       }
       const p = parseRealtimeEvent(raw);
@@ -245,7 +257,7 @@ export function createRealtimeClient(d: RealtimeClientDeps): RealtimeClient {
         log('ws.drop_event', (raw as { type?: unknown } | null)?.type);
         return;
       }
-      d.onEvent(p.event);
+      guarded(p.event.type, () => d.onEvent(p.event));
     };
     sock.onerror = () => log('ws.error');
     sock.onclose = (ev) => {

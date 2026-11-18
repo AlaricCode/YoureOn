@@ -18,6 +18,7 @@ export type Route =
   | 'scan'
   | 'faceSettings'
   | 'enroll'
+  | 'history'
   | 'incoming'
   | 'negotiate'
   | 'terms'
@@ -41,8 +42,8 @@ export interface AppState {
   me: UserRef | null;
   deviceId: string | null;
   /**
-   * A screen opened over home: profile, demo claim, the face scan (Beat 1), face settings, or
-   * face enrollment (offered right after signup, or from face settings).
+   * A screen opened over home: profile, demo claim, the face scan (Beat 1), face settings,
+   * face enrollment (offered right after signup, or from face settings), or bet history.
    */
   overlay: Overlay;
   room: RoomInfo | null;
@@ -56,7 +57,8 @@ export interface AppState {
   offline: boolean;
 }
 
-export type Overlay = 'none' | 'profile' | 'demoClaim' | 'scan' | 'faceSettings' | 'enroll';
+export type Overlay =
+  'none' | 'profile' | 'history' | 'demoClaim' | 'scan' | 'faceSettings' | 'enroll';
 
 export type AppEvent =
   | { type: 'booted'; me: UserRef | null; deviceId: string | null }
@@ -190,6 +192,7 @@ export function selectRoute(app: AppState, bet: BetModel | null | undefined): Ro
   if (app.auth === 'booting') return 'boot';
   if (app.auth === 'signedOut') return app.overlay === 'demoClaim' ? 'demoClaim' : 'signup';
   if (app.overlay === 'profile') return 'profile';
+  if (app.overlay === 'history') return 'history';
   if (app.overlay === 'demoClaim') return 'demoClaim';
   if (app.overlay === 'faceSettings') return 'faceSettings';
   if (app.overlay === 'enroll') return 'enroll';

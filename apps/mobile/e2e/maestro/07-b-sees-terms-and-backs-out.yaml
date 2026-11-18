@@ -1,0 +1,16 @@
+# Phone B: A's typed terms arrived over the socket (terms.proposed) -> B backs out
+# (POST /v1/bets/:id/invite/decline -> CANCELLED; nothing was locked, nothing moves) -> home.
+appId: dev.youreon.app
+name: b-backs-out
+---
+- extendedWaitUntil:
+    visible: Draft terms
+    timeout: 20000
+- assertVisible: \$5 vs \$5
+- takeScreenshot: 12-b-sees-terms
+- tapOn: Back out
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 15000
+- takeScreenshot: 13-b-home-after-back-out

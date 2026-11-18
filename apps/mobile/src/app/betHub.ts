@@ -53,8 +53,18 @@ export class BetHub {
     return () => this.listeners.delete(l);
   }
 
+  /** One failing listener is logged and skipped: the others, and the bet's state, carry on. */
   private emit(e: RealtimeEvent | null, before: BetModel | null, after: BetModel) {
-    for (const l of this.listeners) l(e, before, after);
+    for (const l of this.listeners) {
+      try {
+        l(e, before, after);
+      } catch (err) {
+        this.log('listener.failed', {
+          type: e?.type ?? 'snapshot',
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Forget every bet (the signed-in user changed): nothing of the old user's bets carries over. */
@@ -77,6 +87,44 @@ export class BetHub {
     this.models.set(s.bet_id, model);
     this.emit(null, before, model);
     for (const e of apply) this.applyOne(e);
+    return this.models.get(s.bet_id) as BetModel;
+  }
+
+  /**
+   * Cold start (the app restarted mid-bet): rebuild a bet from its snapshot AND its event log.
+   * The snapshot does not carry the facts only events do (who challenged, the invite answer,
+   * captions, the armed attempt), so the log is folded onto it silently (a replay must not
+   * re-fire haptics or lock signals), then the snapshot wins for what it carries (state, my
+   * party, terms). Listeners get one change with no event. Without the log (offline, pruned)
+   * it is a plain adopt.
+   */
+  async restore(s: BetSnapshot): Promise<BetModel> {
+    let events: RealtimeEvent[] = [];
+    try {
+      events = (await this.api.getBetEvents(s.bet_id, 0)).events;
+    } catch (err) {
+      this.log('restore.events_failed', {
+        betId: s.bet_id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      // The one event-only fact a screen cannot do without is who challenged (B's invite):
+      // always party A, the caller of POST /v1/bets. The invite answer stays unknown (null),
+      // so B is asked again; a repeated accept is a no-op on the server.
+      const m = this.adopt(s);
+      if (m.challenger === null) this.patch(s.bet_id, (x) => ({ ...x, challenger: s.party_a }));
+      return this.models.get(s.bet_id) as BetModel;
+    }
+    const before = this.models.get(s.bet_id) ?? null;
+    const ordered = [...events].sort((x, y) => x.seq - y.seq);
+    let model = fromSnapshot(s, before ?? undefined);
+    for (const e of ordered) if (e.seq <= s.last_seq) model = applyBetEvent(model, e);
+    model = fromSnapshot(s, model);
+    this.models.set(s.bet_id, model);
+    const { state } = resetTo(this.seqs.get(s.bet_id) ?? initialSeq(), s.last_seq, this.now());
+    this.seqs.set(s.bet_id, state);
+    this.emit(null, before, model);
+    // Anything newer than the snapshot goes through the sequencer like a live event.
+    for (const e of ordered) if (e.seq > s.last_seq) this.push(e);
     return this.models.get(s.bet_id) as BetModel;
   }
 

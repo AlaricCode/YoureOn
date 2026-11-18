@@ -20,6 +20,14 @@ export const COPY = {
     history: ['History', 'label'],
     profile: ['Profile', 'label'],
     badCode: ['Room not found', 'error'],
+    createFailed: ['Room not created', 'error'],
+    challengeFailed: ['Challenge not sent', 'error'],
+    pairBusy: ['Bet already open', 'error'],
+    tooManyBets: ['Finish open bets', 'error'],
+    notInRoom: ['Not in room', 'error'],
+    slowDown: ['Try again soon', 'error'],
+    joinRoomFirst: ['Join room first', 'error'],
+    judgeCamFailed: ['Camera not set', 'error'],
   },
   scan: {
     title: ['Challenge', 'label'],
@@ -95,6 +103,7 @@ export const COPY = {
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
     start: ['Start', 'label'],
+    noJudgeCam: ['No judge cam', 'error'],
   },
   judgeCam: {
     title: ['Judge cam', 'label'],
@@ -105,6 +114,7 @@ export const COPY = {
     sending: ['Sending', 'label'],
     sent: ['Sent', 'label'],
     start: ['Start', 'label'],
+    noCamera: ['No camera', 'error'],
   },
   ruling: {
     judge: ['Judge', 'label'],
@@ -186,6 +196,7 @@ export const COPY = {
     loading: ['Loading', 'label'],
     offline: ["Can't connect", 'error'],
     failed: ['Try again', 'error'],
+    crashed: ['Something went wrong', 'error'],
   },
   demo: {
     title: ['Demo account', 'label'],
@@ -194,6 +205,7 @@ export const COPY = {
     done: ['Signed in', 'label'],
     badCode: ['Code expired', 'error'],
     continue: ['Continue', 'label'],
+    useLink: ['Use this account', 'label'],
   },
 } as const satisfies Record<string, Record<string, Line>>;
 

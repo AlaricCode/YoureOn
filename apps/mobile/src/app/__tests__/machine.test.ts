@@ -74,6 +74,10 @@ describe('app reducer', () => {
     expect(selectRoute(s, null)).toBe('home');
     s = appReducer(s, { type: 'overlay', overlay: 'profile' });
     expect(selectRoute(s, null)).toBe('profile');
+    s = appReducer(s, { type: 'overlay', overlay: 'history' });
+    expect(selectRoute(s, null)).toBe('history');
+    s = appReducer(s, { type: 'overlay', overlay: 'none' });
+    expect(selectRoute(s, null)).toBe('home');
     s = appReducer(s, { type: 'signed_out' });
     expect(s.auth).toBe('signedOut');
     expect(s.room).toBeNull();

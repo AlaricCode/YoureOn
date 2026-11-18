@@ -64,6 +64,15 @@ describe('diagnostics catalog (TASKS D0-M2)', () => {
     const staticImports = [...src.matchAll(/^import\s+(?!type\b)[^;]*from\s+'([^']+)'/gm)].map(
       (m) => m[1],
     );
-    expect(staticImports).toEqual([]);
+    // The one static import is the pure-TS guard that keeps a failing module from crashing.
+    expect(staticImports).toEqual(['../app/importSafely']);
+  });
+
+  it('loads every native module through importSafely (a bare import() crashes on failure)', () => {
+    const src = read('../autoChecks.ts');
+    const dynamic = [...src.matchAll(/import\('([^']+)'\)/g)].length;
+    const guarded = [...src.matchAll(/importSafely\(\(\) => import\('([^']+)'\)\)/g)].length;
+    expect(dynamic).toBeGreaterThan(0);
+    expect(guarded).toBe(dynamic);
   });
 });

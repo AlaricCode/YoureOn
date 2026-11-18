@@ -1,6 +1,7 @@
 // Guards the native-stack config for EAS build #1 (TASKS D0-M2 install checklist, FINDINGS §3.1-3.3,
 // §3.10, §7). These are cheap to break and expensive to find on a 90-minute cloud build.
 import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -194,5 +195,47 @@ describe('Metro', () => {
   it('bundles .tflite as an asset', async () => {
     const src = readFileSync(here('../../metro.config.js'), 'utf8');
     expect(src).toMatch(/assetExts\.push\('tflite'\)/);
+  });
+});
+
+describe('dark appearance (ui/tokens palette is dark)', () => {
+  it('asks iOS for the dark system appearance (sheets, keyboard, Face ID prompt)', () => {
+    expect((app as unknown as { userInterfaceStyle: string }).userInterfaceStyle).toBe('dark');
+  });
+
+  it('shows a light status bar over the app (the white diagnostics screen gets dark)', () => {
+    const demo = readFileSync(here('../app/DemoApp.tsx'), 'utf8');
+    expect(demo).toContain('<StatusBar style="light" />');
+    expect(demo).not.toMatch(/<StatusBar style="dark"/);
+    const root = readFileSync(here('../../App.tsx'), 'utf8');
+    expect(root).toContain("<StatusBar style={operator ? 'dark' : 'light'} />");
+  });
+});
+
+describe('iOS Simulator autolinking (react-native.config.js)', () => {
+  const configPath = here('../../react-native.config.js');
+  const load = (simulator: string | undefined) => {
+    const saved = process.env.YO_IOS_SIMULATOR;
+    if (simulator === undefined) delete process.env.YO_IOS_SIMULATOR;
+    else process.env.YO_IOS_SIMULATOR = simulator;
+    try {
+      const require = createRequire(import.meta.url);
+      delete require.cache[require.resolve(configPath)];
+      return require(configPath) as { dependencies: Record<string, unknown> };
+    } finally {
+      if (saved === undefined) delete process.env.YO_IOS_SIMULATOR;
+      else process.env.YO_IOS_SIMULATOR = saved;
+    }
+  };
+
+  it('links everything for a device build', () => {
+    expect(load(undefined).dependencies).toEqual({});
+    expect(load('0').dependencies).toEqual({});
+  });
+
+  it('leaves out only the MLKit face detector for a simulator build', () => {
+    expect(load('1').dependencies).toEqual({
+      'react-native-vision-camera-face-detector': { platforms: { ios: null, android: null } },
+    });
   });
 });
