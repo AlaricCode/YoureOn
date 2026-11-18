@@ -175,19 +175,21 @@ Required by the rules and the ElevenLabs bounty: it must show the voice judge **
 the phones' screens (iOS screen recording with the mic on), one over-the-shoulder camera, and the
 stage page. Label any replayed segment.
 
-| #   | Time      | Shot                                                                                                                                  | Audio                                | Proves             |
-| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------ |
-| 1   | 0:00–0:10 | Title card; two friends, a water bottle.                                                                                              | VO: the one-line pitch               | Hook               |
-| 2   | 0:10–0:25 | Close-up: an argument over a flip; "you owe me five".                                                                                 | VO: the problem                      | Problem            |
-| 3   | 0:25–0:40 | Over the shoulder: A scans B's face → "Challenge B?" → B's phone buzzes.                                                              | Ambient                              | Beat 1             |
-| 4   | 0:40–1:10 | Phone A screen recording + room audio: the judge's voice, its edge-case question, the read-back. Cut to the stage captions.           | **The ElevenLabs judge, audible**    | Beat 2, ElevenLabs |
-| 5   | 1:10–1:25 | Split screen: both phones, hold → Face ID → Locked. Stage LOCKED; Explorer page of the lock transaction.                              | VO: "one transaction, three signers" | Beat 3, Solana     |
-| 6   | 1:25–1:55 | Judge cam POV of the flip; the ruling on the phones and stage; the loser taps GG; the winner's payout; Explorer link.                 | Judge announces the result           | Beat 4             |
-| 7   | 1:55–2:25 | Beat 6: "Bet on Bitcoin" with Gemini's odds; time-lapse to expiry; settled, "verified", paid.                                         | VO: fair odds, evidence on chain     | Gemini             |
-| 8   | 2:25–2:45 | Under the hood: the architecture diagram; the stage ticker reading "via QuickNode Streams"; the webhook log; the program on Explorer. | VO: Streams, the program, the tests  | QuickNode, Solana  |
-| 9   | 2:45–3:00 | End card: program ID, repo URL, team.                                                                                                 | VO: close                            |                    |
+| #   | Time      | Shot                                                                                                                                  | Audio                                        | Proves             |
+| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------ |
+| 1   | 0:00–0:10 | Title card; two friends, a water bottle.                                                                                              | VO: the one-line pitch                       | Hook               |
+| 2   | 0:10–0:25 | Close-up: an argument over a flip; "you owe me five".                                                                                 | VO: the problem                              | Problem            |
+| 3   | 0:25–0:40 | Over the shoulder: A scans B's face → "Challenge B?" → B's phone buzzes.                                                              | Ambient                                      | Beat 1             |
+| 4   | 0:40–1:10 | Phone A screen recording + room audio: the judge's voice, its edge-case question, the read-back. Cut to the stage captions.           | **The ElevenLabs judge, audible**            | Beat 2, ElevenLabs |
+| 5   | 1:10–1:25 | Split screen: both phones, hold → Face ID → Locked. Stage LOCKED; Explorer page of the lock transaction.                              | VO: "one transaction, three signers"         | Beat 3, Solana     |
+| 6   | 1:25–1:55 | Judge cam POV of the flip; the ruling on the phones and stage; the loser taps GG; the winner's payout; Explorer link.                 | The stage speaks the ruling (ElevenLabs TTS) | Beat 4             |
+| 7   | 1:55–2:25 | Beat 6: "Bet on Bitcoin" with Gemini's odds; time-lapse to expiry; settled, "verified", paid.                                         | VO: fair odds, evidence on chain             | Gemini             |
+| 8   | 2:25–2:45 | Under the hood: the architecture diagram; the stage ticker reading "via QuickNode Streams"; the webhook log; the program on Explorer. | VO: Streams, the program, the tests          | QuickNode, Solana  |
+| 9   | 2:45–3:00 | End card: program ID, repo URL, team.                                                                                                 | VO: close                                    |                    |
 
-Gates: shot 4 needs the ElevenLabs key; shot 8's "via QuickNode Streams" needs the live Stream (the
+Gates: shot 4 needs the ElevenLabs key, and so does shot 6's stage voice (without the key the stage
+speaks in the browser's voice: the strip says `Voice browser`, so don't present it as ElevenLabs);
+shot 8's "via QuickNode Streams" needs the live Stream (the
 stage only says it when the Stream delivered). Without them those bounties lose their evidence, so
 record those shots last and don't substitute footage that implies otherwise. No Beat 5 shot: the
 hearing and panel are not built.

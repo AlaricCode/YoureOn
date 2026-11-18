@@ -24,7 +24,7 @@ Check these first; each changes the script ([`pitch.md`](pitch.md)).
 
 | Gap                         | Effect                                                                                                                                                                                                               | Check                                                    |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| ElevenLabs key pending      | No voice judge: A uses "Type it instead" in Beat 2.                                                                                                                                                                  | `demo "$SERVER/v1/demo/voice"`                           |
+| ElevenLabs key pending      | No voice judge: A uses "Type it instead" in Beat 2. The projector still speaks each ruling and payout, in the browser's voice (`Voice: browser` on the strip).                                                       | `demo "$SERVER/v1/demo/voice"`                           |
 | QuickNode key pending       | No Stream: chain events arrive through `rpc_poll`, about 5 s after the send (30 s once a Stream token is set); the stage ticker won't say "via QuickNode Streams". The RPC is not QuickNode's, so it can rate-limit. | `stream.last_delivery_at` in the health report is `null` |
 | Signed iPhone build pending | No phones: run the bets from the laptop with `cp1-drive` (see "No phones" in the pitch).                                                                                                                             | The app is installed and opens on each phone             |
 | Beat 6 not yet run live     | Rehearse it at least once on Gemini; keep `REPLAY 6` and the Gemini replay feed ready.                                                                                                                               | `docs/measurements.md` Beat 6 TODO filled in             |
@@ -127,14 +127,16 @@ free nonces are enough for the demo. If `free` is low:
 ## 2. Opening the stage
 
 ```
-https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
+https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>
 ```
 
 - `<CODE>`: the room's 6-character code from phone A (or the room's uuid).
 - After `#` (the fragment, never sent to any server or its logs): `key` is the `STAGE_KEY` (it is
-  exchanged for a stage token), `demo` is the `DEMO_ADMIN_TOKEN` (it turns on the health strip). The
-  page reads them and removes them from the address bar. A secret put in the query (`?key=`) is
-  ignored, and the form says so.
+  exchanged for a stage token). The page reads it and removes it from the address bar. A secret
+  put in the query (`?key=`) is ignored, and the form says so.
+- The health strip needs no admin key: the page reads `/v1/demo/health` with its own stage token
+  (`DEMO_MODE=true`). The old link with `&demo=<DEMO_ADMIN_TOKEN>` still works, but keep the admin
+  key off the projector.
 - Optional query: `bet=<id>` pins one bet until it is over; `nopreload` turns off the REPLAY
   download.
 - A reload of the same tab comes back to the same card without the URL (session storage).
@@ -144,6 +146,7 @@ https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOK
 | --------- | -------------------------------------------------- |
 | `F`       | Full screen                                        |
 | `M`       | Mute / unmute (the first key press unlocks audio)  |
+| `V`       | Judge voice off / on (sounds keep playing)         |
 | `Q`       | QR of the latest lock or payout on Solana Explorer |
 | `H` / `?` | Key help                                           |
 | `1`–`6`   | REPLAY clip of that beat                           |
@@ -152,6 +155,19 @@ https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOK
 The bottom strip shows demo health: fee-payer SOL, free nonces, RPC and DB latency, and how many
 REPLAY clips are cached. The ticker header says "via QuickNode Streams" only for events the Stream
 delivered.
+
+**Press any key once the page is up**: browsers keep audio locked until then, and the judge's voice
+is part of the show. The projector speaks every ruling, payout and appeal vote. The strip's
+`Voice` item says whose voice it is:
+
+| `Voice`                           | Meaning                                                                                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `ElevenLabs`                      | The server voices the stage (`ELEVENLABS_API_KEY` and `ALLOW_SPEND=true` on Fly): each line is an ElevenLabs clip.                       |
+| `ElevenLabs (last line: browser)` | The last clip did not come in time (or failed), so the browser said that line. Check `stage_voice.tts_failed` in `fly logs -a youre-on`. |
+| `browser`                         | No key yet, or `STAGE_TTS=off`: the browser's voice says the same lines, about 0.8 s after each moment.                                  |
+| `off (V)`                         | Turned off with `V`.                                                                                                                     |
+
+Use the laptop's speakers or the hall's sound, not a phone: A's phone is busy with the voice judge.
 
 ## 3. REPLAY fallbacks
 
@@ -223,8 +239,8 @@ both.
   `fly deploy` from a checkout of the deployed commit (a deploy ships whatever is checked out).
   The ruling then comes from a stored verdict with no model call (model `cache/demo-bottle@1`,
   always "landed"); it still commits to the hashes of the frames actually uploaded. Use it only for
-  a staged clean flip. The stage does not label a cached ruling, so say it out loud ("cached
-  ruling"). Set it back to `"false"` afterwards.
+  a staged clean flip. The stage labels it "replay ruling" on the ruling panel; say it out loud
+  too. Set it back to `"false"` afterwards.
 
 ### The voice judge fails
 
