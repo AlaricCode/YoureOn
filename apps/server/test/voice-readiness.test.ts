@@ -116,7 +116,7 @@ describe('voice readiness', () => {
       MISSING.AGENT_ID,
       MISSING.webhook('https://youre-on.fly.dev/webhooks/elevenlabs'),
     ]);
-    expect(b.tool_urls).toHaveLength(4);
+    expect(b.tool_urls).toHaveLength(5);
   });
 
   it('the judge can be ready while the post-call webhook is not (ready needs both)', async () => {
