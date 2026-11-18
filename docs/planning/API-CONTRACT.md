@@ -530,6 +530,7 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 
 - **`GET /v1/me/balance`** returns `{wallet_pubkey, usdc: MicroUsdc, usdc_display, in_escrow: MicroUsdc, in_escrow_display, as_of, source:'rpc'}`. `usdc` is the sum of `getTokenAccountsByOwner(mint)` (ESCROW §5.2: payouts may land in a fallback account). The result is cached 2 s and invalidated on this user's terminal events.
 - **`GET /v1/me/bets?status=active|settled&cursor&limit`** returns `{items: BetSummary[], next_cursor}`. `BetSummary = {bet_id, title, opponent: UserRef, my_party, state, my_stake, my_payout|null, outcome: OnchainOutcome|null, settled_at|null, is_seed}`.
+  - Built (`apps/server/src/me/bets.ts`): `title` is the terms' `presentation.title`, else the bet row's own `title` (a `seed-h2h` row has no terms: "Demo history: …", §2.17), else "Challenge".
 - **`GET /v1/bets/:bet_id`** (B+P or stage) returns `BetSnapshot` (§2.18), the full current state used for cold start and resync.
 - **`GET /v1/bets/:bet_id/events?after=<seq>&limit=200`** returns `{events: RealtimeEvent[], last_seq}`, replayed from `bet_events` (DATA-MODEL §5.19). This is the gap-recovery endpoint SCHEMAS §10.1 refers to.
 - **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed}`, from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
