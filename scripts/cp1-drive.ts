@@ -7,6 +7,7 @@
 //   npm run cp1-drive -- [--base-url http://127.0.0.1:8080] [--admin-token <DEMO_ADMIN_TOKEN>]
 //        [--keys-dir ~/.config/solana/youre-on] [--state-file <path>] [--reset] [--timeout 60]
 //        [--name-a Logan] [--name-b Jake] [--through locked|paid] [--gg] [--frames 8]
+//        [--market up|down] [--amount 2]
 //
 // Steps: sign up (or log in) two users whose wallet keys are demo-a / demo-b -> A creates a room,
 // B joins -> A challenges B from the list (POST /v1/bets) -> B accepts the invite -> fixture terms
@@ -27,6 +28,15 @@
 // the loser concedes (GET /v1/bets/:id/concede, signs the stored message with its wallet key,
 // POST /v1/bets/:id/concede). Each chain tx is printed with its Explorer link on devnet.
 // The verdict is the server's: CACHED_RULING=true (no LLM call) rules B_WINS from the frames.
+//
+// --market up|down (Beat 6, the Gemini closer) replaces the fixture terms: A bets UP or DOWN on
+// Gemini's current BTC 5-minute contract with --amount dollars a side (default 2). The script
+// waits for a lockable window (GET /v1/markets/btc5m/current: strike known, >= 120 s to expiry),
+// proposes (POST /v1/bets/:id/terms/market: the server's binding quote at Gemini's odds), confirms
+// (POST /v1/bets/:id/terms/confirm, following a re-quote), and waits for AWAITING_MARKET. With
+// --through paid it waits for Gemini to settle (the server's settlement keeper rules and sends
+// resolve), then GG (--gg) or the finalize, as for Beat 4. Needs the server's Gemini relay on
+// (MARKETS_FEED) and real_world allowed (ALLOW_P2P_REAL_WORLD, unset = DEMO_MODE).
 //
 // Wallet keys: <keys-dir>/demo-a-keypair.json / demo-b-keypair.json (scripts/keys.ts), or the env
 // DEMO_A_SECRET_KEY / DEMO_B_SECRET_KEY (the same values the server's custodial signer uses).
@@ -61,10 +71,12 @@ import { assertNotCommittable, loadRole } from './lib/keys';
 
 const USAGE = `usage: npm run cp1-drive -- [--base-url <url>] [--admin-token <token>] [--keys-dir <dir>]
           [--state-file <path>] [--reset] [--timeout 60] [--name-a Logan] [--name-b Jake]
-          [--through locked|paid] [--gg] [--frames 8]
+          [--through locked|paid] [--gg] [--frames 8] [--market up|down] [--amount 2]
 Drives challenge -> terms -> confirm -> LOCKED against a running server (DEMO_MODE=true);
 --through paid goes on: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID
-(finalize after the appeal window, or the loser's GG with --gg).`;
+(finalize after the appeal window, or the loser's GG with --gg).
+--market up|down (Beat 6): Gemini BTC 5-minute terms at Gemini's odds instead of the fixture;
+--through paid then waits for Gemini to settle (up to ~6 min) instead of the judge cam.`;
 
 type Device = { d: string; x: string };
 type State = { A?: Device; B?: Device; CAM?: Device; base_url?: string };
@@ -329,7 +341,19 @@ run(async () => {
     through: { type: 'string' },
     gg: { type: 'boolean' },
     frames: { type: 'string' },
+    market: { type: 'string' },
+    amount: { type: 'string' },
   });
+  const marketSide = values.market?.toUpperCase();
+  if (marketSide !== undefined && marketSide !== 'UP' && marketSide !== 'DOWN') {
+    console.error(`--market must be up or down\n\n${USAGE}`);
+    process.exit(2);
+  }
+  const amountUsd = values.amount ?? '2';
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(amountUsd)) {
+    console.error(`--amount must be dollars like 2 or 2.50\n\n${USAGE}`);
+    process.exit(2);
+  }
   const through = values.through ?? 'locked';
   if (through !== 'locked' && through !== 'paid') {
     console.error(`--through must be locked or paid\n\n${USAGE}`);
@@ -426,22 +450,34 @@ run(async () => {
   console.log(`bet ${betId} DRAFTING`);
   must(await api.signed(B, 'POST', `/v1/bets/${betId}/invite/accept`), [200], 'accept invite');
 
-  const terms = must(
-    await api.demo('POST', `/v1/demo/bets/${betId}/terms`, {}),
-    [200],
-    'fixture terms',
-  );
-  console.log(`terms ${terms.code} (${terms.terms_hash}) TERMS_PROPOSED: "${terms.say}"`);
-  const conf = must(await api.demo('POST', `/v1/demo/bets/${betId}/confirm`), [200], 'confirm');
-  console.log(`confirm: ${conf.say}`);
+  let expiryMs: number | null = null;
+  if (marketSide) {
+    expiryMs = await marketTerms(api, A, betId, marketSide, amountUsd, timeoutMs);
+  } else {
+    const terms = must(
+      await api.demo('POST', `/v1/demo/bets/${betId}/terms`, {}),
+      [200],
+      'fixture terms',
+    );
+    console.log(`terms ${terms.code} (${terms.terms_hash}) TERMS_PROPOSED: "${terms.say}"`);
+    const conf = must(await api.demo('POST', `/v1/demo/bets/${betId}/confirm`), [200], 'confirm');
+    console.log(`confirm: ${conf.say}`);
+  }
 
   const t0 = Date.now();
   let signedPhones = false;
   for (;;) {
     const st = must(await api.demo('GET', `/v1/demo/bets/${betId}`), [200], 'bet status');
-    if (st.state === 'LOCKED') {
+    // A Gemini bet is locked straight into AWAITING_MARKET (one commit), and may even be ruled
+    // by the time we look.
+    if (
+      st.state === 'LOCKED' ||
+      (marketSide && !['AWAITING_AUTHORIZATIONS', 'AWAITING_LOCK'].includes(st.state))
+    ) {
       const lock = st.chain_txs.find((t: { kind: string }) => t.kind === 'atomic_lock');
-      console.log(`\nLOCKED in ${Date.now() - t0} ms after confirm. lock tx ${lock?.signature}`);
+      console.log(
+        `\n${st.state} in ${Date.now() - t0} ms after confirm. lock tx ${lock?.signature}`,
+      );
       console.log(`  pending_sig ${st.pending_sig} (onchain_pending ${st.onchain_pending})`);
       tx('atomic_lock', lock?.signature);
       break;
@@ -490,13 +526,32 @@ run(async () => {
   }
   if (through === 'locked') return;
 
-  // ---- Beat 4: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID ------------
-  const cam = await judgeCam(api, A, room.room_id, state);
-  writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
-  console.log(`\njudge cam: device ${cam.session.device_id} of ${A.name}, bound to the room`);
-
   let ruling: LatestRuling | null = null;
-  for (let n = 1; n <= 3; n++) {
+  if (expiryMs !== null) {
+    // ---- Beat 6: Gemini settles the contract -> the settlement ruling -> RULED -> PAID ------
+    const waitMs = Math.max(0, expiryMs - Date.now()) + 120_000;
+    console.log(
+      `waiting for Gemini: the contract expires ${new Date(expiryMs).toISOString()} (in ${Math.round((expiryMs - Date.now()) / 1000)} s); settlement lands ~6-9 s later`,
+    );
+    ruling = await until(waitMs + timeoutMs, 'the Gemini settlement ruling', async () => {
+      const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
+      const r = snap.latest_ruling as LatestRuling | null;
+      return r && r.ruling.stage === 'settlement' ? r : null;
+    });
+    const r = ruling.ruling;
+    console.log(`\nGemini settled: ${r.outcome} (${r.claim_result}, ${r.model}) "${r.reason}"`);
+    console.log(`  ruling_hash ${ruling.ruling_hash}, evidence_hash ${r.evidence_hash}`);
+  }
+
+  // ---- Beat 4: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID ------------
+  for (let n = 1; n <= 3 && expiryMs === null; n++) {
+    if (n === 1) {
+      const cam0 = await judgeCam(api, A, room.room_id, state);
+      writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
+      console.log(`\njudge cam: device ${cam0.session.device_id} of ${A.name}, bound to the room`);
+      camRef.cam = cam0;
+    }
+    const cam = camRef.cam!;
     const att = must(
       await api.signed(A, 'POST', `/v1/bets/${betId}/attempts`, {
         attempt_no: n,
@@ -525,6 +580,8 @@ run(async () => {
   }
   if (!ruling || ruling.ruling.outcome === 'REDO')
     throw new Error('no decisive ruling in 3 attempts');
+  if (values.gg && ruling.ruling.outcome === 'VOID')
+    console.log('  VOID: a refund, nobody to GG; waiting for the finalize');
 
   const ruled = await until(timeoutMs, 'RULED', async () => {
     const st = must(await api.demo('GET', `/v1/demo/bets/${betId}`), [200], 'bet status');
@@ -535,7 +592,7 @@ run(async () => {
   console.log(`\nRULED (resolve confirmed): appeal window until ${ruled.appeal_deadline}`);
   tx('resolve', lastTx(ruled.chain_txs, 'resolve')?.signature);
 
-  if (values.gg) {
+  if (values.gg && ruling.ruling.outcome !== 'VOID') {
     const loser = await ggLoser(api, players, betId);
     if (!loser) throw new Error(`no loser can GG this ruling (${ruling.ruling.outcome})`);
     const req = must(await api.get(loser, `/v1/bets/${betId}/concede`), [200], 'concede request');
@@ -568,7 +625,7 @@ run(async () => {
     const st = must(await api.demo('GET', `/v1/demo/bets/${betId}`), [200], 'bet status');
     return ['PAID', 'VOIDED'].includes(st.state) ? st : null;
   });
-  const via = values.gg ? 'concede' : 'finalize';
+  const via = values.gg && ruling.ruling.outcome !== 'VOID' ? 'concede' : 'finalize';
   console.log(`\n${paid.state} via ${via} (${ruling.ruling.outcome})`);
   tx(via, lastTx(paid.chain_txs, via)?.signature);
   const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
@@ -579,15 +636,70 @@ run(async () => {
 type LatestRuling = {
   ruling: {
     attempt_no: number;
+    stage?: string;
     outcome: string;
     claim_result: string;
     confidence: number;
     reason: string;
     model: string;
     redo_reason: string | null;
+    evidence_hash: string;
   };
   ruling_hash: string;
 };
+
+/** The judge-cam signer, set on the first Beat 4 attempt. */
+const camRef: { cam: Signer | null } = { cam: null };
+
+/**
+ * Beat 6 terms: wait for a lockable BTC 5-minute window, propose at Gemini's odds, confirm
+ * (following the server's re-quote). Returns the contract's expiry (ms).
+ */
+async function marketTerms(
+  api: Api,
+  a: Player,
+  betId: string,
+  side: 'UP' | 'DOWN',
+  amountUsd: string,
+  timeoutMs: number,
+): Promise<number> {
+  // A window lasts 5 min and is lockable from its strike to T-120 s: wait up to one window.
+  const cur = await until(Math.max(timeoutMs, 330_000), 'a lockable Gemini window', async () => {
+    const r = await api.get(a, '/v1/markets/btc5m/current');
+    if (r.status !== 200)
+      throw new Error(`markets/current: HTTP ${r.status} ${JSON.stringify(r.json)}`);
+    return r.json.lockable ? r.json : null;
+  });
+  console.log(
+    `Gemini ${cur.market.eventTicker}: line ${cur.market.strike.value}, BTC ${cur.market.indexPrice}, bid ${cur.market.bestBid} / ask ${cur.market.bestAsk}, expiry ${cur.market.expiry}, lockable until ${cur.lockable_until}`,
+  );
+  const p = must(
+    await api.signed(a, 'POST', `/v1/bets/${betId}/terms/market`, { side, amount_usd: amountUsd }),
+    [200],
+    'market terms',
+  );
+  const q = p.quote;
+  console.log(
+    `terms ${p.code} (${p.terms_hash}) TERMS_PROPOSED: ${side} at ${q.market.priceAtLock} (${q.market.priceSource}), stakes A ${q.stakes.a} / B ${q.stakes.b}, quoted ${q.market.quotedAt}`,
+  );
+  console.log(`  binding snapshot #${q.snapshot_id} sha256 ${q.snapshot_sha256}`);
+  console.log(`  "${p.say}"`);
+  let hash: string = p.terms_hash;
+  for (let i = 0; ; i++) {
+    const c = await api.signed(a, 'POST', `/v1/bets/${betId}/terms/confirm`, { terms_hash: hash });
+    if (c.status === 200) {
+      console.log(`confirm: ${c.json.say}`);
+      break;
+    }
+    if (c.status === 409 && c.json?.error?.details?.reason === 'requoted' && i < 2) {
+      hash = c.json.error.details.terms_hash;
+      console.log(`  re-quoted by the server (quote older than 30 s): new terms ${hash}`);
+      continue;
+    }
+    must(c, [200], 'confirm');
+  }
+  return Date.parse(q.market.expiry);
+}
 type ChainTxRow = { kind: string; status: string; signature: string | null };
 const lastTx = (rows: ChainTxRow[], kind: string) =>
   rows.filter((t) => t.kind === kind && t.status === 'confirmed').at(-1) ??

@@ -17,11 +17,18 @@
 // independent PDAs and nonces don't care about time.
 // Own database (<DATABASE_URL db>_gem_e2e): it owns nonce_pool and gemini_markets.
 // Skips without DATABASE_URL or without programs/escrow/target/deploy/escrow.so.
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as ed from '@noble/ed25519';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { asc, eq, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
+  getAddressEncoder,
   getBase58Decoder,
   type Address,
   type KeyPairSigner,
@@ -102,6 +109,7 @@ import {
 
 const run = DB_URL && HAVE_SO ? describe : describe.skip;
 const STAGE_KEY = 'stage-key-for-gemini-e2e';
+const ADMIN = 'demo-admin-token-for-gemini-e2e';
 const TICKER = 'BTC05M2611180240';
 const T0240 = Date.parse('2026-11-18T02:40:00.000Z');
 const b58 = getBase58Decoder();
@@ -169,7 +177,7 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
     g = fakeGemini({});
     ctx = await startTestServer({
       now,
-      env: { DATABASE_URL: dbUrl, DEMO_MODE: 'true', STAGE_KEY },
+      env: { DATABASE_URL: dbUrl, DEMO_MODE: 'true', STAGE_KEY, DEMO_ADMIN_TOKEN: ADMIN },
     });
     await ctx.deps.db.execute(sql`TRUNCATE gemini_markets, market_snapshots CASCADE`);
     svm = await newEnv();
@@ -635,4 +643,112 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
     expect(await usdc(signerB.address)).toBe(b0);
     expect(svc.followed).not.toContain(betId);
   });
+
+  // ---- the live driver, against this local server (never the live one) -------------------
+
+  it('scripts/cp1-drive.ts --market down --through paid: market terms -> lock -> Gemini -> PAID', async () => {
+    install('phones'); // the driver plays both phones with fresh wallets
+    const w: [TestKey, KeyPairSigner][] = [];
+    for (const k of [newKey(), newKey()]) {
+      const s = await createKeyPairSignerFromPrivateKeyBytes(k.secret);
+      await fund(s);
+      w.push([k, s]);
+    }
+    const a0 = await usdc(w[0]![1].address);
+    const b0 = await usdc(w[1]![1].address);
+    const secret = (k: TestKey, s: KeyPairSigner) =>
+      JSON.stringify([...k.secret, ...new Uint8Array(getAddressEncoder().encode(s.address))]);
+    const stateFile = join(tmpdir(), `cp1-drive-${randomUUID()}.json`);
+    // Play Gemini and the clock while the driver waits: once its bet is AWAITING_MARKET, Gemini
+    // settles it (recorded "no": DOWN wins), the keeper rules, then the appeal window passes.
+    let ticking = true;
+    let settledBet: string | null = null;
+    let out = '';
+    const ticker = (async () => {
+      while (ticking) {
+        await new Promise((r) => setTimeout(r, 150));
+        // Gemini settles once the driver is waiting for it (minutes later in real life).
+        if (!out.includes('waiting for Gemini')) continue;
+        const [waiting] = await ctx.deps.db
+          .select({ id: bets.id })
+          .from(bets)
+          .where(eq(bets.state, 'AWAITING_MARKET'));
+        if (waiting && settledBet === null) {
+          settledBet = waiting.id;
+          g.routes.set(eventPath(TICKER), F.event_0240_settled);
+          at(T0240 + 6_000 - T0237);
+          await svc.check(waiting.id);
+          await settle();
+        }
+        const [ruled] = await ctx.deps.db
+          .select({ id: bets.id })
+          .from(bets)
+          .where(eq(bets.state, 'RULED'));
+        if (ruled) {
+          at(offset + 12_000);
+          await lc.payout.finalizeDue(now());
+          await lc.idle();
+        }
+      }
+    })();
+    let code: number | null = null;
+    try {
+      code = await new Promise<number | null>((resolve) => {
+        const child = spawn(
+          'npx',
+          [
+            'tsx',
+            'scripts/cp1-drive.ts',
+            '--base-url',
+            ctx.base,
+            '--admin-token',
+            ADMIN,
+            '--state-file',
+            stateFile,
+            '--timeout',
+            '30',
+            '--market',
+            'down',
+            '--amount',
+            '2',
+            '--through',
+            'paid',
+            '--name-a',
+            'Ava',
+            '--name-b',
+            'Ben',
+          ],
+          {
+            cwd: fileURLToPath(new URL('../../../', import.meta.url)),
+            env: {
+              ...process.env,
+              DEMO_A_SECRET_KEY: secret(...w[0]!),
+              DEMO_B_SECRET_KEY: secret(...w[1]!),
+            },
+          },
+        );
+        child.stdout.on('data', (d) => (out += String(d)));
+        child.stderr.on('data', (d) => (out += String(d)));
+        child.on('close', (c) => {
+          if (process.env.E2E_DEBUG) console.log(out);
+          resolve(c);
+        });
+      });
+    } finally {
+      ticking = false;
+      await ticker;
+      rmSync(stateFile, { force: true });
+      await settle();
+    }
+    expect(out).toContain('Gemini BTC05M2611180240');
+    expect(out).toMatch(/TERMS_PROPOSED: DOWN at 0\.61/);
+    expect(out).toContain('AWAITING_MARKET in');
+    expect(out).toMatch(/Gemini settled: A_WINS/);
+    expect(out).toMatch(/PAID via finalize/);
+    expect(code, out).toBe(0);
+    // Ava bet DOWN at 39 %: $1.56 against Ben's $2.44; Gemini said no, so Ava takes Ben's stake.
+    expect(await usdc(w[0]![1].address)).toBe(a0 + 2_440_000n);
+    expect(await usdc(w[1]![1].address)).toBe(b0 - 2_440_000n);
+    expect((await betRow(settledBet!)).state).toBe('PAID');
+  }, 120_000);
 });
