@@ -997,6 +997,8 @@ export const KEYS: Array<[string, string]> = [
   ['Q', 'Big QR of the latest transaction'],
   ['M', 'Sound on / off (any key unlocks it); off stops the line being said'],
   ['V', 'Judge voice on / off; off stops the line being said'],
+  ['P', 'Phones: stage only → phones + stage → phones big'],
+  ['O', 'Phone sources: window / camera / test pattern, crop, swap A ⇄ B'],
   ['H or ?', 'This help'],
 ];
 

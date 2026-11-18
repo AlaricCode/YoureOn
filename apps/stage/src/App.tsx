@@ -12,7 +12,8 @@
 // re-checked here (verify.ts), and the projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
-// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, M mute, V voice, H help.
+// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, M mute, V voice, H help,
+// P phone layout (stage only / phones + stage / phones big), O the phone sources (PhonePanes.tsx).
 import {
   useCallback,
   useEffect,
@@ -80,6 +81,7 @@ import {
   StageView,
   type LockSigner,
 } from './view';
+import { OperatorPanel, PhoneStage, usePhonePanes } from './PhonePanes';
 
 export {
   BetCard,
@@ -387,6 +389,16 @@ export function App() {
   const shownNow = pv ? pv.now : now;
   const focus = shown.focusBetId ? (shown.bets[shown.focusBetId] ?? null) : null;
   const paidMoment = usePaidMoment(focus, shownNow);
+  // the phones on the projector: P cycles the layout, O picks each phone's source
+  const [search] = useState(() => {
+    try {
+      return globalThis.location?.search ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const panes = usePhonePanes(focus, search);
+  const { cycle: cyclePanes, toggleOperator } = panes;
 
   // Secrets never stay in the address bar (or the browser history) on a projector.
   useEffect(() => {
@@ -780,10 +792,15 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === 'escape') setOverlay(null);
-      else if (k === 'f') toggleFullscreen();
+      if (k === 'escape') {
+        setOverlay(null);
+        toggleOperator(false);
+      } else if (k === 'f') toggleFullscreen();
+      else if (k === 'p') cyclePanes();
+      else if (k === 'o') toggleOperator();
       else if (k === 'q') setOverlay((o) => (o?.kind === 'qr' ? null : { kind: 'qr' }));
       else if (k === 'h' || k === '?')
         setOverlay((o) => (o?.kind === 'help' ? null : { kind: 'help' }));
@@ -805,7 +822,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [cyclePanes, toggleOperator]);
 
   const field = (
     k: keyof FormState,
@@ -835,22 +852,35 @@ export function App() {
   return (
     <>
       {pv || live ? (
-        <StageView
-          state={shown}
-          now={shownNow}
-          preview={pv ? launch.preview : null}
-          onDisconnect={live ? disconnect : undefined}
-          health={pv ? PREVIEW_HEALTH : health}
-          healthError={pv ? null : healthError}
-          showHealth={
-            pv ? true : !!live && (health !== null || healthError !== null || !!live.demoKey)
+        <PhoneStage
+          panes={panes}
+          bet={focus}
+          badge={
+            pv
+              ? { text: 'PREVIEW', cls: 'preview' }
+              : shown.status === 'open'
+                ? { text: 'LIVE', cls: 'live' }
+                : { text: shown.status.toUpperCase(), cls: 'down' }
           }
-          replays={replays}
-          roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
-          sound={sound}
-          voice={voiceLabel(voiceOn, !pv && !!audioCaps?.tts, voiceHow)}
-          lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
-          verifications={pv ? undefined : verifications}
+          stage={
+            <StageView
+              state={shown}
+              now={shownNow}
+              preview={pv ? launch.preview : null}
+              onDisconnect={live ? disconnect : undefined}
+              health={pv ? PREVIEW_HEALTH : health}
+              healthError={pv ? null : healthError}
+              showHealth={
+                pv ? true : !!live && (health !== null || healthError !== null || !!live.demoKey)
+              }
+              replays={replays}
+              roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
+              sound={sound}
+              voice={voiceLabel(voiceOn, !pv && !!audioCaps?.tts, voiceHow)}
+              lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
+              verifications={pv ? undefined : verifications}
+            />
+          }
         />
       ) : (
         <div className="stage connect">
@@ -893,8 +923,8 @@ export function App() {
           </form>
           <ReplayLine replays={replays} off={launch.noPreload} />
           <p className="muted small">
-            Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}
-            <a href="?preview">open the preview</a>
+            Keys: 1–6 REPLAY clips · F full screen · Q big QR · P phones · O phone sources · H help
+            · <a href="?preview">open the preview</a>
           </p>
           <p className="muted small tip">
             No typing on the projector: open <code>/stage/?room=ABC234#key=STAGE_KEY</code> (the
@@ -916,6 +946,7 @@ export function App() {
         <QrOverlay tx={focus ? featuredTx(focus) : null} onClose={() => setOverlay(null)} />
       )}
       {overlay?.kind === 'help' && <HelpOverlay onClose={() => setOverlay(null)} />}
+      {panes.state.operator && <OperatorPanel panes={panes} bet={focus} />}
     </>
   );
 }
