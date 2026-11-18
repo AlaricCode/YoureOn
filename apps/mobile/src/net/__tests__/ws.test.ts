@@ -81,9 +81,9 @@ class FakeSocket implements SocketLike {
   msg(f: unknown) {
     this.onmessage?.({ data: JSON.stringify(f) });
   }
-  serverClose(code: number) {
+  serverClose(code: number, reason?: string) {
     this.readyState = 3;
-    this.onclose?.({ code });
+    this.onclose?.(reason === undefined ? { code } : { code, reason });
   }
 }
 
@@ -94,7 +94,12 @@ describe('realtime client', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  const make = (o: { onUnauthorized?: () => Promise<boolean> } = {}) => {
+  const make = (
+    o: {
+      onUnauthorized?: () => Promise<boolean>;
+      onForbidden?: (d: { room: string | null; bets: string[]; reason: string }) => void;
+    } = {},
+  ) => {
     const events: unknown[] = [];
     const seqs = new Map<string, number>([[BET, 4]]);
     const statuses: string[] = [];
@@ -107,6 +112,7 @@ describe('realtime client', () => {
       onStatus: (s) => statuses.push(s),
       random: () => 0,
       ...(o.onUnauthorized ? { onUnauthorized: o.onUnauthorized } : {}),
+      ...(o.onForbidden ? { onForbidden: o.onForbidden } : {}),
     });
     return { c, events, seqs, statuses };
   };
@@ -203,6 +209,72 @@ describe('realtime client', () => {
     expect(FakeSocket.all).toHaveLength(2);
   });
 
+  const welcome = {
+    op: 'welcome',
+    server_time: '2026-11-21T18:00:00.000Z',
+    heartbeat_ms: 20000,
+    user_channel: true,
+  };
+  const helloOf = (s: FakeSocket) => s.sent[0] as { subs: { bet_id: string }[] };
+
+  it('4403 bet not allowed: drops the bet subs and reconnects with a clean hello (no loop)', () => {
+    const dropped: unknown[] = [];
+    const { c } = make({ onForbidden: (d) => dropped.push(d) });
+    c.subscribe(BET);
+    c.subscribeRoom('room-1');
+    c.start();
+    const s1 = FakeSocket.all[0]!;
+    s1.open();
+    s1.msg(welcome); // welcome arrives before the server checks the subs
+    s1.serverClose(WS_CLOSE.FORBIDDEN, 'bet not allowed');
+    expect(dropped).toEqual([{ room: null, bets: [BET], reason: 'bet not allowed' }]);
+    vi.advanceTimersByTime(499);
+    expect(FakeSocket.all).toHaveLength(1); // backed off, not an instant retry
+    vi.advanceTimersByTime(1);
+    const s2 = FakeSocket.all[1]!;
+    s2.open();
+    expect(helloOf(s2).subs).toEqual([]);
+    // the room was allowed: still subscribed
+    expect(s2.sent[1]).toEqual({ op: 'subscribe_room', room_id: 'room-1' });
+    s2.msg(welcome);
+    vi.advanceTimersByTime(WS_CLIENT_DEAD_MS - 1); // stays up (no new 4403)
+    expect(FakeSocket.all).toHaveLength(2);
+  });
+
+  it('4403 room not allowed: drops only the room; repeated 4403s back off', () => {
+    const { c } = make();
+    c.subscribe(BET);
+    c.subscribeRoom('room-1');
+    c.start();
+    FakeSocket.all[0]!.open();
+    FakeSocket.all[0]!.serverClose(WS_CLOSE.FORBIDDEN, 'room not allowed');
+    vi.advanceTimersByTime(500);
+    const s2 = FakeSocket.all[1]!;
+    s2.open();
+    expect(helloOf(s2).subs).toEqual([{ bet_id: BET, after_seq: 4 }]);
+    expect(s2.sent).toHaveLength(1);
+    // the app re-adds a refused room: the next 4403 waits longer (1 s), never a tight loop
+    c.subscribeRoom('room-1');
+    s2.msg(welcome);
+    s2.serverClose(WS_CLOSE.FORBIDDEN, 'room not allowed');
+    vi.advanceTimersByTime(999);
+    expect(FakeSocket.all).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(FakeSocket.all).toHaveLength(3);
+  });
+
+  it('reset() forgets every sub: the next hello (a new user) carries none', () => {
+    const { c } = make();
+    c.subscribe(BET);
+    c.subscribeRoom('room-1');
+    c.reset();
+    c.start();
+    const s = FakeSocket.all[0]!;
+    s.open();
+    expect(helloOf(s).subs).toEqual([]);
+    expect(s.sent).toHaveLength(1);
+  });
+
   it('stop closes and never reconnects', () => {
     const { c } = make();
     c.start();
@@ -211,6 +283,20 @@ describe('realtime client', () => {
     expect(FakeSocket.all[0]!.closed).toBe(1000);
     vi.advanceTimersByTime(60_000);
     expect(FakeSocket.all).toHaveLength(1);
+  });
+});
+
+describe('bet hub', () => {
+  it('clear() forgets every bet and its seq', () => {
+    const hub = new BetHub({
+      getBet: async () => snapshot(),
+      getBetEvents: async () => ({ events: [], last_seq: 0 }),
+    });
+    hub.adopt(snapshot({ last_seq: 3 }));
+    hub.clear();
+    expect(hub.has(BET)).toBe(false);
+    expect(hub.lastSeq(BET)).toBe(0);
+    expect(hub.ids()).toEqual([]);
   });
 });
 

@@ -26,6 +26,7 @@ import {
 } from '../net/ws';
 import type { WsServerControlFrame } from '@youre-on/shared/api';
 import { BetHub } from './betHub';
+import { resetOnUserSwitch } from './userSwitch';
 
 export interface Runtime {
   baseUrl: string;
@@ -40,6 +41,8 @@ export interface Runtime {
   /** Control frames (presence) and socket status, for the React layer. */
   onControl(l: (f: WsServerControlFrame) => void): () => void;
   onStatus(l: (s: WsStatus) => void): () => void;
+  /** The server refused a sub (close 4403); the client already dropped it. */
+  onForbidden(l: (d: { room: string | null; bets: string[] }) => void): () => void;
   uuid(): string;
 }
 
@@ -104,6 +107,7 @@ async function build(): Promise<Runtime> {
   );
   const controlListeners = new Set<(f: WsServerControlFrame) => void>();
   const statusListeners = new Set<(s: WsStatus) => void>();
+  const forbiddenListeners = new Set<(d: { room: string | null; bets: string[] }) => void>();
   const ws = createRealtimeClient({
     url: wsUrlFor(API_BASE_URL),
     createSocket: (u) => new WebSocket(u) as unknown as SocketLike,
@@ -124,9 +128,16 @@ async function build(): Promise<Runtime> {
     onStatus: (s) => {
       for (const l of statusListeners) l(s);
     },
+    // login() resolving null (device unknown: DB reseeded) also signs out, back to signup.
     onUnauthorized: async () => (await mgr.login().catch(() => null)) !== null,
+    onForbidden: (d) => {
+      for (const l of forbiddenListeners) l(d);
+    },
     log: (m, x) => console.warn(`[yo] ${m}`, x ?? ''),
   });
+  // A user switch (demo claim from Profile) or sign-out: the old user's subs and bets go, so the
+  // next hello carries none the new user may not see (else 4403 on every reconnect).
+  resetOnUserSwitch(mgr, { ws, hub });
   return {
     baseUrl: API_BASE_URL,
     wallet,
@@ -145,6 +156,10 @@ async function build(): Promise<Runtime> {
     onStatus(l) {
       statusListeners.add(l);
       return () => statusListeners.delete(l);
+    },
+    onForbidden(l) {
+      forbiddenListeners.add(l);
+      return () => forbiddenListeners.delete(l);
     },
   };
 }

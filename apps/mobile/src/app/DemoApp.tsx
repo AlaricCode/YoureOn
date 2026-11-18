@@ -191,9 +191,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       if (f.op === 'room.presence')
         dispatch({ type: 'presence', room_id: f.room_id, members: f.members });
     });
+    // 4403: the client already dropped the refused subs. The reason does not name the bet, so
+    // keep following the bet on screen unless it was the only one dropped (then it was refused).
+    const c = rt.onForbidden((d) => {
+      const cur = appRef.current;
+      if (d.room && cur.room?.room_id === d.room) dispatch({ type: 'room', room: null });
+      if (cur.activeBetId && d.bets.length > 1 && d.bets.includes(cur.activeBetId))
+        rt.ws.subscribe(cur.activeBetId);
+    });
     return () => {
       a();
       b();
+      c();
     };
   }, [rt]);
 
