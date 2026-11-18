@@ -85,6 +85,28 @@ describe('historyItemOf', () => {
   it('a missing settled_at becomes an empty string (the screen does not show it)', () => {
     expect(historyItemOf(item({ settled_at: null }))?.settled_at).toBe('');
   });
+
+  it('seed rows (is_seed, POST /v1/demo/seed-h2h) read as demo history, never as "Challenge"', () => {
+    // today's server titles a seed row from its (absent) terms: the generic "Challenge"
+    expect(historyItemOf(item({ is_seed: true, title: 'Challenge' }))?.title).toBe('Demo history');
+    // a server that sends the row's own title ("Demo history: …") keeps it as is
+    expect(historyItemOf(item({ is_seed: true, title: 'Demo history: Free throw' }))?.title).toBe(
+      'Demo history: Free throw',
+    );
+    // any other title of a seed row is marked
+    expect(historyItemOf(item({ is_seed: true, title: 'Bottle flip' }))?.title).toBe(
+      'Demo history: Bottle flip',
+    );
+    expect(historyItemOf(item({ is_seed: true, title: '' }))?.title).toBe('Demo history');
+    // a real bet is left alone, even one titled "Challenge"
+    expect(historyItemOf(item({ is_seed: false, title: 'Challenge' }))?.title).toBe('Challenge');
+    // the rest of the row is unchanged
+    expect(historyItemOf(item({ is_seed: true, title: 'Challenge' }))).toMatchObject({
+      opponent: 'Jake',
+      net: '5000000',
+      outcome: 'won',
+    });
+  });
 });
 
 describe('api.myBets', () => {

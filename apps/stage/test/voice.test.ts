@@ -8,6 +8,7 @@ import { GENERATED_FOR, StageAudio } from '../src/sound';
 import { applyFrame, initialTicker, type TickerState } from '../src/ticker';
 import {
   browserSpeech,
+  cancelSpeech,
   CLIP_WAIT_MS,
   freshVoiceLines,
   StageVoice,
@@ -187,6 +188,95 @@ describe('StageVoice: the clip, or the browser after the timeout', () => {
   });
 });
 
+describe('StageVoice: M or V stops the line already playing', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** A 20 s clip (a 300-character line) whose source node records stop(). */
+  function longClip() {
+    const c = { started: 0, stopped: 0, end: null as (() => void) | null };
+    const playable: Playable = {
+      play: () =>
+        new Promise<void>((r) => {
+          c.started++;
+          c.end = r;
+          setTimeout(r, 20_000);
+        }),
+      stop: () => {
+        c.stopped++;
+        c.end?.();
+      },
+    };
+    return { c, playable };
+  }
+
+  it('mid-clip: the clip stops at once, the line ends, the next is skipped while off', async () => {
+    const io = fakeIo();
+    let cancels = 0;
+    io.impl.cancelSpeech = () => cancels++;
+    const { v, done } = voiceOf(io);
+    const { c, playable } = longClip();
+    v.expect(line(30));
+    v.expect(line(31, 'Judge 1 votes.'));
+    v.clip({ key: voiceKey(BET, 30), url: '/v1/stage/tts/long', text: 'Jake wins.' });
+    io.loads[0]!.resolve(playable);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.started).toBe(1);
+    // the operator presses V 1 s into a 20 s line
+    io.on = false;
+    v.silence();
+    expect(c.stopped).toBe(1);
+    expect(cancels).toBe(0); // the browser was not speaking
+    await vi.advanceTimersByTimeAsync(VOICE_WAIT_MS);
+    expect(done).toEqual([
+      [voiceKey(BET, 30), 'skip'],
+      [voiceKey(BET, 31), 'skip'],
+    ]);
+    expect(io.spoken).toEqual([]); // no browser fallback after the cut
+  });
+
+  it('mid-speech: speechSynthesis.cancel(), and the line ends even if the browser never says so', async () => {
+    const io = fakeIo();
+    let cancels = 0;
+    io.impl.cancelSpeech = () => cancels++;
+    io.impl.speak = (l) =>
+      new Promise<void>(() => {
+        io.spoken.push(l.text); // an utterance whose onend never fires
+      });
+    const { v, done } = voiceOf(io);
+    v.expect(line(32, 'A long browser line.'));
+    await vi.advanceTimersByTimeAsync(VOICE_WAIT_MS + 500);
+    expect(io.spoken).toEqual(['A long browser line.']);
+    expect(done).toEqual([]);
+    io.on = false; // M
+    v.silence();
+    expect(cancels).toBe(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toEqual([[voiceKey(BET, 32), 'skip']]);
+    // back on: the next line is heard as usual
+    io.on = true;
+    io.impl.speak = async (l) => void io.spoken.push(l.text);
+    v.expect(line(33, 'Next.'));
+    await vi.advanceTimersByTimeAsync(VOICE_WAIT_MS);
+    expect(io.spoken.at(-1)).toBe('Next.');
+    expect(done.at(-1)).toEqual([voiceKey(BET, 33), 'speech']);
+  });
+
+  it('nothing playing: silence() does nothing (a line still waiting for its clip is skipped later)', async () => {
+    const io = fakeIo();
+    let cancels = 0;
+    io.impl.cancelSpeech = () => cancels++;
+    const { v, done } = voiceOf(io);
+    v.silence();
+    v.expect(line(34));
+    io.on = false;
+    v.silence();
+    expect(cancels).toBe(0);
+    await vi.advanceTimersByTimeAsync(VOICE_WAIT_MS);
+    expect(done).toEqual([[voiceKey(BET, 34), 'skip']]);
+  });
+});
+
 describe('which events are voiced', () => {
   const START = Date.parse('2026-11-20T15:00:00.000Z');
 
@@ -323,12 +413,29 @@ describe('the browser voice adapter', () => {
     expect(said[0]!.pitch).not.toBe(said[1]!.pitch);
     expect(browserSpeech({})).toBeNull();
   });
+
+  it('cancelSpeech calls speechSynthesis.cancel(); a browser without it is left alone', () => {
+    let cancels = 0;
+    cancelSpeech({ speechSynthesis: { cancel: () => cancels++ } });
+    expect(cancels).toBe(1);
+    expect(() => cancelSpeech({})).not.toThrow();
+    expect(() =>
+      cancelSpeech({
+        speechSynthesis: {
+          cancel: () => {
+            throw new Error('nope');
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe('StageAudio plays decoded clips', () => {
   /** A context that decodes anything and counts buffer sources started. */
   function ctx() {
     const started: unknown[] = [];
+    const stopped: unknown[] = [];
     const c = {
       state: 'running',
       currentTime: 0,
@@ -343,7 +450,13 @@ describe('StageAudio plays decoded clips', () => {
           connect() {},
           start() {
             started.push(src.buffer);
-            setTimeout(() => src.onended?.(), 0);
+            // a clip with a duration plays until stop(); the others end at once
+            if (!(src.buffer as { long?: boolean } | null)?.long)
+              setTimeout(() => src.onended?.(), 0);
+          },
+          stop() {
+            stopped.push(src.buffer);
+            src.onended?.();
           },
         };
         return src;
@@ -353,7 +466,7 @@ describe('StageAudio plays decoded clips', () => {
       createBiquadFilter: () => ({}),
       createBuffer: () => ({}),
     };
-    return { c, started };
+    return { c, started, stopped };
   }
 
   it('a TTS clip decodes and plays to its end; muted or locked it does not', async () => {
@@ -367,6 +480,26 @@ describe('StageAudio plays decoded clips', () => {
     expect(started).toHaveLength(1);
     a.muted = true;
     expect(a.playBuffer(buf!)).toBeNull();
+  });
+
+  it("startBuffer's stop() stops the source node (M / V mid-line) and resolves done", async () => {
+    const { c, started, stopped } = ctx();
+    const a = new StageAudio(() => c as never);
+    a.unlock();
+    const buf = { duration: 20, long: true } as unknown as AudioBuffer;
+    const h = a.startBuffer(buf)!;
+    expect(started).toEqual([buf]);
+    let ended = false;
+    void h.done.then(() => (ended = true));
+    await Promise.resolve();
+    expect(ended).toBe(false); // still playing
+    h.stop();
+    await Promise.resolve();
+    expect(stopped).toEqual([buf]);
+    expect(ended).toBe(true);
+    h.stop(); // twice is harmless
+    a.muted = true;
+    expect(a.startBuffer(buf)).toBeNull();
   });
 
   it('generated cue clips replace the synthesized gavel / buzzer / cheer once decoded', async () => {

@@ -7,12 +7,16 @@ import {
   buildEvidence,
   capturePlan,
   DEFAULT_FRAMES,
+  encodeSteps,
+  fitUnderCap,
   FRAME_MAX_PX,
   frameTimesMs,
   hashFrames,
+  JPEG_QUALITIES,
   LANDING_CROP_MAX_PX,
   MAX_FRAME_BYTES,
   mimeForUri,
+  runCapturePlan,
   shotTransform,
   type CapturedFrame,
 } from '../frames';
@@ -154,5 +158,116 @@ describe('evidence', () => {
         '--B\r\nContent-Disposition: form-data; name="frame"; filename="00.jpg"\r\nContent-Type: image/jpeg\r\n\r\n\u0000ÿ\r\n\r\n' +
         '--B--\r\n',
     );
+  });
+});
+
+describe('the per-image cap: step down, else drop (never send what the server refuses)', () => {
+  const evidenceOf = (f: readonly CapturedFrame[]) =>
+    buildEvidence({
+      bet_id: BET,
+      attempt_no: 1,
+      clip: new Uint8Array(5000).fill(7),
+      mime: 'video/quicktime',
+      duration_ms: 6000,
+      recorded_by: 'A',
+      recorded_at: '2026-11-21T18:07:06.000Z',
+      frames: f,
+    });
+  /** A JPEG of `n` bytes. */
+  const bytes = (n: number) => new Uint8Array(n).fill(1);
+  const plan = capturePlan(6000);
+
+  it('every quality at full size, then smaller sizes: the crop goes 1024 -> 768 -> 512 px', () => {
+    const steps = encodeSteps({ width: LANDING_CROP_MAX_PX, height: 576 });
+    expect(steps.slice(0, 4)).toEqual(
+      JPEG_QUALITIES.map((quality) => ({ quality, width: 1024, height: 576 })),
+    );
+    expect(JPEG_QUALITIES).toEqual([0.8, 0.65, 0.5, 0.35]);
+    expect(steps.slice(4).map((s) => `${s.width}x${s.height}@${s.quality}`)).toEqual([
+      '768x432@0.5',
+      '768x432@0.35',
+      '512x288@0.5',
+      '512x288@0.35',
+    ]);
+    // a frame steps down the same way, from 512 px
+    expect(encodeSteps({ width: FRAME_MAX_PX, height: 288 }).at(-1)).toEqual({
+      quality: 0.35,
+      width: 256,
+      height: 144,
+    });
+  });
+
+  it('fitUnderCap: the first step under 200 KB wins; none fits -> null', async () => {
+    const steps = encodeSteps({ width: 1024, height: 576 });
+    const tried: string[] = [];
+    // over the cap at full size whatever the quality; fits at 768 px
+    const jpeg = await fitUnderCap(steps, async (s) => {
+      tried.push(`${s.width}@${s.quality}`);
+      return bytes(s.width === 1024 ? MAX_FRAME_BYTES + 1 : MAX_FRAME_BYTES);
+    });
+    expect(jpeg?.length).toBe(MAX_FRAME_BYTES);
+    expect(tried).toEqual(['1024@0.8', '1024@0.65', '1024@0.5', '1024@0.35', '768@0.5']);
+    expect(await fitUnderCap(steps, async () => bytes(MAX_FRAME_BYTES + 1))).toBeNull();
+    expect(await fitUnderCap(steps, async () => bytes(0))).toBeNull();
+  });
+
+  it('a crop still over the cap is dropped: the 12 frames go, and the upload builds', async () => {
+    const warned: string[] = [];
+    const out = await runCapturePlan(
+      plan,
+      async (shot) => (shot.kind === 'frame' ? bytes(1000) : null),
+      (m) => warned.push(m),
+    );
+    expect(out).toHaveLength(12);
+    expect(out.some((f) => f.landing_crop)).toBe(false);
+    expect(warned).toEqual([expect.stringMatching(/landing crop dropped/)]);
+    expect(evidenceOf(out).frames).toHaveLength(12);
+  });
+
+  it('an oversized crop returned anyway is dropped, never sent', async () => {
+    const out = await runCapturePlan(plan, async (shot) =>
+      bytes(shot.kind === 'frame' ? 1000 : MAX_FRAME_BYTES + 1),
+    );
+    expect(out).toHaveLength(12);
+    expect(out.every((f) => f.jpeg.length <= MAX_FRAME_BYTES)).toBe(true);
+    expect(() => evidenceOf(out)).not.toThrow();
+  });
+
+  it('a crop that fails to render is dropped too (the catch path)', async () => {
+    const warned: string[] = [];
+    const out = await runCapturePlan(
+      plan,
+      async (shot) => {
+        if (shot.kind === 'landing_crop') throw new Error('render failed');
+        return bytes(1000);
+      },
+      (m) => warned.push(m),
+    );
+    expect(out).toHaveLength(12);
+    expect(warned).toEqual(['landing crop skipped: render failed']);
+  });
+
+  it('a crop that fits is sent last, flagged, at the last frame time', async () => {
+    const out = await runCapturePlan(plan, async (shot) =>
+      bytes(shot.kind === 'frame' ? 1000 : 150_000),
+    );
+    expect(out).toHaveLength(13);
+    expect(out.at(-1)).toMatchObject({ t_ms: plan[11]!.t_ms, landing_crop: true });
+    expect(evidenceOf(out).frames.at(-1)!.landing_crop).toBe(true);
+  });
+
+  it('a frame that never fits is dropped (11 still go); a frame that throws fails the capture', async () => {
+    const out = await runCapturePlan(plan, async (shot, i) =>
+      shot.kind === 'frame' && i === 3 ? null : bytes(1000),
+    );
+    expect(out.filter((f) => !f.landing_crop)).toHaveLength(11);
+    expect(out.map((f) => f.t_ms)).not.toContain(plan[3]!.t_ms);
+    expect(evidenceOf(out).frames).toHaveLength(12);
+    await expect(
+      runCapturePlan(plan, async (_shot, i) => {
+        if (i === 0) throw new Error('no thumbnail');
+        return bytes(1000);
+      }),
+    ).rejects.toThrow('no thumbnail');
   });
 });

@@ -59,7 +59,7 @@ import { DemoHealthError, fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } fro
 import { PREVIEW_HEALTH, previewAt } from './preview';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
-import { browserSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
+import { browserSpeech, cancelSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
 import { settlementFetches, verifyEvidence, type Verification } from './verify';
 import {
   initialReplays,
@@ -682,7 +682,8 @@ export function App() {
 
   // The judge's voice (voice.ts): each fresh ruling / payout / appeal vote is heard, as the
   // ElevenLabs clip a stage.voice frame points at, else (no frame within ~800 ms, a failed clip)
-  // in the browser's voice. V turns the voice off and on; M mutes everything. In a bet the voice
+  // in the browser's voice. V turns the voice off and on; M mutes everything; either one, going
+  // off, stops the line being said (StageVoice.silence). In a bet the voice
   // judge hosts, the ruling and payout are left to A's phone (one judge at a time); a preview
   // has no phones, so it voices them all.
   const liveRef = useRef(live);
@@ -700,11 +701,19 @@ export function App() {
         if (!l) throw new Error('not connected');
         const buf = await audio.current!.decode(await fetchAudio(l.serverUrl, l.token, url));
         if (!buf) throw new Error('clip did not decode');
+        let playing: { stop(): void } | null = null;
         return {
-          play: () => audio.current!.playBuffer(buf) ?? Promise.reject(new Error('audio locked')),
+          play: () => {
+            const h = audio.current!.startBuffer(buf);
+            if (!h) return Promise.reject(new Error('audio locked'));
+            playing = h;
+            return h.done;
+          },
+          stop: () => playing?.stop(),
         };
       },
       speak: (line) => (speak ? speak(line) : Promise.resolve()),
+      cancelSpeech: () => cancelSpeech(),
       on: () => !audio.current!.muted && voiceOnRef.current,
     });
     voice.current.onDone = (_key, how) => setVoiceHow(how);
@@ -781,9 +790,14 @@ export function App() {
       else if (k === 'm') {
         const a = audio.current!;
         a.muted = !a.muted;
-        if (!a.muted) a.play('lock');
-      } else if (k === 'v') setVoiceOn((v) => !v);
-      else {
+        if (a.muted) voice.current?.silence();
+        else a.play('lock');
+      } else if (k === 'v') {
+        const on = !voiceOnRef.current;
+        voiceOnRef.current = on; // on() reads it before the next render
+        setVoiceOn(on);
+        if (!on) voice.current?.silence();
+      } else {
         const n = Number(e.key);
         if ((REPLAY_BEATS as readonly number[]).includes(n))
           setOverlay({ kind: 'replay', beat: n });
