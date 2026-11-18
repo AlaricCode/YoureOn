@@ -238,10 +238,20 @@ export function ListRow({
 }
 
 /** A small rounded tag ("Online", "Face on"). */
-export function Chip({ label, tone = 'muted' }: { label: string; tone?: 'muted' | 'accent' }) {
+export function Chip({
+  label,
+  tone = 'muted',
+  testID,
+}: {
+  label: string;
+  tone?: 'muted' | 'accent';
+  testID?: string;
+}) {
   return (
     <View style={[styles.chip, tone === 'accent' ? styles.chipAccent : styles.chipMuted]}>
-      <Text style={[type.small, tone === 'accent' && { color: palette.text }]}>{label}</Text>
+      <Text testID={testID} style={[type.small, tone === 'accent' && { color: palette.text }]}>
+        {label}
+      </Text>
     </View>
   );
 }

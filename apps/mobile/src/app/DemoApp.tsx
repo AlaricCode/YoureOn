@@ -73,6 +73,9 @@ import {
   type AppEvent,
   type AppState,
 } from './machine';
+import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
+import { deviceRoleRequest } from './judgeCam';
+import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
 import {
   canConfirm,
@@ -89,7 +92,8 @@ import {
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
-const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
+/** A voice SDK that throws while it loads falls back to typed terms (the boundary below). */
+const JudgeVoice = lazy(() => importSafely(() => import('../voice/JudgeVoice')));
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
@@ -147,6 +151,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [walletKey, setWalletKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Home: why "New room" / "Challenge" failed (clears itself), and the in-flight guards. */
+  const [homeNote, setHomeNote] = useState<string | null>(null);
+  const [creatingRoom, setCreatingRoom] = useState(false);
+  const challenging = useRef(false);
   const [alert, setAlert] = useState<string | null>(null);
   const [bootFailed, setBootFailed] = useState(false);
   const appRef = useRef(app);
@@ -444,7 +452,34 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     };
   }, [rt, needDeadline, betId]);
 
+  useEffect(() => {
+    if (!homeNote) return;
+    const tm = setTimeout(() => setHomeNote(null), HOME_NOTE_MS);
+    return () => clearTimeout(tm);
+  }, [homeNote]);
+
   // ---- actions -----------------------------------------------------------------------------
+  /** Judge-cam mode on this phone AND on the server (./judgeCam: the server picks the recorder). */
+  const setJudgeCam = useCallback(
+    (on: boolean) => {
+      dispatch({ type: 'overlay', overlay: 'none' });
+      const req = deviceRoleRequest(on, appRef.current.room?.room_id ?? null);
+      if (!req.ok) {
+        setHomeNote(t(COPY.home.joinRoomFirst));
+        return;
+      }
+      dispatch({ type: 'judge_cam', on });
+      rt.api.setDeviceRole(req.role, req.roomId).catch((e: unknown) => {
+        console.warn('[yo] device role', e);
+        // Off stays off on screen; the Profile row can send it again.
+        if (!on) return;
+        dispatch({ type: 'judge_cam', on: false });
+        setHomeNote(homeErrorLabel('judgeCam', e));
+      });
+    },
+    [rt],
+  );
+
   async function joinRoom(code: string): Promise<boolean> {
     try {
       const r = await rt.api.joinRoom(code);
@@ -641,13 +676,23 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               .filter((m) => m.user.user_id !== app.me?.user_id)
               .map(toPreviewUser)}
             offline={app.offline}
+            note={homeNote}
+            creating={creatingRoom}
             onJoin={joinRoom}
-            onCreate={() =>
-              void rt.api.createRoom().then(
-                (r) => void joinRoom(r.code),
-                () => undefined,
-              )
-            }
+            onCreate={() => {
+              if (creatingRoom) return;
+              setCreatingRoom(true);
+              setHomeNote(null);
+              rt.api
+                .createRoom()
+                .then(
+                  async (r) => {
+                    if (!(await joinRoom(r.code))) setHomeNote(t(COPY.home.createFailed));
+                  },
+                  (e: unknown) => setHomeNote(homeErrorLabel('create', e)),
+                )
+                .finally(() => setCreatingRoom(false));
+            }}
             onLeave={() => {
               const id = app.room?.room_id;
               dispatch({ type: 'room', room: null });
@@ -659,16 +704,27 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             }}
             onChallenge={(u) => {
               const room = app.room;
-              if (!room) return;
-              rt.api.createBet(room.room_id, u.user_id).then(
-                (r) => {
-                  voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
-                  rt.hub.adopt(r.bet);
-                  rt.ws.subscribe(r.bet.bet_id);
-                  dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
-                },
-                () => undefined,
-              );
+              // One challenge in flight: a double tap must not open two bets.
+              if (!room || challenging.current) return;
+              challenging.current = true;
+              setHomeNote(null);
+              rt.api
+                .createBet(room.room_id, u.user_id)
+                .then(
+                  (r) => {
+                    voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
+                    rt.hub.adopt(r.bet);
+                    rt.ws.subscribe(r.bet.bet_id);
+                    dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
+                  },
+                  (e: unknown) => {
+                    feel('failed');
+                    setHomeNote(homeErrorLabel('challenge', e));
+                  },
+                )
+                .finally(() => {
+                  challenging.current = false;
+                });
             }}
             onHistory={() => undefined}
             onProfile={() => dispatch({ type: 'overlay', overlay: 'profile' })}
@@ -683,13 +739,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
             onFace={() => undefined}
             onHistory={() => undefined}
-            onJudgeCam={() => {
-              dispatch({ type: 'judge_cam', on: !app.judgeCam });
-              dispatch({ type: 'overlay', overlay: 'none' });
-              void rt.api
-                .setDeviceRole(app.judgeCam ? 'phone' : 'judge_cam', app.room?.room_id)
-                .catch(() => undefined);
-            }}
+            onJudgeCam={() => setJudgeCam(!app.judgeCam)}
             onDemo={() => dispatch({ type: 'overlay', overlay: 'demoClaim' })}
           />
         );
@@ -821,13 +871,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         );
       }
       case 'judgeCam':
-        return (
-          <JudgeCamScreen
-            arm={arm}
-            onSend={sendClip}
-            onBack={() => dispatch({ type: 'judge_cam', on: false })}
-          />
-        );
+        return <JudgeCamScreen arm={arm} onSend={sendClip} onBack={() => setJudgeCam(false)} />;
       case 'redo':
         return (
           <RedoScreen
@@ -905,7 +949,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <Label variant="small">{alert}</Label>
         </View>
       ) : null}
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
     </View>
   );
 }
