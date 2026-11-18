@@ -20,6 +20,7 @@ import {
   Chip,
   DataText,
   ListRow,
+  OperatorHold,
   Page,
   ReconnectBanner,
   Screen,
@@ -90,14 +91,9 @@ export function HomeScreen({
     <Screen>
       <ReconnectBanner visible={offline} />
       <View style={styles.head}>
-        <Pressable
-          style={styles.flex}
-          onLongPress={onTitleLongPress}
-          delayLongPress={1200}
-          accessible={false}
-        >
+        <OperatorHold style={styles.flex} onHold={onTitleLongPress}>
           <BalanceHeader cents={balanceCents} pending={pending} inBetsUsd={inBetsUsd} />
-        </Pressable>
+        </OperatorHold>
         <Pressable
           testID="home-profile"
           accessibilityRole="button"

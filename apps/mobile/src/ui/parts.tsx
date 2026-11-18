@@ -77,6 +77,41 @@ export function Page({ children, style }: { children: ReactNode; style?: StylePr
   return <View style={[styles.page, style]}>{children}</View>;
 }
 
+/**
+ * The hidden operator gesture (diagnostics / design preview): hold 1.2 s, then let go. It fires
+ * on release: switching screens while the finger is still down unmounts the Pressable that owns
+ * the touch, and React Native then spends the next touch on it (the first tap on the new screen
+ * did nothing; found on the simulator).
+ */
+export function OperatorHold({
+  onHold,
+  style,
+  children,
+}: {
+  onHold?: (() => void) | undefined;
+  style?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  const held = useRef(false);
+  return (
+    <Pressable
+      style={style}
+      accessible={false}
+      delayLongPress={1200}
+      onLongPress={() => {
+        held.current = onHold !== undefined;
+      }}
+      onPressOut={() => {
+        if (!held.current) return;
+        held.current = false;
+        onHold?.();
+      }}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
 // ---------------------------------------------------------------------------------------
 // People
 // ---------------------------------------------------------------------------------------

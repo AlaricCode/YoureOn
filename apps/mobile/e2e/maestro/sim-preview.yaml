@@ -18,16 +18,7 @@ name: sim-preview
     visible: App preview
     timeout: 10000
 - waitForAnimationToEnd
-# The first touch after the long-press can be swallowed (see sim-diagnostics.yaml).
 - tapOn: App preview
-- runFlow:
-    when:
-      notVisible:
-        id: menu-signup
-    commands:
-      - tapOn:
-          text: App preview
-          optional: true
 - extendedWaitUntil:
     visible:
       id: menu-signup
