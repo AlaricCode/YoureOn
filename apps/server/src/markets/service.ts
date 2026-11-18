@@ -12,6 +12,7 @@ import { FAIR, fairStakes, type FairRefusal, type FairStakesResult } from '@your
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import type { MicroUsdc } from '@youre-on/shared/money';
 import type { Logger } from '../log';
+import type { FeedMode, RoutedClient } from './replay';
 import {
   btcContract,
   cleanDecimal,
@@ -102,6 +103,30 @@ export class MarketService {
   /** The REST client (the settlement keeper fetches a bet's own event with it). */
   get client(): GeminiClient {
     return this.o.client;
+  }
+
+  /** 'live' or 'replay' with a routed client (markets/replay.ts); null for a plain client. */
+  get feed(): FeedMode | null {
+    const c = this.o.client as Partial<RoutedClient>;
+    return typeof c.setMode === 'function' ? (c.mode ?? null) : null;
+  }
+
+  /**
+   * Switches a routed client's feed and forgets the current contract, its quote and the chart,
+   * so the next poll re-discovers. Bets keep settling from the feed they were quoted on (the
+   * routed client routes ticker-scoped calls by ticker). False for a plain client.
+   */
+  setFeed(mode: FeedMode): boolean {
+    const c = this.o.client as Partial<RoutedClient>;
+    if (typeof c.setMode !== 'function') return false;
+    c.setMode(mode);
+    this.cur = null;
+    this.events = [];
+    this.snap = null;
+    this.lastDiscoveryAt = Number.NEGATIVE_INFINITY;
+    this.ring.length = 0;
+    this.o.log.info('markets.feed', { mode });
+    return true;
   }
 
   /** The relay's current contract, if it is `eventTicker` (raw fields the snapshot drops). */

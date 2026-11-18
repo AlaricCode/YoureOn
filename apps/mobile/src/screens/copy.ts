@@ -150,6 +150,7 @@ export const COPY = {
     back: ['Back', 'label'],
     gemini: ['Gemini', 'label'],
     settled: ['Gemini settled', 'label'],
+    replay: ['Replay', 'label'],
   },
   history: {
     title: ['History', 'label'],

@@ -26,6 +26,7 @@ import {
 import { StyleSheet, View } from 'react-native';
 
 import type { RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
+import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 import { formatPrice } from '@youre-on/shared/settlement';
 
@@ -863,6 +864,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                             market.quote.lockableUntilMs === null
                               ? null
                               : market.quote.lockableUntilMs - rt.clock.offsetMs,
+                          replay: isReplayTicker(market.quote.eventTicker ?? ''),
                         }
                       : null,
                     sending: market.phase === 'sending',
@@ -957,6 +959,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             strikeUsd={m.strike.value ? formatPrice(m.strike.value) : '—'}
             side={t(mineUp ? COPY.market.up : COPY.market.down)}
             expiryMs={Date.parse(m.expiry) - rt.clock.offsetMs}
+            replay={isReplayTicker(m.eventTicker)}
           />
         );
       }

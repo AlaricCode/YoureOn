@@ -103,8 +103,12 @@ export const EnvSchema = z.object({
   STAGE_KEY: opt(str),
   /** Comma-separated origins allowed to call the stage routes (CORS); unset = Vite dev origins. */
   STAGE_ORIGIN: opt(str),
-  /** Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test. */
-  MARKETS_FEED: opt(z.enum(['on', 'off'])),
+  /**
+   * Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test.
+   * 'replay' = on, serving the recorded round (markets/replay.ts, labelled REPLAY everywhere);
+   * POST /v1/demo/gemini switches live <-> replay at runtime.
+   */
+  MARKETS_FEED: opt(z.enum(['on', 'off', 'replay'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
   // --- optional

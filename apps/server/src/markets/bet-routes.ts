@@ -16,6 +16,7 @@
 // Also wires the relay's snapshots into the settlement service (market.tick per waiting bet),
 // as stage/routes.ts wires them into stage.market, and serves the voice judge's
 // POST /el/tools/get_market_odds (markets/voice-tool.ts).
+import { z } from 'zod/v4';
 import { evaluateProposeTerms } from '@youre-on/shared/judge/reply';
 import {
   marketReadback,
@@ -29,6 +30,7 @@ import type { RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { requireSignedRequest } from '../auth/middleware';
+import { requireDemo } from '../demo/routes';
 import { readBet } from '../lock/common';
 import { displayCode, persistEvaluation } from '../lock/terms';
 import { partyABet } from '../terms/routes';
@@ -46,6 +48,20 @@ export const marketBetRoutes: RouteModule = {
     deps.markets?.onSnapshot((snapshot) => settlementOf(deps).onSnapshot(snapshot));
 
     app.post('/el/tools/get_market_odds', getMarketOddsHandler);
+
+    // Demo (DEMO_MODE + admin key): switch the relay between live Gemini and the labelled REPLAY
+    // of a recorded round (ARCHITECTURE §7.2 gemini_fallback), then poll once.
+    app.post('/v1/demo/gemini', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const body = await readBody(c, z.object({ feed: z.enum(['live', 'replay']) }));
+      const m = deps.markets;
+      if (!m || !m.setFeed(body.feed))
+        throw new HttpError('MARKET_UNAVAILABLE', 'The market feed is off.', {
+          reason: 'MARKET_NOT_OPEN',
+        });
+      await m.refresh();
+      return c.json({ feed: m.feed, current: m.current(deps.now()) }, 200);
+    });
 
     app.post('/v1/bets/:bet_id/terms/market', requireSignedRequest, async (c) => {
       const deps = c.get('deps');
@@ -74,6 +90,7 @@ export const marketBetRoutes: RouteModule = {
           side: body.side,
           amount_usd: body.amount_usd,
           expiry: q.quote.ref.expiry,
+          eventTicker: q.quote.ref.eventTicker,
         }),
         { maxStake: maxStakeOf(deps), realWorldEnabled: true },
       );

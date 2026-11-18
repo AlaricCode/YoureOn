@@ -211,6 +211,16 @@ describe('settlementRuling (§5.2 stage settlement)', () => {
     ).toThrow(/not a market bet/);
   });
 
+  it('a record fetched from the REPLAY feed says so in the reason', () => {
+    const rec = record(
+      { kind: 'settled', side: 'no' },
+      { source_url: 'replay://gemini/v1/prediction-markets/events/BTC05M2611180240' },
+    );
+    expect(ruling(rec).reason).toBe(
+      'Replay of a recorded round. Gemini settled DOWN: Bitcoin finished at $64,367.38, below the $64,389.60 line.',
+    );
+  });
+
   it('the record is strict and hashes stably', () => {
     const rec = record({ kind: 'settled', side: 'no' });
     expect(GeminiSettlementRecord.parse(rec)).toEqual(rec);

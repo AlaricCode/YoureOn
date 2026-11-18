@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { formatUsd } from '@youre-on/shared/money';
+import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
 import { formatPrice } from '@youre-on/shared/settlement';
 import {
   applyFrame,
@@ -164,6 +165,9 @@ export function MarketPanel({
     <div className="market" aria-label="market bet">
       <div className="market-head">
         <span className="label">BTC 5-MIN · GEMINI</span>
+        {isReplayTicker(m.eventTicker) && (
+          <span className="replay-badge inline">REPLAY · recorded Gemini round</span>
+        )}
         <span className="muted">
           Up {pct}% · locked at Gemini {m.priceSource === 'mid' ? 'mid' : 'last trade'}
         </span>
@@ -378,6 +382,9 @@ export function OddsWidget({ view }: { view: MarketView | null }) {
   return (
     <section className="odds" aria-label="odds">
       <h2>BTC 5-min · Gemini</h2>
+      {isReplayTicker(view.eventTicker) && (
+        <span className="replay-badge inline">REPLAY · recorded Gemini round</span>
+      )}
       <div className="odds-grid">
         <div>
           <span className="label">LINE</span>

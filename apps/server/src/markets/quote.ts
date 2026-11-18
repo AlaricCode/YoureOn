@@ -185,4 +185,4 @@ export function requoteProposal(t: Terms): TermsProposal {
 
 /** True when the claim is the server's template (so a re-quote may rewrite its expiry). */
 export const isTemplateClaim = (t: Terms): boolean =>
-  t.market !== null && t.claim === marketClaim(t.market.expiry);
+  t.market !== null && t.claim === marketClaim(t.market.expiry, t.market.eventTicker);

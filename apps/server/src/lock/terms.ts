@@ -87,7 +87,7 @@ export function composeTerms(i: ComposeInput) {
     party_a: i.a,
     party_b: i.b,
     type: p.type,
-    claim: q && i.templateClaim ? marketClaim(q.ref.expiry) : p.claim,
+    claim: q && i.templateClaim ? marketClaim(q.ref.expiry, q.ref.eventTicker) : p.claim,
     performer: p.performer,
     yes_party: p.yes_party,
     attempts: p.attempts,

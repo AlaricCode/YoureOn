@@ -15,6 +15,7 @@ import { createServerKeeper } from './keeper';
 import { createLogger, type Logger } from './log';
 import { createPayoutService } from './payout';
 import { createGeminiClient } from './markets/gemini';
+import { createReplayClient, createRoutedClient } from './markets/replay';
 import { MarketService } from './markets/service';
 import { createProviders } from './providers/registry';
 import type { Providers } from './providers/types';
@@ -72,9 +73,18 @@ export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbH
   if (o.markets instanceof MarketService) deps.markets = o.markets;
   else if (
     o.markets ??
-    (o.env.MARKETS_FEED ? o.env.MARKETS_FEED === 'on' : o.env.NODE_ENV !== 'test')
+    (o.env.MARKETS_FEED ? o.env.MARKETS_FEED !== 'off' : o.env.NODE_ENV !== 'test')
   )
-    deps.markets = new MarketService({ client: createGeminiClient(), now, log });
+    deps.markets = new MarketService({
+      // live Gemini, or the labelled REPLAY of a recorded round (markets/replay.ts)
+      client: createRoutedClient({
+        live: createGeminiClient(),
+        replay: createReplayClient({ now }),
+        mode: o.env.MARKETS_FEED === 'replay' ? 'replay' : 'live',
+      }),
+      now,
+      log,
+    });
   return { deps, dbHandle };
 }
 
