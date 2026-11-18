@@ -65,6 +65,7 @@ import {
   foldChainEvents,
   impliedState,
   statusRank,
+  terminalFacts,
   STATUS_RANK,
   type ChainFold,
   type FoldEvent,
@@ -88,6 +89,12 @@ export const APPLY_ERROR = {
   unknownEvent: 'unknown_event',
   /** Final: the stored payload does not parse as SCHEMAS ChainEvents.<name>. */
   payloadInvalid: 'payload_invalid',
+  /**
+   * Parked: attributed and already PUSHED (applied_at set, bet_events row exists), but the bets
+   * write was rejected (CHECK / trigger). Re-folded by the bet's next event, a duplicate copy,
+   * or the keeper's retry pass (reconciler.ts), and never pushed twice.
+   */
+  projectionRejected: 'projection_rejected',
 } as const;
 
 /** Verdicts a later delivery may revisit: the projector treats these rows as not yet applied. */
@@ -95,6 +102,7 @@ export const REFOLDABLE_ERRORS: readonly string[] = [
   APPLY_ERROR.notOurs,
   APPLY_ERROR.unknownBet,
   APPLY_ERROR.projectorFailed,
+  APPLY_ERROR.projectionRejected,
 ];
 const REFOLDABLE = new Set(REFOLDABLE_ERRORS);
 /** Rows that decoded (an attribution verdict is not a decode failure). */
@@ -437,7 +445,13 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
         r.event_name === 'BetCreated' &&
         (applied(r) || candidate(r)) &&
         i.lockSigs.has(r.signature),
-    ) ?? all.find((r) => r.event_name === 'BetCreated' && applied(r));
+    ) ??
+    all.find(
+      (r) =>
+        r.event_name === 'BetCreated' &&
+        r.applied_at !== null &&
+        (r.apply_error === null || r.apply_error === APPLY_ERROR.projectionRejected),
+    );
   if (!lock) {
     await setError(tx, i.fresh, APPLY_ERROR.notOurs);
     return [];
@@ -473,7 +487,7 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
   const diff = diffProjection(bet, fold);
   const move = chainWins(
     bet,
-    impliedState(diff.status, fold.terminal, bet.evidence_source),
+    impliedState(diff.status, terminalFacts(fold, bet), bet.evidence_source),
     diff.status,
   );
   const streamSigs = [
@@ -531,9 +545,17 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
     }
 
   // ---- audit the disagreements (outside the savepoint, so they survive a rejection) ----
-  const newIds = new Set(pending.map((p) => p.row.id));
+  // Only for rows seen for the first time: a retry of a rejected projection does not re-audit.
+  const pendingIds = pending.map((p) => p.row.id);
+  const firstSeen = new Set(
+    pending
+      .filter((p) => p.row.apply_error !== APPLY_ERROR.projectionRejected)
+      .map((p) => p.row.id),
+  );
   const names = new Map(events.map((e) => [e.id, e.name]));
-  const mismatches = diff.mismatches.filter((m) => m.event_id === null || newIds.has(m.event_id));
+  const mismatches = diff.mismatches.filter(
+    (m) => m.event_id === null || firstSeen.has(m.event_id),
+  );
   if (mismatches.length) {
     log.error('chain.mismatch', { alert: true, bet_id: bet.id, mismatches: mismatches.map(fmt) });
     await tx.insert(auditLog).values({
@@ -543,7 +565,9 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
       details: { mismatches: mismatches.map((m) => ({ ...fmt(m), event: eventName(names, m) })) },
     });
   }
-  if (rejected) {
+  if (rejected && firstSeen.size === 0)
+    log.warn('chain.projection_still_rejected', { bet_id: bet.id, ...rejected });
+  else if (rejected) {
     log.error('chain.projection_rejected', { alert: true, bet_id: bet.id, ...rejected });
     await tx.insert(auditLog).values({
       actor_kind: 'system',
@@ -556,11 +580,13 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
         state: move?.state ?? null,
       },
     });
-  }
+  } else if (pending.some((p) => p.row.apply_error === APPLY_ERROR.projectionRejected))
+    log.warn('chain.projection_recovered', { bet_id: bet.id, onchain_status: diff.status });
 
-  // ---- fan out: chain.* in chain order, then the state move ----
+  // ---- fan out: chain.* in chain order (each row once), then the state move ----
   const envs: BetEventEnvelope[] = [];
-  for (const { row, event } of pending)
+  for (const { row, event } of pending) {
+    if (row.applied_at !== null) continue; // pushed by an earlier (rejected) pass
     envs.push(
       await appendBetEvent(tx, {
         bet_id: bet.id,
@@ -570,10 +596,15 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
         now: nowMs,
       }),
     );
+  }
   await tx
     .update(chainEvents)
-    .set({ applied_at: new Date(nowMs), apply_error: null })
-    .where(inArray(chainEvents.id, [...newIds]));
+    .set({
+      // ISO text + cast: a Date param in raw sql is not serialized by drizzle (resolve-due fix)
+      applied_at: sql`coalesce(${chainEvents.applied_at}, ${new Date(nowMs).toISOString()}::timestamptz)`,
+      apply_error: rejected ? APPLY_ERROR.projectionRejected : null,
+    })
+    .where(inArray(chainEvents.id, pendingIds));
   if (move && !rejected) {
     envs.push(...(await stateEnvelopes(tx, bet, after, move, fold, nowMs)));
     log.warn('chain.state_reconciled', {
@@ -721,21 +752,31 @@ async function queuePushes(sp: Tx, before: BetRow, after: BetRow, fold: ChainFol
       });
   }
   const t = fold.terminal;
-  if (t && was < STATUS_RANK.settled && is >= STATUS_RANK.settled)
-    for (const p of parties)
+  if (t && was < STATUS_RANK.settled && is >= STATUS_RANK.settled) {
+    // A refund / cancel gives stakes back: nobody "lost", and a party that never staked (a
+    // sequential cancel or a refund from Open: to_b = 0) gets no push at all.
+    const refund = t.status !== 'settled' || t.outcome === 'refund';
+    for (const p of parties) {
+      if (refund && p.amount === 0n) continue;
+      const copy = refund
+        ? { title: `${usd(p.amount)} refunded`, body: 'Your stake is back in your wallet.' }
+        : p.amount > 0n
+          ? { title: `${usd(p.amount)} is yours`, body: 'Sent to your wallet.' }
+          : { title: 'Bet settled', body: 'Better luck next time.' };
       rows.push({
         recipient_user_id: p.user,
         bet_id: before.id,
         kind: 'payout',
         payload: {
           bet_id: before.id,
-          title: p.amount > 0n ? `${usd(p.amount)} is yours` : 'Bet settled',
-          body: p.amount > 0n ? 'Sent to your wallet.' : 'Better luck next time.',
+          ...copy,
           amount: p.amount.toString(),
           signature: t.signature,
         },
         dedupe_key: `${before.id}:payout:${t.signature}:${p.user}`,
         next_attempt_at: at,
       });
+    }
+  }
   if (rows.length) await sp.insert(outbox).values(rows).onConflictDoNothing();
 }

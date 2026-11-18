@@ -377,10 +377,13 @@ export function diffProjection(row: BetRow, fold: ChainFold): ProjectionDiff {
       event_id: fold.source[k] ?? null,
     });
   }
+  // The chain reached (or passed) what the RPC path was waiting for. Terminal statuses are not
+  // ordered among themselves (settled / refunded / cancelled are alternatives), so any terminal
+  // status settles any pending one.
   if (
     row.onchain_pending !== null &&
-    statusRank(status) >= statusRank(row.onchain_pending) &&
-    status !== 'none'
+    status !== 'none' &&
+    (statusRank(status) >= statusRank(row.onchain_pending) || isTerminalStatus(status))
   ) {
     patch.onchain_pending = null;
     patch.pending_sig = null;
@@ -397,6 +400,29 @@ const TERMINAL_STATES: ReadonlySet<BetState> = new Set(['PAID', 'VOIDED', 'CANCE
 export interface StateMove {
   state: BetState;
   end_reason: EndReason | null;
+}
+
+/**
+ * The terminal facts impliedState needs: the fold's terminal event, else (the row is already
+ * terminal onchain, e.g. projected by an earlier pass) what the row recorded from it.
+ */
+export function terminalFacts(
+  fold: Pick<ChainFold, 'terminal'>,
+  row: Pick<BetRow, 'onchain_status' | 'outcome' | 'accept_sig' | 'appealed_at'>,
+): Pick<Terminal, 'outcome' | 'from_status'> | null {
+  if (fold.terminal) return fold.terminal;
+  if (!isTerminalStatus(row.onchain_status) || !row.outcome) return null;
+  return {
+    outcome: row.outcome,
+    from_status:
+      row.onchain_status !== 'refunded'
+        ? null
+        : row.accept_sig === null
+          ? 'open'
+          : row.appealed_at
+            ? 'appealed'
+            : 'locked',
+  };
 }
 
 /** The offchain state an onchain status implies (SCHEMAS §9.2 / DATA-MODEL §5.6 table). */
