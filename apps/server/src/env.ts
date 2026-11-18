@@ -96,6 +96,10 @@ export const EnvSchema = z.object({
   DEMO_SEED_KEK: opt(str),
   SESSION_SECRET: opt(str),
   STAGE_KEY: opt(str),
+  /** Comma-separated origins allowed to call the stage routes (CORS); unset = Vite dev origins. */
+  STAGE_ORIGIN: opt(str),
+  /** Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test. */
+  MARKETS_FEED: opt(z.enum(['on', 'off'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
   // --- optional
