@@ -91,7 +91,13 @@ describe('the preview without chain.* events (QuickNode Streams off)', () => {
     expect(html).toContain('Logan</span><span class="amt">+$10');
   });
 
-  it('the ticker still lists the server-confirmed transactions', () => {
+  it('the ticker still lists the server-confirmed transactions, and says where they came from', () => {
+    expect(render('paid')).toContain('via Solana RPC');
+    expect(render('paid')).not.toContain('via QuickNode Streams');
+    const f = previewAt(START, START, 'paid');
+    expect(text(renderToString(<StageView state={f.state} now={f.now} />))).toContain(
+      'via QuickNode Streams',
+    );
     const rows = tickerRows(noStreams('paid').state);
     const kinds = rows.map((r) => `${r.type}:${(r.payload as { kind?: string }).kind ?? ''}`);
     expect(kinds).toContain('tx.confirmed:finalize');
