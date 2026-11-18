@@ -4,34 +4,45 @@
 // error boundary, so a voice failure never takes the app down; the screens still work from
 // server pushes alone.
 //
+// A thin binding of ./session (the tested controller) to @elevenlabs/react-native 1.2.38:
+//   useConversation({clientTools, callbacks})  ->  session.onStatus / onConnect / onDisconnect /
+//                                                  onError / onMessage
 //   token:   POST /v1/voice/tokens {purpose:'terms', bet_id} (server holds the API key)
-//   start:   startSession({conversationToken, dynamicVariables, clientTools})
-//   tools:   ./judgeTools (request_attempt, show_terms_card, cue)
-//   cues:    judge.cue for this bet -> sendUserMessage / sendContextualUpdate (verbatim)
-//   lines:   onMessage -> local captions + batched POST /v1/bets/:id/voice/lines (stage)
+//   tools:   ./judgeTools (request_attempt, show_terms_card, cue) passed to useConversation and
+//            to startSession (API-CONTRACT §4.4: useConversationClientTool is not used)
+//   cues:    judge.cue for this bet -> session.onCue (verbatim [EVENT] line, queued until live)
+//   mute:    props.micMuted (DemoApp: micMutedFor(bet state)) -> session.setMuted
+//   lines:   captions into the bet hub + batched POST /v1/bets/:id/voice/lines (the stage)
 import { ConversationProvider, useConversation } from '@elevenlabs/react-native';
 import { useEffect, useMemo, useRef } from 'react';
 
 import type { VoiceDynamicVariables } from '@youre-on/shared/api';
+import { cuesPath, voiceLinesPath } from '@youre-on/shared/judge/voice';
 
 import type { Runtime } from '../app/runtime';
+import { upsertLine } from '../bets/store';
+import { judgeClientTools } from './judgeTools';
 import {
-  ATTEMPT_CUES,
-  createLineBatcher,
-  cueAction,
-  judgeClientTools,
-  type VoiceLine,
-} from './judgeTools';
+  createJudgeSession,
+  type ConversationPort,
+  type FailReason,
+  type JudgeSession,
+  type SessionPhase,
+} from './session';
 
 export interface JudgeVoiceProps {
   rt: Runtime;
   betId: string;
   dynamicVariables: VoiceDynamicVariables;
+  /** Mute, don't end (FINDINGS §4): true from the terms card to the ruling. */
+  micMuted: boolean;
   startAttempt(attemptNo: number): Promise<void>;
   onShowTermsCard(): void;
-  onStatus?(s: string): void;
+  onPhase?(p: SessionPhase): void;
+  /** The judge is talking (SDK mode 'speaking') vs listening. */
+  onSpeaking?(speaking: boolean): void;
   /** The session could not start or broke (no key, token refused, SDK error): type it instead. */
-  onFailed?(reason: 'token' | 'session'): void;
+  onFailed?(reason: FailReason): void;
 }
 
 export default function JudgeVoice(p: JudgeVoiceProps) {
@@ -42,116 +53,81 @@ export default function JudgeVoice(p: JudgeVoiceProps) {
   );
 }
 
-function Session({
-  rt,
-  betId,
-  dynamicVariables,
-  startAttempt,
-  onShowTermsCard,
-  onStatus,
-  onFailed,
-}: JudgeVoiceProps) {
-  const canAttempt = useRef(false);
-  const seq = useRef(0);
-  const batcher = useMemo(
-    () =>
-      createLineBatcher(async (lines: VoiceLine[]) => {
-        await rt.client.request('POST', `/v1/bets/${encodeURIComponent(betId)}/voice/lines`, {
-          json: { lines },
-        });
-      }),
-    [rt, betId],
-  );
+function Session(p: JudgeVoiceProps) {
+  const { rt, betId } = p;
+  const props = useRef(p);
+  props.current = p;
+  const port = useRef<ConversationPort | null>(null);
+  // One controller per mounted bet (DemoApp keys this component by bet_id). No StrictMode in
+  // this app, so the mount effect below runs once: the token is single-use.
+  const session = useRef<JudgeSession | null>(null);
+  session.current ??= createJudgeSession({
+    betId,
+    conv: () => {
+      if (!port.current) throw new Error('No active conversation.');
+      return port.current;
+    },
+    mintToken: () => rt.api.voiceToken(betId),
+    dynamicVariables: { ...props.current.dynamicVariables },
+    postLines: async (lines) => {
+      await rt.client.request('POST', voiceLinesPath(betId), { json: { lines } });
+    },
+    onCaption: (c) =>
+      rt.hub.patch(betId, (b) => ({ ...b, lines: upsertLine(b.lines, c.id, c.who, c.text) })),
+    onFailed: (r) => props.current.onFailed?.(r),
+    onPhase: (ph) => props.current.onPhase?.(ph),
+    log: (msg, extra) => console.warn(`[yo] ${msg}`, extra ?? ''),
+    now: () => rt.clock.now(),
+  });
+  const s = session.current;
+
   const tools = useMemo(
     () =>
       judgeClientTools({
-        startAttempt,
-        showTermsCard: onShowTermsCard,
+        startAttempt: (n) => props.current.startAttempt(n),
+        showTermsCard: () => props.current.onShowTermsCard(),
         cue: async (kind) => {
-          await rt.client.request('POST', `/v1/bets/${encodeURIComponent(betId)}/cues`, {
-            json: { kind },
-          });
+          await rt.client.request('POST', cuesPath(betId), { json: { kind } });
         },
-        canAttempt: () => canAttempt.current,
+        canAttempt: () => s.canAttempt(),
       }),
-    [rt, betId, startAttempt, onShowTermsCard],
+    [rt, betId, s],
   );
 
   const conv = useConversation({
     clientTools: tools,
-    onMessage: (m) => {
-      const who: 'judge' | 'a' = m.role === 'agent' ? 'judge' : 'a';
-      const id = `${betId.slice(0, 8)}-${m.event_id}-${seq.current++}`;
-      rt.hub.patch(betId, (b) => ({
-        ...b,
-        lines: [...b.lines, { id, who, text: m.message }].slice(-40),
-      }));
-      batcher.add({
-        utterance_id: uuidish(betId, m.event_id),
-        role: m.role === 'agent' ? 'judge' : 'party',
-        ...(m.role === 'agent' ? {} : { party: 'A' as const }),
-        text: m.message.slice(0, 600),
-        final: true,
-        at: new Date(rt.clock.now()).toISOString(),
-      });
-    },
-    onStatusChange: (s) => onStatus?.(String((s as { status?: unknown }).status ?? s)),
-    onError: (e) => {
-      console.warn('[yo] voice error', e);
-      onFailed?.('session');
-    },
+    onMessage: (m) => s.onMessage(m),
+    onStatusChange: ({ status }) => s.onStatus(status),
+    onConnect: (c) => s.onConnect(c),
+    onDisconnect: (d) => s.onDisconnect(d),
+    onError: (message) => s.onError(message),
+    onModeChange: ({ mode }) => props.current.onSpeaking?.(mode === 'speaking'),
   });
-  const convRef = useRef(conv);
-  convRef.current = conv;
+  port.current = {
+    startSession: (o) => conv.startSession({ ...o, clientTools: tools }),
+    endSession: () => conv.endSession(),
+    sendUserMessage: (t) => conv.sendUserMessage(t),
+    sendContextualUpdate: (t) => conv.sendContextualUpdate(t),
+    sendUserActivity: () => conv.sendUserActivity(),
+    setMuted: (m) => conv.setMuted(m),
+  };
 
-  // Mint and start once per bet; end on unmount.
+  // Mint and start once per bet; end on unmount (a quiet stop: no typed fallback).
   useEffect(() => {
-    let live = true;
-    rt.api.voiceToken(betId).then(
-      (tok) => {
-        if (!live) return;
-        convRef.current.startSession({
-          conversationToken: tok.conversation_token,
-          dynamicVariables: dynamicVariables as unknown as Record<string, string>,
-          clientTools: tools,
-        });
-      },
-      (e: unknown) => {
-        console.warn('[yo] voice token failed', e);
-        if (live) onFailed?.('token');
-      },
-    );
-    return () => {
-      live = false;
-      batcher.flush();
-      try {
-        convRef.current.endSession();
-      } catch {
-        // already closed
-      }
-    };
-    // Once per bet: the token is single-use.
-  }, [betId]);
+    s.start();
+    return () => s.stop();
+  }, [s]);
 
-  // [EVENT] lines from the server, verbatim (§4.5).
+  useEffect(() => s.setMuted(p.micMuted), [s, p.micMuted]);
+
+  // [EVENT] lines from the server, verbatim (§4.5). Never throws into the hub's listener loop.
   useEffect(
     () =>
       rt.hub.onChange((e) => {
-        if (!e || e.bet_id !== betId || e.type !== 'judge.cue') return;
-        if (ATTEMPT_CUES.has(e.payload.cue)) canAttempt.current = true;
-        if (e.payload.cue === 'ATTEMPT_ARMED') canAttempt.current = false;
-        const a = cueAction(e.payload);
-        if (a.send === 'user') convRef.current.sendUserMessage(a.text);
-        else convRef.current.sendContextualUpdate(a.text);
+        if (e && e.bet_id === betId && e.type === 'judge.cue') s.onCue(e.payload);
       }),
-    [rt, betId],
+    [rt, betId, s],
   );
 
   return null;
-}
-
-/** A UUIDv4-shaped id from the bet and the SDK event id (voice/lines idempotency: utterance_id + final). */
-function uuidish(betId: string, eventId: number): string {
-  const h = (eventId >>> 0).toString(16).padStart(12, '0').slice(-12);
-  return `${betId.slice(0, 8)}-${betId.slice(9, 13)}-4${betId.slice(15, 18)}-8${betId.slice(20, 23)}-${h}`;
 }

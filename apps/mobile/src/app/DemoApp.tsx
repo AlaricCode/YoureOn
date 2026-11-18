@@ -56,6 +56,7 @@ import { Label, PrimaryButton } from '../ui/kit';
 import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { palette } from '../ui/tokens';
+import { micMutedFor, type SessionPhase } from '../voice/session';
 import { WalletError } from '../wallet/wallet';
 import {
   authorizeLock,
@@ -144,6 +145,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [typed, typedDispatch] = useReducer(typedReducer, initialTyped);
   /** The bet whose voice session failed (no key, token refused, SDK error): type it instead. */
   const [voiceFailedBet, setVoiceFailedBet] = useState<string | null>(null);
+  /** The judge session's phase and whether the judge is talking (NegotiateScreen's mic/ring). */
+  const [voicePhase, setVoicePhase] = useState<SessionPhase>('idle');
+  const [judgeSpeaking, setJudgeSpeaking] = useState(false);
   const [walletKey, setWalletKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [busy, setBusy] = useState(false);
@@ -337,7 +341,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
 
   const voiceFailed = useCallback((id: string) => {
+    // Unmounts JudgeVoice (the session is already ended) and opens the typed form.
     setVoiceFailedBet(id);
+    setJudgeSpeaking(false);
     typedDispatch({ type: 'open' });
   }, []);
 
@@ -375,14 +381,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const req = bet?.authorizeRequest ?? null;
   const betId = bet?.bet_id ?? null;
   const state = bet?.state ?? null;
-  useEffect(() => {
-    if (!betId || state !== 'AWAITING_AUTHORIZATIONS' || req) return;
-    let live = true;
-    const tm = setTimeout(() => {
-      rt.api.getLock(betId).then(
+  /** GET /lock into the hub, unless the push already brought it (`live` guards an unmount). */
+  const fetchLock = useCallback(
+    (id: string, live: () => boolean = () => true) => {
+      rt.api.getLock(id).then(
         (r) => {
-          if (!live) return;
-          rt.hub.patch(betId, (m) =>
+          if (!live()) return;
+          rt.hub.patch(id, (m) =>
             m.authorizeRequest
               ? m
               : {
@@ -396,12 +401,32 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         },
         () => undefined,
       );
-    }, 600);
+    },
+    [rt],
+  );
+  useEffect(() => {
+    if (!betId || state !== 'AWAITING_AUTHORIZATIONS' || req) return;
+    let live = true;
+    const tm = setTimeout(() => fetchLock(betId, () => live), 600);
     return () => {
       live = false;
       clearTimeout(tm);
     };
-  }, [rt, betId, state, req]);
+  }, [fetchLock, betId, state, req]);
+
+  /**
+   * The judge's show_terms_card client tool (§4.4, after confirm_terms): the card arrives anyway
+   * with terms.authorize_request; this brings it forward now. Back from the typed form to the
+   * draft card, and fetch the lock request if the push has not landed yet.
+   */
+  const showTermsCard = useCallback(
+    (id: string) => {
+      typedDispatch({ type: 'voice' });
+      const b = rt.hub.get(id);
+      if (b?.state === 'AWAITING_AUTHORIZATIONS' && !b.authorizeRequest) fetchLock(id);
+    },
+    [rt, fetchLock],
+  );
 
   const lockId = req?.lock_request_id ?? null;
   const mismatch = bet?.termsMismatch ?? false;
@@ -583,10 +608,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     refreshBalance();
   };
 
+  // The judge session lives for the whole bet on A's phone, and is gone once it failed (the
+  // controller already ended it; unmounting also drops the error boundary's box).
   const voice =
-    VOICE_ENABLED && !app.judgeCam && bet && me === 'A' && !isOver(bet.state)
+    VOICE_ENABLED &&
+    !app.judgeCam &&
+    bet &&
+    me === 'A' &&
+    !isOver(bet.state) &&
+    voiceFailedBet !== bet.bet_id
       ? (voiceVars.current.get(bet.bet_id) ?? null)
       : null;
+  const voiceLive = voice !== null && voicePhase === 'connected';
 
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
@@ -730,9 +763,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <NegotiateScreen
             view={names}
             captions={captions}
-            speaking={captions.at(-1)?.who === 'judge'}
-            hasMic={me === 'A' && VOICE_ENABLED}
-            micMuted={view !== null}
+            speaking={voiceLive ? judgeSpeaking : captions.at(-1)?.who === 'judge'}
+            hasMic={me === 'A' && VOICE_ENABLED && !typedForced}
+            micMuted={!voiceLive || micMutedFor(state)}
             draft={view}
             typed={
               negotiating && typed.bet_id === bet?.bet_id
@@ -894,8 +927,14 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               betId={bet.bet_id}
               dynamicVariables={voice}
               startAttempt={(n) => rt.api.startAttempt(bet.bet_id, n).then(() => undefined)}
-              onShowTermsCard={() => undefined}
-              onFailed={() => voiceFailed(bet.bet_id)}
+              micMuted={micMutedFor(bet.state)}
+              onShowTermsCard={() => showTermsCard(bet.bet_id)}
+              onPhase={setVoicePhase}
+              onSpeaking={setJudgeSpeaking}
+              onFailed={(reason) => {
+                console.warn('[yo] voice failed', reason);
+                voiceFailed(bet.bet_id);
+              }}
             />
           </Suspense>
         </PanelErrorBoundary>
