@@ -79,7 +79,20 @@ export const subjectKeys = (s: { assertions: readonly Assertion[] }): Set<string
 export const keysOf = (t: Predicate): string[] =>
   'a' in t ? [t.a, t.b] : 'ref' in t && t.ref !== null ? [t.e, t.ref] : [t.e];
 
-const MULTI_OK = new Set<PredicateName>(['visible', 'at_rest', 'moved_from_start', 'stacked']);
+/** §6 lint: the only predicates whose entities may have count > 1 (the compiler prompt lists them). */
+export const MULTI_COUNT_PREDICATES = [
+  'visible',
+  'at_rest',
+  'moved_from_start',
+  'stacked',
+] as const satisfies readonly PredicateName[];
+/** §6 lint: the only predicates that may be a gate. */
+export const GATE_PREDICATES = ['visible'] as const satisfies readonly PredicateName[];
+/** §6 lint: predicates whose entity needs count >= 2. */
+export const MIN_COUNT_2_PREDICATES = ['stacked'] as const satisfies readonly PredicateName[];
+const MULTI_OK = new Set<PredicateName>(MULTI_COUNT_PREDICATES);
+const GATE_OK = new Set<PredicateName>(GATE_PREDICATES);
+const MIN2 = new Set<PredicateName>(MIN_COUNT_2_PREDICATES);
 const cmp = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
 const roleRank = (a: Assertion) => (a.role === 'gate' ? 0 : 1);
 
@@ -133,12 +146,13 @@ export const CheckSpec = z
         if (n !== undefined && n > 1 && !isRef && !MULTI_OK.has(t.p))
           bad(at, `${t.p} needs count-1 entities`);
       }
-      if (t.p === 'stacked' && (ent.get(t.e)?.count ?? 2) < 2) bad(at, 'stacked needs count >= 2');
+      if (MIN2.has(t.p) && 'e' in t && (ent.get(t.e)?.count ?? 2) < 2)
+        bad(at, `${t.p} needs count >= 2`);
       if (t.p === 'moved_from_start' && ent.get(t.e)?.count === 1 && t.of !== 'all')
         bad([...at, 'of'], "count 1 => of: 'all'");
       if (as.role === 'gate') {
-        if (t.p !== 'visible') bad(['assertions', i, 'role'], "only 'visible' can be a gate");
-        else if (t.window !== 'start') gatedLate.add(t.e);
+        if (!GATE_OK.has(t.p)) bad(['assertions', i, 'role'], "only 'visible' can be a gate");
+        else if (t.p === 'visible' && t.window !== 'start') gatedLate.add(t.e);
       }
       if (t.p === 'ends_at') endsAtSubjects.add(t.a);
     });
