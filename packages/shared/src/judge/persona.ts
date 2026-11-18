@@ -26,7 +26,10 @@ export const FIRST_MESSAGE =
 /** Soft-timeout fillers (FINDINGS §3.10: 1.0–1.2 s, 2–3 per generation; in character). */
 export const SOFT_TIMEOUT_FILLERS = ['Hmm.', 'Noted.', 'The clerk is writing that down.'] as const;
 
-/** ASR keyword boosts (API-CONTRACT §4.1). Party names are dynamic: see the PENDING note in el-agent. */
+/**
+ * ASR keyword boosts (API-CONTRACT §4.1). Party names are not here: they are per-call dynamic
+ * variables, and the keyword list is agent-wide, so they cannot be boosted per conversation.
+ */
 export const ASR_KEYWORDS = [
   'accept',
   'appeal',
