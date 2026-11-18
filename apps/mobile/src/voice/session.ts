@@ -2,16 +2,19 @@
 // failure handling is tested in node with a mocked one (./JudgeVoice.tsx binds it to the
 // @elevenlabs/react-native 1.2.38 hooks). One session per bet (D6; never restarted: iOS #991).
 //
-//   start()        POST /v1/voice/tokens -> startSession({conversationToken, dynamicVariables,
-//                  clientTools}); connected within CONNECT_TIMEOUT_MS or it failed
+//   start()        the mic permission first (its iOS prompt is not on the connect clock) ->
+//                  POST /v1/voice/tokens (one retry after MINT_RETRY_MS for a retryable error:
+//                  a 504 / network blip, never not_configured) -> startSession({conversationToken,
+//                  dynamicVariables, clientTools}); connected within CONNECT_TIMEOUT_MS or it failed
 //   onCue()        judge.cue -> sendUserMessage (speak) / sendContextualUpdate, verbatim (§4.5);
 //                  queued while connecting, never thrown into the bet hub's listener loop
 //   setMuted()     "mute, don't end" from the terms card on (FINDINGS §4), with
 //                  sendUserActivity every 10 s meanwhile so the turn timeout never fires (§4.1)
 //   onMessage()    captions (same id as the server's line, so its echo replaces ours) + the
 //                  transcript relay (POST /voice/lines); our own [EVENT] text is never captioned
-//   failure        a refused token, a start error, no connection in time or a disconnect we did
-//                  not ask for -> end the session and onFailed once (the app types instead).
+//   failure        a denied mic, a refused token, a start error, no connection in time or a
+//                  disconnect we did not ask for -> end the session and onFailed once (the app
+//                  types instead).
 //                  An onError while connected (e.g. a client tool threw) is logged, not fatal.
 //
 // Why guarded: the SDK's controls throw "No active conversation" before connect / after end.
@@ -23,6 +26,8 @@ import { sha256 } from '../wallet/noble';
 import { ATTEMPT_CUES, createLineBatcher, cueAction, type VoiceLine } from './judgeTools';
 
 export const CONNECT_TIMEOUT_MS = 15_000;
+/** One retry of a retryable token failure (UPSTREAM_TIMEOUT, a 502 blip, NETWORK) after this. */
+export const MINT_RETRY_MS = 1_000;
 export const ACTIVITY_EVERY_MS = 10_000;
 /** Cues that arrive before the session connects (the latest kept). */
 export const MAX_QUEUED_CUES = 8;
@@ -61,7 +66,7 @@ export interface ConversationPort {
   setMuted(muted: boolean): void;
 }
 
-export type FailReason = 'token' | 'session' | 'timeout' | 'disconnected';
+export type FailReason = 'mic' | 'token' | 'session' | 'timeout' | 'disconnected';
 export type SessionPhase = 'idle' | 'minting' | 'connecting' | 'connected' | 'failed' | 'stopped';
 
 export interface Caption {
@@ -87,6 +92,13 @@ export interface JudgeSessionDeps {
   betId: string;
   /** The current conversation (a getter: the hook's object changes every render). */
   conv(): ConversationPort;
+  /**
+   * Asks for the microphone before the token is minted, so the iOS permission prompt on a fresh
+   * install never runs down CONNECT_TIMEOUT_MS. false = denied (type instead); a throw = unknown
+   * (logged; LiveKit asks itself at connect). Omitted: no up-front request.
+   */
+  micPermission?(): Promise<boolean>;
+  /** Rejections carry the server's `code` and `retryable` (net ApiClientError). */
   mintToken(): Promise<{ conversation_token: string; conversation_id: string }>;
   dynamicVariables: Record<string, string | number | boolean>;
   postLines(lines: VoiceLine[]): Promise<void>;
@@ -207,6 +219,24 @@ export function createJudgeSession(d: JudgeSessionDeps) {
     d.onFailed(reason);
   };
 
+  /**
+   * mintToken, retried once after MINT_RETRY_MS when the server says the failure is retryable
+   * (UPSTREAM_TIMEOUT, an upstream 502, NETWORK). not_configured / spend_disabled are not: no
+   * key on the server means typed terms right away.
+   */
+  const mintOnceMore = async () => {
+    try {
+      return await d.mintToken();
+    } catch (e) {
+      if ((e as { retryable?: unknown } | null)?.retryable !== true || over()) throw e;
+      const code = (e as { code?: unknown } | null)?.code;
+      log('voice.token_retry', { code: typeof code === 'string' ? code : String(e) });
+      await new Promise<void>((r) => timers.setTimeout(r, MINT_RETRY_MS));
+      if (over()) throw e;
+      return d.mintToken();
+    }
+  };
+
   const onConnected = () => {
     if (connectTimer !== null) timers.clearTimeout(connectTimer);
     connectTimer = null;
@@ -224,30 +254,43 @@ export function createJudgeSession(d: JudgeSessionDeps) {
     start() {
       if (phase !== 'idle') return;
       setPhase('minting');
-      d.mintToken().then(
-        (tok) => {
-          if (over()) return;
-          expectedConversationId = tok.conversation_id;
-          setPhase('connecting');
-          connectTimer = timers.setTimeout(
-            () => fail('timeout'),
-            d.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
-          );
+      void (async () => {
+        if (d.micPermission) {
+          let granted = true;
           try {
-            d.conv().startSession({
-              conversationToken: tok.conversation_token,
-              dynamicVariables: d.dynamicVariables,
-            });
+            granted = await d.micPermission();
           } catch (e) {
-            fail('session', e instanceof Error ? e.message : String(e));
+            log('voice.mic_permission_unknown', {
+              err: e instanceof Error ? e.message : String(e),
+            });
           }
-        },
-        (e: unknown) => {
+          if (over()) return;
+          if (!granted) return fail('mic');
+        }
+        let tok: { conversation_token: string; conversation_id: string };
+        try {
+          tok = await mintOnceMore();
+        } catch (e) {
           if (over()) return;
           const code = (e as { code?: unknown } | null)?.code;
-          fail('token', typeof code === 'string' ? code : String(e));
-        },
-      );
+          return fail('token', typeof code === 'string' ? code : String(e));
+        }
+        if (over()) return;
+        expectedConversationId = tok.conversation_id;
+        setPhase('connecting');
+        connectTimer = timers.setTimeout(
+          () => fail('timeout'),
+          d.connectTimeoutMs ?? CONNECT_TIMEOUT_MS,
+        );
+        try {
+          d.conv().startSession({
+            conversationToken: tok.conversation_token,
+            dynamicVariables: d.dynamicVariables,
+          });
+        } catch (e) {
+          fail('session', e instanceof Error ? e.message : String(e));
+        }
+      })();
     },
 
     /** Our unmount: end quietly (no fallback). */

@@ -7,6 +7,8 @@
 // A thin binding of ./session (the tested controller) to @elevenlabs/react-native 1.2.38:
 //   useConversation({clientTools, callbacks})  ->  session.onStatus / onConnect / onDisconnect /
 //                                                  onError / onMessage
+//   mic:     expo-audio requestRecordingPermissionsAsync before the mint (the iOS prompt is
+//            not on the connect clock); denied -> typed terms
 //   token:   POST /v1/voice/tokens {purpose:'terms', bet_id} (server holds the API key)
 //   tools:   ./judgeTools (request_attempt, show_terms_card, cue) passed to useConversation and
 //            to startSession (API-CONTRACT §4.4: useConversationClientTool is not used)
@@ -66,6 +68,10 @@ function Session(p: JudgeVoiceProps) {
     conv: () => {
       if (!port.current) throw new Error('No active conversation.');
       return port.current;
+    },
+    micPermission: async () => {
+      const { requestRecordingPermissionsAsync } = await import('expo-audio');
+      return (await requestRecordingPermissionsAsync()).granted;
     },
     mintToken: () => rt.api.voiceToken(betId),
     dynamicVariables: { ...props.current.dynamicVariables },

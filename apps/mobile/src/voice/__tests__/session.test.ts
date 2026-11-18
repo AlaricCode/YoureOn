@@ -1,15 +1,16 @@
 import { Uuid } from '@youre-on/shared/primitives';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { VoiceLine } from '../judgeTools';
 import { BetState } from '@youre-on/shared/bet-state';
 
-import type { VoiceLine } from '../judgeTools';
 import {
   ACTIVITY_EVERY_MS,
   CONNECT_TIMEOUT_MS,
   createJudgeSession,
   isEventLine,
   micMutedFor,
+  MINT_RETRY_MS,
   utteranceId,
   utteranceKey,
   type Caption,
@@ -50,19 +51,39 @@ function mockConversation() {
   };
 }
 
-function setup(o: { token?: 'ok' | 'fail' } = {}) {
+/** An ApiClientError-shaped rejection (net/signedFetch): the server's code and retryable flag. */
+const apiError = (code: string, retryable: boolean, details?: Record<string, unknown>) =>
+  Object.assign(new Error(code), { code, retryable, details });
+const TOKEN = { conversation_token: 'lk_tok', conversation_id: 'conv_1' };
+
+function setup(
+  o: {
+    token?: 'ok' | 'fail';
+    /** Results of successive mintToken calls (an Error rejects); overrides `token`. */
+    mints?: Array<typeof TOKEN | Error>;
+    mic?: () => Promise<boolean>;
+  } = {},
+) {
   const conv = mockConversation();
   const failed: FailReason[] = [];
   const captions: Caption[] = [];
   const posted: VoiceLine[][] = [];
   const logs: string[] = [];
+  let mints = 0;
   const s = createJudgeSession({
     betId: BET,
     conv: () => conv.port,
-    mintToken: () =>
-      o.token === 'fail'
-        ? Promise.reject(Object.assign(new Error('judge not set up'), { code: 'UPSTREAM_ERROR' }))
-        : Promise.resolve({ conversation_token: 'lk_tok', conversation_id: 'conv_1' }),
+    ...(o.mic ? { micPermission: o.mic } : {}),
+    mintToken: () => {
+      mints += 1;
+      if (o.mints) {
+        const r = o.mints[Math.min(mints, o.mints.length) - 1]!;
+        return r instanceof Error ? Promise.reject(r) : Promise.resolve(r);
+      }
+      return o.token === 'fail'
+        ? Promise.reject(apiError('UPSTREAM_ERROR', false, { reason: 'not_configured' }))
+        : Promise.resolve(TOKEN);
+    },
     dynamicVariables: VARS,
     postLines: async (l) => void posted.push(l),
     onCaption: (c) => captions.push(c),
@@ -81,7 +102,7 @@ function setup(o: { token?: 'ok' | 'fail' } = {}) {
     s.onStatus('connected');
     s.onConnect({ conversationId });
   };
-  return { s, conv, failed, captions, posted, logs, started, connected };
+  return { s, conv, failed, captions, posted, logs, started, connected, mints: () => mints };
 }
 
 const cue = (name: string, speak = true) => ({
@@ -113,6 +134,83 @@ describe('judge session: start and failure -> typed fallback', () => {
     expect(t.failed).toEqual(['token']);
     expect(t.conv.calls.filter(([n]) => n === 'startSession')).toEqual([]);
     expect(t.s.phase()).toBe('failed');
+  });
+
+  it('a retryable token failure (504 UPSTREAM_TIMEOUT, a 502 blip, NETWORK) is retried once after 1 s', async () => {
+    for (const err of [
+      apiError('UPSTREAM_TIMEOUT', true),
+      apiError('UPSTREAM_ERROR', true, { upstream_status: 502 }),
+      apiError('NETWORK', true),
+    ]) {
+      const t = setup({ mints: [err, TOKEN] });
+      await t.started();
+      expect([t.mints(), t.s.phase()]).toEqual([1, 'minting']);
+      await vi.advanceTimersByTimeAsync(MINT_RETRY_MS);
+      expect(t.mints()).toBe(2);
+      expect(t.conv.calls[0]).toEqual([
+        'startSession',
+        { conversationToken: 'lk_tok', dynamicVariables: VARS },
+      ]);
+      expect(t.failed).toEqual([]);
+      expect(t.logs).toContain('voice.token_retry');
+    }
+    // Twice in a row: typed terms, after exactly one retry.
+    const u = setup({ mints: [apiError('UPSTREAM_TIMEOUT', true)] });
+    await u.started();
+    await vi.advanceTimersByTimeAsync(MINT_RETRY_MS * 5);
+    expect([u.mints(), u.failed]).toEqual([2, ['token']]);
+  });
+
+  it('a non-retryable token failure (no key, spend off, bet over) fails at once, no retry', async () => {
+    for (const err of [
+      apiError('UPSTREAM_ERROR', false, { reason: 'not_configured' }),
+      apiError('UPSTREAM_ERROR', false, { reason: 'spend_disabled' }),
+      apiError('INVALID_STATE', false),
+    ]) {
+      const t = setup({ mints: [err, TOKEN] });
+      await t.started();
+      expect([t.mints(), t.failed]).toEqual([1, ['token']]);
+      await vi.advanceTimersByTimeAsync(MINT_RETRY_MS * 2);
+      expect(t.mints()).toBe(1);
+    }
+    // stop() while waiting to retry: no second mint, no fallback.
+    const u = setup({ mints: [apiError('UPSTREAM_TIMEOUT', true), TOKEN] });
+    await u.started();
+    u.s.stop();
+    await vi.advanceTimersByTimeAsync(MINT_RETRY_MS * 2);
+    expect([u.mints(), u.failed, u.conv.calls.filter(([n]) => n === 'startSession')]).toEqual([
+      1,
+      [],
+      [],
+    ]);
+  });
+
+  it('the mic prompt comes before the mint and is not on the connect clock; denied -> "mic"', async () => {
+    let answer!: (granted: boolean) => void;
+    const t = setup({ mic: () => new Promise<boolean>((r) => (answer = r)) });
+    await t.started();
+    // A fresh install: the iOS prompt sits there for longer than the connect timeout.
+    await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS * 2);
+    expect([t.mints(), t.failed, t.s.phase()]).toEqual([0, [], 'minting']);
+    answer(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.mints()).toBe(1);
+    expect(t.s.phase()).toBe('connecting');
+    t.connected();
+    expect(t.failed).toEqual([]);
+
+    const u = setup({ mic: async () => false });
+    await u.started();
+    expect([u.mints(), u.failed]).toEqual([0, ['mic']]);
+    // Unknown (the module threw): logged, and LiveKit asks at connect as before.
+    const w = setup({
+      mic: async () => {
+        throw new Error('expo-audio missing');
+      },
+    });
+    await w.started();
+    expect([w.mints(), w.failed, w.s.phase()]).toEqual([1, [], 'connecting']);
+    expect(w.logs).toContain('voice.mic_permission_unknown');
   });
 
   it('a start error before connecting fails; a client-tool error while connected does not', async () => {
