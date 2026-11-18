@@ -15,6 +15,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   getBase58Decoder,
+  getCompiledTransactionMessageDecoder,
   type Base64EncodedWireTransaction,
   type KeyPairSigner,
 } from '@solana/kit';
@@ -534,6 +535,35 @@ run('money path hardening over LiteSVM', () => {
     advance(12_000);
     expect(await lc.payout.finalizeDue(now())).toContain(betId);
     await lc.idle();
+  });
+
+  it('with CU_PRICE_MICROLAMPORTS the server-only txs carry a priority fee and still land', async () => {
+    const betId = await lockedBet();
+    installLifecycle(
+      ctx.deps,
+      createLifecycle(ctx.deps, {
+        runtime: async () => ({ ...rt, cuPrice: 2_000n }),
+        signer: 'server',
+        send: { pollMs: 5, resendMs: 50, timeoutMs: 2_000 },
+        timers: false,
+      }),
+    );
+    try {
+      lc = lifecycleOf(ctx.deps);
+      await lc.payout.onRuling(betId, ruling(betId, (await betRow(betId))!.terms_hash!, 'A_WINS'));
+      const [resolve] = await txRows(betId, 'resolve');
+      expect(resolve!.status).toBe('confirmed');
+      const msg = getCompiledTransactionMessageDecoder().decode(
+        new Uint8Array(Buffer.from(resolve!.message_b64!, 'base64')),
+      ) as unknown as { instructions: Array<{ data?: Uint8Array }> };
+      expect(msg.instructions.map((i) => i.data?.[0]).slice(0, 2)).toEqual([2, 3]);
+      advance(12_000);
+      expect(await lc.payout.finalizeDue(now())).toContain(betId);
+      await lc.idle();
+      expect((await betRow(betId))!.state).toBe('PAID');
+    } finally {
+      install('server');
+    }
   });
 
   it('lock sweep re-broadcasts a dropped lock (durable nonce: same bytes) before expires_at -> LOCKED', async () => {

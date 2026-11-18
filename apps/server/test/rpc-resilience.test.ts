@@ -3,6 +3,8 @@
 // treats a failed status poll as "unknown" (never as a failed tx). No network, no DB.
 import {
   generateKeyPairSigner,
+  getBase58Decoder,
+  getCompiledTransactionMessageDecoder,
   getSolanaErrorFromJsonRpcError,
   getSolanaErrorFromTransactionError,
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
@@ -15,6 +17,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildBlockhashTx,
+  chainRuntimeFromEnv,
   confirmSent,
   customErrorCode,
   heightOnce,
@@ -37,6 +40,7 @@ import {
   type ChainClient,
   type SigStatus,
 } from '../src/chain/tx';
+import { testEnv } from './helpers';
 
 type Req = Parameters<RpcTransport>[0];
 const req = (method = 'getBalance', signal?: AbortSignal): Req =>
@@ -604,5 +608,34 @@ describe('txFate / send: second-round rules', () => {
     expect(e).toBeInstanceOf(PreflightError);
     expect((e as Error).cause).toBeDefined(); // the kit error (scripts print its logs)
     expect(calls).toEqual(['send']);
+  });
+});
+
+describe('CU_PRICE_MICROLAMPORTS (priority fee on server-only txs)', () => {
+  it('chainRuntimeFromEnv reads it; unset means no price', async () => {
+    const seed = getBase58Decoder().decode(new Uint8Array(32).fill(9));
+    const base = { SOLANA_DEVNET_RPC: 'http://127.0.0.1:8899', FEE_PAYER_SECRET_KEY: seed };
+    expect((await chainRuntimeFromEnv(testEnv(base)))!.cuPrice).toBeUndefined();
+    expect(
+      (await chainRuntimeFromEnv(testEnv({ ...base, CU_PRICE_MICROLAMPORTS: '5000' })))!.cuPrice,
+    ).toBe(5000n);
+  });
+
+  it('buildBlockhashTx with cuPrice puts SetComputeUnitPrice right after the limit', async () => {
+    const fp = await generateKeyPairSigner();
+    const ix = {
+      programAddress: 'ComputeBudget111111111111111111111111111111' as never,
+      data: new Uint8Array([9]),
+    };
+    const built = await buildBlockhashTx(fake(), fp.address, [ix], {
+      signers: [fp],
+      label: 't',
+      cuPrice: 5000n,
+    });
+    const msg = getCompiledTransactionMessageDecoder().decode(built.tx.messageBytes) as unknown as {
+      instructions: Array<{ data?: Uint8Array }>;
+    };
+    const datas = msg.instructions.map((i) => i.data?.[0]);
+    expect(datas.slice(0, 2)).toEqual([2, 3]); // SetComputeUnitLimit, SetComputeUnitPrice
   });
 });

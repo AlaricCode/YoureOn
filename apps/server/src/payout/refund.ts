@@ -317,6 +317,7 @@ export class RefundService {
       built = await buildBlockhashTx(rt.client, fp.address, plan.ixs, {
         signers: [fp],
         label: 'timeout_refund+close_bet',
+        cuPrice: rt.cuPrice,
       });
     } catch (err) {
       if (err instanceof SimulationError) {
@@ -723,6 +724,7 @@ export class RefundService {
     const fp = rt.keys.feePayer;
     const built = await buildBlockhashTx(rt.client, fp.address, plan.ixs, {
       signers: [fp, ...plan.signers],
+      cuPrice: rt.cuPrice,
       label: `${action}${action === 'close_bet' ? '' : '+close_bet'} (orphan)`,
     });
     const signature = sigOf(built, fp.address);
@@ -800,6 +802,7 @@ export class RefundService {
     const built = await buildBlockhashTx(rt.client, fp.address, [ix], {
       signers: [fp, judge],
       label: 'resolve(Refund) (demo reset)',
+      cuPrice: rt.cuPrice,
     });
     const signature = sigOf(built, fp.address);
     await this.deps.db.insert(auditLog).values({

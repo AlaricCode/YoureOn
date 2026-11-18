@@ -40,6 +40,12 @@ export const EnvSchema = z.object({
    * accept_bet as demo-a / demo-b (DEMO_A/B_SECRET_KEY) right after confirm_terms (D-A).
    */
   LOCK_SIGNER: z.preprocess(unset, z.enum(['phones', 'server']).default('phones')),
+  /**
+   * Priority fee (micro-lamports per CU) on the server-only txs (resolve, finalize, refunds,
+   * orphan exits, nonce advances, rebalance). Unset = none; devnet congestion insurance. The
+   * phone-signed lock and concede are never changed.
+   */
+  CU_PRICE_MICROLAMPORTS: opt(intStr),
   /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
   SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
