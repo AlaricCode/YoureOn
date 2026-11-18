@@ -24,6 +24,7 @@
     "smoke-devnet": "tsx scripts/smoke-devnet.ts",
     "crank": "tsx scripts/crank.ts",
     "cp1-drive": "tsx scripts/cp1-drive.ts",
+    "face-smoke": "tsx scripts/face-smoke.ts",
     "demo-claim-qr": "tsx scripts/demo-claim-qr.ts",
     "e2e:local": "bash scripts/e2e-local.sh",
     "judge-eval": "tsx scripts/judge-eval.ts"
