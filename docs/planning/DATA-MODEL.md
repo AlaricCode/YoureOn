@@ -598,7 +598,7 @@ The Stream filter must **drop failed transactions** (`meta.err != null`). A fail
 | client_clip_hash | text (hex32) | Y | | Hash computed on the phone at record end, so the ruling isn't blocked on upload (§9). = `CameraEvidence.clip_sha256` = the onchain `evidence_hash`. |
 | evidence_hash | text (hex32) | Y | | sha256(stored clip bytes), recomputed by the server. Must equal `client_clip_hash`. |
 | evidence_canonical | text | Y | | JCS of the SCHEMAS `CameraEvidence` record (frames, hashes, timings) |
-| frame_keys | text[] | N | '{}' | About 8 JPEGs per try (extracted on the phone, spike 02), including the final frames |
+| frame_keys | text[] | N | '{}' | 12 JPEGs per try plus one landing crop (planning D10; 8..12 accepted), extracted on the phone, 8 of them in the last ~1.2 s |
 | frame_ts_ms | integer[] | N | '{}' | `CHECK cardinality = cardinality(frame_keys) AND <= 24` (= SCHEMAS `CameraEvidence.frames` max) |
 | frame_hashes | text[] | N | '{}' | sha256 of each frame = `CameraEvidence.frames[i].sha256`. Committed in `ruling_hash` through the record's `frame_hashes` (SCHEMAS O3, adopted 2026-11-08). |
 | started_at / uploaded_at | timestamptz | Y | | |
@@ -1187,7 +1187,7 @@ The server's RPC result is real (`processed`, then `confirmed`). "Optimistic" on
 | Object | Bucket / key | Written by | Hash | Retention | Access |
 |---|---|---|---|---|---|
 | Attempt clip | `evidence` / `attempts/{bet_id}/{n}/clip.{mp4\|mov}` | Phone via presigned PUT (≤ 25 MB, URL TTL 60 s, content-type pinned) | `evidence_hash = sha256(exact stored bytes)` | **30 days** (lifecycle rule) | Server only. Signed GET (5 min) for the stage view and the two parties. |
-| Frames (~8 JPEG per try, ≤ 24) | `evidence` / `attempts/{bet_id}/{n}/frames/{00..23}.jpg` | Phone (confirmed: spike 02: expo-video `generateThumbnailsAsync`, 512 px; server ffmpeg is the fallback) | Per frame, in `attempts.frame_hashes` and `CameraEvidence.frames[]` | 30 days | Same. Models receive frames inline (base64) from the server, never as URLs. |
+| Frames (12 JPEG + 1 landing crop per try since D10, each ≤ 200 KB, ≤ 24) | `evidence` / `attempts/{bet_id}/{n}/frames/{00..23}.jpg` | Phone (confirmed: spike 02: expo-video `generateThumbnailsAsync`, 512 px; server ffmpeg is the fallback) | Per frame, in `attempts.frame_hashes` and `CameraEvidence.frames[]` | 30 days | Same. Models receive frames inline (base64) from the server, never as URLs. |
 | Transcripts | `evidence` / `transcripts/{bet_id}/{el_conversation_id}.json` | Server, when the session ends | `voice_sessions.transcript_sha256` | 30 days | Server |
 | Hearing audio | not stored by default | | | | |
 | Gemini settlement | DB: raw body in `gemini_markets.settlement_raw`; the per-bet `GeminiSettlementRecord` in `rulings.evidence_canonical` | Server | `rulings.evidence_hash` (= onchain `evidence_hash`) | Kept with the bet | Server |
@@ -1437,3 +1437,4 @@ The original proposals, kept for the record:
   - **§8.6.** `STALE_LOCK_REQUEST` naming; client idempotency is an in-process LRU in P0 and an `api_idempotency` table in P1 (was P2).
   - **§10.** Face KEK env name is `FACE_KEK_<KEY_ID in UPPER_SNAKE>` (e.g. `FACE_KEK_2026_11_A`) plus `FACE_KEK_ACTIVE`.
   - **§11.** Demo wallets are custodial and server-generated (no `DEMO_WALLET_*` env); `seed:chain` uses those seeds; `npm run db:demo-reset` (npm workspaces, not pnpm). §13 row updated.
+- **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): `frame_keys` and the §9 frames row say 12 frames + one landing crop per try. No schema change: the crop is one more `attempt_frames` row (idx 12, the 204800 B CHECK holds it), and which row is the crop is read back from `attempts.evidence_canonical` (`frames[i].landing_crop`). `attempts.recorder = 'self'` is now also the two-phone demo's fallback (API-CONTRACT §2.9).

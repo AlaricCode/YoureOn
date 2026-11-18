@@ -120,7 +120,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 - Timestamps are `IsoUtc` (ms). Onchain-mirroring fields are unix seconds (SCHEMAS §0). `X-YO-Timestamp` is unix ms.
 - Ids are UUIDv4. Pubkeys and tx signatures are base58. Hashes are `Hex32`. Binary in JSON is base64 (standard, padded): `message_b64`, `embedding` ciphertext.
 - Pagination is `?cursor=<opaque>&limit=<1..50>` and returns `{items, next_cursor|null}`.
-- Size limits: JSON body 64 KB; frames multipart 2 MB; hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9); QuickNode webhook 1 MiB. Larger bodies return `413 PAYLOAD_TOO_LARGE`. A body above 64 KB without a `Content-Length` (chunked) is capped as the route reads it, after its auth / header checks, never buffered before them.
+- Size limits: JSON body 64 KB; frames multipart 3 MiB (12 frames + the landing crop, each ≤ 200 KB, §2.9); hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9); QuickNode webhook 1 MiB. Larger bodies return `413 PAYLOAD_TOO_LARGE`. A body above 64 KB without a `Content-Length` (chunked) is capped as the route reads it, after its auth / header checks, never buffered before them.
 - Every response carries `X-Request-Id`; a client-supplied one is echoed back.
 
 ### 1.5 Errors
@@ -198,7 +198,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 | `face/enrollment` writes | 5/h | user | |
 | `POST /v1/bets` | 6/min, ≤ 3 pre-lock bets per user | user | spam challenges |
 | lock authorization / decline | 10/min | bet + device | |
-| attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing |
+| attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing; a `409 no_judge_cam` gives its token back (the two-phone fallback, §2.9) |
 | appeal | 3/h | user | ESCROW TM-L9 |
 | markets | 60/min | user | Gemini limit is 120 req/min with no headers (FINDINGS §7), so the server caches |
 | `POST /v1/voice/tokens` | 6 / 10 min | user | each token opens a billed agent session of up to 20 min; under `DEMO_MODE` demo accounts only (`403 NOT_A_PARTY {reason:'demo_only'}`) |
@@ -434,22 +434,23 @@ Server timers:
 
 ### 2.9 Attempts and evidence (Beat 4)
 
-**`POST /v1/bets/:bet_id/attempts`** (S, A's voice device)
+**`POST /v1/bets/:bet_id/attempts`** (S, party)
 
-- Request: `{attempt_no, recorder: 'judge_cam'|'self'}`. A's phone calls it when the judge invokes the `request_attempt` client tool, or the "Start" fallback button.
+- Request: `{attempt_no, recorder: 'judge_cam'|'self'}`. A's phone calls it when the judge invokes the `request_attempt` client tool; the non-performer's phone calls it from its "Start" button (also the REDO "Ready").
+- **Who films (2026-11-18, two-phone fallback).** The phone asks for `'judge_cam'` first. `409 INVALID_STATE {reason:'no_judge_cam'}` means the room has no judge cam for this bet (two phones); the non-performer's phone then asks again with `'self'` and films the attempt itself, and the performer's phone never does (`403 NOT_A_PARTY {reason:'performer_cannot_record'}`). With a judge cam in the room the judge cam always records. The `no_judge_cam` refusal writes nothing and gives its token of the 6/min bucket back (§1.7), so the fallback costs no more than the judge-cam path. The recording phone records video only (no audio track): on A's phone the voice session keeps the mic. Phone side: `apps/mobile/src/attempt/recorder.ts`.
 - Response 201: `{attempt_no, performer, recorder_device_id, max_ms: 6000 × attempts.count, go_at}`.
 - Effects: state `ATTEMPT`; event `attempt.started` (SCHEMAS §10.1, extended with `recorder_device_id` and `go_at`, §3.4). The judge-cam shows "3-2-1, flip on GO".
 - Allowed from `LOCKED`, or from `JUDGING` after a REDO (`attempt_no = redo_count + 2`).
-- Errors: `INVALID_STATE`, `VALIDATION_FAILED` (wrong `attempt_no`).
-- Idem: `(bet_id, attempt_no)`.
+- Errors: `INVALID_STATE` (also `{reason:'no_judge_cam'}`), `VALIDATION_FAILED` (wrong `attempt_no`), `NOT_A_PARTY {reason:'performer_cannot_record'}` (`'self'` from the performer).
+- Idem: `(bet_id, attempt_no)`. A replay returns the attempt as started, whichever `recorder` the replay asks for.
 
-**Judge-cam identity.** For the demo, the judge-cam iPhone is registered as a second device of party A, with `devices.role='judge_cam'` set via `PATCH /v1/devices/current` and `CameraEvidence.recorded_by = 'A'`. In the product, `recorder:'self'` means the non-performer's own phone. DATA-MODEL §5.2 has the `devices.role` column; SCHEMAS §4 documents `recorded_by`.
+**Judge-cam identity.** For the demo, the judge-cam iPhone is registered as a second device of party A, with `devices.role='judge_cam'` set via `PATCH /v1/devices/current` and `CameraEvidence.recorded_by = 'A'`. `recorder:'self'` means the non-performer's own phone: the product default, and the demo's fallback with only phones A and B (then `recorded_by` is the non-performer's party). DATA-MODEL §5.2 has the `devices.role` column; SCHEMAS §4 documents `recorded_by`.
 
 **`POST /v1/bets/:bet_id/attempts/:n/frames`** (S, recorder device): `multipart/form-data`
 
 - Parts:
   1. `evidence`, `application/json`: SCHEMAS `CameraEvidence`, with `clip_sha256` already computed on the phone at record end.
-  2. `frame` × N, `image/jpeg`, in `frames[].index` order. Each is ≤ 200 KB and ≤ 512 px; N ≤ 24, normally 8 "u4d4" frames (FINDINGS §3.3).
+  2. `frame` × N, `image/jpeg`, in `frames[].index` order (planning D10, `packages/shared/src/judge/frames.ts`): 8..12 frames, each ≤ 512 px (the phone sends 12: 4 spread over the clip and 8 in its last ~1.2 s, the landing), then at most one **landing crop**, always last and flagged `frames[i].landing_crop: true` (the last frame again, the middle 80 % of the full-resolution still, ≤ 1024 px). Every JPEG, the crop included, is ≤ 200 KB. An 8-frame upload with no crop (older builds, `scripts/cp1-drive.ts --frames 8..12`) is accepted unchanged. Anything else is `422 VALIDATION_FAILED`. (Was: N ≤ 24, normally 8 "u4d4" frames, FINDINGS §3.3.)
 - Server steps:
   1. Check the attempt is open.
   2. sha256 each JPEG and compare it to `frames[i].sha256`.
@@ -868,7 +869,7 @@ Responses (≤ 300 B):
 
 | Tool | `parameters` | `expects_response` / timeout | App behavior |
 |---|---|---|---|
-| `request_attempt` | `{attempt_no: integer "1 for the first try; +1 after Run it back"}` | true / 5 s | `POST /v1/bets/:id/attempts {attempt_no, recorder:'judge_cam'}` (§2.9). Returns `"armed: judge cam counting down"`, or `"error: <code>"`. Allowed only after `[EVENT] LOCKED` or `[EVENT] REDO`. |
+| `request_attempt` | `{attempt_no: integer "1 for the first try; +1 after Run it back"}` | true / 5 s | `POST /v1/bets/:id/attempts {attempt_no, recorder:'judge_cam'}`, then `'self'` on `no_judge_cam` when A is the non-performer (§2.9, two phones). Returns `"armed: judge cam counting down"`, `"armed: this phone films, counting down"` (A's phone films), or `"error: <code>"` (`"error: NO_JUDGE_CAM"`: A performs and the room has no judge cam, so B taps Start). Allowed only after `[EVENT] LOCKED` or `[EVENT] REDO`. |
 | `show_terms_card` | none | false | Brings A's terms card to the front and re-sends the stage's card focus. The card appears anyway on `terms.authorize_request`. |
 | `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip. A light haptic on A's phone may be silent while the mic is live (FINDINGS §4). |
 
@@ -1120,7 +1121,7 @@ Settings for every call:
 |---|---|---|---|---|
 | Guardrail on each `propose_terms` (async) | `claude-haiku-5-5`, `thinking:{type:'disabled'}`, `output_config.effort:'low'`, `max_tokens` 256 | `TermsGuardrailVerdict` = `{kind:'ok'} \| {kind:'refuse', refusal: GuardrailRefusal}` (API-owned; SCHEMAS `GuardrailRefusal`) | 2 s, 1 retry; on failure, fail closed (the bet can't reach the lock; the judge says "Clerk's out. Try again.") | Off the voice path. A synchronous keyword prefilter catches the obvious cases. **No model was evaluated in Phase 0.** |
 | Terms step (Speech Engine fallback only) | `claude-haiku-5-5`, as above, `max_tokens` 600 | SCHEMAS `TermsStepOutput` | 3 s | Used only if ElevenLabs post-tool latency misses (FINDINGS §3.10) |
-| First ruling | Candidate A: `claude-haiku-5-5`, thinking `disabled`, effort `low`, `max_tokens` 2048, streaming. Candidate B: `claude-opus-5-5`, effort `low` (thinking can't be disabled), as the only model. **Pick after the eval (PENDING-KEY).** | SCHEMAS `VisionVerdict` → `toOutcome` → `Ruling` (with `frame_hashes`, D7) | first-token deadline 2.5 s, total 6 s, no SDK retry | 8 frames as separate images labelled `Frame k/8 at t=…s` + terms; frames inline base64, never URLs (DATA-MODEL §9). Play the pre-generated outcome stinger as soon as `claim_result` streams. |
+| First ruling | Candidate A: `claude-haiku-5-5`, thinking `disabled`, effort `low`, `max_tokens` 2048, streaming. Candidate B: `claude-opus-5-5`, effort `low` (thinking can't be disabled), as the only model. **Pick after the eval (PENDING-KEY).** | SCHEMAS `VisionVerdict` → `toOutcome` → `Ruling` (with `frame_hashes`, D7) | first-token deadline 2.5 s, total 6 s, no SDK retry | 12 frames + the landing crop (D10) as separate images labelled `Frame k/N at t=…s`, with `, LANDING` on the frames in the clip's last ~1.2 s and `LANDING CROP of frame k` on the crop, + terms; frames inline base64, never URLs (DATA-MODEL §9). Play the pre-generated outcome stinger as soon as `claim_result` streams. |
 | Re-check (parallel, from t=0) | `claude-sonnet-5-5` (adaptive, effort `low`) or `claude-opus-5-5` (effort `low`) | `VisionVerdict` | 6 s | Rule: take the primary if it is decisive at ≥ 0.8; else take the re-check if it is decisive at ≥ 0.8; else REDO. Timeouts and errors count as non-decisive REDO `unclear` and **count toward `MAX_REDOS`** (simplicity; §9 O4). |
 | Hearing | `claude-opus-5-5`, effort `medium`, streaming | SCHEMAS `HearingVerdict` → `toHearingOutcome` → `HearingRuling` | 15 s, then 1 retry on `claude-sonnet-5-5` (adaptive, low); both fail → `VOID / undecidable` (refund, appealable) | Inputs: terms, the same frames, both `HearingTurn` transcripts |
 
@@ -1206,7 +1207,7 @@ sequenceDiagram
     EL->>A: client tool request_attempt(1)
     A->>S: POST /v1/bets/:id/attempts {attempt_no:1}
     S-->>J: WS attempt.started (go_at)
-    J->>S: POST /attempts/1/frames (8 JPEG + CameraEvidence)
+    J->>S: POST /attempts/1/frames (12 JPEG + landing crop + CameraEvidence)
     S->>S: Haiku plus parallel re-check gives B_WINS 0.93
     S-->>A: WS ruling.issued + judge.cue RULING
     S->>C: resolve(PartyB)
@@ -1292,7 +1293,7 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 
 **6. 18:05:30: attempt.** The judge calls `request_attempt({attempt_no:1})` → A's phone sends `POST /v1/bets/7f3c…/attempts {"attempt_no":1,"recorder":"judge_cam"}` → 201 `{attempt_no:1, performer:"B", recorder_device_id:"<judge-cam>", max_ms:6000, go_at:"…:33.000Z"}`, and the judge cam counts down.
 
-**7. 18:07:01.8: STOP → frames.** The judge cam sends `POST …/attempts/1/frames` (multipart: `evidence` = `CameraEvidence{attempt_no:1, clip_sha256:"6d16c2ef…4a06", frames:[8 × {index, t_ms, sha256}], …}` plus 8 JPEGs ≈ 120–250 KB) → 202 `{judging:true, frame_hashes:["4a732389…aae6", … 8 entries], clip_upload:{url:"https://…/attempts/7f3c…/1/clip.mov?X-Amz-…", method:"PUT", headers:{"Content-Type":"video/quicktime"}, max_bytes:26214400, expires_at:"…:02.400Z"}}`. Haiku and the re-check start at t+0.05 s.
+**7. 18:07:01.8: STOP → frames.** The judge cam sends `POST …/attempts/1/frames` (multipart: `evidence` = `CameraEvidence{attempt_no:1, clip_sha256:"6d16c2ef…4a06", frames:[8 × {index, t_ms, sha256}], …}` plus 8 JPEGs ≈ 120–250 KB; since D10 it is 12 frames + the landing crop, ≈ 300–450 KB) → 202 `{judging:true, frame_hashes:["4a732389…aae6", … 8 entries], clip_upload:{url:"https://…/attempts/7f3c…/1/clip.mov?X-Amz-…", method:"PUT", headers:{"Content-Type":"video/quicktime"}, max_bytes:26214400, expires_at:"…:02.400Z"}}`. Haiku and the re-check start at t+0.05 s.
 
 **8. 18:07:04.5: ruling.** The primary returns `{claim_result:"MET", confidence:0.93, reason:"Two full rotations, lands upright on its base in frame 7. Jake never touches it.", cited_frames:[5,6,7], contested:false}` → `toOutcome` = `B_WINS` → `Ruling` (the SCHEMAS §5.2 example, `frame_hashes` included).
 
@@ -1372,3 +1373,7 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
   - **Lock build timing:** the nonce lease, build and simulation happen at `confirm_terms` (ESCROW §5.0.1), not speculatively at `propose_terms`. The skill `accept_deadline` is build time + 300 s; the trace now uses 1795284618 (18:10:18) and `expires_at` 18:10:13.
   - **D7:** `evidence_record_hash` replaced by `frame_hashes` (§2.9, §7.1, §8); the trace uses the recomputed SCHEMAS ruling hash `997ce278…5daa`.
   - `tx.*` payloads carry `kind: TxKind` (was `ix`). Nonce pool is created by `scripts/nonce-pool.ts` at deploy, not at boot (§6.1). `/v1/config` serves `nonce_seed_max`. Pins come from committed `packages/shared` constants, not EAS env. CU floor cites ESCROW N11. Added `GET /health` to §2.0, `POST /v1/demo/toggles` to §2.17, and a status note for every §9.1 conflict.
+- **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`):
+  - **§2.9 frames.** 8..12 frames + at most one landing crop (`frames[i].landing_crop`, last, ≤ 1024 px), every JPEG ≤ 200 KB; the phone sends 12 (8 in the last ~1.2 s) + the crop through the shared sampler `packages/shared/src/judge/frames.ts`. §1.4: the frames body limit is 3 MiB (it already was in code; the 2 MB here was stale).
+  - **§2.9 attempts.** Called by the non-performer's Start as well as A's `request_attempt`. `'judge_cam'` first, then `'self'` on `409 no_judge_cam`, never from the performer; the `no_judge_cam` refusal refunds its rate-limit token. Deviation from ARCHITECTURE §1.1 ("recording never happens on A's phone"): with two phones and B performing, A's phone films, video only, so WebRTC keeps the mic.
+  - **§4.4** `request_attempt` replies `"armed: this phone films, counting down"` or `"error: NO_JUDGE_CAM"` too. **§7.1** the first-ruling prompt labels the landing frames and the crop. **§1.7** notes the refund. **§8** the trace notes the D10 counts.

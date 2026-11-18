@@ -527,7 +527,7 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 | D3-L3 | Latency runs (FINDINGS §6 steps 12–13) with E2 (runs below this table) | L, E2 | D2 checkpoint, D3-L1 | 2 | P0 | Second authorization → LOCKED p50 < 2 s in both orders; payout visible < 1 s at processed; numbers recorded | B3, B4 |
 | D3-L4 | Office hours: QuickNode, and Solana if present (§7) | L | D2 checkpoint | 1.5 | P1 | Answers in `docs/sponsor-notes.md`; follow-ups filed as issues | ALL |
 | D3-L5 | Integration and review | L | — | 2 | P0 | — | — |
-| D3-M1 | Judge-cam mode (steps below this table) | E2 | D1-M1, D2-J4 | 4 | P0 | 10 recordings: 8 frames each, and the client hash equals the server's recomputed hash 10/10; frame upload p50 < 1 s on cellular | B4 |
+| D3-M1 | Judge-cam mode (steps below this table) | E2 | D1-M1, D2-J4 | 4 | P0 | 10 recordings: 12 frames + the landing crop each (D10), and the client hash equals the server's recomputed hash 10/10; frame upload p50 < 1 s on cellular | B4 |
 | D3-M2 | Payout UX (screens below this table) | E2 | D3-L1 | 3.5 | P0 | The winner's phone buzzes < 1 s after the loser's Face ID success (p50, n=10), and its balance header shows the new dollar amount in the same animation | B4 |
 | D3-M3 | Face enrollment (DATA-MODEL §5.3, §10; flow below this table) | E2 | D1-M3 | 4 | P0 | All 3 teammates enrolled; enrollment is offered (skippable) right after signup; disabling excludes the user from the next match; delete removes the row; a log grep finds no embedding; a photo spoof fails liveness | B1 |
 | D3-J1 | Ruling pipeline (SCHEMAS constants; rules below this table) | E3 | D2-J4, D3-L1 | 4 | P0 | Bottle at rest → first outcome audio p50 < 4 s on cellular (n=10; clock per §6.5); a third non-decisive recording opens HEARING | B4 |
@@ -548,9 +548,9 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 **D3-L3 latency runs:** 10 A-first and 10 B-first locks over cellular, and 10 GG payouts. Also record the real escrow's CU range and transaction size.
 
 **D3-M1 judge-cam steps:**
-1. Role switch to judge cam; "3-2-1, flip on GO" countdown.
-2. `recordAsync({codec:'avc1', maxDuration:6})` at 720p, about 5 Mbps, with a big STOP button.
-3. u4d4 frames through `generateThumbnailsAsync`: wait for `readyToPlay`, assert 8 frames, retry. The fallback is `expo-video-thumbnails`.
+1. Role switch to judge cam; "3-2-1, flip on GO" countdown. With no judge cam in the room the non-performer's own phone runs the same screen for the attempt (`recorder:'self'`, API-CONTRACT §2.9; built 2026-11-18).
+2. `recordAsync({codec:'avc1', maxDuration:6})` at 720p, about 5 Mbps, muted (no audio track), with a big STOP button.
+3. D10 frames (`packages/shared/src/judge/frames.ts`): 12 stills through `expo-video-thumbnails` (4 spread over the clip, 8 in its last ~1.2 s, ≤ 512 px) and the landing crop of the last one (middle 80 % at full resolution, ≤ 1024 px). Was: u4d4, 8 frames through `generateThumbnailsAsync`.
 4. Save frames as JPEG at 0.8 and compute `client_clip_hash`.
 5. Upload the frames first, then the clip through the presigned PUT.
 
@@ -1061,3 +1061,4 @@ All six were applied on 2026-11-08, before the window (the core-spec pass, then 
   - **Alignments.** D2-M1 card shows the bet deadline (BRIEF 5f); D2-J3 stage shows photos; GG and appeal are tap + Face ID (§10.2 item 14); TASKS routes match API-CONTRACT (`/v1/face/enrollment`, `/v1/rooms/:room_id/face-match`); the attempt → ruling clock is "bottle at rest" (ARCHITECTURE §4); fallbacks are labelled REPLAY.
   - **Rules.** §0 official-docs-first and traceability bullets; §3.2 rule 9 (face model regenerated in the window, eval clips out of git) and rule 11 (README moves with the code); §10.2 items 13–16.
   - **Hours.** About +9 h in total (D5-X2 counted once): Fri E3 +2 (D0-J4, may spill to Sat), Sat L +1 and E2 +1, Mon L +0.5 and E2 +0.5, Tue E3 +0.5, Wed L +1 and ALL +1.5, Thu E2 +1. Absorb it from bug-bash hours or rebalance per §1.3.
+- **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`): D3-M1's DoD and steps 1–3 say 12 frames + the landing crop, a muted recording, and that the non-performer's phone films when the room has no judge cam.
