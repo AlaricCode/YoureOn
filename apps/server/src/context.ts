@@ -9,6 +9,7 @@ import type { ChallengeStore } from './auth/challenges';
 import type { IdempotencyCache } from './http/idempotency';
 import type { RateLimiter } from './http/rate-limit';
 import type { Keeper } from './keeper/keeper';
+import type { MarketService } from './markets/service';
 import type { Providers } from './providers/types';
 import type { Ruling } from '@youre-on/shared/ruling';
 
@@ -55,6 +56,8 @@ export interface AppDeps {
    * decisive / VOID rulings. Unset = no-op. Errors are logged, never surfaced to the uploader.
    */
   onRuling?: (betId: string, ruling: Ruling) => Promise<void> | void;
+  /** Gemini BTC 5-min relay (src/markets); started/stopped by startServer. Absent in tests by default. */
+  markets?: MarketService;
 }
 
 export type AppVariables = {

@@ -14,6 +14,8 @@ import { RateLimiter } from './http/rate-limit';
 import { createServerKeeper } from './keeper';
 import { createLogger, type Logger } from './log';
 import { createPayoutService } from './payout';
+import { createGeminiClient } from './markets/gemini';
+import { MarketService } from './markets/service';
 import { createProviders } from './providers/registry';
 import type { Providers } from './providers/types';
 import { dbHubAccess } from './realtime/access';
@@ -32,6 +34,9 @@ export interface CreateDepsOptions {
   providers?: Partial<Providers>;
   /** Build the periodic sweeper (src/keeper). Default: on, except NODE_ENV=test. */
   keeper?: boolean;
+  /** The Gemini BTC 5-min relay: a ready service (tests: fake fetch), true/false, or default
+   *  MARKETS_FEED (unset: on, except NODE_ENV=test). */
+  markets?: MarketService | boolean;
 }
 
 export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbHandle } {
@@ -64,6 +69,12 @@ export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbH
     await createPayoutService(deps).onRuling(betId, ruling);
   };
   if (o.keeper ?? o.env.NODE_ENV !== 'test') deps.keeper = createServerKeeper(deps);
+  if (o.markets instanceof MarketService) deps.markets = o.markets;
+  else if (
+    o.markets ??
+    (o.env.MARKETS_FEED ? o.env.MARKETS_FEED === 'on' : o.env.NODE_ENV !== 'test')
+  )
+    deps.markets = new MarketService({ client: createGeminiClient(), now, log });
   return { deps, dbHandle };
 }
 
@@ -98,6 +109,7 @@ export async function startServer(
   });
   deps.hub.start();
   deps.keeper?.start();
+  deps.markets?.start();
   const port = (server.address() as AddressInfo).port;
 
   let closing: Promise<void> | null = null;
@@ -108,6 +120,7 @@ export async function startServer(
     close() {
       closing ??= (async () => {
         await deps.keeper?.stop(); // waits for an in-flight sweep before the pool closes
+        await deps.markets?.stop();
         deps.hub.stop();
         for (const client of wss.clients) client.terminate();
         wss.close();
