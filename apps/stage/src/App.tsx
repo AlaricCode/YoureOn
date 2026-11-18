@@ -70,6 +70,7 @@ import {
 
 export {
   BetCard,
+  MarketPanel,
   OddsWidget,
   PaidMoment,
   QrCode,
@@ -81,6 +82,7 @@ export {
 } from './view';
 export { clock, shortSig } from './format';
 export { REPLAY_BEATS } from './replays';
+export { verifiedChain, verifyEvidence, type Verification } from './verify';
 
 /** How long the PAID moment stays up, and how fresh a payout must be to trigger it. */
 export const PAID_MOMENT_MS = 7_000;

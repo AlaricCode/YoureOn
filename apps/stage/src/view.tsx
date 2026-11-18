@@ -4,7 +4,8 @@
 //
 //   top:    brand · phase rail (Challenge -> Terms -> Lock -> Attempt/Market -> Ruling -> Paid)
 //   left:   the two players (photo or initials, Face ID per party, online) · the terms card with
-//           the terms code · the moment panel (whatever just happened, big) · live judge caption
+//           the terms code · a Gemini bet's market panel (Beat 6) · the moment panel (whatever
+//           just happened, big) · live judge caption
 //   right:  Gemini BTC 5-minute odds · the on-chain ticker with Explorer links
 //   bottom: demo health (fee payer SOL, free nonces, RPC / DB ms, REPLAY clips cached)
 // Overlays: the PAID moment, a big Explorer QR (Q), REPLAY clips (1-6), key help (H).
@@ -17,6 +18,9 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { formatPrice } from '@youre-on/shared/settlement';
 import {
   explorerTx,
   finalOutcomeOf,
@@ -43,6 +47,7 @@ import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from '
 import { qrSvg } from './qr';
 import { healthItems, type DemoHealth, type HealthItem } from './health';
 import { BEAT_TITLES, replayProgress, type ReplayStatus } from './replays';
+import { verifiedChain, type Verification } from './verify';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -743,17 +748,155 @@ export function MomentPanel({
   );
 }
 
-/** The whole left column for one bet: players, terms, the moment, the judge's caption. */
+// ---- Beat 6: the market bet -----------------------------------------------------------------
+
+/**
+ * Beat 6 on the projector: a Gemini bet's live market (who holds Up / Down at what stake, the
+ * line, BTC live, who is ahead, the countdown to the contract's expiry), then Gemini's settled
+ * result with the evidence hash and the stage's own re-check of the evidence chain (verify.ts).
+ */
+export function MarketPanel({
+  bet,
+  tick,
+  now,
+  verification = null,
+}: {
+  bet: BetView;
+  /** The latest snapshot of THIS bet's contract (market.tick, or the relay's if it matches). */
+  tick: GeminiMarketSnapshot | null;
+  now: number;
+  verification?: Verification | null;
+}) {
+  const t = bet.envelope?.terms;
+  const m = t?.market;
+  if (!t || !m) return null;
+  const aUp = m.side === 'YES';
+  const up = aUp ? t.party_a.display_name : t.party_b.display_name;
+  const down = aUp ? t.party_b.display_name : t.party_a.display_name;
+  const upStake = aUp ? t.stakes.a : t.stakes.b;
+  const downStake = aUp ? t.stakes.b : t.stakes.a;
+  const pot = (BigInt(t.stakes.a) + BigInt(t.stakes.b)).toString();
+  const s = bet.settlement?.record;
+  // once Gemini has settled it the contract is over, whatever the local clock says
+  const left = s ? 0 : Date.parse(m.expiry) - now;
+  const live = tick && tick.eventTicker === m.eventTicker ? tick.indexPrice : null;
+  const line = m.strike.value;
+  const ahead = live !== null && line !== null ? (Number(live) >= Number(line) ? up : down) : null;
+  const pct = Math.round(Number(m.priceAtLock) * 100);
+  const side = s
+    ? s.contract.resolutionSide === 'yes'
+      ? 'up'
+      : 'down'
+    : live !== null && line !== null
+      ? Number(live) >= Number(line)
+        ? 'up'
+        : 'down'
+      : '';
+  return (
+    <section className="market" aria-label="market bet">
+      <div className="market-head">
+        <span className="label">BTC 5-MIN · GEMINI</span>
+        {isReplayTicker(m.eventTicker) && (
+          <span className="replay-badge inline">REPLAY · recorded Gemini round</span>
+        )}
+        <span className="muted">
+          Up {pct}% · locked at Gemini {m.priceSource === 'mid' ? 'mid' : 'last trade'}
+        </span>
+      </div>
+      <div className="market-sides">
+        <span className={s?.contract.resolutionSide === 'yes' ? 'good' : undefined}>
+          ▲ {up} Up {usd(upStake)}
+        </span>
+        <span className={s?.contract.resolutionSide === 'no' ? 'good' : undefined}>
+          ▼ {down} Down {usd(downStake)}
+        </span>
+        <span className="muted">pot {usd(pot)}</span>
+      </div>
+      <div className="odds-grid">
+        <div>
+          <span className="label">LINE</span>
+          <span className="num">{line === null ? 'pending' : formatPrice(line)}</span>
+        </div>
+        <div>
+          <span className="label">{s ? 'SETTLED' : 'BTC'}</span>
+          <span className={`num ${side}`}>
+            {s
+              ? s.contract.settlementValue === null
+                ? '—'
+                : formatPrice(s.contract.settlementValue)
+              : live === null
+                ? '—'
+                : formatPrice(live)}
+          </span>
+        </div>
+        <div>
+          <span className="label">{left > 0 ? 'SETTLES IN' : 'EXPIRED'}</span>
+          <span className="num">{left > 0 ? clock(left) : m.expiry.slice(11, 16)}</span>
+        </div>
+      </div>
+      {s ? (
+        <>
+          <p className="market-result">
+            {s.contract.status === 'invalid' ? (
+              <span className="bad">Gemini voided the contract · both stakes back</span>
+            ) : (
+              <span className="good">
+                Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
+                {s.contract.resolutionSide === 'yes' ? up : down} wins
+              </span>
+            )}
+          </p>
+          <p className="muted market-evidence">
+            evidence <code>{bet.settlement!.evidence_hash.slice(0, 8)}</code> ·{' '}
+            <a className="explorer" href={s.source_url} target="_blank" rel="noreferrer">
+              Gemini ↗
+            </a>
+          </p>
+          {verification && (
+            <p className={`market-evidence ${verification.ok ? 'good' : 'bad'}`}>
+              {verification.ok
+                ? `✓ verified: ${verifiedChain(verification)}`
+                : `✗ evidence mismatch: ${verification.failed.join(', ')}`}
+            </p>
+          )}
+        </>
+      ) : left > 0 ? (
+        ahead && <p className="muted">{ahead} is ahead</p>
+      ) : (
+        <p className="countdown">Waiting for Gemini to settle…</p>
+      )}
+    </section>
+  );
+}
+
+/** A Gemini bet's own contract snapshot: its latest market.tick, else the relay's if it matches. */
+export function betTickOf(
+  state: Pick<TickerState, 'betTicks' | 'market'>,
+  bet: BetView,
+): GeminiMarketSnapshot | null {
+  const own = state.betTicks[bet.bet_id];
+  if (own) return own;
+  const m = bet.envelope?.terms.market;
+  return m && state.market?.eventTicker === m.eventTicker ? state.market : null;
+}
+
+/** The whole left column for one bet: players, terms, a Gemini bet's market, the moment, the caption. */
 export function BetCard({
   bet,
   now,
   market = null,
   presence = null,
+  tick = null,
+  verification = null,
 }: {
   bet: BetView;
   now: number;
   market?: MarketView | null;
   presence?: Record<string, boolean> | null;
+  /** Gemini bets: the latest snapshot of the bet's contract. */
+  tick?: GeminiMarketSnapshot | null;
+  /** Gemini bets: the stage's re-check of the evidence chain, once ruled. */
+  verification?: Verification | null;
 }) {
   const online = (p: PartyKey): boolean | null => {
     const id = bet.user_ids[p];
@@ -768,6 +911,9 @@ export function BetCard({
         <PartyCard bet={bet} party="B" online={online('B')} />
       </div>
       <TermsCard bet={bet} />
+      {bet.envelope?.terms.market && (
+        <MarketPanel bet={bet} tick={tick} now={now} verification={verification} />
+      )}
       <MomentPanel bet={bet} now={now} market={market} />
       {bet.caption && bet.caption.text.trim() && (
         <p className={`caption${bet.caption.final ? '' : ' partial'}`} aria-live="polite">
@@ -1024,6 +1170,9 @@ export function OddsWidget({
       <h2>
         BTC 5-min · Gemini <span className="muted">prediction market</span>
       </h2>
+      {isReplayTicker(view.eventTicker) && (
+        <span className="replay-badge inline">REPLAY · recorded Gemini round</span>
+      )}
       <div className="odds-grid">
         <div>
           <span className="label">LINE</span>
@@ -1154,6 +1303,7 @@ export function StageView({
   roomLabel = null,
   sound = null,
   lockSigner = null,
+  verifications = {},
 }: {
   state: TickerState;
   now: number;
@@ -1169,6 +1319,8 @@ export function StageView({
   sound?: 'locked' | 'on' | 'off' | null;
   /** Who signs the lock: 'server' words the signature slots as custodial demo signing. */
   lockSigner?: LockSigner;
+  /** Gemini bets' evidence re-checks, by bet id. */
+  verifications?: Readonly<Record<string, Verification>>;
 }) {
   const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
   const mv = useMemo(
@@ -1202,6 +1354,8 @@ export function StageView({
                 now={now}
                 market={mv}
                 presence={state.presence?.online_by_user ?? null}
+                tick={betTickOf(state, bet)}
+                verification={verifications[bet.bet_id] ?? null}
               />
             ) : (
               <section className="card empty">
