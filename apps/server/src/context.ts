@@ -11,6 +11,7 @@ import type { RateLimiter } from './http/rate-limit';
 import type { Keeper } from './keeper/keeper';
 import type { MarketService } from './markets/service';
 import type { Providers } from './providers/types';
+import type { StageVoice } from './stage/voice';
 import type { Ruling } from '@youre-on/shared/ruling';
 
 /** Who is calling, after `requireSession` (bearer) or the WS hello. */
@@ -58,6 +59,11 @@ export interface AppDeps {
   onRuling?: (betId: string, ruling: Ruling) => Promise<void> | void;
   /** Gemini BTC 5-min relay (src/markets); started/stopped by startServer. Absent in tests by default. */
   markets?: MarketService;
+  /**
+   * The projector's ElevenLabs voice (src/stage/voice.ts): stage.voice clips for the judge's
+   * spoken moments and the cues' Sound Effects. createDeps builds it; absent = off.
+   */
+  stageVoice?: StageVoice;
 }
 
 export type AppVariables = {

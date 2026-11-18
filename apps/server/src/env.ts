@@ -61,6 +61,25 @@ export const EnvSchema = z.object({
    * DEFAULT_AGENT_LLM). The post-call webhook warns `voice.llm_mismatch` when another model billed.
    */
   ELEVENLABS_AGENT_LLM: opt(str),
+  /**
+   * The stage's voice (src/voice/tts.ts): ElevenLabs TTS of the rulings, payouts and appeal votes
+   * on the projector, and (SFX_PROVIDER=auto) its Sound Effects cues. On whenever
+   * ELEVENLABS_API_KEY is set and ALLOW_SPEND=true; 'off' is the kill switch (the stage then speaks
+   * with the browser's voice and synthesizes its cues).
+   */
+  STAGE_TTS: opt(z.enum(['on', 'off'])),
+  /** The stage TTS model (API-CONTRACT §4.1: eleven_v4_turbo; A/B eleven_flash_v2). */
+  STAGE_TTS_MODEL: opt(str),
+  /**
+   * Three comma-separated ElevenLabs voice ids, appeal panel seats 1-3 (API-CONTRACT §4.5: three
+   * distinct voices). Unset = three premade voices (voice/tts.ts DEFAULT_STAGE_VOICES).
+   */
+  ELEVENLABS_PANEL_VOICE_IDS: opt(
+    z.string().refine((s) => {
+      const ids = s.split(',').map((x) => x.trim());
+      return ids.length === 3 && ids.every(Boolean) && new Set(ids).size === 3;
+    }, 'three distinct comma-separated voice ids'),
+  ),
   // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)
   /** Spend guard: any `*_PROVIDER=live` refuses to start unless this is true. Never set in tests/CI. */
   ALLOW_SPEND: z.preprocess(unset, boolStr.default(false)),
@@ -68,8 +87,12 @@ export const EnvSchema = z.object({
   LLM_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
   /** mock = echo transcript; live = ElevenLabs Scribe (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
   STT_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
-  /** mock = generated beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
-  SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
+  /**
+   * mock = generated beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY);
+   * auto (default) = live exactly when the stage's voice is on (the key, ALLOW_SPEND=true, and
+   * not STAGE_TTS=off), else mock. So the cues go live with the key and need no other switch.
+   */
+  SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live', 'auto']).default('auto')),
   // --- judge pipeline (src/judge, Beat 4)
   /** Anthropic model for the attempt ruling (12 frames; Opus is too slow for the 10 s cap). */
   JUDGE_MODEL: z.preprocess(unset, str.default('claude-sonnet-5-5')),

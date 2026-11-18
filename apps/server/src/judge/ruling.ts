@@ -36,7 +36,8 @@ import { judgeStatsOf, type JudgeCallSource } from './stats';
 
 /**
  * `Ruling.model` of a cached ruling (env CACHED_RULING or the runtime toggle POST
- * /v1/demo/toggles, demo/toggles.ts): the marker the stage labels (shared isCachedRuling).
+ * /v1/demo/toggles, demo/toggles.ts): the marker the stage labels "replay ruling" (shared
+ * isCachedRuling / isCachedRulingModel).
  */
 export { CACHED_RULING_MODEL };
 

@@ -29,6 +29,7 @@ import {
   type VoiceLine,
   type VoiceLinesResponse,
 } from '@youre-on/shared/judge/voice';
+import { stageSfxPath } from '@youre-on/shared/stage-voice';
 import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
@@ -182,7 +183,16 @@ export function cuesHandler() {
     const deps = c.get('deps');
     const bet = await hostedBet(c, 'cues', CUES_BUCKET);
     const { kind } = await readBody(c, StageCueRequest);
-    if (bet.room_id) deps.hub.publishToRoom(bet.room_id, { op: 'stage.cue', bet_id: bet.id, kind });
+    // The ElevenLabs Sound Effects clip when it is live (src/stage/audio.ts); else the stage
+    // synthesizes the cue itself.
+    const live = deps.providers.sfx.name === 'live';
+    if (bet.room_id)
+      deps.hub.publishToRoom(bet.room_id, {
+        op: 'stage.cue',
+        bet_id: bet.id,
+        kind,
+        ...(live ? { audio_url: stageSfxPath(kind) } : {}),
+      });
     deps.log.info('voice.cue', { bet_id: bet.id, kind, relayed: bet.room_id !== null });
     const res: StageCueResponse = { relayed: bet.room_id !== null };
     return c.json(res, 202);

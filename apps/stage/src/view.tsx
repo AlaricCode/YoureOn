@@ -20,6 +20,7 @@ import {
 } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { isCachedRulingModel } from '@youre-on/shared/ruling';
 import { formatPrice } from '@youre-on/shared/settlement';
 import {
   explorerTx,
@@ -480,6 +481,15 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
           : r.stage === 'hearing'
             ? 'THE JUDGE RULES · AFTER THE HEARING'
             : `THE JUDGE RULES${r.attempt_no ? ` · ATTEMPT ${r.attempt_no}` : ''}`}
+        {/* CACHED_RULING: a stored verdict, no model call (ARCHITECTURE §7.2): say so on screen */}
+        {isCachedRulingModel(r.model) && (
+          <>
+            {' '}
+            <span className="replay-badge inline" title={r.model}>
+              replay ruling
+            </span>
+          </>
+        )}
       </span>
       <div className="verdict">{outcomeLine(bet)}</div>
       <div className="ruling-row">
@@ -986,6 +996,7 @@ export const KEYS: Array<[string, string]> = [
   ['F', 'Full screen on / off'],
   ['Q', 'Big QR of the latest transaction'],
   ['M', 'Sound on / off (any key unlocks it)'],
+  ['V', 'Judge voice on / off'],
   ['H or ?', 'This help'],
 ];
 
@@ -1232,6 +1243,7 @@ export function HealthStrip({
   room = null,
   online = null,
   sound = null,
+  voice = null,
   onDisconnect,
 }: {
   health: DemoHealth | null;
@@ -1241,6 +1253,8 @@ export function HealthStrip({
   room?: string | null;
   online?: { online: number; members: number } | null;
   sound?: 'locked' | 'on' | 'off' | null;
+  /** Whose voice the judge has here: 'ElevenLabs', 'browser', 'off (V)' (App.tsx voiceLabel). */
+  voice?: string | null;
   onDisconnect?: () => void;
 }) {
   const items: HealthItem[] = [];
@@ -1273,6 +1287,18 @@ export function HealthStrip({
       value: sound === 'off' ? 'off (M)' : 'press any key',
       level: 'idle',
     });
+  if (voice)
+    items.push({
+      key: 'voice',
+      label: 'Voice',
+      value: voice,
+      // warn: ElevenLabs is on but the browser said the last line (a late or failed clip)
+      level: !voice.startsWith('ElevenLabs')
+        ? 'idle'
+        : voice.includes('last line: browser')
+          ? 'warn'
+          : 'ok',
+    });
   return (
     <footer className="health" aria-label="status">
       {items.map((i) => (
@@ -1302,6 +1328,7 @@ export function StageView({
   replays = null,
   roomLabel = null,
   sound = null,
+  voice = null,
   lockSigner = null,
   verifications = {},
 }: {
@@ -1317,6 +1344,8 @@ export function StageView({
   roomLabel?: string | null;
   /** 'locked' until a key press unlocks audio; 'off' when muted (M). */
   sound?: 'locked' | 'on' | 'off' | null;
+  /** The health strip's voice item (App.tsx voiceLabel). */
+  voice?: string | null;
   /** Who signs the lock: 'server' words the signature slots as custodial demo signing. */
   lockSigner?: LockSigner;
   /** Gemini bets' evidence re-checks, by bet id. */
@@ -1377,6 +1406,7 @@ export function StageView({
           room={roomLabel}
           online={state.presence}
           sound={sound}
+          voice={voice}
           onDisconnect={onDisconnect}
         />
       </div>
