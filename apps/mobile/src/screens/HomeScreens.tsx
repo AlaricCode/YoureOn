@@ -286,7 +286,8 @@ export function ProfileScreen({
   return (
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.profile.title)} />
-      <Page>
+      {/* Scrolls: in landscape (the judge cam on its tripod) the last rows were cut off. */}
+      <ScrollView style={styles.flex} contentContainerStyle={styles.profileScroll}>
         <View style={styles.profileHead}>
           <Avatar name={name} size={72} accent />
           <DataText variant="title">{name}</DataText>
@@ -302,10 +303,14 @@ export function ProfileScreen({
           <ListRow title={t(COPY.profile.history)} onPress={onHistory} />
         </Section>
         <Section label={t(COPY.profile.demo)}>
-          <ListRow title={t(COPY.profile.judgeCam)} onPress={onJudgeCam} />
-          <ListRow title={t(COPY.profile.demo)} onPress={onDemo} />
+          <ListRow
+            testID="profile-judge-cam"
+            title={t(COPY.profile.judgeCam)}
+            onPress={onJudgeCam}
+          />
+          <ListRow testID="profile-demo" title={t(COPY.profile.demo)} onPress={onDemo} />
         </Section>
-      </Page>
+      </ScrollView>
     </Screen>
   );
 }
@@ -337,4 +342,5 @@ const styles = StyleSheet.create({
   challenge: { width: 120 },
   row: { flexDirection: 'row', gap: space.x1, marginTop: space.x1 },
   profileHead: { alignItems: 'center', gap: space.x2, marginTop: space.x2 },
+  profileScroll: { paddingHorizontal: space.page, paddingBottom: space.x4 },
 });
