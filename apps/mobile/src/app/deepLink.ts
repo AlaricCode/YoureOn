@@ -12,6 +12,8 @@ import {
   parseRoomCode,
 } from '@youre-on/shared/api';
 
+import type { Route } from './machine';
+
 export type DeepLink = { kind: 'room'; code: string } | { kind: 'demoClaim'; token: string };
 
 export function parseDeepLink(url: string | null | undefined): DeepLink | null {
@@ -26,3 +28,12 @@ export function parseDeepLink(url: string | null | undefined): DeepLink | null {
     ? { kind: 'demoClaim', token }
     : null;
 }
+
+/**
+ * Whether a demo-claim token from a link is still wanted on this route. It lives only while the
+ * Demo account screen is up: a claim closes that screen through the session listener (signed_in
+ * sets the overlay to 'none'), so neither its Back nor its Done runs, and the next "Demo account"
+ * from Profile used to open in link mode with the spent single-use token (no scanner, and "Use
+ * this account" failed). 'boot' keeps it: a cold-start link arrives while the session restores.
+ */
+export const demoLinkLives = (route: Route): boolean => route === 'demoClaim' || route === 'boot';
