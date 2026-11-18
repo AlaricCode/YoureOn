@@ -133,6 +133,7 @@ describe('phase rail', () => {
       onchain_at: null,
     };
     expect(phaseOf(bet({ state: 'AWAITING_LOCK', lock }))).toBe('play');
+    expect(phaseOf(bet({ attempt_no: 1 }))).toBe('play');
     expect(phaseOf(bet({ state: 'AWAITING_LOCK', lock: { ...lock, status: 'submitted' } }))).toBe(
       'lock',
     );

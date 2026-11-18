@@ -44,6 +44,7 @@ function fieldPhase(b: BetView): PhaseKey {
   if (b.payout) return 'paid';
   if (isDecisiveOrVoid(b.ruling?.outcome) || b.appealed || b.hearing) return 'ruling';
   if (b.lock && (b.lock.status === 'confirmed' || b.lock.onchain)) return 'play';
+  if (b.attempt_no !== null || b.evidence) return 'play';
   if (b.lock || b.auth_count > 0 || b.auth.A || b.auth.B || b.declined) return 'lock';
   if (b.envelope) return 'terms';
   // the voice judge is talking (DRAFTING): the challenge was accepted, terms are being set

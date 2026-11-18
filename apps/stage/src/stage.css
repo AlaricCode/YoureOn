@@ -538,11 +538,16 @@ code,
 .frames li.cited {
   border-color: var(--accent);
 }
-.frames img {
+.frames img,
+.frames .loading {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
+}
+.frames .loading {
+  background: var(--panel-2);
+  animation: pulse 1.2s ease-in-out infinite;
 }
 
 .ruling {

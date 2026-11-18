@@ -20,6 +20,7 @@ import { WS_CLOSE } from '@youre-on/shared/api';
 import { applyFrame, initialTicker, type BetView } from './ticker';
 import {
   fetchBetSnapshot,
+  fetchFrame,
   fetchMarket,
   openStageSession,
   StageConnection,
@@ -219,6 +220,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const conn = useRef<StageConnection | null>(null);
   const seeded = useRef(new Set<string>());
+  /** Evidence frames already requested (`bet|attempt|count`), and their object URLs. */
+  const framesAsked = useRef(new Set<string>());
+  const frameUrls = useRef<string[]>([]);
   const now = useNow(state.clockOffsetMs);
   const replays = useReplays(!launch.noPreload);
   const { health, error: healthError } = useDemoHealth(live);
@@ -264,6 +268,8 @@ export function App() {
     }) => {
       conn.current?.stop();
       seeded.current = new Set();
+      framesAsked.current = new Set();
+      for (const u of frameUrls.current.splice(0)) URL.revokeObjectURL(u);
       dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
       const serverUrl = resolveServer(s.serverUrl, origin());
       conn.current = new StageConnection({
@@ -395,6 +401,37 @@ export function App() {
       );
     }
   }, [betIds, live]);
+
+  // Evidence frames: attempt.evidence carries no frame_urls yet (the server keeps the JPEGs in
+  // Postgres), so each frame is fetched once with the stage bearer and shown from a blob URL.
+  const framesWanted = Object.values(state.bets)
+    .flatMap((b) =>
+      b.evidence && !b.frame_urls.length
+        ? [`${b.bet_id}|${b.evidence.attempt_no}|${b.evidence.frames}`]
+        : [],
+    )
+    .join(',');
+  useEffect(() => {
+    if (!live || !framesWanted) return;
+    for (const want of framesWanted.split(',')) {
+      if (framesAsked.current.has(want)) continue;
+      framesAsked.current.add(want);
+      const [betId, n, count] = want.split('|') as [string, string, string];
+      void (async () => {
+        for (let idx = 0; idx < Number(count); idx++) {
+          try {
+            const blob = await fetchFrame(live.serverUrl, live.token, betId, Number(n), idx);
+            const url = URL.createObjectURL(blob);
+            frameUrls.current.push(url);
+            dispatch({ kind: 'frame_blob', bet_id: betId, attempt_no: Number(n), idx, url });
+          } catch (err) {
+            dispatch({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+            return;
+          }
+        }
+      })();
+    }
+  }, [framesWanted, live]);
 
   // A reconnect's hello resumes each bet after the last seq applied, not from 0.
   useEffect(() => {

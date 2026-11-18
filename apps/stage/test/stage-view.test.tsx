@@ -13,6 +13,7 @@ import {
   applyFrame,
   emptyBet,
   explorerTx,
+  framesOf,
   initialTicker,
   type TickerAction,
   type TickerState,
@@ -448,6 +449,62 @@ describe('bet card state', () => {
     // a fresh snapshot (last_seq >= everything seen) still lays on top
     s = applyFrame(s, { kind: 'snapshot', bet: snapshot(99, 'FINALIZED'), receivedAt: 3 });
     expect(s.bets[BET]!.state).toBe('FINALIZED');
+  });
+
+  it('evidence frames: fetched JPEGs fill in by index; a new attempt starts empty', () => {
+    seq = 0;
+    const evidence = {
+      schema_version: 1,
+      kind: 'camera',
+      bet_id: BET,
+      attempt_no: 2,
+      clip_sha256: '6d'.repeat(32),
+      clip_bytes: 1000,
+      mime: 'video/mp4',
+      duration_ms: 4000,
+      recorded_by: 'A',
+      recorded_at: '2026-11-21T18:06:00.000Z',
+      frames: [0, 1, 2].map((i) => ({ index: i, t_ms: i * 500, sha256: 'ab'.repeat(32) })),
+    };
+    let s = run([
+      ev('attempt.started', {
+        attempt_no: 2,
+        performer: 'B',
+        max_ms: 15000,
+        recorder_device_id: '00000000-0000-4000-8000-0000000000d1',
+        go_at: '2026-11-21T18:05:58.000Z',
+      }),
+      ev('attempt.evidence', { evidence, frame_urls: [] }),
+    ]);
+    const b = s.bets[BET]!;
+    expect(b.evidence).toEqual({ attempt_no: 2, frames: 3 });
+    expect(framesOf(s, b)).toEqual(['', '', '']);
+    s = applyFrame(s, { kind: 'frame_blob', bet_id: BET, attempt_no: 2, idx: 1, url: 'blob:f1' });
+    expect(framesOf(s, s.bets[BET]!)).toEqual(['', 'blob:f1', '']);
+    // a blob for another attempt is not shown for this one
+    s = applyFrame(s, { kind: 'frame_blob', bet_id: BET, attempt_no: 1, idx: 0, url: 'blob:old' });
+    expect(framesOf(s, s.bets[BET]!)).toEqual(['', 'blob:f1', '']);
+    const html = renderToString(<StageView state={s} now={0} />);
+    expect(html).toContain('src="blob:f1"');
+    expect(html.match(/class="loading"/g)).toHaveLength(2);
+    // server-sent frame_urls win
+    expect(framesOf(s, { ...s.bets[BET]!, frame_urls: ['https://x.test/a.jpg'] })).toEqual([
+      'https://x.test/a.jpg',
+    ]);
+    s = run(
+      [
+        ev('attempt.started', {
+          attempt_no: 3,
+          performer: 'B',
+          max_ms: 15000,
+          recorder_device_id: '00000000-0000-4000-8000-0000000000d1',
+          go_at: '2026-11-21T18:07:00.000Z',
+        }),
+      ],
+      s,
+    );
+    expect(s.bets[BET]!.evidence).toBeNull();
+    expect(framesOf(s, s.bets[BET]!)).toEqual([]);
   });
 
   it('captions: the judge (partial, then final) and the players (party.line)', () => {
