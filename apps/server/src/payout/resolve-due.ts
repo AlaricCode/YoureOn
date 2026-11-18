@@ -19,7 +19,8 @@ export type ResolveDueDeps = Pick<AppDeps, 'db' | 'log'> & Partial<Pick<AppDeps,
 
 export async function resolveDue(deps: ResolveDueDeps, now: number): Promise<number> {
   if (!deps.onRuling) return 0;
-  const cutoff = new Date(now - RESOLVE_GRACE_MS);
+  // ISO text + an explicit cast: a raw Date is not serialized inside a drizzle sql`` template.
+  const cutoff = new Date(now - RESOLVE_GRACE_MS).toISOString();
   const rows = await deps.db.execute<{ bet_id: string; record_canonical: string }>(sql`
     SELECT r.bet_id, r.record_canonical
       FROM bets b
@@ -33,7 +34,7 @@ export async function resolveDue(deps: ResolveDueDeps, now: number): Promise<num
      WHERE b.state = 'JUDGING'
        AND b.ruling_hash IS NULL
        AND r.outcome IN ('A_WINS', 'B_WINS', 'VOID')
-       AND r.created_at < ${cutoff}
+       AND r.created_at < ${cutoff}::timestamptz
      ORDER BY r.created_at
      LIMIT ${RESOLVE_BATCH}`);
   let sent = 0;
