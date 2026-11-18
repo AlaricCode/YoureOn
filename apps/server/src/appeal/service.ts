@@ -1141,6 +1141,9 @@ export class AppealService {
         },
       });
       const envs = [
+        // Every vote is on the log before the result, even ones stored while the bet was still
+        // RULED (the Stream's BetAppealed moved it before our own confirm could stream them).
+        ...(await this.pendingVotes(tx, ap.id, b.id)),
         await appendBetEvent(tx, {
           bet_id: b.id,
           type: 'appeal.result',
