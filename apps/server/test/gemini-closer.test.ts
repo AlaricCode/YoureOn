@@ -85,6 +85,19 @@ import {
 const T0240 = Date.parse('2026-11-18T02:40:00.000Z');
 const TICKER = 'BTC05M2611180240';
 
+/**
+ * Every test quotes the recorded contract, and a contract settles once (the settlement keeper
+ * rules every later bet on the body the first one stored): retire the contract's row so the
+ * next quote starts a fresh one, as a new 5-minute round would. Bets already quoted keep
+ * pointing at the retired row.
+ */
+async function forgetSettlement(db: Ctx['deps']['db']) {
+  await db
+    .update(geminiMarkets)
+    .set({ instrument_symbol: sql`instrument_symbol || ':retired:' || gen_random_uuid()` })
+    .where(sql`instrument_symbol NOT LIKE '%:retired:%'`);
+}
+
 /** A logger that keeps every line: [level, event, fields]. */
 function recordingLog(): Logger & { lines: Array<[string, string, Record<string, unknown>]> } {
   const lines: Array<[string, string, Record<string, unknown>]> = [];
@@ -180,6 +193,7 @@ describeDb(
       ruled = [];
       failRuling = false;
       await retireLeftovers();
+      await forgetSettlement(ctx.deps.db);
       g.routes.clear();
       g.routes.set(EVENTS_PATH, F.events_0237);
       g.routes.set(eventPath(TICKER), F.event_0240_active);
@@ -576,6 +590,8 @@ describeDb(
       expect(await svc.check(down.betId)).toBe('settled');
       expect(ruled.at(-1)!.ruling).toMatchObject({ outcome: 'A_WINS', claim_result: 'NOT_MET' });
 
+      // SYNTHETIC: the same contract settled the other way (forget the NO body stored above)
+      await forgetSettlement(ctx.deps.db);
       g.routes.set(eventPath(TICKER), settledYes());
       expect(await svc.check(up.betId)).toBe('settled');
       expect(ruled.at(-1)!.ruling).toMatchObject({
@@ -610,6 +626,7 @@ describeDb(
         expect(cue.payload.cue).toBe('VOIDED');
         ruled = [];
         clock.t = T0237;
+        await forgetSettlement(ctx.deps.db);
         g.routes.set(eventPath(TICKER), F.event_0240_active);
         await markets.refresh();
       }
@@ -971,6 +988,107 @@ describeDb(
         fix: 'TOO_CLOSE_TO_EXPIRY',
         say: 'Too late for this round. The next one opens at 02:40 UTC.',
       });
+    });
+
+    // ---- one settlement body per contract ------------------------------------------------
+
+    /** SYNTHETIC: the recorded settled body as other bytes (the same JSON, keys reordered). */
+    const reorderedSettled = () => {
+      const { ticker, ...rest } = clone(F.event_0240_settled) as any;
+      return { ...rest, ticker };
+    };
+    const evidenceOf = async (u: SignedUp, betId: string) => {
+      const r = await fetch(`${ctx.base}/v1/bets/${betId}/settlement`, {
+        headers: { Authorization: `Bearer ${u.session.token}` },
+      });
+      expect(r.status).toBe(200);
+      return SettlementEvidence.parse(await r.json());
+    };
+
+    it('a second bet on the same contract rules on the stored body: both evidence chains keep it', async () => {
+      const one = await lockedBet('UP');
+      const two = await lockedBet('DOWN');
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      expect(await svc.check(one.betId)).toBe('settled');
+      // later, Gemini would answer with other bytes; the second bet does not fetch at all
+      g.routes.set(eventPath(TICKER), reorderedSettled());
+      clock.t = T0240 + 30_000;
+      const calls = g.calls.length;
+      expect(await svc.check(two.betId)).toBe('settled');
+      expect(g.calls.length).toBe(calls);
+
+      const body = JSON.stringify(F.event_0240_settled);
+      const [r1] = await settlementRows(one.betId);
+      const [r2] = await settlementRows(two.betId);
+      const rec1 = GeminiSettlementRecord.parse(JSON.parse(r1!.evidence_canonical!));
+      const rec2 = GeminiSettlementRecord.parse(JSON.parse(r2!.evidence_canonical!));
+      // the same fetch: bytes, URL and time; each bet's own record and ruling
+      expect(rec2.response_sha256).toBe(sha256Hex(body));
+      expect(rec2.response_sha256).toBe(rec1.response_sha256);
+      expect(rec2.fetched_at).toBe(rec1.fetched_at);
+      expect(rec2.source_url).toBe(rec1.source_url);
+      expect(rec2).toMatchObject({ bet_id: two.betId, terms_hash: two.res.terms_hash });
+      expect(r2).toMatchObject({ latency_ms: 30_000, created_at: new Date(T0240 + 30_000) });
+      expect(ruled.map((r) => [r.betId, r.ruling.outcome])).toEqual([
+        [one.betId, 'B_WINS'],
+        [two.betId, 'A_WINS'],
+      ]);
+      for (const [u, id] of [
+        [one.A, one.betId],
+        [two.A, two.betId],
+      ] as const) {
+        const ev = await evidenceOf(u, id);
+        expect(ev.raw_body).toBe(body);
+        expect(ev.verification).toMatchObject({ ok: true, checks: { body_matches_record: true } });
+      }
+      const [m] = await ctx.deps.db
+        .select()
+        .from(geminiMarkets)
+        .where(eq(geminiMarkets.instrument_symbol, SYMBOL));
+      expect(m!.settlement_raw).toBe(body);
+    });
+
+    it('two bets settling at once on different bytes: one stores its body, the other retries on it', async () => {
+      const one = await lockedBet('UP');
+      const two = await lockedBet('DOWN');
+      // every fetch of the event gets the next body: the same JSON, different bytes
+      const bodies = [JSON.stringify(F.event_0240_settled), JSON.stringify(reorderedSettled())];
+      let n = 0;
+      const split = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (new URL(url).pathname === eventPath(TICKER))
+          return new Response(bodies[n++ % 2], { status: 200 });
+        return g.fetch(input, init);
+      }) as typeof fetch;
+      ctx.deps.markets = new MarketService({
+        client: createGeminiClient({ fetch: split }),
+        now,
+        log: silentLogger,
+      });
+      clock.t = T0240 + 6_000;
+      const first = await Promise.all([svc.check(one.betId), svc.check(two.betId)]);
+      expect(n).toBe(2);
+      expect([...first].sort()).toEqual(['pending', 'settled']);
+      const loser = first[0] === 'pending' ? one.betId : two.betId;
+      expect(await settlementRows(loser)).toHaveLength(0);
+      expect(await svc.check(loser)).toBe('settled'); // on the stored body, no third fetch
+      expect(n).toBe(2);
+      const shas = await Promise.all(
+        [one.betId, two.betId].map(async (id) => {
+          const [row] = await settlementRows(id);
+          return GeminiSettlementRecord.parse(JSON.parse(row!.evidence_canonical!)).response_sha256;
+        }),
+      );
+      expect(shas[0]).toBe(shas[1]);
+      const [m] = await ctx.deps.db
+        .select()
+        .from(geminiMarkets)
+        .where(eq(geminiMarkets.instrument_symbol, SYMBOL));
+      expect(sha256Hex(m!.settlement_raw!)).toBe(shas[0]);
+      for (const b of [one, two])
+        expect((await evidenceOf(b.A, b.betId)).verification.checks.body_matches_record).toBe(true);
     });
 
     // ---- the resolve deadline, re-sends --------------------------------------------------
