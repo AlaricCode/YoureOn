@@ -92,7 +92,11 @@ export interface ChainClient {
   simulate(wire: Base64EncodedWireTransaction, replaceRecentBlockhash: boolean): Promise<Simulated>;
   /** preflight ON unless skipPreflight (re-broadcasts only). Throws PreflightError on rejection. */
   send(wire: Base64EncodedWireTransaction, skipPreflight: boolean): Promise<void>;
-  signatureStatus(sig: string): Promise<SigStatus | null>;
+  /**
+   * getSignatureStatuses. `searchHistory` adds searchTransactionHistory: true (sweeps after a
+   * restart: the default lookup only sees the recent status cache, so an older landed tx is null).
+   */
+  signatureStatus(sig: string, o?: { searchHistory?: boolean }): Promise<SigStatus | null>;
   blockHeight(): Promise<bigint>;
   getAccount(addr: Address): Promise<RawAccount | null>;
   /** Sum of every token account of `owner` for `mint` (API-CONTRACT §2.14). */
@@ -198,8 +202,13 @@ export function rpcChainClient(
         throw e;
       }
     },
-    async signatureStatus(sig) {
-      const { value } = await rpc.getSignatureStatuses([sig as Signature]).send();
+    async signatureStatus(sig, o) {
+      const { value } = await rpc
+        .getSignatureStatuses(
+          [sig as Signature],
+          o?.searchHistory ? { searchTransactionHistory: true } : undefined,
+        )
+        .send();
       const st = value[0];
       return st ? { err: st.err, confirmationStatus: st.confirmationStatus, slot: st.slot } : null;
     },
