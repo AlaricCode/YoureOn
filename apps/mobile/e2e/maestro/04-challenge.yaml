@@ -1,0 +1,28 @@
+# Phone A, in the room with B: B appeared by a room.presence push over A's socket (the app never
+# polls presence, so this proves A's WebSocket is live), then "Challenge" -> POST /v1/bets (list
+# pick) -> the typed-terms form (EXPO_PUBLIC_VOICE=off: no voice judge).
+#   maestro --device <udid A> test -e OPPONENT="Sim B" e2e/maestro/04-challenge.yaml
+appId: dev.youreon.app
+name: challenge
+---
+- extendedWaitUntil:
+    visible: ${OPPONENT}
+    timeout: 20000
+- takeScreenshot: 07-a-sees-b
+- tapOn: Challenge
+- extendedWaitUntil:
+    visible:
+      id: typed-claim
+    timeout: 20000
+# The default claim names B; the four stakes; Send, never Lock it in yet.
+- assertVisible: ${OPPONENT} lands a water bottle flip.*
+- assertVisible:
+    id: typed-stake-1
+- assertVisible:
+    id: typed-stake-20
+- assertVisible:
+    id: typed-send
+    enabled: true
+- assertNotVisible:
+    id: typed-confirm
+- takeScreenshot: 08-typed-terms-form

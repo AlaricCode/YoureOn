@@ -1,0 +1,35 @@
+# Home -> History (GET /v1/me/bets?status=settled) -> back; Profile -> History -> back.
+# A new user has no settled bets: "No bets yet".
+#   maestro --device <udid> test e2e/maestro/history.yaml   (signed in, on home)
+appId: dev.youreon.app
+name: history
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- tapOn:
+    id: home-history
+- extendedWaitUntil:
+    visible: No bets yet|Won.*|Lost.*|Refunded.*
+    timeout: 15000
+- takeScreenshot: 40-history
+- tapOn:
+    id: top-back
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000
+- tapOn:
+    id: home-profile
+- tapOn: History
+- extendedWaitUntil:
+    visible: No bets yet|Won.*|Lost.*|Refunded.*
+    timeout: 15000
+- tapOn:
+    id: top-back
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000

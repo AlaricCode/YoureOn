@@ -1,0 +1,21 @@
+# Phone A, signed in with no room: "New room" -> the room page with its code chip.
+# two-phones.sh then reads the code (`maestro hierarchy`, element room-code-chip) for phone B.
+appId: dev.youreon.app
+name: create-room
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- tapOn:
+    id: room-create
+# POST /v1/rooms, then POST /v1/rooms/join (both signed writes), then the room page.
+- extendedWaitUntil:
+    visible:
+      id: room-code-chip
+    timeout: 20000
+- assertVisible:
+    id: room-leave
+- assertVisible: Room is empty
+- takeScreenshot: 04-room-created

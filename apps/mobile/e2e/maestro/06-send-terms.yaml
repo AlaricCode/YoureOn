@@ -1,0 +1,17 @@
+# Phone A: "Send terms" -> POST /v1/bets/:id/terms/typed (pure server-side checks, no model call)
+# -> terms.proposed -> the draft card, and "Lock it in" because B accepted.
+# NEVER tap "Lock it in" here: with LOCK_SIGNER=server it locks real devnet stakes.
+appId: dev.youreon.app
+name: send-terms
+---
+- tapOn:
+    id: typed-stake-5
+- tapOn:
+    id: typed-send
+- extendedWaitUntil:
+    visible:
+      id: typed-confirm
+    timeout: 20000
+- assertVisible: Draft terms
+- assertVisible: \$5 vs \$5
+- takeScreenshot: 11-a-terms-sent
