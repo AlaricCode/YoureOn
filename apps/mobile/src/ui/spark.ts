@@ -55,11 +55,36 @@ function tangents(p: readonly Pt[]): number[] {
 }
 
 /**
- * Lays `points` out left to right across `width`, lowest value at the bottom of `height`, as a
- * monotone-cubic smoothed path. `pad` keeps the stroke and the end dot inside the box (top,
- * bottom and right, where the dot sits); `padLeft` (default `pad`) is the left inset, so the
- * line can start right on the page margin. A flat series draws a flat line in the middle. Fewer
- * than SPARK_MIN_POINTS, or no room, draws nothing.
+ * The sparkline's vertices: `points` laid out left to right across `width`, lowest value at the
+ * bottom of `height`. `pad` keeps the stroke and the end dot inside the box (top, bottom and
+ * right, where the dot sits); `padLeft` (default `pad`) is the left inset, so the line can start
+ * right on the page margin. A flat series sits in the middle. Non-finite points are dropped.
+ * Fewer than SPARK_MIN_POINTS, or no room, gives []. The scrub (./ScrubSparkline) snaps to these
+ * same vertices, so the drawing and the touch share one layout. Not rounded.
+ */
+export function sparkPoints(
+  points: readonly number[],
+  width: number,
+  height: number,
+  pad = 4,
+  padLeft = pad,
+): { x: number; y: number }[] {
+  const finite = points.filter((p) => Number.isFinite(p));
+  if (finite.length < SPARK_MIN_POINTS || width <= padLeft + pad || height <= 2 * pad) return [];
+  const lo = Math.min(...finite);
+  const hi = Math.max(...finite);
+  const span = hi - lo;
+  const w = width - padLeft - pad;
+  const h = height - 2 * pad;
+  return finite.map((p, i) => ({
+    x: padLeft + (w * i) / (finite.length - 1),
+    y: span === 0 ? pad + h / 2 : pad + h - ((p - lo) / span) * h,
+  }));
+}
+
+/**
+ * The sparkline (see sparkPoints for the layout) as a monotone-cubic smoothed path, plus its end
+ * point. Fewer than SPARK_MIN_POINTS, or no room, draws nothing.
  */
 export function sparkGeometry(
   points: readonly number[],
@@ -68,18 +93,8 @@ export function sparkGeometry(
   pad = 4,
   padLeft = pad,
 ): SparkGeometry {
-  const finite = points.filter((p) => Number.isFinite(p));
-  if (finite.length < SPARK_MIN_POINTS || width <= padLeft + pad || height <= 2 * pad)
-    return { d: '', end: null };
-  const lo = Math.min(...finite);
-  const hi = Math.max(...finite);
-  const span = hi - lo;
-  const w = width - padLeft - pad;
-  const h = height - 2 * pad;
-  const xy: Pt[] = finite.map((p, i) => ({
-    x: padLeft + (w * i) / (finite.length - 1),
-    y: span === 0 ? pad + h / 2 : pad + h - ((p - lo) / span) * h,
-  }));
+  const xy: Pt[] = sparkPoints(points, width, height, pad, padLeft);
+  if (xy.length === 0) return { d: '', end: null };
   const m = tangents(xy);
   const first = xy[0] as Pt;
   let d = `M${round(first.x)} ${round(first.y)}`;

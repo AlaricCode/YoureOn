@@ -1,0 +1,75 @@
+# Swipe to confirm (ui/SwipeToConfirm) in the stand-in design preview: a tap on the lock control
+# does not commit; a swipe up does, and the preview's simulated Face ID then signs (the swipe is
+# the deliberate intent, device auth still follows). Then the loser's GG, same control.
+#   maestro --device <udid> test e2e/maestro/sim-swipe.yaml   (signed in, on home)
+appId: dev.youreon.app
+name: sim-swipe
+---
+- launchApp:
+    stopApp: true
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- longPressOn:
+    id: balance-header
+- extendedWaitUntil:
+    visible: App preview
+    timeout: 10000
+- waitForAnimationToEnd
+- tapOn: App preview
+- extendedWaitUntil:
+    visible:
+      id: menu-launch
+    timeout: 10000
+# --- Lock: tap nudges, swipe commits -------------------------------------------------------
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: terms
+# The device policy passes ~0.7 s after mount; until then the control is disabled.
+- extendedWaitUntil:
+    visible:
+      id: terms-hold
+      enabled: true
+    timeout: 10000
+- assertVisible: Swipe up to lock in .*
+- tapOn:
+    id: terms-hold
+# A tap is not a commit: the control is still there (the hint shows for a moment).
+- assertVisible:
+    id: terms-hold
+- swipe:
+    from:
+      id: terms-hold
+    direction: UP
+    duration: 300
+- extendedWaitUntil:
+    notVisible:
+      id: terms-hold
+    timeout: 8000
+- takeScreenshot: swipe-lock
+- tapOn:
+    id: preview-menu
+# --- Ruling: the loser's GG ----------------------------------------------------------------
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: rulingLost
+- extendedWaitUntil:
+    visible:
+      id: ruling-gg
+      enabled: true
+    timeout: 10000
+- swipe:
+    from:
+      id: ruling-gg
+    direction: UP
+    duration: 300
+- extendedWaitUntil:
+    visible:
+      id: payout-home
+    timeout: 8000
+- takeScreenshot: swipe-gg
+- tapOn:
+    id: preview-menu

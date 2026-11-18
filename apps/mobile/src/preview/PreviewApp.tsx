@@ -118,6 +118,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [inRoom, setInRoom] = useState(true);
   const [balance, setBalance] = useState(startCents);
   const [market, setMarket] = useState(false);
+  // History: 'loading' with no rows is the first-load skeleton; a pull on a loaded list reloads
+  // it (the refresh spinner over the rows, for a moment).
+  const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready'>('ready');
+  const [historyFirstLoad, setHistoryFirstLoad] = useState(false);
   // "Bet on Bitcoin" panel (Beat 6): A's call and stake, priced at the sample 62 % Up.
   const [mSide, setMSide] = useState<'UP' | 'DOWN'>('UP');
   const [mStake, setMStake] = useState<number>(2);
@@ -397,7 +401,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
               setMarket(false);
               startNegotiation();
             }}
-            onHistory={() => go('history')}
+            onHistory={() => openHistory(false)}
             onProfile={() => go('profile')}
           />
         );
@@ -648,7 +652,18 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
           />
         );
       case 'history':
-        return <HistoryScreen items={HISTORY} onBack={() => go('home')} />;
+        return (
+          <HistoryScreen
+            items={historyFirstLoad ? [] : HISTORY}
+            status={historyStatus}
+            onRetry={() => {
+              setHistoryFirstLoad(false);
+              setHistoryStatus('loading');
+              later(1200, () => setHistoryStatus('ready'));
+            }}
+            onBack={() => go('home')}
+          />
+        );
       case 'profile':
         return (
           <ProfileScreen
@@ -656,7 +671,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             faceOn={faceOn}
             onBack={() => go('home')}
             onFace={() => go('faceSettings')}
-            onHistory={() => go('history')}
+            onHistory={() => openHistory(false)}
             onJudgeCam={() => go('judgeCam')}
             onDemo={() => go('demo')}
           />
@@ -678,6 +693,13 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
     }
   })();
 
+  /** History ready, or (`firstLoad`) still on its first page: the skeleton, held there. */
+  function openHistory(firstLoad: boolean) {
+    setHistoryFirstLoad(firstLoad);
+    setHistoryStatus(firstLoad ? 'loading' : 'ready');
+    go('history');
+  }
+
   function openFromMenu(key: MenuKey) {
     setMarket(key === 'market' || key === 'termsMarket' || key === 'marketPanel');
     setMe('A');
@@ -685,10 +707,13 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       case 'launch':
       case 'launchFailed':
         return go(key);
+      case 'history':
+        return openHistory(false);
+      case 'historyLoading':
+        return openHistory(true);
       case 'signup':
       case 'home':
       case 'scan':
-      case 'history':
       case 'profile':
       case 'judgeCam':
       case 'demo':
@@ -828,6 +853,7 @@ type MenuKey =
   | 'marketPanel'
   | 'market'
   | 'history'
+  | 'historyLoading'
   | 'profile'
   | 'demo';
 
@@ -852,8 +878,9 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     section: 'Home',
     items: [
       ['homeNoRoom', '4  Home, no room'],
-      ['home', '5  Home, in a room'],
-      ['history', '6  History'],
+      ['home', '5  Home, in a room (scrub the line)'],
+      ['history', '6  History (pull to refresh)'],
+      ['historyLoading', '6b  History, loading'],
       ['profile', '7  Profile'],
     ],
   },
@@ -868,7 +895,7 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
   {
     section: 'Beat 3: lock',
     items: [
-      ['terms', '11  Terms card'],
+      ['terms', '11  Terms card (swipe up to lock)'],
       ['termsTheyFirst', '12  Terms card, they signed first'],
       ['termsLocked', '12b  Locked'],
       ['endDeclined', '13  Declined'],
@@ -884,7 +911,7 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
       ['liveSelf', '17b  Two phones: this phone films'],
       ['judgeCam', '18  Judge cam'],
       ['rulingWon', '19  Ruling, winner'],
-      ['rulingLost', '20  Ruling, loser (GG, appeal)'],
+      ['rulingLost', '20  Ruling, loser (swipe GG, appeal)'],
       ['rulingVoid', '21  Ruling, no contest'],
       ['redo', '22  Run it back'],
       ['payoutWon', '23  Payout, winner'],
@@ -897,7 +924,7 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     items: [
       ['hearing', '26  Hearing'],
       ['appeal', '27  Appeal panel'],
-      ['marketPanel', '28  Bet on Bitcoin (odds)'],
+      ['marketPanel', '28  Bet on Bitcoin (odds, stakes)'],
       ['termsMarket', '29  Market terms card'],
       ['market', '30  Waiting for market'],
     ],

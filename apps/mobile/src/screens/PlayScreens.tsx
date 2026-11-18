@@ -44,7 +44,6 @@ import {
   Avatar,
   BalanceLine,
   Chip,
-  CountdownBar,
   DataText,
   DotsLabel,
   InfoRow,
@@ -60,6 +59,9 @@ import {
   TopBar,
   useNow,
 } from '../ui/parts';
+import { DrainBar } from '../ui/DrainBar';
+import { RollingText } from '../ui/RollingNumber';
+import { SwipeToConfirm } from '../ui/SwipeToConfirm';
 import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
@@ -441,18 +443,20 @@ export function RulingScreen({
         <>
           <View>
             <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
-            <CountdownBar fraction={left / APPEAL_WINDOW_MS} />
+            <DrainBar endsAtMs={appealDeadlineMs} windowMs={APPEAL_WINDOW_MS} />
             <InfoRow label={t(COPY.live.pot)} value={view.potUsd} />
           </View>
           <AlertLine message={alert ?? null} />
           {result === 'lost' ? (
             <>
-              <PrimaryButton
+              {/* GG pays the other side now: a swipe up, the same deliberate gesture as the lock. */}
+              <SwipeToConfirm
                 testID="ruling-gg"
                 label={t(COPY.ruling.gg)}
+                hint={t(COPY.terms.swipeHint)}
                 busy={busy}
                 disabled={!canConcede(result, appealDeadlineMs, now)}
-                onPress={onGG}
+                onComplete={onGG}
               />
               {onAppeal && canAppeal(view, result, appealDeadlineMs, now) ? (
                 <QuietButton
@@ -777,9 +781,7 @@ export function MarketScreen({
             on this screen as a 2 pt line (green if up, red if down; hidden until two ticks). */}
         <View style={styles.priceBlock}>
           <Label variant="value">{t(COPY.market.price)}</Label>
-          <Text style={type.balance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}>
-            {priceUsd}
-          </Text>
+          <RollingText text={priceUsd} style={type.balance} minScale={0.5} />
           <View style={styles.trail}>
             <Sparkline points={trail} />
           </View>
