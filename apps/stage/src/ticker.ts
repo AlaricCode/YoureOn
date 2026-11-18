@@ -904,6 +904,20 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   const parsed = parseRealtimeEvent(raw);
   if (!parsed.ok) return { ...s, dropped: s.dropped + 1 };
   const e = parsed.event;
+  // market.tick is 1 Hz chatter (API-CONTRACT §3.4, persisted: ~400 per Gemini bet). It stays out
+  // of the ticker (it would evict every chain / tx row from MAX_EVENTS) and out of the card's
+  // history, so it is deduped by lastSeq. It never moves the focus, but a bet first seen through
+  // a tick (a reload while AWAITING_MARKET) gets its card entry, so the App subscribes it from
+  // seq 0 and fetches its snapshot.
+  if (e.type === 'market.tick') {
+    if (e.seq <= (s.lastSeq[e.bet_id] ?? 0)) return s;
+    return {
+      ...s,
+      bets: s.bets[e.bet_id] ? s.bets : { ...s.bets, [e.bet_id]: emptyBet(e.bet_id, a.receivedAt) },
+      focusBetId: s.focusBetId ?? e.bet_id,
+      lastSeq: { ...s.lastSeq, [e.bet_id]: e.seq },
+    };
+  }
   const past = s.history[e.bet_id] ?? [];
   if (
     past.some((x) => x.seq === e.seq) ||
@@ -913,14 +927,6 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   const events = [...s.events, toTicker(e)]
     .sort((x, y) => (x.ts === y.ts ? x.seq - y.seq : x.ts < y.ts ? -1 : 1))
     .slice(-MAX_EVENTS);
-  // market.tick is 1 Hz chatter: it doesn't steal the focus or touch the card.
-  if (e.type === 'market.tick')
-    return {
-      ...s,
-      events,
-      focusBetId: s.focusBetId ?? e.bet_id,
-      lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
-    };
   const inOrder = e.seq > foldedSeq(s, e.bet_id);
   const hist = (inOrder ? [...past, e] : [...past, e].sort((x, y) => x.seq - y.seq)).slice(
     -MAX_BET_HISTORY,

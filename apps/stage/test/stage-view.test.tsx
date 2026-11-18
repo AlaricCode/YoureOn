@@ -741,9 +741,11 @@ describe('bet card state', () => {
       signers: 3,
     });
     const other = '0b8e5d2c-9a41-4f37-b6e2-5c1d0a9f8e73';
+    const before = s.events.length;
     s = applyFrame(s, frame({ ...ev('market.tick', { snapshot: snap() }), bet_id: other }));
     expect(s.focusBetId).toBe(BET);
-    expect(s.events.at(-1)?.type).toBe('market.tick');
+    expect(s.events).toHaveLength(before); // not a ticker row
+    expect(s.bets[other]).toBeDefined(); // but the bet is known (the App seeds it)
   });
 });
 
