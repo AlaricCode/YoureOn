@@ -16,6 +16,8 @@
 //   without a plausible signature is refused without buffering it.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+/** The post-call webhook route (API-CONTRACT §4.6). Here so readiness / el-agent need no DB. */
+export const EL_WEBHOOK_PATH = '/webhooks/elevenlabs';
 /** Hono's c.req.header() is case-insensitive; ElevenLabs sends `ElevenLabs-Signature`. */
 export const EL_SIGNATURE_HEADER = 'elevenlabs-signature';
 /** = the SDK's constructEvent tolerance (30 minutes in the past). */

@@ -44,11 +44,12 @@ import { dbErrorSummary, isTransientDbError } from '../chain/db-errors';
 import {
   checkElSignatureHeader,
   EL_SIGNATURE_HEADER,
+  EL_WEBHOOK_PATH,
   elSignatureMatches,
   type ElSignatureRejectReason,
 } from './webhook-signature';
 
-export const EL_WEBHOOK_PATH = '/webhooks/elevenlabs';
+export { EL_WEBHOOK_PATH };
 /**
  * A transcript is tens to hundreds of KB. The cap also admits a short call's post_call_audio
  * (base64 MP3, ~1 MB a minute) so it is verified and discarded with a 200 instead of a 413 that

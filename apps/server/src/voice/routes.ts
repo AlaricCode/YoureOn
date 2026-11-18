@@ -69,7 +69,13 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         });
       const state = o.state ?? new ToolState();
       const readiness = voiceReadiness(deps.env, el !== null);
-      deps.log.info('voice.readiness', { ready: readiness.ready, missing: readiness.missing });
+      deps.log.info('voice.readiness', {
+        ready: readiness.ready,
+        judge_ready: readiness.judge_ready,
+        missing: readiness.missing,
+        optional: readiness.optional,
+        webhook_url: readiness.webhook_url,
+      });
 
       app.post(VOICE_TOKENS_PATH, requireSignedRequest, async (c) => {
         const d = c.get('deps');
