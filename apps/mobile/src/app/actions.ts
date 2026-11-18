@@ -3,7 +3,8 @@
 //   lock    AuthorizeRequest -> device policy -> Face ID -> sign -> POST PartyAuthorization
 //   GG      SignRequest(concede) -> phone-rendered card + verified ruling -> Face ID -> POST
 //   appeal  SignRequest(appeal), the same gate on the 'appeal' screen -> Face ID -> POST (Beat 5)
-//   attempt clip -> frames -> sha256s -> CameraEvidence -> multipart POST …/frames
+//   attempt clip -> frames -> sha256s -> CameraEvidence -> multipart POST …/frames (once more
+//           without the landing crop if the server is older than D10 and refuses it)
 // The wallet runs the device policy itself on the exact bytes before any prompt (ESCROW §5.0.2);
 // nothing here can ask it to sign anything else.
 import type {
@@ -14,7 +15,7 @@ import type {
 } from '@youre-on/shared/api';
 import type { AuthorizeRequest, PartyAuthorization } from '@youre-on/shared/authorization';
 import type { DevicePolicyVerdict } from '@youre-on/shared/device-policy';
-import type { CameraEvidence } from '@youre-on/shared/evidence';
+import { CameraEvidence } from '@youre-on/shared/evidence';
 import { hashJcs } from '@youre-on/shared/jcs';
 import type { Party } from '@youre-on/shared/primitives';
 import { renderSignCard } from '@youre-on/shared/sign-card';
@@ -24,6 +25,7 @@ import type { BetModel } from '../bets/store';
 import { messageBytesOf, runDevicePolicy } from '../wallet/devicePolicy';
 import type { Wallet } from '../wallet/wallet';
 import type { YoApi } from '../net/api';
+import { ApiClientError } from '../net/signedFetch';
 
 type Signer = Pick<Wallet, 'authorizeTransaction'>;
 
@@ -188,12 +190,49 @@ export interface ClipIn {
 export interface PreparedAttempt {
   evidence: CameraEvidence;
   frames: Uint8Array[];
+  /** Set once the server refused the landing crop: the 12-frame upload, under its own key. */
+  noCrop?: { evidence: CameraEvidence; frames: Uint8Array[]; idempotencyKey: string };
+}
+
+/**
+ * POST …/frames refused the landing crop: a server older than D10, whose strict CameraEvidence
+ * has no `landing_crop` ("Unrecognized key") and which takes 8..12 images ('frame': "send 8 to
+ * 12 frames (got 13)"). A 422 VALIDATION_FAILED naming either.
+ */
+export function refusesLandingCrop(e: unknown): boolean {
+  if (!(e instanceof ApiClientError) || e.status !== 422 || e.code !== 'VALIDATION_FAILED')
+    return false;
+  const issues: unknown[] = Array.isArray(e.details?.issues) ? e.details.issues : [];
+  return issues.some((i) => {
+    const { path, message } = (i ?? {}) as { path?: unknown; message?: unknown };
+    const p = typeof path === 'string' ? path : '';
+    const m = typeof message === 'string' ? message : '';
+    return p === 'frame' || p.includes('landing_crop') || m.includes('landing_crop');
+  });
+}
+
+/** The same upload without its landing crop (the 12 frames, re-indexed), or null if it has none. */
+export function withoutLandingCrop(
+  p: Pick<PreparedAttempt, 'evidence' | 'frames'>,
+): Pick<PreparedAttempt, 'evidence' | 'frames'> | null {
+  const keep = p.evidence.frames.flatMap((f, i) => (f.landing_crop ? [] : [i]));
+  if (keep.length === p.evidence.frames.length) return null;
+  const evidence = CameraEvidence.parse({
+    ...p.evidence,
+    frames: keep.map((i, index) => {
+      const { landing_crop: _crop, ...f } = p.evidence.frames[i]!;
+      return { ...f, index };
+    }),
+  });
+  return { evidence, frames: keep.map((i) => p.frames[i]!) };
 }
 
 /**
  * Frames + evidence for one clip, then the multipart POST. With `cache` (keyed by the pinned
  * Idempotency-Key) a retry reuses the first build, so the body matches the key on the server
- * (a different body under the same key is 409 IDEMPOTENCY_KEY_REUSED).
+ * (a different body under the same key is 409 IDEMPOTENCY_KEY_REUSED). If the server refuses
+ * the landing crop (refusesLandingCrop: an older server) and `d.noCropKey` is given, the 12
+ * frames go once more without it, under that key; a retry then resends that upload.
  */
 export async function sendAttempt(
   d: {
@@ -203,6 +242,8 @@ export async function sendAttempt(
     extractFrames(uri: string, durationMs: number): Promise<CapturedFrame[]>;
     /** server-corrected ms -> ISO */
     iso(ms: number): string;
+    /** The pinned Idempotency-Key of the same upload without its crop (omitted: no fallback). */
+    noCropKey?: (() => string) | undefined;
   },
   a: {
     bet_id: string;
@@ -218,8 +259,19 @@ export async function sendAttempt(
     prepared = await prepareAttempt(d, a);
     cache?.set(a.idempotencyKey, prepared);
   }
-  const res = await d.api.uploadFrames(prepared.evidence, prepared.frames, a.idempotencyKey);
-  return { evidence: prepared.evidence, res };
+  const send = async (p: { evidence: CameraEvidence; frames: Uint8Array[] }, key: string) => ({
+    evidence: p.evidence,
+    res: await d.api.uploadFrames(p.evidence, p.frames, key),
+  });
+  if (prepared.noCrop) return send(prepared.noCrop, prepared.noCrop.idempotencyKey);
+  try {
+    return await send(prepared, a.idempotencyKey);
+  } catch (e) {
+    const plain = d.noCropKey && refusesLandingCrop(e) ? withoutLandingCrop(prepared) : null;
+    if (!plain || !d.noCropKey) throw e;
+    prepared.noCrop = { ...plain, idempotencyKey: d.noCropKey() };
+    return send(prepared.noCrop, prepared.noCrop.idempotencyKey);
+  }
 }
 
 async function prepareAttempt(

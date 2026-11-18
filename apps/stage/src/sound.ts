@@ -246,20 +246,40 @@ export class StageAudio {
 
   /** Plays a decoded clip; resolves when it ends. null when muted or locked. */
   playBuffer(buf: AudioBuffer): Promise<void> | null {
+    return this.startBuffer(buf)?.done ?? null;
+  }
+
+  /**
+   * Starts a decoded clip: `done` resolves when it ends, `stop()` cuts it off now (the voice's
+   * M / V) and resolves `done`. null when muted or locked.
+   */
+  startBuffer(buf: AudioBuffer): { done: Promise<void>; stop(): void } | null {
     const ctx = this.ctx;
     if (this.muted || !ctx || ctx.state !== 'running') return null;
     try {
       const src = ctx.createBufferSource();
       src.buffer = buf;
       src.connect(ctx.destination);
-      return new Promise<void>((resolve) => {
-        const safety = setTimeout(resolve, (buf.duration || 0) * 1000 + 1_000);
-        src.onended = () => {
-          clearTimeout(safety);
-          resolve();
-        };
-        src.start(ctx.currentTime + 0.02);
-      });
+      let finish!: () => void;
+      const done = new Promise<void>((resolve) => (finish = resolve));
+      const safety = setTimeout(() => finish(), (buf.duration || 0) * 1000 + 1_000);
+      const end = () => {
+        clearTimeout(safety);
+        finish();
+      };
+      src.onended = end;
+      src.start(ctx.currentTime + 0.02);
+      return {
+        done,
+        stop: () => {
+          try {
+            src.stop();
+          } catch {
+            // already stopped
+          }
+          end();
+        },
+      };
     } catch {
       return null;
     }

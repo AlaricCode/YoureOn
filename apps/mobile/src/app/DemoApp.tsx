@@ -987,19 +987,22 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     async (clip: Clip | null) => {
       const b = appRef.current.activeBetId ? rt.hub.get(appRef.current.activeBetId) : undefined;
       if (!clip || !b?.attempt) throw new Error('no clip');
+      const frameKey = `frames:${b.bet_id}:${b.attempt.attempt_no}`;
       await sendAttempt(
         {
           api: rt.api,
           readClip,
           extractFrames: (uri, ms) => extractFrames(uri, ms),
           iso: (ms) => new Date(ms + rt.clock.offsetMs).toISOString(),
+          // a server older than D10 refuses the landing crop: the 12 frames go under this key
+          noCropKey: () => keyFor(`${frameKey}:nocrop`),
         },
         {
           bet_id: b.bet_id,
           attempt_no: b.attempt.attempt_no,
           recorded_by: b.my_party ?? 'A',
           clip,
-          idempotencyKey: keyFor(`frames:${b.bet_id}:${b.attempt.attempt_no}`),
+          idempotencyKey: keyFor(frameKey),
         },
         preparedUploads.current,
       );

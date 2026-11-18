@@ -8,7 +8,8 @@
 // Without one (no ElevenLabs key, STAGE_TTS=off, a server hiccup), or when the clip fails or is
 // still not playable CLIP_WAIT_MS after its frame, it speaks the same line with the browser's
 // speechSynthesis instead. Lines play one at a time, in the order their events came; M (mute)
-// and V (voice off) skip them.
+// and V (voice off) skip them, and stop the one being said (silence: the clip's buffer source
+// stops, speechSynthesis.cancel()).
 //
 // One judge at a time: in a bet a voice judge hosts (its history has a judge.line from A's
 // phone), the ruling and the payout are the phone's to say (leftToPhoneJudge), so those lines
@@ -82,6 +83,8 @@ export function freshVoiceLines(
 export interface Playable {
   /** Resolves when the clip has finished; rejects when it cannot play (audio locked). */
   play(): Promise<void>;
+  /** Stops it mid-line (M / V): the AudioBufferSourceNode stops, play() resolves. */
+  stop?(): void;
 }
 
 export interface VoiceIo {
@@ -91,6 +94,8 @@ export interface VoiceIo {
   speak(line: { voice: StageVoiceName; text: string }): Promise<void>;
   /** false while muted / voice off: lines are skipped. */
   on(): boolean;
+  /** Cuts the browser's voice off mid-line (speechSynthesis.cancel()). */
+  cancelSpeech?(): void;
 }
 
 /** How a line was heard: its clip, the browser's voice, not at all (M / V), or by A's phone. */
@@ -119,6 +124,8 @@ export class StageVoice {
   /** Recent lines the phone judge said (a late clip for one is ignored). */
   private readonly phoneKeys = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
+  /** The line being said now: silence() stops its clip or its speech and ends it. */
+  private current: { playable: Playable | null; speaking: boolean; cut(): void } | null = null;
   /** How the latest line was heard (the health strip): a clip, the browser, or not at all. */
   last: VoiceHow | null = null;
   /** Called after each line (tests, the health strip). */
@@ -199,23 +206,61 @@ export class StageVoice {
     );
   }
 
+  /**
+   * M (mute) or V (voice off): the line being said stops now (its clip's source node, or the
+   * browser's utterance) and counts as skipped; the queued ones are skipped while it is off.
+   */
+  silence(): void {
+    const cur = this.current;
+    if (!cur) return;
+    this.current = null;
+    try {
+      cur.playable?.stop?.();
+      if (cur.speaking) this.io.cancelSpeech?.();
+    } finally {
+      cur.cut();
+    }
+  }
+
   private async perform(line: VoiceLine, o: Outcome): Promise<void> {
     let how: VoiceHow = 'skip';
     if (this.io.on()) {
-      if (o.kind === 'clip') {
-        try {
-          await within(o.playable.play(), LINE_MAX_MS);
-          how = 'clip';
-        } catch {
-          // could not play (audio locked): the browser says it instead
+      let cut = false;
+      let endCut!: () => void;
+      // resolves on silence(), so a line whose clip or utterance never reports its end still ends
+      const stopped = new Promise<void>((r) => (endCut = r));
+      const cur = {
+        playable: o.kind === 'clip' ? o.playable : null,
+        speaking: false,
+        cut: () => {
+          cut = true;
+          endCut();
+        },
+      };
+      this.current = cur;
+      try {
+        if (o.kind === 'clip') {
+          try {
+            await within(Promise.race([o.playable.play(), stopped]), LINE_MAX_MS);
+            if (!cut) how = 'clip';
+          } catch {
+            // could not play (audio locked): the browser says it instead
+          }
         }
-      }
-      if (how !== 'clip') {
-        await within(
-          this.io.speak({ voice: line.voice, text: o.kind === 'speech' ? o.text : line.text }),
-          LINE_MAX_MS,
-        );
-        how = 'speech';
+        if (how !== 'clip' && !cut) {
+          cur.playable = null;
+          cur.speaking = true;
+          await within(
+            Promise.race([
+              this.io.speak({ voice: line.voice, text: o.kind === 'speech' ? o.text : line.text }),
+              stopped,
+            ]),
+            LINE_MAX_MS,
+          );
+          if (!cut) how = 'speech';
+        }
+      } finally {
+        if (this.current === cur) this.current = null;
       }
     }
     this.last = how;
@@ -236,6 +281,7 @@ const ORDER: Record<StageVoiceName, number> = { judge: 0, seat_1: 1, seat_2: 2, 
 
 interface SynthLike {
   speak(u: unknown): void;
+  cancel?(): void;
   getVoices(): Array<{ lang: string; name: string }>;
 }
 type UtteranceCtor = new (text: string) => {
@@ -268,4 +314,13 @@ export function browserSpeech(
         resolve();
       }
     });
+}
+
+/** speechSynthesis.cancel() (M / V cut a line off mid-word); nothing in a browser without it. */
+export function cancelSpeech(g: { speechSynthesis?: unknown } = globalThis as never): void {
+  try {
+    (g.speechSynthesis as SynthLike | undefined)?.cancel?.();
+  } catch {
+    // no voice to stop
+  }
 }

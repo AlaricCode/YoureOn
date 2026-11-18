@@ -182,6 +182,8 @@ export const COPY = {
     won: ['Won', 'label'],
     lost: ['Lost', 'label'],
     voided: ['Refunded', 'label'],
+    /** A seed row's title (is_seed: the head-to-head demo history). */
+    demo: ['Demo history', 'label'],
   },
   profile: {
     title: ['Profile', 'label'],
