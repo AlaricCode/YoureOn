@@ -80,6 +80,13 @@ describe('stage session without a DB round trip', () => {
     expect(((await r.json()) as any).error.code).toBe('AUTH_REQUIRED');
     const bad = await post(a, { stage_key: KEY, room_id: 'not-a-uuid' });
     expect(bad.status).toBe(422);
+    // exactly one of room_id / room_code, and the code must be a room code
+    for (const body of [
+      { stage_key: KEY },
+      { stage_key: KEY, room_id: ROOM, room_code: 'ABC234' },
+      { stage_key: KEY, room_code: 'ABC10O' },
+    ])
+      expect((await post(a, body)).status, JSON.stringify(body)).toBe(422);
   });
 
   it('10/min per client IP, then 429 with Retry-After', async () => {
@@ -206,6 +213,29 @@ describeDb('stage over Postgres', () => {
     expect(ttl).toBeGreaterThan(11.9 * 3600_000);
     const missing = await session('00000000-0000-4000-8000-00000000abcd');
     expect(missing.status).toBe(404);
+  });
+
+  it('room_code: the typed code (any case) or the QR payload finds the same room', async () => {
+    const A = await signUp(base, 'Logan');
+    const r = await signed(A, '/v1/rooms', { name: 'Stage by code', kind: 'session' });
+    expect(r.status).toBe(201);
+    const { room_id, code } = r.json as { room_id: string; code: string };
+    for (const typed of [` ${code.toLowerCase()} `, `youreon://room/${code}`]) {
+      const s = await postJson(base, '/v1/stage/session', { stage_key: KEY, room_code: typed });
+      expect(s.status, typed).toBe(201);
+      expect(s.json).toMatchObject({ room_id, scopes: ['stage'] });
+    }
+    const wrongKey = await postJson(base, '/v1/stage/session', {
+      stage_key: 'nope',
+      room_code: code,
+    });
+    expect(wrongKey.status).toBe(401);
+    // a well-formed code no room holds (codes are random: a clash is a 1-in-10^9 event)
+    const nobody = await postJson(base, '/v1/stage/session', {
+      stage_key: KEY,
+      room_code: 'ZZZZZZ',
+    });
+    expect(nobody.status).toBe(404);
   });
 
   it('the stage token opens /v1/ws for its room and receives stage.market frames', async () => {

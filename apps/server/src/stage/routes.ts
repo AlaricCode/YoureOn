@@ -1,6 +1,6 @@
 // Stage laptop routes (API-CONTRACT §1.3 "Stage and demo", §2.14, §2.17):
-//   POST /v1/stage/session {stage_key, room_id} -> 201 StageSessionResponse (scope `stage`, plus
-//        `demo` when DEMO_MODE=true). 404 unless STAGE_KEY is configured. The key is compared in
+//   POST /v1/stage/session {stage_key, room_id | room_code} -> 201 StageSessionResponse (scope
+//        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code (or QR payload). 404 unless STAGE_KEY is configured. The key is compared in
 //        constant time; 10/min per client IP.
 //   GET  /v1/bets/:bet_id -> BetSnapshot, for a party of the bet or a stage session of its room
 //        (cold start / resync).
@@ -12,7 +12,7 @@ import type { HttpBindings } from '@hono/node-server';
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { apiSessions, betEvents, bets, rooms, type Db } from '@youre-on/db';
-import { BetSnapshot } from '@youre-on/shared/api';
+import { BetSnapshot, parseRoomCode } from '@youre-on/shared/api';
 import { AppealResult } from '@youre-on/shared/appeal';
 import { BetState } from '@youre-on/shared/bet-state';
 import { HearingRuling } from '@youre-on/shared/hearing';
@@ -34,10 +34,26 @@ export const STAGE_SESSION_BUCKET = { limit: 10, windowMs: 60_000 } as const;
 /** How long the list of stage rooms (for stage.market fan-out) is cached. */
 export const STAGE_ROOMS_TTL_MS = 15_000;
 
-export const StageSessionRequest = z.object({
-  stage_key: z.string().min(1).max(256),
-  room_id: Uuid,
-});
+/**
+ * Exactly one of `room_id` and `room_code`: the presenter can type the 6-char code phone A shows
+ * (or paste its youreon://room/ QR payload) instead of the room's uuid.
+ */
+export const StageSessionRequest = z
+  .object({
+    stage_key: z.string().min(1).max(256),
+    room_id: Uuid.optional(),
+    room_code: z.string().max(64).optional(),
+  })
+  .superRefine((b, ctx) => {
+    if ((b.room_id === undefined) === (b.room_code === undefined))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['room_id'],
+        message: 'exactly one of room_id, room_code',
+      });
+    else if (b.room_code !== undefined && parseRoomCode(b.room_code) === null)
+      ctx.addIssue({ code: 'custom', path: ['room_code'], message: 'not a room code' });
+  });
 export const StageSessionResponse = z.object({
   token: z.string(),
   session_id: Uuid,
@@ -175,13 +191,14 @@ export const stageRoutes: RouteModule = {
       deps.rateLimit?.take('stage_session', clientIp(c), STAGE_SESSION_BUCKET);
       const body = await readBody(c, StageSessionRequest);
       if (!stageKeyMatches(body.stage_key, expected)) {
-        deps.log.warn('stage.session_denied', { room_id: body.room_id });
+        deps.log.warn('stage.session_denied', { room_id: body.room_id ?? null });
         throw new HttpError('AUTH_REQUIRED', 'Wrong stage key.');
       }
+      const code = body.room_code !== undefined ? parseRoomCode(body.room_code) : null;
       const [room] = await deps.db
         .select({ id: rooms.id })
         .from(rooms)
-        .where(eq(rooms.id, body.room_id))
+        .where(code !== null ? eq(rooms.code, code) : eq(rooms.id, body.room_id!))
         .limit(1);
       if (!room) throw new HttpError('NOT_FOUND', 'No such room.');
 
