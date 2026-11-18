@@ -37,6 +37,7 @@ import { sha256Hex } from '../crypto';
 import { lifecycleOf } from '../lock/runtime';
 import { confirmTerms, persistEvaluation } from '../lock/terms';
 import { realWorldEnabled } from '../markets/quote';
+import { realWorldReply } from '../markets/voice-tool';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
 
 /** States in which the judge may (re)propose terms (SCHEMAS §9.2: edits before the freeze). */
@@ -339,7 +340,8 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         evaluation.kind === 'proposal'
           ? opts.state.revision(betId, sha256Hex(jcs(evaluation.proposal)))
           : undefined;
-      const r = proposeTermsReply(evaluation, { rev, maxStake });
+      // real_world: Gemini's split (or its refusal) in the spoken reply (markets/voice-tool.ts)
+      const r = realWorldReply(deps, evaluation, proposeTermsReply(evaluation, { rev, maxStake }));
       opts.state.store(dedupeKey, now, r);
       if (evaluation.kind === 'refused') opts.state.markRefused(betId, r);
 
