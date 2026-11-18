@@ -20,6 +20,7 @@
 import { z } from 'zod/v4';
 import { BetState } from '../bet-state';
 import { formatUsd } from '../money';
+import { formatPrice } from '../settlement';
 import { Hex32 } from '../primitives';
 import { MarketRef, Stakes, type Terms } from '../terms';
 import type { ProposeTermsProjection } from './propose-terms';
@@ -87,6 +88,16 @@ export function expiryLabel(expiryIso: string): string {
   const hh = String(d.getUTCHours()).padStart(2, '0');
   const mm = String(d.getUTCMinutes()).padStart(2, '0');
   return `${hh}:${mm} UTC`;
+}
+
+/**
+ * "New round: line $64,367.38, ends 02:45 UTC." A re-quote at confirm that moved the bet to the
+ * next 5-minute contract (the old one stopped pricing) says so: a new line and a new expiry, not
+ * just new odds.
+ */
+export function newRoundLine(m: Pick<MarketRef, 'strike' | 'expiry'>): string {
+  const line = m.strike.value === null ? 'not set' : formatPrice(m.strike.value);
+  return `New round: line ${line}, ends ${expiryLabel(m.expiry)}.`;
 }
 
 /** SCHEMAS §2.6 claim: always about UP (YES); `yes_party` says who holds it. */

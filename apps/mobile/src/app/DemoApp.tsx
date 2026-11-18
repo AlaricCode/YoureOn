@@ -407,6 +407,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       keys.current.delete(keyName);
       if (r.kind === 'requoted')
         marketDispatch({ type: 'requoted', terms_hash: r.terms_hash, note: r.note });
+      else if (r.kind === 'round_over') marketDispatch({ type: 'round_over', note: r.note });
       else marketDispatch({ type: 'confirm_failed', note: r.note });
       feel('failed');
     }

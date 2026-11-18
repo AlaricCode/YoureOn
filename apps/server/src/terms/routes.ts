@@ -19,6 +19,7 @@
 import type { Context } from 'hono';
 import { isTerminalBetState } from '@youre-on/shared/bet-state';
 import { MAX_STAKE } from '@youre-on/shared/constants';
+import { newRoundLine } from '@youre-on/shared/judge/market-terms';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import {
   TermsConfirmRequest,
@@ -36,7 +37,8 @@ import type { BetRow } from '../bets/snapshot';
 import { readBet } from '../lock/common';
 import { priorAnswers } from '../bets/routes';
 import { betIdParam } from '../lock/routes';
-import { displayCode, persistEvaluation } from '../lock/terms';
+import { displayCode, loadEnvelope, persistEvaluation } from '../lock/terms';
+import { marketMessage } from '../markets/routes';
 import { confirmAndLock, PROPOSABLE_STATES } from '../voice/tools';
 
 /** Typed proposals + confirms: 12/min per (bet, user). Plenty for a person, stops a loop. */
@@ -166,16 +168,31 @@ export const termsRoutes: RouteModule = {
         actor: 'user',
         actorUserId: userId,
       });
-      // Gemini bets: a quote too old to lock was re-quoted (new terms: review them again).
-      if (r.fix === 'REQUOTED')
-        throw new HttpError('TERMS_HASH_MISMATCH', "Gemini's odds moved. Review the new split.", {
-          terms_hash: r.terms_hash,
-          reason: 'requoted',
-        });
-      if (r.fix === 'QUOTE_STALE')
-        throw new HttpError('MARKET_UNAVAILABLE', "Gemini can't price this round anymore.", {
-          reason: 'QUOTE_STALE',
-        });
+      // Gemini bets: a quote too old to lock was re-quoted (new terms: review them again); when
+      // the old round stopped pricing, the re-quote is the next round (new line and end).
+      if (r.fix === 'REQUOTED') {
+        const newRound = r.new_round === true;
+        const m = newRound ? (await loadEnvelope(deps.db, bet.id))?.envelope.terms.market : null;
+        throw new HttpError(
+          'TERMS_HASH_MISMATCH',
+          m
+            ? `${newRoundLine(m)} Review the new split.`
+            : "Gemini's odds moved. Review the new split.",
+          { terms_hash: r.terms_hash, reason: 'requoted', new_round: newRound },
+        );
+      }
+      // ...or Gemini can't price it at all now: its own reason (e.g. TOO_CLOSE_TO_EXPIRY, so the
+      // phone goes back to the next-round countdown instead of offering the dead card).
+      if (r.fix === 'QUOTE_STALE') {
+        const reason = typeof r.reason === 'string' ? r.reason : 'QUOTE_STALE';
+        throw new HttpError(
+          'MARKET_UNAVAILABLE',
+          reason === 'QUOTE_STALE'
+            ? "Gemini can't price this round anymore."
+            : marketMessage(reason),
+          { reason },
+        );
+      }
       if (!r.ok || typeof r.code !== 'string')
         throw new HttpError('INVALID_STATE', 'There are no terms to lock in yet.', {
           state: (await readBet(deps.db, bet.id))?.state ?? null,

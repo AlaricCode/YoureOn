@@ -158,6 +158,32 @@ describe('market panel reducer', () => {
     });
   });
 
+  it('round over at confirm: back to browsing (no card to lock, the quote polled again)', () => {
+    const confirming = run(
+      opened(),
+      { type: 'quoted', side: 'UP', stakeUsd: 2, quote: goodQuote },
+      { type: 'submit' },
+      { type: 'submitted', outcome: { kind: 'proposed', terms_hash: HASH } },
+      { type: 'confirm' },
+    );
+    const over = run(confirming, { type: 'round_over', note: 'Next round soon' });
+    expect(over).toMatchObject({
+      phase: 'browsing',
+      proposedHash: null,
+      quote: null,
+      note: 'Next round soon',
+    });
+    expect(canConfirmMarket(over, HASH, 'accepted')).toBe(false);
+    expect(shouldPoll(over)).toBe(true);
+    // the next round's quote arrives, and A can propose again
+    const again = run(over, { type: 'quoted', side: 'UP', stakeUsd: 2, quote: goodQuote });
+    expect(canSubmitMarket(again)).toBe(true);
+    // only a confirm in flight can end that way
+    expect(run(opened(), { type: 'round_over', note: 'x' }).phase).toBe('browsing');
+    const sent = run(confirming, { type: 'confirm_failed', note: 'Try again' });
+    expect(run(sent, { type: 'round_over', note: 'x' })).toBe(sent);
+  });
+
   it('close goes back to the judge / form without losing the pick', () => {
     const q = run(opened(), { type: 'stake', usd: 5 }, { type: 'close' });
     expect(q).toMatchObject({ phase: 'closed', stakeUsd: 5 });
@@ -334,12 +360,51 @@ describe('market panel calls', () => {
         i,
       ),
     ).toEqual({ kind: 'failed', note: 'Odds updating', freshKey: true });
+    // the re-quote moved the bet to the next 5-minute round
+    expect(
+      await confirmMarketTerms(
+        {
+          api: throwing(
+            new ApiClientError('TERMS_HASH_MISMATCH', 409, 'x', false, {
+              reason: 'requoted',
+              terms_hash: HASH2,
+              new_round: true,
+            }),
+          ),
+        },
+        i,
+      ),
+    ).toEqual({ kind: 'requoted', terms_hash: HASH2, note: 'New round' });
+    // Gemini stopped pricing the round: the card is dead, browse the next one
+    for (const [reason, note] of [
+      ['TOO_CLOSE_TO_EXPIRY', 'Next round soon'],
+      ['MARKET_NOT_OPEN', 'Market closed'],
+      ['STRIKE_PENDING', 'Line not set'],
+    ] as const)
+      expect(
+        await confirmMarketTerms(
+          { api: throwing(new ApiClientError('MARKET_UNAVAILABLE', 409, 'x', true, { reason })) },
+          i,
+        ),
+      ).toEqual({ kind: 'round_over', note });
+    // a spread that may narrow is not the end of the round: keep the card, retry
+    expect(
+      await confirmMarketTerms(
+        {
+          api: throwing(
+            new ApiClientError('MARKET_UNAVAILABLE', 409, 'x', true, { reason: 'SPREAD_TOO_WIDE' }),
+          ),
+        },
+        i,
+      ),
+    ).toEqual({ kind: 'failed', note: 'Odds too wide', freshKey: true });
     expect(await confirmMarketTerms({ api: throwing(new TypeError('net')) }, i)).toEqual({
       kind: 'failed',
       note: t(COPY.app.failed),
       freshKey: false,
     });
-    for (const n of ['Odds moved', 'Not accepted yet']) expect(checkCopy(n, 'label')).toEqual([]);
+    for (const n of ['Odds moved', 'New round', 'Not accepted yet'])
+      expect(checkCopy(n, 'label')).toEqual([]);
   });
 
   it('offers the four even-money stakes', () => {

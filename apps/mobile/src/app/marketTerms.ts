@@ -7,12 +7,17 @@
 //            and proposes; the terms card arrives by the normal terms.proposed push.
 //   confirm  "Lock it in" -> POST /v1/bets/:id/terms/confirm {terms_hash of the card shown}. A
 //            quote older than 30 s is re-quoted by the server (409 TERMS_HASH_MISMATCH
-//            {reason: 'requoted', terms_hash}): the new card arrives by push and is the one to
-//            confirm next (the lock carries accept_deadline = quotedAt + 60 s).
+//            {reason: 'requoted', terms_hash, new_round}): the new card arrives by push and is the
+//            one to confirm next (the lock carries accept_deadline = quotedAt + 60 s); new_round
+//            means it is the next 5-minute contract (new line, new end), not just new odds. When
+//            Gemini can't price the round at all any more (409 MARKET_UNAVAILABLE
+//            {reason: TOO_CLOSE_TO_EXPIRY | MARKET_NOT_OPEN | STRIKE_PENDING}) the old card is
+//            dead: back to browsing, where the panel counts down to the next round.
 //
 //   closed ──open──▶ browsing ──submit──▶ sending ──proposed──▶ sent ──confirm──▶ confirming ──▶ confirmed
 //            ▲          ▲  ▲                  │ refused / error          │ requoted ─▶ sent (new hash)
 //            └─close────┘  └──── side / stake / note ◀──────────────────┘ failed ──▶ sent (note)
+//                          └──────────────────────────────── round over ◀──┘ (no card, countdown)
 import type { FairRefusal } from '@youre-on/shared/gemini';
 import {
   MARKET_STAKES_USD,
@@ -97,6 +102,8 @@ export type MarketEvent =
   | { type: 'confirmed' }
   /** The server re-quoted the bet: the new card (by push) is the one to lock. */
   | { type: 'requoted'; terms_hash: string; note: string }
+  /** Gemini stopped pricing this round: the card can't lock; pick again for the next one. */
+  | { type: 'round_over'; note: string }
   | { type: 'confirm_failed'; note: string };
 
 const busy = (s: MarketState) => s.phase === 'sending' || s.phase === 'confirming';
@@ -133,6 +140,10 @@ export function marketReducer(s: MarketState, e: MarketEvent): MarketState {
     case 'requoted':
       return s.phase === 'confirming'
         ? { ...s, phase: 'sent', proposedHash: e.terms_hash, note: e.note }
+        : s;
+    case 'round_over':
+      return s.phase === 'confirming'
+        ? { ...s, phase: 'browsing', proposedHash: null, quote: null, note: e.note }
         : s;
     case 'confirm_failed':
       return s.phase === 'confirming' ? { ...s, phase: 'sent', note: e.note } : s;
@@ -269,7 +280,16 @@ export async function submitMarketTerms(
 export type ConfirmMarketOutcome =
   | { kind: 'confirmed' }
   | { kind: 'requoted'; terms_hash: string; note: string }
+  /** Gemini can't price this round any more (the card is dead): browse the next one. */
+  | { kind: 'round_over'; note: string }
   | { kind: 'failed'; note: string; freshKey: boolean };
+
+/** Confirm refusals the same card can never get past: the round is over for pricing. */
+const ROUND_OVER: ReadonlySet<string> = new Set([
+  'TOO_CLOSE_TO_EXPIRY',
+  'MARKET_NOT_OPEN',
+  'STRIKE_PENDING',
+]);
 
 /**
  * `freshKey`: a 4xx is replayed for that Idempotency-Key, so the next tap needs a new key (a
@@ -289,7 +309,18 @@ export async function confirmMarketTerms(
       e.details?.reason === 'requoted' &&
       typeof e.details.terms_hash === 'string'
     )
-      return { kind: 'requoted', terms_hash: e.details.terms_hash, note: 'Odds moved' };
+      return {
+        kind: 'requoted',
+        terms_hash: e.details.terms_hash,
+        note: e.details.new_round === true ? 'New round' : 'Odds moved',
+      };
+    if (
+      e instanceof ApiClientError &&
+      e.code === 'MARKET_UNAVAILABLE' &&
+      typeof e.details?.reason === 'string' &&
+      ROUND_OVER.has(e.details.reason)
+    )
+      return { kind: 'round_over', note: refusalOf(e) };
     const answered = e instanceof ApiClientError && e.status >= 400 && e.status < 500;
     let note = refusalOf(e);
     if (e instanceof ApiClientError && e.code === 'INVALID_STATE')
