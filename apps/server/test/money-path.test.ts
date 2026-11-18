@@ -41,8 +41,21 @@ import {
   USDC,
   type Env as SvmEnv,
 } from '../../../packages/shared/test/escrow/harness';
-import type { ChainClient, ChainRuntime } from '../src/chain/tx';
-import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
+import { bootReconcile } from '../src/chain/reconcile';
+import {
+  instrumentChainClient,
+  RpcStats,
+  type ChainClient,
+  type ChainRuntime,
+} from '../src/chain/tx';
+import { forgetLastRebalance } from '../src/demo/rebalance';
+import { createServerKeeper } from '../src/keeper';
+import {
+  createLifecycle,
+  installLifecycle,
+  lifecycleOf,
+  type Lifecycle,
+} from '../src/lock/runtime';
 import { liteSvmClient } from './litesvm-client';
 import {
   DB_URL,
@@ -201,7 +214,7 @@ run('money path hardening over LiteSVM', () => {
     const raw = body === undefined ? '' : JSON.stringify(body);
     return postJson(ctx.base, path, raw, signedHeaders(u, method, path, raw, { ts: now() }));
   };
-  const _get = async (u: SignedUp | null, path: string, headers: Record<string, string> = {}) => {
+  const get = async (u: SignedUp | null, path: string, headers: Record<string, string> = {}) => {
     const res = await fetch(ctx.base + path, {
       headers: u ? { Authorization: `Bearer ${u.session.token}`, ...headers } : headers,
     });
@@ -508,5 +521,269 @@ run('money path hardening over LiteSVM', () => {
     const s = await lc.refund.sweepOrphans(now());
     expect(s.sent).toEqual([expect.objectContaining({ bet_id: betId, action: 'finalize' })]);
     expect(await usdc(signerB)).toBe(bBefore + USDC); // B's stake back + A's
+  });
+
+  // ---- demo reset, rebalance ---------------------------------------------------------------
+
+  it('demo reset: escrow returned, pair freed, nonces free, sessions untouched', async () => {
+    // Start clean: earlier tests leave locked bets (their escrow comes back here too).
+    await admin('/v1/demo/reset');
+    advance(12_000);
+    await lc.refund.sweepOrphans(now());
+    expect(lc.refund.lastOrphanScan?.live).toBe(0);
+    const aBefore = await usdc(signerA);
+    const bBefore = await usdc(signerB);
+    const locked = await lockedBet(); // money in escrow
+    install('phones');
+    const pre = await proposedBet(); // a pre-lock bet: holds pair_busy...
+    expect((await admin(`/v1/demo/bets/${pre}/confirm`)).json).toMatchObject({ ok: true });
+    await lc.idle(); // ...and a leased nonce (AWAITING_AUTHORIZATIONS)
+    expect((await betRow(pre))!.state).toBe('AWAITING_AUTHORIZATIONS');
+    const pool0 = await ctx.deps.db.select().from(noncePool);
+    expect(pool0.filter((n) => n.status === 'leased')).toHaveLength(1);
+    const room = await signed(A, 'POST', '/v1/rooms', { name: 'Busy', kind: 'session' });
+    await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code });
+    const busy = await signed(A, 'POST', '/v1/bets', {
+      room_id: room.json!.room_id,
+      opponent_user_id: B.session.user.user_id,
+      challenge_method: 'list',
+    });
+    expect(busy.json!.error.details.reason).toBe('pair_busy');
+
+    const r = await admin('/v1/demo/reset');
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ ok: true, nonces_revoked: 1, nonces_synced: 3 });
+    expect(r.json!.deleted_bets).toBeGreaterThanOrEqual(2);
+    // The Locked rehearsal bet: resolve(Refund) by the judge key, pending the appeal window.
+    expect(r.json!.escrow.actions).toContainEqual(
+      expect.objectContaining({ bet_id: locked, action: 'resolve_refund' }),
+    );
+    expect(r.json!.escrow.pending).toContainEqual({ bet_id: locked, status: 'Resolved' });
+    expect(r.json!.escrow.settles_at).toBeNull(); // timers off in tests: the sweep is driven here
+    expect(await betRow(locked)).toBeUndefined();
+    // Nonces: none leased, all three free with a fresh value.
+    const pool = await ctx.deps.db.select().from(noncePool);
+    expect(pool.map((n) => n.status)).toEqual(['free', 'free', 'free']);
+    // Sessions untouched: the same bearer still works; the pair can challenge again.
+    expect((await get(A, '/v1/me/bets')).status).toBe(200);
+    expect((await get(B, '/v1/me/bets')).status).toBe(200);
+    const again = await signed(A, 'POST', '/v1/bets', {
+      room_id: room.json!.room_id,
+      opponent_user_id: B.session.user.user_id,
+      challenge_method: 'list',
+    });
+    expect(again.status).toBe(201);
+    // After the appeal window the orphan sweep finalizes the Refund: both stakes are back.
+    advance(12_000);
+    const s = await lc.refund.sweepOrphans(now());
+    expect(s.sent).toContainEqual(expect.objectContaining({ bet_id: locked, action: 'finalize' }));
+    expect(await onchainBet(locked)).toBeNull();
+    expect(await usdc(signerA)).toBe(aBefore);
+    expect(await usdc(signerB)).toBe(bBefore);
+    const audit = await ctx.deps.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.bet_id, locked), eq(auditLog.action, 'demo.reset_void')));
+    expect(audit).toHaveLength(1);
+    install('server');
+    await admin('/v1/demo/reset'); // tidy: the fresh challenge
+  });
+
+  it('rebalance: demo-a and demo-b end up equal; the fee payer pays, the wallets hold no SOL', async () => {
+    await mint(signerB, 37n * USDC + 3n); // B won a lot of rehearsals (odd micro-units too)
+    const [a0, b0] = [await usdc(signerA), await usdc(signerB)];
+    const fp0 = svm.svm.getBalance(svm.s.address)!;
+    const r = await admin('/v1/demo/rebalance');
+    expect(r.json).toMatchObject({ ok: true, status: 'moved', from: 'demo-b' });
+    const [a1, b1] = [await usdc(signerA), await usdc(signerB)];
+    expect(a1 + b1).toBe(a0 + b0);
+    expect(a1 - b1 === 0n || a1 - b1 === 1n).toBe(true); // A gets the odd micro-unit
+    expect(r.json!.after).toEqual({ a: a1.toString(), b: b1.toString() });
+    expect(svm.svm.getBalance(svm.s.address)!).toBeLessThan(fp0); // fee payer paid
+    expect(svm.svm.getBalance(signerA.address) ?? 0n).toBe(0n);
+    expect(svm.svm.getBalance(signerB.address) ?? 0n).toBe(0n);
+    // Again: already balanced, no tx.
+    const again = await admin('/v1/demo/rebalance');
+    expect(again.json).toMatchObject({ status: 'balanced', signature: null });
+    const sent = await ctx.deps.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'demo.rebalance_sent'));
+    expect(sent.at(-1)!.details).toMatchObject({ signature: r.json!.signature, from: 'demo-b' });
+  });
+
+  it('rebalance never doubles: an earlier one still in flight -> 409 rebalance_in_flight', async () => {
+    await mint(signerA, 10n * USDC);
+    let drop = true;
+    const f = flaky({ drop: () => drop });
+    install('server', { client: f.client, timeoutMs: 30 });
+    try {
+      const r1 = await admin('/v1/demo/rebalance');
+      expect(r1.json!.error).toMatchObject({ code: 'UPSTREAM_TIMEOUT' });
+      // Unknown fate, blockhash still valid: refused, also after a "restart" (audit_log).
+      forgetLastRebalance({ ...rt, client: f.client });
+      const r2 = await admin('/v1/demo/rebalance');
+      expect(r2.status).toBe(409);
+      expect(r2.json!.error.details.reason).toBe('rebalance_in_flight');
+      // It lands after all: the next call sees it settled and finds the wallets balanced.
+      drop = false;
+      await f.base.send(f.dropped[0]!, false);
+      const r3 = await admin('/v1/demo/rebalance');
+      expect(r3.json).toMatchObject({ ok: true, status: 'balanced' });
+    } finally {
+      install('server');
+    }
+  });
+
+  it('rebalance refuses while a demo bet is locking', async () => {
+    install('phones');
+    try {
+      const pre = await proposedBet();
+      await admin(`/v1/demo/bets/${pre}/confirm`);
+      await lc.idle();
+      const r = await admin('/v1/demo/rebalance');
+      expect(r.status).toBe(409);
+      expect(r.json!.error.details).toMatchObject({ reason: 'lock_in_progress', bet_id: pre });
+    } finally {
+      install('server');
+      await admin('/v1/demo/reset');
+    }
+  });
+
+  // ---- health, boot reconcile, stranded payouts --------------------------------------------
+
+  it('GET /v1/demo/health: balances, pool, RPC stats, warnings with fixes', async () => {
+    const stats = new RpcStats();
+    install('server', { client: instrumentChainClient(rt.client, stats) });
+    try {
+      await lc.lock.ensurePool(rt);
+      await lc.refund.sweepOrphans(now()); // some RPC traffic + an orphan scan
+      const h = await get(null, '/v1/demo/health', { 'X-YO-Demo-Key': ADMIN });
+      expect(h.status).toBe(200);
+      const body = h.json!;
+      expect(body).toMatchObject({
+        chain_configured: true,
+        fee_payer: svm.s.address,
+        nonce_pool: { size: 3, free: 3 },
+        balances: {
+          demo_a: { address: signerA.address },
+          demo_b: { address: signerB.address },
+          treasury: null,
+        },
+        escrow: { live: 0, orphans: [] },
+        stream: { last_delivery_at: null },
+      });
+      expect(body.rpc_stats.calls).toBeGreaterThan(0);
+      expect(body.rpc_stats.p95_ms).not.toBeNull();
+      expect(body.balances.demo_a.usdc).toBe((await usdc(signerA)).toString());
+      // No keeper in tests: a warning, but not a critical one.
+      expect(body.warnings).toContainEqual(
+        expect.objectContaining({ code: 'keeper_off', level: 'warn' }),
+      );
+      expect(body.ok).toBe(true);
+    } finally {
+      install('server');
+    }
+  });
+
+  it('health: low fee payer, few free nonces and a stuck sent tx are flagged', async () => {
+    const poor: ChainClient = { ...rt.client, lamports: async () => 50_000_000n }; // 0.05 SOL
+    const betId = await lockedBet();
+    install('server', { client: poor });
+    const pool = await ctx.deps.db.select().from(noncePool).orderBy(noncePool.seed_index);
+    try {
+      for (const n of pool.slice(0, 2))
+        await ctx.deps.db
+          .update(noncePool)
+          .set({ status: 'retired', retired_at: new Date(now()) })
+          .where(eq(noncePool.seed_index, n.seed_index));
+      await ctx.deps.db.insert(chainTxs).values({
+        bet_id: betId,
+        kind: 'finalize',
+        signer_role: 'fee_payer',
+        message_sha256: 'ab'.repeat(32),
+        expected_status: 'settled',
+        status: 'sent',
+        sent_at: new Date(now() - 10 * 60_000),
+      });
+      const h = (await get(null, '/v1/demo/health', { 'X-YO-Demo-Key': ADMIN })).json!;
+      const codes = Object.fromEntries(h.warnings.map((w: any) => [w.code, w.level]));
+      expect(codes).toMatchObject({
+        fee_payer_low: 'critical',
+        nonce_pool_low: 'warn',
+        txs_stuck: 'warn',
+      });
+      expect(h.ok).toBe(false);
+      expect(h.inflight.stuck[0]).toMatchObject({ bet_id: betId, kind: 'finalize' });
+    } finally {
+      await ctx.deps.db
+        .delete(chainTxs)
+        .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'finalize')));
+      await ctx.deps.db
+        .update(noncePool)
+        .set({ status: 'free', retired_at: null })
+        .where(eq(noncePool.status, 'retired'));
+      install('server');
+      await admin('/v1/demo/reset');
+    }
+  });
+
+  it('a FINALIZED bet with no payout in flight is not stranded: still Resolved -> RULED -> PAID', async () => {
+    const betId = await lockedBet();
+    await lc.payout.onRuling(betId, ruling(betId, (await betRow(betId))!.terms_hash!, 'A_WINS'));
+    await lc.idle();
+    // A crash left FINALIZED with no 'sent' row (nothing would ever move it otherwise).
+    await ctx.deps.db.update(bets).set({ state: 'FINALIZED' }).where(eq(bets.id, betId));
+    advance(40_000); // past STRANDED_GRACE_MS and the appeal window
+    const fixed = await lc.payout.reconcileStranded(rt, now());
+    expect(fixed).toEqual([betId]);
+    expect((await betRow(betId))!.state).toBe('RULED');
+    expect(await lc.payout.finalizeDue(now())).toContain(betId);
+    await lc.idle();
+    expect((await betRow(betId))!.state).toBe('PAID');
+  });
+
+  it('boot reconcile: a lock whose confirm was lost lands; anomalies are listed', async () => {
+    let hide = true;
+    const f = flaky({ hide: () => hide });
+    install('server', { client: f.client, timeoutMs: 30 });
+    const lost = await proposedBet();
+    await admin(`/v1/demo/bets/${lost}/confirm`);
+    await lc.idle();
+    hide = false;
+    install('server'); // "restart"
+    expect((await betRow(lost))!.state).toBe('AWAITING_LOCK');
+    const report = await bootReconcile(ctx.deps, now());
+    expect(report.chain_configured).toBe(true);
+    expect(report.before.sent_txs).toMatchObject({ atomic_lock: 1 });
+    expect(report.lock?.landed).toContain(lost);
+    expect((await betRow(lost))!.state).toBe('LOCKED');
+    expect(report.anomalies).toEqual([]);
+    expect(report.errors).toEqual([]);
+    // An unexplained one: RULED in the DB, but the Bet is still Locked onchain.
+    await ctx.deps.db.update(bets).set({ state: 'RULED' }).where(eq(bets.id, lost));
+    const r2 = await bootReconcile(ctx.deps, now());
+    expect(r2.anomalies).toContainEqual({ bet_id: lost, state: 'RULED', onchain: 'Locked' });
+    await ctx.deps.db.update(bets).set({ state: 'LOCKED' }).where(eq(bets.id, lost));
+    await admin('/v1/demo/reset');
+  });
+
+  it('the keeper drives the SAME lifecycle the routes use (never one per deps copy)', async () => {
+    const keeper = createServerKeeper(ctx.deps, { intervalMs: 60_000 });
+    const calls: string[] = [];
+    const prev = lifecycleOf(ctx.deps);
+    const fake = {
+      ...prev,
+      lock: { sweep: async () => (calls.push('lock'), { expired: [], landed: [] }) },
+    } as unknown as Lifecycle;
+    installLifecycle(ctx.deps, fake);
+    try {
+      await keeper.tick();
+      expect(calls.length).toBeGreaterThan(0);
+      expect(keeper.status().tasks.map((t) => t.name)).toContain('boot-reconcile');
+    } finally {
+      installLifecycle(ctx.deps, prev);
+      await keeper.stop();
+    }
   });
 });

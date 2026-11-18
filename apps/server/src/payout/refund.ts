@@ -109,6 +109,8 @@ export interface RefundServiceOptions {
   runtime: () => Promise<ChainRuntime | null>;
   inflight: Inflight;
   send?: SendOptions;
+  /** Arm setTimeout follow-ups (armOrphanSweep; default true). Tests drive the sweeps by hand. */
+  timers?: boolean;
 }
 
 export interface RefundSweepResult {
@@ -140,10 +142,38 @@ export class RefundService {
   private readonly confirming = new Set<string>();
   private readonly anomalies = new Map<string, number>();
   private readonly orphanTx = new Map<string, { signature: string; lvbh: bigint | null }>();
+  private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   /** The last orphan scan, for GET /v1/demo/health. */
   lastOrphanScan: OrphanSummary | null = null;
 
   constructor(private readonly o: RefundServiceOptions) {}
+
+  stop(): void {
+    for (const t of this.timers) clearTimeout(t);
+    this.timers.clear();
+  }
+
+  /**
+   * Runs sweepOrphans at `atMs` (then `after`), off the keeper's 60 s cadence: POST /v1/demo/reset
+   * uses it so the rehearsal's escrow is back right after the appeal window. Returns false (and
+   * does nothing) when timers are off.
+   */
+  armOrphanSweep(atMs: number, after?: () => Promise<unknown>): boolean {
+    if (this.o.timers === false) return false;
+    const t = setTimeout(
+      () => {
+        this.timers.delete(t);
+        this.o.inflight.run('refund.orphan_sweep', async () => {
+          await this.sweepOrphans(this.deps.now());
+          await after?.();
+        });
+      },
+      Math.max(0, atMs - this.deps.now()),
+    );
+    t.unref?.();
+    this.timers.add(t);
+    return true;
+  }
 
   private get deps() {
     return this.o.deps;
