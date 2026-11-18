@@ -168,8 +168,13 @@ const JudgeVoice = lazy(() => importSafely(() => import('../voice/JudgeVoice')))
 const VOICE_TAIL_MS = 20_000;
 /** EXPO_PUBLIC_FACE=off hides face enrollment and the face scan (the room list still works). */
 const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
-/** The face natives load on first use, never at app start (see createLazyEmbedder). */
-const loadFaceEmbedder = () => import('../face/native').then((m) => m.getNativeEmbedder());
+/**
+ * The face natives load on first use, never at app start (see createLazyEmbedder), and through
+ * importSafely: a face native that throws while it loads (ML Kit is not in the simulator build)
+ * rejects here instead of aborting the app (opening "Scan a face" used to kill it).
+ */
+const loadFaceEmbedder = () =>
+  importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
