@@ -14,7 +14,7 @@
 // (evaluateProposeTerms + proposeTermsReply). Party lines come from the fixture; each clarifying
 // question (a judge turn ending in "?" without a tool call) gets the next scripted answer.
 //
-// The LLM settings mirror the agent (FINDINGS §3.8): claude-haiku-5-5, max_tokens 300, no
+// The LLM settings mirror the agent (FINDINGS §3.8): claude-haiku-5-5, AGENT_MAX_TOKENS, no
 // temperature (Claude 5.x rejects non-default sampling), thinking disabled at effort low. This is
 // the Anthropic API, not ElevenLabs' serving of the model, so latency numbers from it are not the
 // voice latency (D1-J2 measures that).
@@ -41,6 +41,7 @@ import {
   type ProposeEvaluation,
   type ToolReply,
 } from '@youre-on/shared/judge/reply';
+import { AGENT_MAX_TOKENS } from '@youre-on/shared/judge/el-config';
 import { SpokenBetFixture } from '@youre-on/shared/judge/fixture-schema';
 import { assertSpendAllowed } from '../providers/spend';
 
@@ -146,7 +147,7 @@ export async function runFixture(
     for (let turn = 0; turn < (o.maxTurns ?? 8); turn++) {
       const res = await create({
         model: o.model ?? 'claude-haiku-5-5',
-        max_tokens: 300,
+        max_tokens: AGENT_MAX_TOKENS,
         system: systemPrompt(f),
         tools: [PROPOSE_TERMS_TOOL],
         tool_choice: { type: 'auto', disable_parallel_tool_use: true },

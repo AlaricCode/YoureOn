@@ -35,7 +35,7 @@ import type { BucketSpec } from '../http/rate-limit';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import type { BetRow } from '../bets/snapshot';
 import { readBet } from '../lock/common';
-import { priorAnswers } from '../bets/routes';
+import { priorAnswers } from '../bets/invite';
 import { betIdParam } from '../lock/routes';
 import { displayCode, loadEnvelope, persistEvaluation } from '../lock/terms';
 import { marketMessage } from '../markets/routes';
@@ -156,18 +156,22 @@ export const termsRoutes: RouteModule = {
         });
       // B said yes to the challenge. Typing terms before that is fine; freezing them (and, with
       // LOCK_SIGNER=server, signing B's stake) is not. A decline cancels the bet, so it fails the
-      // state check above, and confirmAndLock re-checks TERMS_PROPOSED under the row lock.
-      if (!frozen && !(await priorAnswers(deps.db, bet.id)).has('accepted'))
-        throw new HttpError('INVALID_STATE', 'Waiting for them to accept.', {
+      // state check above. The early check answers without a write; confirmAndLock re-checks
+      // both TERMS_PROPOSED and B's accept under the row lock.
+      const invitePending = () =>
+        new HttpError('INVALID_STATE', 'Waiting for them to accept.', {
           state: bet.state,
           reason: 'invite_pending',
         });
+      if (!frozen && !(await priorAnswers(deps.db, bet.id)).has('accepted')) throw invitePending();
       const r = await confirmAndLock(deps, bet.id, {
         heard: 'typed',
         requestId: c.get('requestId'),
         actor: 'user',
         actorUserId: userId,
+        requireInviteAccepted: true,
       });
+      if (!r.ok && r.fix === 'INVITE_PENDING') throw invitePending();
       // Gemini bets: a quote too old to lock was re-quoted (new terms: review them again); when
       // the old round stopped pricing, the re-quote is the next round (new line and end).
       if (r.fix === 'REQUOTED') {

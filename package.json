@@ -25,6 +25,7 @@
     "crank": "tsx scripts/crank.ts",
     "demo-check": "tsx scripts/demo-check.ts",
     "cp1-drive": "tsx scripts/cp1-drive.ts",
+    "el-agent": "tsx --env-file-if-exists=apps/server/.env scripts/el-agent.ts",
     "demo-claim-qr": "tsx scripts/demo-claim-qr.ts",
     "qn-stream": "tsx scripts/qn-stream.ts",
     "e2e:local": "bash scripts/e2e-local.sh",

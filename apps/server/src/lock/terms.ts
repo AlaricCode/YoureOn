@@ -8,7 +8,8 @@
 //                        DRAFTING); a refusal cancels the bet (terms.refused, judge.cue REFUSED).
 //   confirmTerms()       freeze: the latest version becomes is_final, -> AWAITING_AUTHORIZATIONS
 //                        (the bets_guard trigger freezes the binding fields from here). The
-//                        caller then starts the LockService.
+//                        caller then starts the LockService. requireInviteAccepted: refused
+//                        (INVITE_PENDING + an audit row) until B tapped accept, under the row lock.
 //
 // Gemini (real_world) bets (Beat 6): the binding quote is taken when the terms are composed
 // (markets/quote.ts takeBindingQuote, before the row lock: it may refetch Gemini), copied into
@@ -50,6 +51,7 @@ import {
   takeBindingQuote,
   type BindingQuote,
 } from '../markets/quote';
+import { priorAnswers, recordInvitePending } from '../bets/invite';
 import { loadUserRefs, type BetRow } from '../bets/snapshot';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { fanout, iso, lockBet, statePayload, type LifecycleDeps, type Tx } from './common';
@@ -251,7 +253,10 @@ export async function persistEvaluation(
       };
 
     if (evaluation.kind === 'refused') {
-      const envs = await cancelRefused(tx, bet, evaluation.refusal, now, o.requestId);
+      // The voice judge already spoke the quip from the propose_terms reply: the cue only
+      // informs it (contextual update). Typed / demo refusals have it spoken.
+      const speak = o.source !== 'propose_terms';
+      const envs = await cancelRefused(tx, bet, evaluation.refusal, now, o.requestId, speak);
       return { res: { kind: 'refused' } as PersistResult, bet, envs };
     }
 
@@ -392,6 +397,7 @@ async function cancelRefused(
   refusal: GuardrailRefusal,
   now: number,
   requestId?: string,
+  speak = true,
 ): Promise<BetEventEnvelope[]> {
   const [row] = await tx
     .update(bets)
@@ -417,7 +423,14 @@ async function cancelRefused(
     await appendBetEvent(tx, {
       bet_id: bet.id,
       type: 'judge.cue',
-      payload: judgeCue('REFUSED', { category: refusal.category }, `Say: ${refusal.quip}`),
+      payload: speak
+        ? judgeCue('REFUSED', { category: refusal.category }, `Say: ${refusal.quip}`)
+        : judgeCue(
+            'REFUSED',
+            { category: refusal.category },
+            'You already said the refusal. Do not repeat it.',
+            false,
+          ),
       now,
     }),
   ];
@@ -437,7 +450,23 @@ export type ConfirmResult =
    * Gemini's reason when it had one (TOO_CLOSE_TO_EXPIRY, STRIKE_PENDING ...); `reason` is
    * for the log.
    */
-  | { ok: false; fix: 'QUOTE_STALE'; reason: string; refusal: FairRefusal | null };
+  | { ok: false; fix: 'QUOTE_STALE'; reason: string; refusal: FairRefusal | null }
+  | { ok: false; fix: 'INVITE_PENDING'; state: BetState; party_b_id: string };
+
+export interface ConfirmOptions {
+  heard?: string;
+  requestId?: string;
+  actor?: 'judge' | 'system' | 'user';
+  actorUserId?: string;
+  /**
+   * B's consent is B's own tap on the invite (§2.5), never what the judge heard: refuse with
+   * INVITE_PENDING until bet.invite_answered accepted is in the log. Checked here, under the row
+   * lock, because the state a caller read before it can be stale (the propose_terms sink may be
+   * committing DRAFTING -> TERMS_PROPOSED right then). With LOCK_SIGNER=server a freeze signs
+   * B's stake custodially.
+   */
+  requireInviteAccepted?: boolean;
+}
 
 /** The re-quote moved the bet to another 5-minute contract (a new line and expiry). */
 export const isNewRound = (r: { envelope: TermsEnvelope; previous: MarketRef }): boolean =>
@@ -485,12 +514,7 @@ async function requoteIfStale(
 export async function confirmTerms(
   deps: TermsDeps,
   betId: string,
-  o: {
-    heard?: string;
-    requestId?: string;
-    actor?: 'judge' | 'system' | 'user';
-    actorUserId?: string;
-  } = {},
+  o: ConfirmOptions = {},
 ): Promise<ConfirmResult> {
   const requoted = await requoteIfStale(deps, betId, o);
   if (requoted) return requoted;
@@ -520,6 +544,26 @@ export async function confirmTerms(
     const latest = await loadEnvelope(tx, betId);
     if (!latest || latest.envelope.terms_hash !== bet.terms_hash)
       return { res: { ok: false, fix: 'NOT_PROPOSED' } as ConfirmResult, bet, envs: [] };
+    if (o.requireInviteAccepted && !(await priorAnswers(tx, betId)).has('accepted')) {
+      await recordInvitePending(tx, {
+        betId,
+        termsHash: bet.terms_hash,
+        actor: o.actor ?? 'judge',
+        actorUserId: o.actorUserId,
+        requestId: o.requestId,
+        heard: o.heard,
+      });
+      return {
+        res: {
+          ok: false,
+          fix: 'INVITE_PENDING',
+          state: bet.state,
+          party_b_id: bet.party_b_id,
+        } as ConfirmResult,
+        bet,
+        envs: [],
+      };
+    }
     await tx
       .update(betTermsVersions)
       .set({ is_final: true })

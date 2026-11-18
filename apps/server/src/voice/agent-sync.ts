@@ -67,19 +67,39 @@ export function fetchElHttp(o: {
   };
 }
 
-/** true iff every leaf of `want` equals the same leaf of `have` (arrays: same length, element-wise). */
-export function isSubset(want: unknown, have: unknown): boolean {
+/**
+ * Arrays that are sets: ElevenLabs may hand them back in another order, which is not a change
+ * (re-PATCHing the agent every run for it would make the script never a no-op).
+ */
+const UNORDERED_KEYS = new Set(['tool_ids', 'client_events', 'required']);
+
+const sameSet = (a: unknown[], b: unknown[]) => {
+  const key = (x: unknown) => JSON.stringify(x);
+  const bs = b.map(key).sort();
+  return (
+    a.length === b.length &&
+    a
+      .map(key)
+      .sort()
+      .every((x, i) => x === bs[i])
+  );
+};
+
+/**
+ * true iff every leaf of `want` equals the same leaf of `have` (arrays: same length,
+ * element-wise; under UNORDERED_KEYS, the same elements in any order).
+ */
+export function isSubset(want: unknown, have: unknown, key?: string): boolean {
   if (want === null) return have === null || have === undefined;
-  if (Array.isArray(want))
-    return (
-      Array.isArray(have) &&
-      have.length === want.length &&
-      want.every((w, i) => isSubset(w, have[i]))
-    );
+  if (Array.isArray(want)) {
+    if (!Array.isArray(have) || have.length !== want.length) return false;
+    if (key !== undefined && UNORDERED_KEYS.has(key)) return sameSet(want, have);
+    return want.every((w, i) => isSubset(w, have[i]));
+  }
   if (typeof want === 'object') {
     if (!have || typeof have !== 'object' || Array.isArray(have)) return false;
     return Object.entries(want as Record<string, unknown>).every(([k, v]) =>
-      isSubset(v, (have as Record<string, unknown>)[k]),
+      isSubset(v, (have as Record<string, unknown>)[k], k),
     );
   }
   return want === have;
@@ -87,7 +107,7 @@ export function isSubset(want: unknown, have: unknown): boolean {
 
 /** Paths where `want` and `have` differ (for the log line of an update). */
 export function diffPaths(want: unknown, have: unknown, at = ''): string[] {
-  if (isSubset(want, have)) return [];
+  if (isSubset(want, have, at.split('.').at(-1) || undefined)) return [];
   if (
     want &&
     typeof want === 'object' &&

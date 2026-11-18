@@ -12,6 +12,7 @@ import {
   PROPOSE_TERMS_DESCRIPTION,
   type ElObjectProperty,
 } from './propose-terms';
+import type { ElReasoningEffort, ElTtsModel } from './el-enums';
 import {
   ASR_KEYWORDS,
   buildJudgePrompt,
@@ -23,6 +24,26 @@ import {
 } from './persona';
 
 export const TOOL_SECRET_HEADER = 'X-YO-Tool-Secret';
+/**
+ * FINDINGS §3.8. In ElevenLabs' `LLM` enum (./el-enums, read 2026-11-18), so the Agents platform
+ * serves it; whether it is really Haiku 5.5 that answers shows in post-call
+ * metadata.charging.llm_usage (API-CONTRACT §4.6). el-agent --llm / ELEVENLABS_AGENT_LLM overrides.
+ */
+export const DEFAULT_AGENT_LLM = 'claude-haiku-5-5';
+/**
+ * The lowest effort the Anthropic API accepts on Claude Haiku 5.5 ('low'..'max'; it has no
+ * 'none' / 'minimal', and its own default is 'medium'). ElevenLabs proxies the value.
+ */
+export const DEFAULT_REASONING_EFFORT: ElReasoningEffort = 'low';
+/**
+ * The agent LLM's output cap per turn. Not 300: Claude Haiku 5.5 thinks adaptively by default
+ * (reasoning_effort 'low' only lowers it) and thinking counts against max_tokens, on top of the
+ * pre-tool speech and a complete propose_terms call (the whole bet as tool arguments, ~170
+ * tokens for 01-bottle-flip). A cut-off tool call (stop_reason max_tokens) would break the
+ * read-back, and backup_llm_config is disabled. The prompt keeps the spoken reply short.
+ */
+export const AGENT_MAX_TOKENS = 1024;
+export const DEFAULT_TTS_MODEL: ElTtsModel = 'eleven_v4_turbo';
 export const TOOL_SECRET_NAME = 'yo-tool-secret';
 export const AGENT_TAGS = ['youre-on'];
 
@@ -210,40 +231,38 @@ export interface AgentOptions {
   toolIds: string[];
   /** ELEVENLABS_JUDGE_VOICE_ID (Voice Design voice). Omitted -> the ElevenLabs default voice. */
   voiceId?: string;
-  /** FINDINGS §3.8: claude-haiku-5-5 unless FINDINGS §6 step 1 picks another. */
+  /** Default DEFAULT_AGENT_LLM (FINDINGS §3.8) unless FINDINGS §6 step 1 picks another. */
   llm?: string;
-  /**
-   * PENDING-KEY: "the lowest accepted reasoning_effort". 'low' is the lowest effort the Anthropic
-   * API accepts for Haiku 5.5; ElevenLabs also lists 'none'/'minimal'. null omits the field.
-   */
-  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | null;
+  /** Default DEFAULT_REASONING_EFFORT; null omits the field (the model's own default). */
+  reasoningEffort?: ElReasoningEffort | null;
   /** The tools the prompt mentions (registered webhook tools + client tools). */
   promptTools: ReadonlySet<JudgeToolName>;
   /** DATA-MODEL §10 "minimum available" retention (PENDING-KEY: check the dashboard minimum). */
   retentionDays?: number;
-  ttsModel?: 'eleven_v4_turbo' | 'eleven_flash_v2';
+  /** Default DEFAULT_TTS_MODEL (A/B: eleven_flash_v2). */
+  ttsModel?: ElTtsModel;
 }
 
 /** Body for POST /v1/convai/agents/create and PATCH /v1/convai/agents/{id}. */
 export function agentBody(o: AgentOptions) {
   const prompt: Record<string, unknown> = {
     prompt: buildJudgePrompt(o.promptTools),
-    llm: o.llm ?? 'claude-haiku-5-5',
+    llm: o.llm ?? DEFAULT_AGENT_LLM,
     // Explicit null: the schema default is 0.0, and "null omits the parameter from the LLM
     // request entirely". Claude 5.x rejects non-default sampling values (FINDINGS §7), which
     // would otherwise silently cascade to a backup model.
     temperature: null,
-    max_tokens: 300,
+    max_tokens: AGENT_MAX_TOKENS,
     enable_parallel_tool_calls: false,
     backup_llm_config: { preference: 'disabled' },
     tool_ids: o.toolIds,
     ignore_default_personality: true,
   };
-  const effort = o.reasoningEffort === undefined ? 'low' : o.reasoningEffort;
+  const effort = o.reasoningEffort === undefined ? DEFAULT_REASONING_EFFORT : o.reasoningEffort;
   if (effort !== null) prompt.reasoning_effort = effort;
 
   const tts: Record<string, unknown> = {
-    model_id: o.ttsModel ?? 'eleven_v4_turbo',
+    model_id: o.ttsModel ?? DEFAULT_TTS_MODEL,
     agent_output_audio_format: 'pcm_16000',
     speed: 1.05,
   };

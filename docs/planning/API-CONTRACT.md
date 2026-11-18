@@ -339,8 +339,8 @@ Flows are in §1.3.
 **`POST /v1/bets/:bet_id/invite/accept`** (S, B)
 
 - Response 200: `{bet: BetSnapshot}`.
-- Effects: event `bet.invite_answered {answer:'accepted'}` (NEW, §3.4). The state is unchanged.
-- **This is not an authorization.** It only tells the room and the judge "Jake's in". Negotiation can start before B taps it.
+- Effects: event `bet.invite_answered {answer:'accepted'}` (NEW, §3.4). The state is unchanged. If the voice judge's `confirm_terms` was refused `INVITE_PENDING` for the current terms, also `judge.cue INVITE_ACCEPTED` (spoken), so the judge calls `confirm_terms` again.
+- **This is not an authorization.** It only tells the room and the judge "Jake's in". Negotiation can start before B taps it. It is, however, the consent gate for freezing the terms: `confirm_terms` (voice and typed) is refused until it is in the log, checked under the bet row lock.
 - Idem: `(bet_id, 'B')`.
 
 **`POST /v1/bets/:bet_id/invite/decline`** (S, B)
@@ -815,7 +815,7 @@ Responses (≤ 300 B):
 
 - Params: `conversation_id`, `bet_id` (dynamic), and `heard: {type:"string", enum:["A","B","both","none"], description:"Who said 'accept' out loud. Theatre only; it is logged, not binding."}`.
 - Server steps:
-  1. Require `TERMS_PROPOSED` and the guardrail verdict `ok`. If the verdict is still pending, publish when it lands (≤ ~1 s) and answer the judge now.
+  1. Require `TERMS_PROPOSED` and the guardrail verdict `ok`. If the verdict is still pending, publish when it lands (≤ ~1 s) and answer the judge now. Require B's `bet.invite_answered accepted` (§2.5), checked under the bet row lock; else `INVITE_PENDING` (audited as `terms.confirm_refused`, never replayed), and B's accept later sends `judge.cue INVITE_ACCEPTED`.
   2. Freeze the terms → `AWAITING_AUTHORIZATIONS`, and answer the judge now. Asynchronously lease a nonce, build and simulate the lock (ESCROW §5.0.1 steps 1–4). If simulation fails, release the lease, cancel (`lock_failed`) and send `judge.cue LOCK_FAILED` (SCHEMAS §9.2).
   3. Once the build lands, publish `terms.proposed` (final) + `terms.authorize_request` to both phones; outbox `authorize_terms`.
 - Responses:
@@ -823,6 +823,7 @@ Responses (≤ 300 B):
 ```json
 {"ok":true,"code":"0586·0f0a","say":"Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do."}
 {"ok":false,"fix":"NOT_PROPOSED","say":"Nothing to confirm yet. What's the bet?"}
+{"ok":false,"fix":"INVITE_PENDING","say":"Jake has to accept the challenge on their phone first."}
 ```
 
 #### `open_hearing` (`pre_tool_speech: "off"`)
@@ -889,6 +890,7 @@ Grammar:
 | `LOCKED` | `[EVENT] LOCKED pot=$10 a=Logan b=Jake performer=Jake tx=1 :: Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.` |
 | `LOCK_FAILED` | `[EVENT] LOCK_FAILED reason=insufficient_funds party=Jake :: Say the lock failed and nothing moved.` |
 | `DECLINED` / `EXPIRED` / `REFUSED` | `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` |
+| `INVITE_ACCEPTED` | `[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.` (only after a refused `INVITE_PENDING` for the same terms) |
 | `ATTEMPT_ARMED` (context) | `[EVENT] ATTEMPT_ARMED attempt=1 performer=Jake :: Stay quiet while the camera counts down.` |
 | `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan he can tap GG.` |
 | `REDO` | `[EVENT] REDO attempt=2 max=3 why=unclear :: Say "Run it back" and call request_attempt with attempt_no 2.` |
