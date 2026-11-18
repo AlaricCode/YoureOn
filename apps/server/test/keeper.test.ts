@@ -18,6 +18,8 @@ import {
   type DraftIdleOptions,
   type KeeperTask,
 } from '../src/keeper';
+import { createLifecycle, installLifecycle, lifecycleOf } from '../src/lock/runtime';
+import { installSettlement, SettlementService, settlementOf } from '../src/markets/settlement';
 import { silentLogger, type Logger } from '../src/log';
 import {
   connectWs,
@@ -449,5 +451,29 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
     expect(deps.keeper?.isStarted).toBe(true);
     await running.close();
     expect(deps.keeper?.isStarted).toBe(false);
+  });
+
+  it('the chain sweeps run on the routes’ own lifecycle and settlement service (no deps copy)', async () => {
+    const dbHandle = createDb({ url: DB_URL!, max: 2 });
+    try {
+      const { deps } = createDeps({ env: testEnv(), dbHandle, rateLimit: false, keeper: true });
+      // What routes / onLanded / onRuling resolve through lifecycleOf(deps) / settlementOf(deps):
+      const calls: string[] = [];
+      const lc = createLifecycle(deps, { runtime: async () => null, timers: false });
+      lc.lock.sweep = async () => (calls.push('lock-sweep'), {}) as any;
+      lc.payout.finalizeDue = async () => (calls.push('finalize-due'), {}) as any;
+      installLifecycle(deps, lc);
+      const svc = new SettlementService(deps, { timers: false });
+      svc.sweep = async () => (calls.push('market-settlement'), {}) as any;
+      installSettlement(deps, svc);
+      await deps.keeper!.tick();
+      expect(calls.sort()).toEqual(['finalize-due', 'lock-sweep', 'market-settlement']);
+      // ...and a lock the sweep lands follows the bet on that same SettlementService
+      expect(lifecycleOf(deps)).toBe(lc);
+      expect(settlementOf(deps)).toBe(svc);
+      lc.stop();
+    } finally {
+      await dbHandle.close();
+    }
   });
 });
