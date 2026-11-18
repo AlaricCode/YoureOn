@@ -72,6 +72,7 @@ const goodQuote: MarketQuoteView = {
   priceUsd: '$64,379.76',
   expiryMs: Date.parse('2026-11-18T02:40:00.000Z'),
   lockableUntilMs: Date.parse('2026-11-18T02:38:00.000Z'),
+  nextWindowMs: null,
 };
 
 describe('market panel reducer', () => {
@@ -190,6 +191,7 @@ describe('market panel calls', () => {
       priceUsd: '$64,379.76',
       expiryMs: Date.parse('2026-11-18T02:40:00.000Z'),
       lockableUntilMs: Date.parse('2026-11-18T02:38:00.000Z'),
+      nextWindowMs: null,
     });
     expect(splitLabel(v)).toBe('$1.22 vs $0.78');
   });
@@ -217,6 +219,41 @@ describe('market panel calls', () => {
       refusal: t(COPY.app.failed),
     });
     for (const label of Object.values(REFUSAL_LABEL)) expect(checkCopy(label, 'label')).toEqual([]);
+  });
+
+  it('too late for this round: the refusal comes with the next round’s start', async () => {
+    const api = {
+      async marketQuote(): Promise<never> {
+        throw new ApiClientError('MARKET_UNAVAILABLE', 409, 'x', true, {
+          reason: 'TOO_CLOSE_TO_EXPIRY',
+        });
+      },
+      async marketCurrent() {
+        return { lockable: false, next_window_start: '2026-11-18T02:40:00.000Z' };
+      },
+    };
+    expect(await fetchMarketQuote({ api }, { side: 'UP', stakeUsd: 2 })).toMatchObject({
+      ok: false,
+      refusal: 'Next round soon',
+      nextWindowMs: Date.parse('2026-11-18T02:40:00.000Z'),
+    });
+    // a stake problem is not fixed by waiting: no countdown, and no extra call
+    let asked = 0;
+    const stake = {
+      async marketQuote(): Promise<never> {
+        throw new ApiClientError('MARKET_UNAVAILABLE', 409, 'x', true, {
+          reason: 'STAKE_ABOVE_MAX',
+        });
+      },
+      async marketCurrent() {
+        asked++;
+        return { lockable: true, next_window_start: null };
+      },
+    };
+    expect(
+      (await fetchMarketQuote({ api: stake }, { side: 'UP', stakeUsd: 10 })).nextWindowMs,
+    ).toBeNull();
+    expect(asked).toBe(0);
   });
 
   it('submit sends the side and the dollars; a refusal is a note', async () => {
