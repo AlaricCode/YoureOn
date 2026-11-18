@@ -31,6 +31,7 @@ import {
   findBetPda,
   getAppealInstructionAsync,
   getBetDecoder,
+  getCreateBetInstructionAsync,
 } from '@youre-on/shared/escrow-client';
 import { betIdToBytes } from '@youre-on/shared/primitives';
 import type { Ruling } from '@youre-on/shared/ruling';
@@ -737,6 +738,36 @@ run('money path hardening over LiteSVM', () => {
     } finally {
       install('server');
     }
+  });
+
+  it('orphan escrow: an Open bet (create_bet without accept) is cancelled at once by the judge key', async () => {
+    // Unreachable through the atomic lock, but any Open Bet must have a prompt exit (ESCROW P4).
+    const aBefore = await usdc(signerA);
+    const betId = randomUUID();
+    const [pda] = await findBetPda({ betId: betIdToBytes(betId) });
+    await send(svm.svm, svm.s, [
+      await getCreateBetInstructionAsync({
+        payer: svm.s,
+        partyA: signerA,
+        mint: svm.mint,
+        partyAToken: await ata(signerA),
+        betId: betIdToBytes(betId),
+        partyB: signerB.address,
+        stakeA: USDC,
+        stakeB: USDC,
+        termsHash: new Uint8Array(32).fill(7),
+        acceptDeadline: BigInt(Math.floor(now() / 1000) + 300),
+      }),
+    ]);
+    client.track(pda); // LiteSVM cannot list accounts: tell the emulated getProgramAccounts
+    expect((await onchainBet(betId))!.status).toBe(BetStatus.Open);
+    expect(await usdc(signerA)).toBe(aBefore - USDC);
+    const s = await lc.refund.sweepOrphans(now());
+    expect(s.sent).toContainEqual(
+      expect.objectContaining({ bet_id: betId, action: 'cancel_open_bet' }),
+    );
+    expect(await onchainBet(betId)).toBeNull(); // cancelled and closed
+    expect(await usdc(signerA)).toBe(aBefore);
   });
 
   it('concurrent orphan sweeps send one exit per Bet, never two', async () => {
