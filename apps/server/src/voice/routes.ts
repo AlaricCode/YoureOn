@@ -1,6 +1,7 @@
 // Voice routes (TASKS D0-J2):
 //   POST /v1/voice/tokens       (S)  mint an ElevenLabs conversation token (API-CONTRACT §2.6)
 //   POST /el/tools/propose_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
+//   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //
 // createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
 // sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
@@ -24,7 +25,13 @@ import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import { createElevenLabsClient, UpstreamError, type ElevenLabsClient } from './elevenlabs';
-import { auditOnlySink, proposeTermsHandler, ToolState, type ProposalSink } from './tools';
+import {
+  confirmTermsHandler,
+  proposeTermsHandler,
+  termsSink,
+  ToolState,
+  type ProposalSink,
+} from './tools';
 
 export interface VoiceRoutesOptions {
   /** Defaults to a fetch client built from ELEVENLABS_API_KEY. */
@@ -145,8 +152,9 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
 
       app.post(
         '/el/tools/propose_terms',
-        proposeTermsHandler({ state, sink: o.sink ?? auditOnlySink }),
+        proposeTermsHandler({ state, sink: o.sink ?? termsSink }),
       );
+      app.post('/el/tools/confirm_terms', confirmTermsHandler({ state }));
     },
   };
 }

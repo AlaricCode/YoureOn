@@ -1,10 +1,17 @@
-// ElevenLabs webhook tools: POST /el/tools/:name (API-CONTRACT §4.2–§4.3, TASKS D0-J2).
+// ElevenLabs webhook tools: POST /el/tools/:name (API-CONTRACT §4.2–§4.3, TASKS D0-J2, D1-J1).
 //
-// Implemented here: propose_terms, up to "validate the LLM-facing projection, map it into
-// TermsProposal, run the synchronous guardrail prefilter, answer the judge". Composing Terms,
-// hashing, bet_terms_versions, terms.proposed / terms.draft events, the async LLM guardrail and
-// the CANCELLED transition on a refusal are TASKS D1-J1 / D2-J1: they plug in through
-// `ProposalSink` without changing this handler.
+// propose_terms: validate the LLM-facing projection, map it into TermsProposal, run the
+// synchronous guardrail prefilter, answer the judge, then hand the evaluation to a `ProposalSink`
+// (NOT awaited: §4.2 heavy work is asynchronous). The production sink is `termsSink`
+// (lock/terms.ts persistEvaluation): compose Terms with the server-owned fields (bet_id, escrow,
+// party pubkeys snapshotted onto the bet, deadline, USDC base-unit stakes), computeTermsHash, a
+// bet_terms_versions row, TERMS_PROPOSED, terms.proposed / terms.draft to both parties + the stage;
+// a refusal cancels the bet (terms.refused, judge.cue REFUSED). The async LLM guardrail is not
+// wired (the synchronous prefilter is the only guardrail today).
+//
+// confirm_terms: the read-back is done and both said yes out loud (theatre, not binding): freeze
+// the terms -> AWAITING_AUTHORIZATIONS, answer now, then LockService.start in the background
+// (nonce lease + build + simulate, terms.authorize_request; LOCK_SIGNER=server signs custodially).
 //
 // Conventions (§4.2): always HTTP 200 with JSON < 300 B, except 401 for a bad secret; business
 // errors are {ok:false, fix, say}; the binding check resolves conversation_id -> voice_sessions
@@ -26,6 +33,8 @@ import {
 import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
+import { lifecycleOf } from '../lock/runtime';
+import { confirmTerms, persistEvaluation } from '../lock/terms';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
 
 /** States in which the judge may (re)propose terms (SCHEMAS §9.2: edits before the freeze). */
@@ -36,8 +45,9 @@ export const TOOL_DEDUPE_WINDOW_MS = 10_000;
 export const EL_TOOLS_BUCKET = { limit: 30, windowMs: 60_000 } as const;
 
 export interface BoundSession {
-  voice_session_id: string;
-  conversation_id: string;
+  /** null for the demo injection path (POST /v1/demo/bets/:id/terms: no voice session). */
+  voice_session_id: string | null;
+  conversation_id: string | null;
   bet_id: string;
   bet_state: string;
   party_a_id: string;
@@ -62,7 +72,21 @@ export interface ProposalSink {
   onEvaluated(e: ProposalEvent): Promise<void>;
 }
 
-/** Default sink until D1-J1: an audit row for every refusal, nothing else. */
+/**
+ * The production sink (D1-J1): lock/terms.ts persistEvaluation. Errors are logged by the caller.
+ */
+export const termsSink: ProposalSink = {
+  async onEvaluated({ deps, session, evaluation, requestId }) {
+    if (evaluation.kind === 'invalid') return;
+    const r = await persistEvaluation(deps, session.bet_id, evaluation, {
+      requestId,
+      source: session.conversation_id ? 'propose_terms' : 'demo',
+    });
+    deps.log.info('terms.sink', { bet_id: session.bet_id, result: r.kind });
+  },
+};
+
+/** The pre-D1-J1 sink: an audit row for every refusal, nothing else (kept for tests). */
 export const auditOnlySink: ProposalSink = {
   async onEvaluated({ deps, session, evaluation, requestId }) {
     if (evaluation.kind !== 'refused') return;
@@ -287,19 +311,19 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         log('error', { fix: 'WRONG_BET', conversation_id: conversationId });
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
       }
-      if (!(PROPOSABLE_STATES as readonly string[]).includes(session.bet_state)) {
-        const r: ToolReply = { ok: false, fix: 'NOT_DRAFTING', say: SAY.NOT_DRAFTING };
-        opts.state.store(dedupeKey, now, r);
-        log('error', { fix: 'NOT_DRAFTING', bet_id: betId, state: session.bet_state });
-        return reply(c, r);
-      }
-
-      // A refused bet stays refused (SCHEMAS §3; see ToolState.refusedReply).
+      // A refused bet stays refused (SCHEMAS §3; see ToolState.refusedReply). Checked before the
+      // state: the sink has already moved a refused bet to CANCELLED.
       const refused = opts.state.refusedReply(betId);
       if (refused) {
         opts.state.store(dedupeKey, now, refused);
         log('error', { bet_id: betId, refused: refused.refused, reason: 'already_refused' });
         return reply(c, refused);
+      }
+      if (!(PROPOSABLE_STATES as readonly string[]).includes(session.bet_state)) {
+        const r: ToolReply = { ok: false, fix: 'NOT_DRAFTING', say: SAY.NOT_DRAFTING };
+        opts.state.store(dedupeKey, now, r);
+        log('error', { fix: 'NOT_DRAFTING', bet_id: betId, state: session.bet_state });
+        return reply(c, r);
       }
 
       // 6. evaluate (pure: normText, map, strip-parse, prefilter, stake, market)
@@ -325,6 +349,107 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         fix: r.fix,
         refused: r.refused,
       });
+      return reply(c, r);
+    } catch (e) {
+      deps.log.error('el_tool.failed', {
+        tool: name,
+        conversation_id: conversationId,
+        err: String(e),
+      });
+      return reply(c, { ok: false, fix: 'SERVER', say: SAY.SERVER });
+    }
+  };
+}
+
+// ---- confirm_terms (API-CONTRACT §4.3) ---------------------------------------------------------
+
+const CONFIRM_SAY = {
+  NOT_PROPOSED: "Nothing to confirm yet. What's the bet?",
+} as const;
+
+/** "Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do." */
+export function confirmSay(a: string, b: string): string {
+  return `${a}, ${b}: hold the button on your own phone to lock it in. Nothing moves until you both do.`;
+}
+
+/**
+ * The confirm step shared by the webhook and POST /v1/demo/bets/:id/confirm: freeze, then start
+ * the lock in the background. Returns the tool reply.
+ */
+export async function confirmAndLock(
+  deps: AppDeps,
+  betId: string,
+  o: { heard?: string; requestId?: string; actor?: 'judge' | 'system' } = {},
+): Promise<ToolReply> {
+  const r = await confirmTerms(deps, betId, o);
+  if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
+  if (!r.already) lifecycleOf(deps).lock.startInBackground(betId);
+  const t = r.envelope.terms;
+  return fitReply({
+    ok: true,
+    code: r.code,
+    say: confirmSay(t.party_a.display_name, t.party_b.display_name),
+  });
+}
+
+export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
+  const name = 'confirm_terms';
+  return async (c: Context<AppEnv>) => {
+    const deps = c.get('deps');
+    const requestId = c.get('requestId');
+    if (!toolSecretOk(c.req.header(TOOL_SECRET_HEADER), [deps.env.ELEVENLABS_TOOL_SECRET])) {
+      deps.log.warn('el_tool.unauthorized', { tool: name, request_id: requestId });
+      return c.json({ ok: false, fix: 'UNAUTHORIZED' }, 401);
+    }
+    let conversationId: string | undefined;
+    try {
+      let body: unknown;
+      try {
+        body = JSON.parse(await c.req.text());
+      } catch {
+        return reply(c, { ok: false, fix: 'INVALID', say: SAY.INVALID });
+      }
+      const ids = (body ?? {}) as { conversation_id?: unknown; bet_id?: unknown; heard?: unknown };
+      conversationId = typeof ids.conversation_id === 'string' ? ids.conversation_id : undefined;
+      const betId = typeof ids.bet_id === 'string' ? ids.bet_id : undefined;
+      const heard = typeof ids.heard === 'string' ? ids.heard.slice(0, 8) : undefined;
+      if (!conversationId || !betId || conversationId.length > 128)
+        return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
+      try {
+        deps.rateLimit?.take('el/tools', conversationId, EL_TOOLS_BUCKET);
+      } catch (e) {
+        if (e instanceof HttpError && e.code === 'RATE_LIMITED')
+          return reply(c, { ok: false, fix: 'SLOW_DOWN', say: SAY.SLOW_DOWN });
+        throw e;
+      }
+      const now = deps.now();
+      const dedupeKey = toolDedupeKey(conversationId, name, body);
+      const prior = opts.state.cached(dedupeKey, now);
+      if (prior) return reply(c, prior);
+
+      const session = await loadBinding(deps, conversationId);
+      if (!session || session.bet_id !== betId) {
+        void deps.db
+          .insert(auditLog)
+          .values({
+            actor_kind: 'judge',
+            action: 'el_tool.wrong_bet',
+            bet_id: Uuid.safeParse(betId).success ? betId : null,
+            request_id: requestId,
+            details: {
+              tool: name,
+              conversation_id: conversationId,
+              claimed_bet_id: betId.slice(0, 64),
+              bound_bet_id: session?.bet_id ?? null,
+              reason: session ? 'bet_mismatch' : 'no_active_session',
+            },
+          })
+          .catch((e: unknown) => deps.log.error('el_tool.audit_failed', { err: String(e) }));
+        return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
+      }
+      const r = await confirmAndLock(deps, betId, { heard, requestId });
+      opts.state.store(dedupeKey, now, r);
+      deps.log.info('el_tool.call', { tool: name, bet_id: betId, ok: r.ok, request_id: requestId });
       return reply(c, r);
     } catch (e) {
       deps.log.error('el_tool.failed', {
