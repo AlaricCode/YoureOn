@@ -6,6 +6,16 @@
 
 export const REPLAY_BEATS = [1, 2, 3, 4, 5, 6] as const;
 
+/** The pitch's six beats (BRIEF §3), named on the REPLAY badge. */
+export const BEAT_TITLES: Record<number, string> = {
+  1: 'Challenge by face',
+  2: 'Terms by voice',
+  3: 'Lock it in',
+  4: 'The attempt',
+  5: 'Dispute',
+  6: 'Bitcoin closer',
+};
+
 /** The clip's URL under the page's base (/stage/ on the server, / in Vite dev). */
 export function replayUrl(beat: number, base: string = import.meta.env.BASE_URL ?? '/'): string {
   return `${base.endsWith('/') ? base : `${base}/`}replay/beat${beat}.mp4`;

@@ -33,7 +33,7 @@ import { marketView, type MarketView } from './market';
 import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from './phase';
 import { qrSvg } from './qr';
 import { healthItems, type DemoHealth, type HealthItem } from './health';
-import { presentCount, readyCount, type ReplayStatus } from './replays';
+import { BEAT_TITLES, presentCount, readyCount, type ReplayStatus } from './replays';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -824,7 +824,10 @@ export function ReplayOverlay({
   }, [missing, onClose]);
   return (
     <div className="replay" role="dialog" aria-label={`replay beat ${beat}`} onClick={onClose}>
-      <span className="replay-badge">REPLAY · beat {beat}</span>
+      <span className="replay-badge">
+        REPLAY · Beat {beat}
+        {BEAT_TITLES[beat] ? ` · ${BEAT_TITLES[beat]}` : ''}
+      </span>
       {missing ? (
         <p className="big muted">No clip at replay/beat{beat}.mp4</p>
       ) : (

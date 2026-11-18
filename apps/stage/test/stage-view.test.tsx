@@ -633,7 +633,7 @@ describe('stage layout', () => {
 
   it('REPLAY overlay is labelled and points at public/replay/beat{n}.mp4', () => {
     const html = renderToString(<ReplayOverlay beat={3} src={replayUrl(3)} onClose={() => {}} />);
-    expect(html).toContain('REPLAY · beat <!-- -->3');
+    expect(html.replace(/<!-- -->/g, '')).toContain('REPLAY · Beat 3 · Lock it in');
     expect(html).toContain('src="/replay/beat3.mp4"');
     expect(replayUrl(3, '/stage/')).toBe('/stage/replay/beat3.mp4');
   });
