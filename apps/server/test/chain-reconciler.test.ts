@@ -5,7 +5,11 @@
 // chain-projector-litesvm.test.ts. Runs in its own database (<DATABASE_URL db>_recon).
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { getBase58Decoder } from '@solana/kit';
+import {
+  getBase58Decoder,
+  SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
+  SolanaError,
+} from '@solana/kit';
 import { bets, chainEvents, chainTxs, createDb, type DbHandle } from '@youre-on/db';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
 import type { AppDeps } from '../src/context';
@@ -269,6 +273,59 @@ describeDb('StreamGapReconciler over Postgres', () => {
       'rpc_poll',
       'rpc_poll',
     ]);
+  });
+
+  it('a pass is time-boxed, and the first 429 ends it: the keeper never stalls behind a throttled RPC', async () => {
+    const f = betFacts();
+    await mkBetRow(h.db, f, { partyA: A, partyB: B, state: 'RULED' });
+    for (const kind of ['resolve', 'concede', 'finalize'] as const)
+      await mkServerTx(h.db, f.bet_id, kind, randomSig(), 'sent');
+    const now = Date.now() + 6_000;
+
+    // each getTransaction "takes" 1.5 s of wall clock: a 2 s budget allows two
+    let wall = 0;
+    let calls = 0;
+    const slow = {
+      client: {
+        transaction: async () => {
+          calls++;
+          wall += 1_500;
+          return null;
+        },
+      },
+    } as unknown as ChainRuntime;
+    const timed = new StreamGapReconciler({ budgetMs: 2_000, clock: () => wall });
+    const r1 = await timed.run(deps, slow, now);
+    expect([calls, r1.polled, r1.stopped]).toEqual([2, 2, 'budget']);
+
+    // a rate-limited RPC: one call, then the pass ends (the rest waits for the next tick)
+    calls = 0;
+    const throttled = {
+      client: {
+        transaction: async () => {
+          calls++;
+          throw new SolanaError(SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, {
+            statusCode: 429,
+            message: 'HTTP 429',
+            headers: new Headers(),
+          });
+        },
+      },
+    } as unknown as ChainRuntime;
+    const r2 = await new StreamGapReconciler().run(deps, throttled, now);
+    expect([calls, r2.polled, r2.stopped]).toEqual([1, 1, 'rpc_throttled']);
+    // any other failure only defers that signature and the pass goes on
+    calls = 0;
+    const flaky = {
+      client: {
+        transaction: async () => {
+          calls++;
+          throw new Error('fetch failed');
+        },
+      },
+    } as unknown as ChainRuntime;
+    const r3 = await new StreamGapReconciler({ batch: 3 }).run(deps, flaky, now);
+    expect([calls, r3.stopped]).toEqual([3, null]);
   });
 
   it('without a chain runtime the gap-fill pass is skipped (the retry pass still runs)', async () => {

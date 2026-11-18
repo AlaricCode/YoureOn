@@ -436,8 +436,8 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
       'draft-idle',
       'lock-sweep',
       'finalize-due',
-      'stream-gaps',
       'resolve-due',
+      'stream-gaps', // the best-effort RPC poller runs after every money sweep
     ]);
     expect(deps.keeper?.isStarted).toBe(false);
     const running = await startServer(deps, {

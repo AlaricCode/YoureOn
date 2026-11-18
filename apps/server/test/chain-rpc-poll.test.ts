@@ -4,10 +4,12 @@
 // no-op. Parity is checked against infra/quicknode/filter.js on the same fixtures, including
 // every ESCROW §7.1 rejection (failed tx, foreign program, forged authority, untagged data,
 // top-level instruction) and keys behind an address lookup table.
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
 import { eventAuthorityAddress } from '../src/chain/filter-config';
-import { isTxVersionParamError, rpcChainClient } from '../src/chain/tx';
+import { isTxVersionParamError, POLL_RPC_ATTEMPTS, rpcChainClient } from '../src/chain/tx';
 import {
   eventsFromRpcTransaction,
   parseStreamDelivery,
@@ -231,5 +233,58 @@ describe('eventsFromRpcTransaction = filter.js + parseStreamDelivery', () => {
       ],
     };
     expect(eventsFromRpcTransaction(bad, ea).events).toEqual([]);
+  });
+});
+
+describe('rpcChainClient: the background poll has its own low-retry RPC', () => {
+  /** An RPC method stub that records which client answered. */
+  const stub = (who: string, calls: string[], result: unknown) =>
+    new Proxy(
+      {},
+      {
+        get:
+          (_t, method: string) =>
+          (..._args: unknown[]) => ({
+            send: async () => {
+              calls.push(`${who}.${method}`);
+              return result;
+            },
+          }),
+      },
+    );
+
+  it('transaction / blockHeightAt go to pollRpc; everything else to the main RPC', async () => {
+    const calls: string[] = [];
+    const main = stub('main', calls, 7n);
+    const poll = stub('poll', calls, { blockHeight: 400_118_207n, meta: null });
+    const client = rpcChainClient('https://rpc.example', main as never, poll as never);
+    expect(await client.blockHeight()).toBe(7n);
+    expect(await client.transaction!(randomSig())).toBeNull(); // no meta = not found
+    expect(await client.blockHeightAt!(519_807_091)).toBe(400_118_207);
+    expect(calls).toEqual(['main.getBlockHeight', 'poll.getTransaction', 'poll.getBlock']);
+  });
+
+  it(`by default the poll RPC tries ${POLL_RPC_ATTEMPTS} times on a 429 (the confirm paths keep 6)`, async () => {
+    let hits = 0;
+    const server = createServer((_req, res) => {
+      hits++;
+      res.writeHead(429, { 'content-type': 'text/plain' }).end('Too Many Requests');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const client = rpcChainClient(`http://127.0.0.1:${port}`);
+      await expect(client.transaction!(randomSig())).rejects.toMatchObject({
+        context: { statusCode: 429 },
+      });
+      expect(hits).toBe(POLL_RPC_ATTEMPTS);
+      hits = 0;
+      await expect(client.blockHeightAt!(1)).rejects.toMatchObject({
+        context: { statusCode: 429 },
+      });
+      expect(hits).toBe(POLL_RPC_ATTEMPTS);
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
   });
 });

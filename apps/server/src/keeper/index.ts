@@ -26,20 +26,26 @@ export {
  *    nonce advances finished / retried (DATA-MODEL §5.20 "Boot reconcile and sweep").
  *  - finalize-due: RULED bets past appeal_deadline + 1 s -> [finalize, close_bet] (the durable
  *    backstop of the PayoutService setTimeout fast path).
- *  - stream-gaps: server txs with no Stream event after rpcPollFallbackMs(env) (30 s with a
- *    Stream configured, else 5 s) -> getTransaction -> chain_events (source rpc_poll) ->
- *    projector (src/chain/reconciler.ts, DATA-MODEL §8.3).
  */
 export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask[] {
-  const gaps = new StreamGapReconciler({ fallbackMs: rpcPollFallbackMs(deps.env) });
   return [
     { name: 'lock-sweep', run: (now) => lifecycleOf(deps).lock.sweep(now) },
     { name: 'finalize-due', run: (now) => lifecycleOf(deps).payout.finalizeDue(now) },
-    {
-      name: 'stream-gaps',
-      run: async (now) => gaps.run(deps, await lifecycleOf(deps).runtime(), now),
-    },
   ];
+}
+
+/**
+ * stream-gaps: server txs with no Stream event after rpcPollFallbackMs(env) (30 s with a Stream
+ * configured, else 5 s) -> getTransaction -> chain_events (source rpc_poll) -> projector
+ * (src/chain/reconciler.ts, DATA-MODEL §8.3). The only best-effort RPC poller: registered after
+ * the money sweeps, so a throttled RPC delays nothing behind it (its pass is also time-boxed).
+ */
+export function streamGapsTask(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask {
+  const gaps = new StreamGapReconciler({ fallbackMs: rpcPollFallbackMs(deps.env) });
+  return {
+    name: 'stream-gaps',
+    run: async (now) => gaps.run(deps, await lifecycleOf(deps).runtime(), now),
+  };
 }
 
 export function createServerKeeper(
@@ -49,8 +55,11 @@ export function createServerKeeper(
   const keeper = new Keeper({ now: deps.now, log: deps.log, ...opts });
   keeper.register(draftIdleTask(deps));
   const env = deps.env;
-  if (env) for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
-  // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
-  if (env) keeper.register(resolveDueTask(deps));
+  if (env) {
+    for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
+    // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
+    keeper.register(resolveDueTask(deps));
+    keeper.register(streamGapsTask({ ...deps, env }));
+  }
   return keeper;
 }

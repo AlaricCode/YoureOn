@@ -110,8 +110,14 @@ export interface ChainClient {
   /**
    * getTransaction(sig, confirmed, json, maxSupportedTransactionVersion 1), normalized; null when
    * not found (yet). Optional: the Stream-gap reconciler (chain/reconciler.ts) skips without it.
+   * rpcChainClient sends it (and blockHeightAt) over its low-retry poll RPC.
    */
   transaction?(sig: string): Promise<RpcTransaction | null>;
+  /**
+   * The block height of the block at `slot` (getBlock, no transactions); null when the RPC has no
+   * height for it. Optional: the reconciler's height backfill (chain/reconciler.ts) skips without.
+   */
+  blockHeightAt?(slot: number): Promise<number | null>;
 }
 
 /** The RPC rejected the tx at preflight (nothing landed, no fee). */
@@ -197,6 +203,13 @@ export function withRpcRetry(inner: RpcTransport, o: RetryOptions = {}): RpcTran
   }) as RpcTransport;
 }
 
+/**
+ * Tries per request on the Stream-gap poll RPC (getTransaction / getBlock): one quick retry, no
+ * multi-second backoff, so a 429 storm on a rate-limited RPC cannot stall the keeper pass (and
+ * the lock / payout sweeps behind it) for minutes; the reconciler simply tries again next tick.
+ */
+export const POLL_RPC_ATTEMPTS = 2;
+
 /** createSolanaRpc with the retrying transport. */
 export function createRetryingSolanaRpc(url: string, o?: RetryOptions): Rpc<SolanaRpcApi> {
   return createSolanaRpcFromTransport(withRpcRetry(createDefaultRpcTransport({ url }), o));
@@ -219,17 +232,32 @@ export function isTxVersionParamError(e: unknown): boolean {
   return false;
 }
 
-/** The real client over a kit RPC (QuickNode devnet in production, a local validator in e2e). */
+/**
+ * The real client over a kit RPC (QuickNode devnet in production, a local validator in e2e).
+ * `pollRpc` serves the background poll (transaction, blockHeightAt): by default the same URL with
+ * POLL_RPC_ATTEMPTS tries, so it never spends the confirm paths' retry budget; when only `rpc` is
+ * given (tests), it serves both.
+ */
 export function rpcChainClient(
   url: string,
-  rpc: Rpc<SolanaRpcApi> = createRetryingSolanaRpc(url),
+  rpc?: Rpc<SolanaRpcApi>,
+  pollRpc?: Rpc<SolanaRpcApi>,
 ): ChainClient {
+  const main = rpc ?? createRetryingSolanaRpc(url);
+  const poll = pollRpc ?? rpc ?? createRetryingSolanaRpc(url, { attempts: POLL_RPC_ATTEMPTS });
   let cluster: Promise<'devnet' | 'localnet'> | null = null;
   let maxTxVersion: 0 | 1 = 1;
+  const heightOf = async (slot: bigint): Promise<number | null> => {
+    const b = await poll
+      .getBlock(slot, { commitment: 'confirmed', transactionDetails: 'none', rewards: false })
+      .send();
+    // (blockHeight can be null on old blocks: unknown, never 0)
+    return b?.blockHeight === null || b?.blockHeight === undefined ? null : Number(b.blockHeight);
+  };
   return {
     label: redactUrl(url),
     assertSafeCluster() {
-      cluster ??= rpc
+      cluster ??= main
         .getGenesisHash()
         .send()
         .then((g) => {
@@ -240,11 +268,11 @@ export function rpcChainClient(
       return cluster;
     },
     async latestBlockhash() {
-      const { value } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
+      const { value } = await main.getLatestBlockhash({ commitment: 'confirmed' }).send();
       return { blockhash: value.blockhash, lastValidBlockHeight: value.lastValidBlockHeight };
     },
     async simulate(wire, replaceRecentBlockhash) {
-      const { value } = await rpc
+      const { value } = await main
         .simulateTransaction(wire, {
           encoding: 'base64',
           sigVerify: false,
@@ -256,7 +284,7 @@ export function rpcChainClient(
     },
     async send(wire, skipPreflight) {
       try {
-        await rpc
+        await main
           .sendTransaction(
             wire,
             skipPreflight
@@ -271,7 +299,7 @@ export function rpcChainClient(
       }
     },
     async signatureStatus(sig, o) {
-      const { value } = await rpc
+      const { value } = await main
         .getSignatureStatuses(
           [sig as Signature],
           o?.searchHistory ? { searchTransactionHistory: true } : undefined,
@@ -281,10 +309,10 @@ export function rpcChainClient(
       return st ? { err: st.err, confirmationStatus: st.confirmationStatus, slot: st.slot } : null;
     },
     async blockHeight() {
-      return rpc.getBlockHeight({ commitment: 'confirmed' }).send();
+      return main.getBlockHeight({ commitment: 'confirmed' }).send();
     },
     async getAccount(addr) {
-      const { value } = await rpc
+      const { value } = await main
         .getAccountInfo(addr, { commitment: 'confirmed', encoding: 'base64' })
         .send();
       if (!value) return null;
@@ -295,7 +323,7 @@ export function rpcChainClient(
       };
     },
     async tokenBalanceByOwner(owner, mint) {
-      const { value } = await rpc
+      const { value } = await main
         .getTokenAccountsByOwner(
           owner,
           { mint },
@@ -312,7 +340,7 @@ export function rpcChainClient(
       return sum;
     },
     async lamports(addr) {
-      const { value } = await rpc.getBalance(addr, { commitment: 'confirmed' }).send();
+      const { value } = await main.getBalance(addr, { commitment: 'confirmed' }).send();
       return value;
     },
     async transaction(sig) {
@@ -320,7 +348,7 @@ export function rpcChainClient(
       // §8.3). Our own txs are v0, so an RPC that rejects the `1` parameter is retried with 0
       // (and remembered).
       const get = (v: 0 | 1) =>
-        rpc
+        poll
           .getTransaction(sig as Signature, {
             commitment: 'confirmed',
             encoding: 'json',
@@ -338,19 +366,11 @@ export function rpcChainClient(
       if (!tx || !tx.meta) return null;
       const loaded = tx.meta.loadedAddresses;
       // getTransaction has no block height; attribution orders events by it (projector.ts), so
-      // ask the block for it (no transactions, no rewards: a few hundred bytes). Best effort.
+      // ask the block for it (no transactions, no rewards: a few hundred bytes). Best effort: a
+      // miss is retried later by the reconciler's height backfill (blockHeightAt).
       let blockHeight: number | null = null;
       try {
-        const b = await rpc
-          .getBlock(tx.slot, {
-            commitment: 'confirmed',
-            transactionDetails: 'none',
-            rewards: false,
-          })
-          .send();
-        // (blockHeight can be null on old blocks: unknown, never 0)
-        blockHeight =
-          b?.blockHeight === null || b?.blockHeight === undefined ? null : Number(b.blockHeight);
+        blockHeight = await heightOf(tx.slot);
       } catch {
         blockHeight = null;
       }
@@ -375,6 +395,7 @@ export function rpcChainClient(
         })),
       };
     },
+    blockHeightAt: (slot) => heightOf(BigInt(slot)),
   };
 }
 
