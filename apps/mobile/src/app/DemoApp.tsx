@@ -128,7 +128,7 @@ import {
   deviceRoleRequest,
   rejoinAndRebind,
 } from './judgeCam';
-import { RESUME_LIMIT, resumable } from './resume';
+import { createLiveRetry, RESUME_LIMIT, resumable, type LiveRetry } from './resume';
 import { createSocketStatusHandler } from './socketStatus';
 import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
@@ -306,6 +306,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [rt],
   );
 
+  /** Sign-in steps waiting for the socket to be live again (./resume createLiveRetry). */
+  const liveRetries = useRef<readonly LiveRetry[]>([]);
+
   // ---- boot / session ---------------------------------------------------------------------
   const boot = useCallback(() => {
     setBootFailed(false);
@@ -349,40 +352,59 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     // restored judge cam then re-binds itself to that room on the server, which may hold another
     // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
     // room comes from the join, not from appRef (a render behind right after it).
-    void cam.then((restored) =>
-      rejoinAndRebind({
-        restored,
-        linked,
-        storedCode: async () => {
-          const S = await import('expo-secure-store');
-          return S.getItemAsync(LAST_ROOM_KEY);
-        },
-        currentRoomId: () => appRef.current.room?.room_id ?? null,
-        join: joinRoomId,
-        live: () => live,
-        stillOn: () => camSync.restoredOn,
-        bind: (roomId) => void bindJudgeCam(roomId),
-      }),
-    );
+    // A step the server could not answer here (offline at a cold start) runs again once the
+    // socket is live (./resume createLiveRetry): it used to wait for the next restart, with the
+    // phone on home, room-less, and its open bet stranded.
+    const roomRetry = createLiveRetry(async () => {
+      if (appRef.current.room) return true;
+      const S = await import('expo-secure-store');
+      const code = await S.getItemAsync(LAST_ROOM_KEY);
+      return !code || !live || (await joinRoomId(code)) !== null;
+    });
+    void cam
+      .then((restored) =>
+        rejoinAndRebind({
+          restored,
+          linked,
+          storedCode: async () => {
+            const S = await import('expo-secure-store');
+            return S.getItemAsync(LAST_ROOM_KEY);
+          },
+          currentRoomId: () => appRef.current.room?.room_id ?? null,
+          join: joinRoomId,
+          live: () => live,
+          stillOn: () => camSync.restoredOn,
+          bind: (roomId) => void bindJudgeCam(roomId),
+        }),
+      )
+      .then((joined) => {
+        if (!joined) roomRetry.markPending();
+      });
     // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
-    void (async () => {
+    const betsRetry = createLiveRetry(async () => {
       let open: BetSnapshot[];
       try {
         open = resumable((await rt.api.myBets('active', RESUME_LIMIT)).items);
       } catch {
-        return; // offline: the bet's own pushes or the next sign-in bring it back
+        return false; // offline: again once the socket is live
       }
       for (const snap of open) {
-        if (!live) return;
+        if (!live) return true;
         if (!rt.hub.has(snap.bet_id)) await rt.hub.restore(snap);
         rt.ws.subscribe(snap.bet_id);
       }
       await cam; // judge cam or not decides the screen this bet opens on
       const newest = open[0];
       if (live && newest) dispatch({ type: 'bet_opened', bet_id: newest.bet_id });
-    })();
+      return true;
+    });
+    void betsRetry.run();
+    liveRetries.current = [roomRetry, betsRetry];
     return () => {
       live = false;
+      roomRetry.stop();
+      betsRetry.stop();
+      liveRetries.current = [];
       rt.ws.stop();
     };
   }, [app.auth, userId, rt, camSync]);
@@ -414,7 +436,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     const a = rt.onStatus(
       createSocketStatusHandler({
         offline: (offline) => dispatch({ type: 'offline', offline }),
-        live: () => void camSync.retry(),
+        live: () => {
+          void camSync.retry();
+          for (const r of liveRetries.current) r.onLive();
+        },
       }),
     );
     const b = rt.onControl((f) => {

@@ -22,3 +22,65 @@ export function resumable(items: readonly unknown[]): BetSnapshot[] {
     return p.success && !isTerminalBetState(p.data.state) ? [p.data] : [];
   });
 }
+
+export interface LiveRetry {
+  /** Run the step now (sign-in). */
+  run(): Promise<void>;
+  /** The step already ran elsewhere and did not finish: run it on the next live socket. */
+  markPending(): void;
+  /** The socket is live (the server answers): run the step again if it is pending. */
+  onLive(): void;
+  /** Signed out / unmounted: never run again. */
+  stop(): void;
+  readonly pending: boolean;
+}
+
+/**
+ * A sign-in step that needs the server (the room rejoin, GET /v1/me/bets): when it could not
+ * finish (it resolved false or threw: the server was unreachable at a cold start), it runs again
+ * the next time the socket is live, until it finishes once. Before this a phone that restarted
+ * mid-bet without a connection stayed on home, room-less, with the bet stranded until the next
+ * restart, even after the server came back.
+ */
+export function createLiveRetry(step: () => Promise<boolean>): LiveRetry {
+  let pending = false;
+  let running = false;
+  let liveDuringRun = false;
+  let stopped = false;
+  async function run(): Promise<void> {
+    if (stopped || running) return;
+    running = true;
+    pending = false;
+    liveDuringRun = false;
+    let done = false;
+    try {
+      done = await step();
+    } catch {
+      done = false;
+    } finally {
+      running = false;
+    }
+    if (stopped || done) return;
+    pending = true;
+    // The socket came back while this run was failing: that 'live' is spent, so go again now.
+    if (liveDuringRun) await run();
+  }
+  return {
+    run,
+    markPending() {
+      if (!stopped) pending = true;
+    },
+    onLive() {
+      if (stopped) return;
+      if (running) liveDuringRun = true;
+      else if (pending) void run();
+    },
+    stop() {
+      stopped = true;
+      pending = false;
+    },
+    get pending() {
+      return pending;
+    },
+  };
+}

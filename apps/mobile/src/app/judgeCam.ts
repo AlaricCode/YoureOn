@@ -212,13 +212,20 @@ export interface RejoinDeps {
  * restored judge cam to the room this phone is in now. That room comes from the join itself: the
  * app state lags a render behind, and reading it right after the join found no room, so every
  * restored judge cam turned itself off ("Join room first") and the memo never brought it back.
+ * Resolves false when a join was tried and failed (the caller tries the rejoin again once the
+ * socket is live: ./resume createLiveRetry).
  */
-export async function rejoinAndRebind(d: RejoinDeps): Promise<void> {
+export async function rejoinAndRebind(d: RejoinDeps): Promise<boolean> {
   const code = d.linked ?? (await d.storedCode().catch(() => null)) ?? null;
   let roomId = d.currentRoomId();
-  if (code && d.live() && (d.linked || !roomId)) roomId = (await d.join(code)) ?? roomId;
-  if (!d.live() || d.restored !== 'judge_cam' || !d.stillOn()) return;
-  d.bind(roomId);
+  let joined = true;
+  if (code && d.live() && (d.linked || !roomId)) {
+    const id = await d.join(code);
+    joined = id !== null;
+    roomId = id ?? roomId;
+  }
+  if (d.live() && d.restored === 'judge_cam' && d.stillOn()) d.bind(roomId);
+  return joined;
 }
 
 // ---- POST /attempts errors on A's Start ----------------------------------------------------------

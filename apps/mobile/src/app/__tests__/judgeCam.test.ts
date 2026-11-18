@@ -252,7 +252,7 @@ describe('rejoinAndRebind: a restored judge cam re-binds the room it just rejoin
 
   it('binds the room the join returned, not the stale room on screen (it used to turn off)', async () => {
     const r = run({ restored: 'judge_cam', stored: 'ABC123', joins: { ABC123: 'room-1' } });
-    await r.done;
+    expect(await r.done).toBe(true);
     expect(r.joined).toEqual(['ABC123']);
     expect(r.bound).toEqual(['room-1']);
   });
@@ -279,8 +279,14 @@ describe('rejoinAndRebind: a restored judge cam re-binds the room it just rejoin
 
   it('no room to rejoin: binds null (the caller turns it off and says "Join room first")', async () => {
     const r = run({ restored: 'judge_cam', stored: 'GONE01', joins: { GONE01: null } });
-    await r.done;
+    // false: the caller tries the rejoin again once the socket is live (offline at a cold start)
+    expect(await r.done).toBe(false);
     expect(r.bound).toEqual([null]);
+  });
+
+  it('nothing to rejoin, or a room already on screen: done', async () => {
+    expect(await run({ restored: 'none' }).done).toBe(true);
+    expect(await run({ restored: 'none', stored: 'ABC123', shown: 'room-0' }).done).toBe(true);
   });
 
   it('a plain phone rejoins its room and binds nothing', async () => {
