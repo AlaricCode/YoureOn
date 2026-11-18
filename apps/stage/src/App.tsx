@@ -48,15 +48,7 @@ import {
   REPLAY_BEATS,
   type ReplayStatus,
 } from './replays';
-import {
-  featuredTx,
-  HelpOverlay,
-  PaidMoment,
-  QrOverlay,
-  ReplayOverlay,
-  StageView,
-  Ticker,
-} from './view';
+import { featuredTx, HelpOverlay, PaidMoment, QrOverlay, ReplayOverlay, StageView } from './view';
 
 export {
   BetCard,
@@ -495,7 +487,11 @@ export function App() {
             Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}
             <a href="?preview">open the preview</a>
           </p>
-          <Ticker state={state} />
+          <p className="muted small tip">
+            No typing on the projector: open{' '}
+            <code>/stage/?room=ABC234#key=STAGE_KEY&amp;demo=DEMO_ADMIN_TOKEN</code> (the part after
+            # never leaves this laptop, and is cleared from the address bar).
+          </p>
         </div>
       )}
       {paidMoment && focus?.payout && <PaidMoment bet={focus} />}

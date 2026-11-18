@@ -1068,8 +1068,14 @@ code,
 .connect button:disabled {
   opacity: 0.6;
 }
-.connect .ticker {
-  width: min(100%, 26em);
+.connect .tip {
+  max-width: 34em;
+  text-align: center;
+  line-height: 1.5;
+}
+.connect .tip code {
+  color: var(--text);
+  word-break: break-all;
 }
 
 /* ---- motion ------------------------------------------------------------------------------- */
