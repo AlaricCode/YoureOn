@@ -75,6 +75,7 @@ export const COPY = {
     judging: ['Judging', 'label'],
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
+    start: ['Start', 'label'],
   },
   judgeCam: {
     title: ['Judge cam', 'label'],
@@ -145,6 +146,11 @@ export const COPY = {
     history: ['History', 'label'],
     judgeCam: ['Judge cam', 'label'],
     demo: ['Demo account', 'label'],
+  },
+  app: {
+    loading: ['Loading', 'label'],
+    offline: ["Can't connect", 'error'],
+    failed: ['Try again', 'error'],
   },
   demo: {
     title: ['Demo account', 'label'],

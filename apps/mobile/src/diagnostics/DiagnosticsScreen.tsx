@@ -44,7 +44,7 @@ const COLORS: Record<CheckResult['status'], string> = {
   fail: '#c62828',
 };
 
-export default function DiagnosticsScreen() {
+export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } = {}) {
   const [results, setResults] = useState<CheckResults>({});
   const [running, setRunning] = useState(false);
   const [panel, setPanel] = useState<CameraPanel | null>(null);
@@ -148,6 +148,15 @@ export default function DiagnosticsScreen() {
               setPreviewOpen(true);
             }}
           />
+          {onClose ? (
+            <Button
+              title="Back to app"
+              onPress={() => {
+                setPanel(null);
+                onClose();
+              }}
+            />
+          ) : null}
         </View>
 
         {panel ? (
