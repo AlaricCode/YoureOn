@@ -11,6 +11,7 @@ import { roomsRoutes } from './rooms/routes';
 import { betsRoutes } from './bets/routes';
 import { voiceRoutes } from './voice/routes';
 import { chainRoutes } from './chain/routes';
+import { judgeRoutes } from './judge/routes';
 
 export const routeModules: RouteModule[] = [
   healthRoutes,
@@ -20,5 +21,6 @@ export const routeModules: RouteModule[] = [
   betsRoutes,
   voiceRoutes,
   chainRoutes,
-  // judgeRoutes, hearingRoutes, appealsRoutes, geminiRoutes, …
+  judgeRoutes,
+  // hearingRoutes, appealsRoutes, geminiRoutes, …
 ];
