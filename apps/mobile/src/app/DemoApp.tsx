@@ -8,8 +8,10 @@
 //   -> B: full-screen invite + haptic -> negotiate (captions, draft; on A's phone "Type it
 //      instead", automatic with EXPO_PUBLIC_VOICE=off or a failed voice session) -> terms card (hash checked,
 //      device policy, hold -> Face ID -> sign -> PartyAuthorization; or the server pushes LOCKED)
-//   -> live / judge cam (record, frames, upload) -> ruling (GG = concede, Face ID) / REDO
-//   -> payout with GET /v1/me/balance.
+//   -> live / judge cam (record, frames, upload) -> ruling (GG = concede, Face ID; the loser's
+//      "I appeal!" = appeal, tap + Face ID, until 1 s before the window ends) / REDO
+//   -> appeal: the three-model panel voting live, then its result (Beat 5; until "Continue")
+//   -> payout with GET /v1/me/balance (the panel's final outcome when there was an appeal).
 // Beat 6 (the closer): on A's negotiate screen "Bet on Bitcoin" (app/marketTerms) shows Gemini's
 // live odds and the fair split, proposes at the binding quote, then the same terms card and lock;
 // a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
@@ -40,8 +42,8 @@ import { formatPrice } from '@youre-on/shared/settlement';
 
 import { extractFrames, readClip } from '../attempt/capture';
 import { initialLock, lockReducer, type AuthFailure } from '../bets/lock';
-import { emptyBet, endReasonOf, lockSignals, type BetModel } from '../bets/store';
-import { betView, myResult, type BetView } from '../bets/view';
+import { emptyBet, endReasonOf, finalOutcome, lockSignals, type BetModel } from '../bets/store';
+import { appealSeats, appealVerdict, betView, myResult, type BetView } from '../bets/view';
 import { feel } from '../device/feedback';
 import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createServerFaceApi, type FaceStatus } from '../enroll/api';
@@ -60,6 +62,7 @@ import { DemoClaimScreen } from '../screens/DemoClaimScreen';
 import { HistoryScreen, HomeScreen, ProfileScreen } from '../screens/HomeScreens';
 import { LockEndedScreen, TermsCardScreen } from '../screens/LockScreens';
 import {
+  AppealScreen,
   JudgeCamScreen,
   LiveScreen,
   MarketScreen,
@@ -81,6 +84,7 @@ import { palette } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
 import { WalletError } from '../wallet/wallet';
 import {
+  appeal,
   authorizeLock,
   checkLockPolicy,
   concede,
@@ -935,6 +939,30 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   };
 
+  /** "I appeal!" (Beat 5): tap + Face ID, the device policy on the 'appeal' screen, POST. */
+  const appealNow = async () => {
+    if (!bet) return;
+    setBusy(true);
+    setAlert(null);
+    try {
+      await appeal(
+        { wallet: rt.wallet, api: rt.api },
+        bet,
+        t(COPY.ruling.appealPrompt),
+        keyFor(`appeal:${bet.bet_id}`),
+      );
+    } catch (e) {
+      feel('failed');
+      if (e instanceof WalletError && e.code === 'POLICY_REJECTED') setAlert(t(COPY.terms.refused));
+      else if (e instanceof WalletError) setAlert(t(COPY.terms.faceIdFailed));
+      else if (e instanceof ApiClientError && e.code === 'APPEAL_WINDOW_CLOSED')
+        setAlert(t(COPY.ruling.tooLate));
+      else setAlert(t(COPY.app.failed));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /** Built uploads by Idempotency-Key: the judge cam's retry resends the exact same body. */
   const preparedUploads = useRef(new Map<string, PreparedAttempt>());
   const sendClip = useCallback(
@@ -1019,12 +1047,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
 
+  // After an appeal the panel's outcome pays (and may differ from the ruling's).
+  const outcome = bet ? finalOutcome(bet) : null;
   const result =
-    bet?.ruling && me
-      ? bet.state === 'VOIDED'
-        ? 'void'
-        : myResult(bet.ruling.ruling.outcome, me)
-      : 'void';
+    outcome && me ? (bet?.state === 'VOIDED' ? 'void' : myResult(outcome, me)) : 'void';
   const balanceCents = balance ? Number(BigInt(balance.usdc) / 10_000n) : 0;
   const waiting = <Loading failed={false} onRetry={() => undefined} />;
 
@@ -1428,6 +1454,21 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             busy={busy}
             alert={alert}
             onGG={() => void gg()}
+            onAppeal={result === 'lost' ? () => void appealNow() : undefined}
+          />
+        );
+      }
+      case 'appeal': {
+        if (!bet) return waiting;
+        const original = bet.appealResult?.original_outcome ?? bet.ruling?.ruling.outcome ?? null;
+        return (
+          <AppealScreen
+            seats={appealSeats(bet.appealVotes, original).map((s) => ({
+              ...s,
+              reason: s.reason ? safeData(s.reason, '') || null : null,
+            }))}
+            result={appealVerdict(bet.appealResult)}
+            onContinue={() => dispatch({ type: 'appeal_ack', bet_id: bet.bet_id })}
           />
         );
       }
@@ -1502,9 +1543,11 @@ function lockSignalsSafe(...args: Parameters<typeof lockSignals>) {
   return lockSignals(...args).filter((s) => s.type !== 'reset');
 }
 
+/** This phone wins the payout: the panel's outcome after an appeal, else the ruling's. */
 function wonBet(b: BetModel): boolean {
-  if (!b.ruling || !b.my_party) return false;
-  return myResult(b.ruling.ruling.outcome, b.my_party) === 'won';
+  const outcome = finalOutcome(b);
+  if (!outcome || !b.my_party) return false;
+  return myResult(outcome, b.my_party) === 'won';
 }
 
 const styles = StyleSheet.create({

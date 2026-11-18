@@ -121,6 +121,8 @@ export const COPY = {
     finalIn: ['Final in', 'label'],
     gg: ['GG', 'label'],
     appeal: ['I appeal!', 'label'],
+    appealPrompt: ['Appeal the ruling', 'label'],
+    tooLate: ['Too late', 'error'],
     waiting: ['Waiting', 'label'],
     tip: ['Tip', 'label'],
     ready: ['Ready', 'label'],
