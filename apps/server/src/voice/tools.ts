@@ -12,6 +12,7 @@
 // confirm_terms: the read-back is done and both said yes out loud (theatre, not binding): freeze
 // the terms -> AWAITING_AUTHORIZATIONS, answer now, then LockService.start in the background
 // (nonce lease + build + simulate, terms.authorize_request; LOCK_SIGNER=server signs custodially).
+// B must have accepted the invite on B's own phone first ({ok:false, fix:'INVITE_PENDING'}).
 //
 // Conventions (§4.2): always HTTP 200 with JSON < 300 B, except 401 for a bad secret; business
 // errors are {ok:false, fix, say}; the binding check resolves conversation_id -> voice_sessions
@@ -30,6 +31,8 @@ import {
   type ProposeEvaluation,
   type ToolReply,
 } from '@youre-on/shared/judge/reply';
+import { priorAnswers } from '../bets/routes';
+import { loadUserRefs } from '../bets/snapshot';
 import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
@@ -367,6 +370,11 @@ const CONFIRM_SAY = {
   NOT_PROPOSED: "Nothing to confirm yet. What's the bet?",
 } as const;
 
+/** "Jake has to accept the challenge on their phone first." (fits the 200-char `say`). */
+export function invitePendingSay(b: string): string {
+  return `${b.slice(0, 40)} has to accept the challenge on their phone first.`;
+}
+
 /** "Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do." */
 export function confirmSay(a: string, b: string): string {
   return `${a}, ${b}: hold the button on your own phone to lock it in. Nothing moves until you both do.`;
@@ -418,8 +426,26 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
       conversationId = typeof ids.conversation_id === 'string' ? ids.conversation_id : undefined;
       const betId = typeof ids.bet_id === 'string' ? ids.bet_id : undefined;
       const heard = typeof ids.heard === 'string' ? ids.heard.slice(0, 8) : undefined;
-      if (!conversationId || !betId || conversationId.length > 128)
+      if (!conversationId || !betId || conversationId.length > 128) {
+        // §4.1: every WRONG_BET writes an audit row (off the reply path).
+        void deps.db
+          .insert(auditLog)
+          .values({
+            actor_kind: 'judge',
+            action: 'el_tool.wrong_bet',
+            bet_id: betId && Uuid.safeParse(betId).success ? betId : null,
+            request_id: requestId,
+            details: {
+              tool: name,
+              conversation_id: conversationId?.slice(0, 128) ?? null,
+              claimed_bet_id: betId?.slice(0, 64) ?? null,
+              bound_bet_id: null,
+              reason: 'missing_ids',
+            },
+          })
+          .catch((e: unknown) => deps.log.error('el_tool.audit_failed', { err: String(e) }));
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
+      }
       try {
         deps.rateLimit?.take('el/tools', conversationId, EL_TOOLS_BUCKET);
       } catch (e) {
@@ -451,6 +477,28 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
           })
           .catch((e: unknown) => deps.log.error('el_tool.audit_failed', { err: String(e) }));
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
+      }
+      // B's consent is B's own tap on the invite, never what the judge heard (a spoken "deal"
+      // is theatre, §4.1). With LOCK_SIGNER=server the lock signs B's stake custodially, so
+      // freezing before B accepted would spend B's money on A's word. Same gate as typed
+      // terms (terms/routes.ts). Not replayed: it turns into a success once B taps accept.
+      if (
+        session.bet_state === 'TERMS_PROPOSED' &&
+        !(await priorAnswers(deps.db, betId)).has('accepted')
+      ) {
+        const b = (await loadUserRefs(deps.db, [session.party_b_id])).get(session.party_b_id);
+        deps.log.info('el_tool.call', {
+          tool: name,
+          bet_id: betId,
+          ok: false,
+          fix: 'INVITE_PENDING',
+          request_id: requestId,
+        });
+        return reply(c, {
+          ok: false,
+          fix: 'INVITE_PENDING',
+          say: invitePendingSay(b?.display_name ?? 'They'),
+        });
       }
       const r = await confirmAndLock(deps, betId, { heard, requestId });
       // Only a success is replayed: NOT_PROPOSED may turn into a success a second later.
