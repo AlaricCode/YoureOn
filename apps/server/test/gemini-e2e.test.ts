@@ -40,6 +40,7 @@ import {
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
 import { betEvents, bets, noncePool, rulings } from '@youre-on/db';
+import { SignRequest } from '@youre-on/shared/api';
 import { AuthorizeRequest } from '@youre-on/shared/authorization';
 import { TOKEN_PROGRAM_ID } from '@youre-on/shared/chain/constants';
 import { QUOTE_TTL_SECS } from '@youre-on/shared/constants';
@@ -65,6 +66,7 @@ import { betIdToBytes } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
 import { Ruling } from '@youre-on/shared/ruling';
 import { SettlementEvidence } from '@youre-on/shared/settlement';
+import { renderSignCard } from '@youre-on/shared/sign-card';
 import {
   createPoolNonce,
   HAVE_SO,
@@ -641,6 +643,59 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
     expect(bet.appeal_deadline).not.toBeNull();
     expect(await usdc(signerA.address)).toBe(a0 + 780_000n);
     expect(await usdc(signerB.address)).toBe(b0 - 780_000n);
+  });
+
+  it('phones: DOWN loses to a (synthetic) YES; the loser GGs on the phone (GG card with odds, policy) -> PAID', async () => {
+    install('phones');
+    const a0 = await usdc(signerA.address);
+    const b0 = await usdc(signerB.address);
+    const { betId, res } = await marketBet('DOWN', '1');
+    // DOWN at 39 %: Logan $0.78 against Jake's $1.22
+    expect(res.quote.stakes).toEqual({ a: '780000', b: '1220000', currency: 'USDC' });
+    at(3_000);
+    await phonesSign(betId);
+    await expectAwaitingMarket(betId, res);
+    const { ruling, bet } = await settleWith(betId, settledYes());
+    expect(ruling.outcome).toBe('B_WINS'); // Gemini said yes; Jake held Up
+    // Logan's phone: the pushed GG request, its own rendering of the card, the shared policy
+    const g = await get(A, `/v1/bets/${betId}/concede`);
+    expect(g.status).toBe(200);
+    const req = SignRequest.parse(g.json);
+    const renderedCard = renderSignCard({
+      kind: 'concede',
+      terms: req.envelope.terms,
+      terms_hash: req.envelope.terms_hash,
+      me: 'A',
+      appeal_deadline: Math.floor(bet.appeal_deadline!.getTime() / 1000),
+    });
+    expect(renderedCard).toMatchObject({ odds_display: '39/61', stakes_line: '$0.78' });
+    const msg = new Uint8Array(Buffer.from(req.message_b64, 'base64'));
+    const v = checkDevicePolicy(msg, {
+      screen: 'gg',
+      request: g.json,
+      renderedCard,
+      verifiedRulingHash: hashJcs(ruling),
+      verifiedRulingOutcome: ruling.outcome,
+      devicePubkey: A.wallet.pubkey,
+      nowSecs: Math.floor(now() / 1000),
+      derive: await derivations(betId),
+      pins: pins(),
+    });
+    expect(v, JSON.stringify(v)).toMatchObject({ ok: true, kind: 'concede', party: 'A' });
+    const post = await signed(A, 'POST', `/v1/bets/${betId}/concede`, {
+      bet_id: betId,
+      kind: 'concede',
+      party: 'A',
+      message_sha256: req.message_sha256,
+      party_signature: b58.decode(ed.sign(msg, keyA.secret)),
+      method: 'faceid_hold',
+      signed_at: new Date(now()).toISOString(),
+    });
+    expect(post.status).toBe(202);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'concede' });
+    expect(await usdc(signerA.address)).toBe(a0 - 780_000n);
+    expect(await usdc(signerB.address)).toBe(b0 + 780_000n);
   });
 
   it('phones: the quote runs out before the second hold -> EXPIRED quote_expired, nothing moved', async () => {
