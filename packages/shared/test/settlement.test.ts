@@ -14,6 +14,7 @@ import {
   settlementReason,
   settlementRecord,
   settlementRuling,
+  verifySettlement,
 } from '../src/settlement';
 import type { MarketRef } from '../src/terms';
 
@@ -219,6 +220,53 @@ describe('settlementRuling (§5.2 stage settlement)', () => {
     expect(ruling(rec).reason).toBe(
       'Replay of a recorded round. Gemini settled DOWN: Bitcoin finished at $64,367.38, below the $64,389.60 line.',
     );
+  });
+
+  it('verifySettlement: every link of the chain, and each forgery caught', () => {
+    const rec = record({ kind: 'settled', side: 'no' });
+    const r = ruling(rec);
+    const base = {
+      record: rec,
+      evidence_hash: hashJcs(rec),
+      ruling: r,
+      ruling_hash: hashJcs(r),
+      terms: { yes_party: 'A' as const, market: market() },
+      body_sha256: rec.response_sha256,
+      onchain: { evidence_hash: hashJcs(rec), ruling_hash: hashJcs(r) },
+    };
+    expect(verifySettlement(base)).toEqual({
+      ok: true,
+      checks: {
+        body_matches_record: true,
+        record_hash: true,
+        ruling_commits_record: true,
+        ruling_hash: true,
+        outcome_follows_gemini: true,
+        onchain_evidence: true,
+        onchain_ruling: true,
+      },
+    });
+    // missing inputs are left out, not failed
+    const partial = verifySettlement({ ...base, body_sha256: null, onchain: null });
+    expect(partial.ok).toBe(true);
+    expect(Object.keys(partial.checks)).not.toContain('onchain_evidence');
+    // forgeries
+    expect(verifySettlement({ ...base, body_sha256: 'ee'.repeat(32) }).checks).toMatchObject({
+      body_matches_record: false,
+    });
+    const flipped = { ...rec, contract: { ...rec.contract, resolutionSide: 'yes' as const } };
+    expect(verifySettlement({ ...base, record: flipped })).toMatchObject({
+      ok: false,
+      checks: { record_hash: false, outcome_follows_gemini: false },
+    });
+    const wrongWinner = { ...r, outcome: 'A_WINS' as const };
+    expect(
+      verifySettlement({ ...base, ruling: wrongWinner, ruling_hash: hashJcs(wrongWinner) }).checks,
+    ).toMatchObject({ ruling_hash: true, outcome_follows_gemini: false, onchain_ruling: false });
+    expect(
+      verifySettlement({ ...base, onchain: { evidence_hash: 'ff'.repeat(32), ruling_hash: null } })
+        .checks,
+    ).toMatchObject({ onchain_evidence: false });
   });
 
   it('the record is strict and hashes stably', () => {

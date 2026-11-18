@@ -14,10 +14,11 @@
 //
 // "yes" means Bitcoin finished at or above the line (the UP contract), so YES -> claim MET; the
 // server maps MET through yes_party exactly as for camera rulings (toOutcome).
+import { z } from 'zod/v4';
 import { GeminiSettlementRecord } from './evidence';
 import type { GeminiStrike } from './gemini';
 import { hashJcs } from './jcs';
-import { otherParty, type Party } from './primitives';
+import { Hex32, otherParty, Signature, type Party } from './primitives';
 import { GEMINI_SETTLEMENT_MODEL, Ruling, type ClaimResult } from './ruling';
 import type { MarketRef } from './terms';
 
@@ -196,3 +197,75 @@ export function settlementRecord(i: {
     fetched_at: i.fetched_at,
   });
 }
+
+/** One link of the evidence chain: Gemini's bytes -> record -> ruling -> on chain. */
+export type SettlementCheckName =
+  | 'body_matches_record'
+  | 'record_hash'
+  | 'ruling_commits_record'
+  | 'ruling_hash'
+  | 'outcome_follows_gemini'
+  | 'onchain_evidence'
+  | 'onchain_ruling';
+
+/**
+ * Anyone can re-check a Gemini settlement: the raw body hashes to record.response_sha256, the
+ * record hashes to evidence_hash, the ruling commits to it and hashes to ruling_hash, the outcome
+ * is what settlementOutcome gives for the record and the bound line, and the resolve tx put the
+ * same two hashes on chain. A check whose input is missing (no raw body, not resolved yet) is
+ * left out rather than failed.
+ */
+export function verifySettlement(i: {
+  record: GeminiSettlementRecord;
+  evidence_hash: string;
+  ruling: Ruling;
+  ruling_hash: string;
+  terms: { yes_party: Party; market: MarketRef };
+  /** sha256 of the raw response body, computed by the caller (no hashing of bytes here). */
+  body_sha256?: string | null;
+  onchain?: { evidence_hash: string | null; ruling_hash: string | null } | null;
+}): { ok: boolean; checks: Partial<Record<SettlementCheckName, boolean>> } {
+  const checks: Partial<Record<SettlementCheckName, boolean>> = {};
+  if (i.body_sha256) checks.body_matches_record = i.body_sha256 === i.record.response_sha256;
+  checks.record_hash = hashJcs(i.record) === i.evidence_hash;
+  checks.ruling_commits_record =
+    i.ruling.evidence_hash === i.evidence_hash &&
+    i.ruling.terms_hash === i.record.terms_hash &&
+    i.ruling.bet_id === i.record.bet_id;
+  checks.ruling_hash = hashJcs(i.ruling) === i.ruling_hash;
+  const d = settlementOutcome(i.record, i.terms.market);
+  const expected =
+    d.outcome === 'VOID'
+      ? 'VOID'
+      : (d.outcome === 'MET' ? i.terms.yes_party : otherParty(i.terms.yes_party)) === 'A'
+        ? 'A_WINS'
+        : 'B_WINS';
+  checks.outcome_follows_gemini = i.ruling.outcome === expected;
+  if (i.onchain?.evidence_hash)
+    checks.onchain_evidence = i.onchain.evidence_hash === i.evidence_hash;
+  if (i.onchain?.ruling_hash) checks.onchain_ruling = i.onchain.ruling_hash === i.ruling_hash;
+  return { ok: Object.values(checks).every(Boolean), checks };
+}
+
+/** GET /v1/bets/:bet_id/settlement (a party, or the stage of the bet's room). */
+export const settlementPath = (betId: string) => `/v1/bets/${encodeURIComponent(betId)}/settlement`;
+
+/** The evidence chain of a Gemini bet, for anyone to re-check with verifySettlement. */
+export const SettlementEvidence = z.object({
+  record: GeminiSettlementRecord,
+  evidence_hash: Hex32,
+  ruling: Ruling,
+  ruling_hash: Hex32,
+  /** Gemini's response body byte for byte (UTF-8), when this record's fetch is the one kept. */
+  raw_body: z.string().nullable(),
+  /** What the resolve tx put on chain (null until RULED). */
+  onchain: z
+    .object({
+      evidence_hash: Hex32.nullable(),
+      ruling_hash: Hex32.nullable(),
+      resolve_signature: Signature.nullable(),
+    })
+    .nullable(),
+  verification: z.object({ ok: z.boolean(), checks: z.record(z.string(), z.boolean()) }),
+});
+export type SettlementEvidence = z.infer<typeof SettlementEvidence>;

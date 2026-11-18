@@ -64,6 +64,7 @@ import { termsConfirmPath } from '@youre-on/shared/judge/typed-terms';
 import { betIdToBytes } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
 import { Ruling } from '@youre-on/shared/ruling';
+import { SettlementEvidence } from '@youre-on/shared/settlement';
 import {
   createPoolNonce,
   HAVE_SO,
@@ -530,6 +531,29 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
       resolutionSide: 'no',
       settlementValue: '64367.38366666667',
     });
+    // The evidence chain, re-checked end to end: Gemini's bytes -> record -> ruling -> chain.
+    const ev = await get(B, `/v1/bets/${betId}/settlement`);
+    expect(ev.status).toBe(200);
+    const evidence = SettlementEvidence.parse(ev.json);
+    expect(evidence.raw_body).toBe(JSON.stringify(F.event_0240_settled));
+    expect(evidence.record).toEqual(record);
+    expect(evidence.verification).toEqual({
+      ok: true,
+      checks: {
+        body_matches_record: true,
+        record_hash: true,
+        ruling_commits_record: true,
+        ruling_hash: true,
+        outcome_follows_gemini: true,
+        onchain_evidence: true,
+        onchain_ruling: true,
+      },
+    });
+    const onchain = await onchainBet(betId);
+    expect(evidence.onchain?.evidence_hash).toBe(
+      Buffer.from(onchain!.evidenceHash).toString('hex'),
+    );
+    expect(evidence.onchain?.resolve_signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
     await finalizeAfterWindow(betId, 'PAID');
     // B wins the whole $10 pot: A's $6.10 on top of B's own $3.90
     expect(await usdc(signerA.address)).toBe(a0 - 6_100_000n);

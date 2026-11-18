@@ -35,6 +35,7 @@ import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/
 import { termsConfirmPath } from '@youre-on/shared/judge/typed-terms';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { Ruling, GEMINI_SETTLEMENT_MODEL } from '@youre-on/shared/ruling';
+import { SettlementEvidence } from '@youre-on/shared/settlement';
 import { Terms } from '@youre-on/shared/terms';
 import type { Ruling as RulingT } from '@youre-on/shared/ruling';
 import { createGeminiClient } from '../src/markets/gemini';
@@ -727,6 +728,36 @@ describeDb(
         timed.stop();
         svc = installSettlement(ctx.deps, new SettlementService(ctx.deps, { timers: false }));
       }
+    });
+
+    it('GET /v1/bets/:id/settlement: the evidence chain, for the parties only, once settled', async () => {
+      const { A, betId } = await lockedBet('DOWN');
+      const read = (u: SignedUp) =>
+        fetch(`${ctx.base}/v1/bets/${betId}/settlement`, {
+          headers: { Authorization: `Bearer ${u.session.token}` },
+        }).then(async (r) => ({ status: r.status, json: (await r.json()) as any }));
+      expect((await read(A)).json.error.code).toBe('NOT_FOUND'); // not settled yet
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      expect(await svc.check(betId)).toBe('settled');
+      const ok = await read(A);
+      expect(ok.status).toBe(200);
+      const ev = SettlementEvidence.parse(ok.json);
+      expect(ev.ruling.outcome).toBe('A_WINS');
+      expect(ev.raw_body).toBe(JSON.stringify(F.event_0240_settled));
+      expect(ev.onchain).toBeNull(); // no chain here (the stub payout seam)
+      expect(ev.verification).toEqual({
+        ok: true,
+        checks: {
+          body_matches_record: true,
+          record_hash: true,
+          ruling_commits_record: true,
+          ruling_hash: true,
+          outcome_follows_gemini: true,
+        },
+      });
+      const stranger = await signUpAt('Carol');
+      expect((await read(stranger)).status).toBe(404);
     });
 
     it('two keepers checking at once commit one ruling and call onRuling once', async () => {

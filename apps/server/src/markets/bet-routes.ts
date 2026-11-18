@@ -30,8 +30,11 @@ import { parseUsd } from '@youre-on/shared/money';
 import type { RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
-import { requireSignedRequest } from '../auth/middleware';
+import { requireSession, requireSignedRequest } from '../auth/middleware';
 import { requireDemo } from '../demo/routes';
+import { betIdParam } from '../lock/routes';
+import { stageCors } from '../stage/cors';
+import { settlementEvidence } from './evidence';
 import { readBet } from '../lock/common';
 import { displayCode, persistEvaluation } from '../lock/terms';
 import { partyABet } from '../terms/routes';
@@ -47,6 +50,14 @@ export const marketBetRoutes: RouteModule = {
   name: 'market-bets',
   register(app, deps) {
     deps.markets?.onSnapshot((snapshot) => settlementOf(deps).onSnapshot(snapshot));
+
+    // The evidence chain of a Gemini bet (markets/evidence.ts), for the phones and the stage.
+    app.use('/v1/bets/:bet_id/settlement', stageCors(deps.env));
+    app.get('/v1/bets/:bet_id/settlement', requireSession, async (c) => {
+      const deps = c.get('deps');
+      const betId = betIdParam(c.req.param('bet_id') ?? '');
+      return c.json(await settlementEvidence(deps, c.get('auth'), betId), 200);
+    });
 
     app.post('/el/tools/get_market_odds', getMarketOddsHandler);
 
