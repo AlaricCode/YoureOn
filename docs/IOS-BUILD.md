@@ -180,7 +180,9 @@ What happens next:
    point the camera at its QR. Each QR is single use and expires after 10 minutes; run the
    command again for a new one. The judge cam is a second device of A, so it claims party `a`
    too, then turns on Profile → **Judge cam**. A claim binds that install's device key to the
-   party and imports the party's wallet, so claiming again later is harmless.
+   party and imports the party's wallet, so claiming again later is harmless. The judge cam is
+   optional: with only phones A and B, skip it and the non-performer's phone films the attempt
+   (A's in the demo; `docs/runbook.md`, Phones and room).
 
 Share build links only within the team. Anyone with the link can download the app file. It only
 installs on the registered phones, but it contains the face model, whose licence is
