@@ -24,6 +24,7 @@ import { cuesPath, voiceLinesPath } from '@youre-on/shared/judge/voice';
 import type { Runtime } from '../app/runtime';
 import { upsertLine } from '../bets/store';
 import { judgeClientTools } from './judgeTools';
+import { createRulingGate, type RulingGate } from './rulingGate';
 import {
   createJudgeSession,
   type ConversationPort,
@@ -46,6 +47,8 @@ export interface JudgeVoiceProps {
   onSpeaking?(speaking: boolean): void;
   /** The session could not start or broke (no key, token refused, SDK error): type it instead. */
   onFailed?(reason: FailReason): void;
+  /** ../gg: the judge finished saying the latest ruling (./rulingGate); false when re-armed. */
+  onRulingSpoken?(spoken: boolean): void;
 }
 
 export default function JudgeVoice(p: JudgeVoiceProps) {
@@ -87,6 +90,11 @@ function Session(p: JudgeVoiceProps) {
     now: () => rt.clock.now(),
   });
   const s = session.current;
+  // ../gg: when the ruling has been said (the RULED mic gate, micMutedFor in DemoApp).
+  const gate = useRef<RulingGate | null>(null);
+  gate.current ??= createRulingGate({ onChange: (v) => props.current.onRulingSpoken?.(v) });
+  const g = gate.current;
+  useEffect(() => () => g.stop(), [g]);
 
   const tools = useMemo(
     () =>
@@ -108,7 +116,10 @@ function Session(p: JudgeVoiceProps) {
     onConnect: (c) => s.onConnect(c),
     onDisconnect: (d) => s.onDisconnect(d),
     onError: (message) => s.onError(message),
-    onModeChange: ({ mode }) => props.current.onSpeaking?.(mode === 'speaking'),
+    onModeChange: ({ mode }) => {
+      props.current.onSpeaking?.(mode === 'speaking');
+      g.onMode(mode);
+    },
   });
   port.current = {
     startSession: (o) => conv.startSession({ ...o, clientTools: tools }),
@@ -131,9 +142,12 @@ function Session(p: JudgeVoiceProps) {
   useEffect(
     () =>
       rt.hub.onChange((e) => {
-        if (e && e.bet_id === betId && e.type === 'judge.cue') s.onCue(e.payload);
+        if (e && e.bet_id === betId && e.type === 'judge.cue') {
+          s.onCue(e.payload);
+          g.onCue(e.payload.cue);
+        }
       }),
-    [rt, betId, s],
+    [rt, betId, s, g],
   );
 
   return null;

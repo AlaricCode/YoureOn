@@ -65,6 +65,7 @@ import { betIdToBytes, type Party } from '@youre-on/shared/primitives';
 import { payout, Ruling, toOnchainOutcome, type OnchainOutcome } from '@youre-on/shared/ruling';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
 import type { BetState } from '@youre-on/shared/bet-state';
+import { recordLine, type PairRecord, type PayoutVia } from '@youre-on/shared/gg';
 import { judgeCue } from '../bets/cues';
 import { partyOf, type BetRow } from '../bets/snapshot';
 import { HttpError } from '../errors';
@@ -154,6 +155,17 @@ export interface PayoutServiceOptions {
    * AppealService.pushRequest); null / absent = only the concede request is pushed.
    */
   appealRequest?: (rt: ChainRuntime, bet: BetRow, loser: Party) => Promise<SignRequest | null>;
+  /**
+   * The GG moment (src/gg/service.ts): extra events in the commit that moves the bet to CONCEDED
+   * (bet.gg). Must never throw for a missing extra (it would fail the loser's GG).
+   */
+  onConcedeSubmitted?: (tx: Tx, bet: BetRow, now: number) => Promise<BetEventEnvelope[]>;
+  /** How the payout came about (GG / the clock / a lapsed review) for the PAID cue's wording. */
+  cueContext?: (
+    tx: Tx,
+    bet: BetRow,
+    kind: 'finalize' | 'concede',
+  ) => Promise<PayoutCueContext | undefined>;
 }
 
 export interface RuledResult {
@@ -1061,6 +1073,10 @@ export class PayoutService {
           payload: { kind, signature },
           now,
         }),
+        // The GG moment: bet.gg in the same commit as CONCEDED (src/gg/service.ts).
+        ...(kind === 'concede' && this.o.onConcedeSubmitted
+          ? await this.o.onConcedeSubmitted(tx, row!, now)
+          : []),
       ];
       return { b, envs, rowId: rowId! };
     });
@@ -1394,7 +1410,7 @@ export class PayoutService {
         .where(eq(bets.id, betId))
         .returning();
       const names = await this.names(b, tx);
-      const cue = payoutCue(outcome, amounts, names);
+      const cue = payoutCue(outcome, amounts, names, await this.o.cueContext?.(tx, b, kind));
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
@@ -1483,13 +1499,29 @@ export class PayoutService {
 }
 
 /**
+ * How a decisive payout came about (the GG moment): the loser's GG (`gg`, with the pair's record
+ * after this bet), or the clock (`timeout`, with how a spoken review ended, if one was asked).
+ * resolve_appeal passes none: its wording is unchanged.
+ */
+export interface PayoutCueContext {
+  via: PayoutVia;
+  record?: PairRecord | null;
+  review?: 'declined' | 'lapsed' | null;
+}
+
+/**
  * judge.cue PAID / VOIDED for a payout of `outcome` (concede, finalize, resolve_appeal):
- * `[EVENT] PAID winner=Jake amount=$10 … :: Congratulate Jake in one line.`
+ * `[EVENT] PAID winner=Jake amount=$10 … :: Congratulate Jake in one line.` With `ctx` (concede /
+ * finalize of a decisive ruling) the line says how: `… via=gg loser=Logan record="Logan 4-6 Jake"
+ * :: Logan said GG. Praise the sportsmanship in one short line, then congratulate Jake.`, or
+ * `… via=timeout loser=Logan :: No GG from Logan; the clock ran out. …`. Without `ctx` the line
+ * is byte-identical to the original one.
  */
 export function payoutCue(
   outcome: OnchainOutcome,
   amounts: { to_a: bigint; to_b: bigint },
   names: Record<Party, string>,
+  ctx?: PayoutCueContext,
 ) {
   if (outcome === 'Refund')
     return judgeCue(
@@ -1498,18 +1530,36 @@ export function payoutCue(
       "Say it's void: both got their stake back.",
     );
   const winner: Party | null = outcome === 'PartyA' ? 'A' : outcome === 'PartyB' ? 'B' : null;
-  return judgeCue(
-    'PAID',
-    {
-      winner: winner ? names[winner] : 'split',
-      amount: formatUsd(
-        (winner === 'A' ? amounts.to_a : winner === 'B' ? amounts.to_b : amounts.to_a).toString(),
-      ),
-      to_a: formatUsd(amounts.to_a.toString()),
-      to_b: formatUsd(amounts.to_b.toString()),
-    },
-    winner ? `Congratulate ${names[winner]} in one line.` : 'Say it is a split.',
-  );
+  const kv: Record<string, string> = {
+    winner: winner ? names[winner] : 'split',
+    amount: formatUsd(
+      (winner === 'A' ? amounts.to_a : winner === 'B' ? amounts.to_b : amounts.to_a).toString(),
+    ),
+    to_a: formatUsd(amounts.to_a.toString()),
+    to_b: formatUsd(amounts.to_b.toString()),
+  };
+  if (!winner) return judgeCue('PAID', kv, 'Say it is a split.');
+  const w = names[winner];
+  if (!ctx || ctx.via === 'appeal') return judgeCue('PAID', kv, `Congratulate ${w} in one line.`);
+  const l = names[winner === 'A' ? 'B' : 'A'];
+  kv.via = ctx.via;
+  kv.loser = l;
+  if (ctx.via === 'gg') {
+    if (ctx.record) kv.record = recordLine(ctx.record, names);
+    return judgeCue(
+      'PAID',
+      kv,
+      `${l} said GG. Praise the sportsmanship in one short line, then congratulate ${w}.`,
+    );
+  }
+  if (ctx.review) kv.review = ctx.review;
+  const why =
+    ctx.review === 'declined'
+      ? `${l} kept the ruling.`
+      : ctx.review === 'lapsed'
+        ? `${l} did not confirm the review, so the ruling stands.`
+        : `No GG from ${l}; the clock ran out.`;
+  return judgeCue('PAID', kv, `${why} Congratulate ${w} in one line.`);
 }
 
 /**

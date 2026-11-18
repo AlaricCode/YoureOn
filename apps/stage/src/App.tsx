@@ -8,7 +8,8 @@
 // connects with no typing (config.ts; `&demo=<DEMO_ADMIN_TOKEN>` is optional: the health strip
 // reads /v1/demo/health with the stage session's own bearer); ?preview plays a sample bet with
 // no server (preview.ts), ?preview=gemini walks one Gemini bet (Beat 6) through its clock to
-// Gemini's result (preview-market.ts). A ruled Gemini bet's evidence chain is fetched and
+// Gemini's result (preview-market.ts), ?preview=gg / ?preview=review the GG moment and the spoken
+// review request (preview-gg.ts). A ruled Gemini bet's evidence chain is fetched and
 // re-checked here (verify.ts), and the projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
@@ -59,6 +60,9 @@ import {
 import { seedBet } from './seed';
 import { DemoHealthError, fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
+import { isGgPreview, previewGgAt } from './preview-gg';
+import { ggCoversPayout, ggMomentOn } from './gg';
+import { GgMoment, useGgSounds } from './gg-moment';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import { browserSpeech, cancelSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
@@ -387,7 +391,9 @@ export function App() {
         ? null
         : marketPv
           ? { state: marketPv, now }
-          : previewAt(previewStart, now, launch.preview || null),
+          : isGgPreview(launch.preview)
+            ? previewGgAt(previewStart, now, launch.preview)
+            : previewAt(previewStart, now, launch.preview || null),
     [launch.preview, marketPv, previewStart, now],
   );
   const shown = pv ? pv.state : state;
@@ -404,6 +410,8 @@ export function App() {
   });
   const panes = usePhonePanes(focus, search);
   const { cycle: cyclePanes, toggleOperator } = panes;
+  // the GG moment (gg.ts): in the PAID moment's place, which it covers for the GG's payout
+  const ggMoment = ggMomentOn(focus, shownNow);
 
   // Secrets never stay in the address bar (or the browser history) on a projector.
   useEffect(() => {
@@ -753,13 +761,15 @@ export function App() {
     }
   }, [state.voiceClips]);
   const heard = useRef(new Set<string>());
+  const ggSounds = useGgSounds(shown, shownNow, audio);
   useEffect(() => {
     const fresh: Sfx[] = [];
     for (const id of Object.keys(shown.bets))
       fresh.push(...freshSounds(shown, id, heard.current, shownNow));
     // one sound per update: the newest moment wins
-    if (fresh.length) audio.current?.play(fresh[fresh.length - 1]!);
-  }, [shown, shownNow]);
+    if (fresh.length && audio.current?.play(fresh[fresh.length - 1]!))
+      ggSounds.played(fresh[fresh.length - 1]!);
+  }, [shown, shownNow, ggSounds]);
 
   // --- slow-mo (feat/slowmo-replay) ---
   // The slow-mo replay of the focused bet (SlowMoPlayer.tsx): R toggles it; it plays once on its own
@@ -772,6 +782,7 @@ export function App() {
     frameBlobs: shown.frameBlobs,
     overlay,
     setOverlay,
+    operatorOpen: panes.state.operator,
     voiceIdle: () => voice.current?.idle !== false,
   });
   const slowmoRef = useRef(slowmo);
@@ -785,7 +796,7 @@ export function App() {
     if (!shown.cueCount || !shown.lastCue) return;
     const { kind, audio_url } = shown.lastCue;
     setFlash(kind);
-    if (isSfx(kind)) audio.current?.play(kind);
+    if (isSfx(kind) && ggSounds.cueAllowed(kind)) audio.current?.play(kind);
     const l = liveRef.current;
     if (audio_url && l && !audio.current?.hasGenerated(kind as CueKind))
       fetchAudio(l.serverUrl, l.token, audio_url).then(
@@ -794,7 +805,7 @@ export function App() {
       );
     const t = setTimeout(() => setFlash(null), 900);
     return () => clearTimeout(t);
-  }, [shown.cueCount, shown.lastCue]);
+  }, [shown.cueCount, shown.lastCue, ggSounds]);
 
   useEffect(() => {
     const unlock = () => {
@@ -956,7 +967,11 @@ export function App() {
           </p>
         </div>
       )}
-      {paidMoment && focus?.payout && <PaidMoment bet={focus} />}
+      {ggMoment && focus?.gg ? (
+        <GgMoment bet={focus} now={shownNow} />
+      ) : (
+        paidMoment && focus?.payout && !ggCoversPayout(focus) && <PaidMoment bet={focus} />
+      )}
       {slowmo.node /* slow-mo (feat/slowmo-replay) */}
       {flash && <div className={`flash ${flash}`} aria-hidden="true" />}
       {overlay?.kind === 'replay' && (

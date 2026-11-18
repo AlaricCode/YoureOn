@@ -8,7 +8,8 @@
 //                            reasons do, is read as it is); VOID says why and that both stakes go
 //                            back; a Gemini settlement starts "Gemini settles it."
 //   judge.cue PAID / VOIDED  the judge voice, when money moved (read from the [EVENT] line's
-//                            values): "Paid. Jake takes $10.00." The VOIDED cue a VOID ruling sends
+//                            values): "Paid. Jake takes $10.00."; after a GG (via=gg) "Logan says
+//                            GG. Jake takes $10.00." The VOIDED cue a VOID ruling sends
 //                            at ruling time is not voiced: its ruling.issued already is.
 //   appeal.vote              one voice per panel seat: "Judge 2, GPT, votes Logan. <reason>"
 //
@@ -200,6 +201,11 @@ function cueLine(c: z.infer<typeof CueLite>): string | null {
   const kv = ev.kv;
   if (c.cue === 'PAID') {
     if (!kv.winner || kv.winner === 'split') return kv.winner ? "It's a split." : null;
+    // The GG moment (apps/server payoutCue via=gg): the loser's sportsmanship first.
+    if (kv.via === 'gg' && kv.loser)
+      return kv.amount
+        ? `${kv.loser} says GG. ${kv.winner} takes ${kv.amount}.`
+        : `${kv.loser} says GG. ${kv.winner} wins.`;
     return kv.amount ? `Paid. ${kv.winner} takes ${kv.amount}.` : `Paid. ${kv.winner} wins.`;
   }
   // The payout's VOIDED carries the refunds (a, b); the ruling-time one carries the reason.

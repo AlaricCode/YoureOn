@@ -82,6 +82,8 @@ export const FramesResponse = z.object({
     .passthrough()
     .nullish(),
 });
+/** POST /v1/bets/:id/review/decline -> 200 (../gg; tolerant: only `status` is read). */
+export const ReviewDeclined = z.object({ status: z.string() }).passthrough();
 /** §2.10 POST /v1/bets/:id/concede -> 202 */
 export const SubmittedResponse = z.object({ status: z.literal('submitted'), signature: Signature });
 /**
@@ -306,6 +308,13 @@ export function createYoApi(c: ApiClient) {
         schema: AppealSubmitted,
         idempotencyKey,
       }),
+
+    /**
+     * The loser's "Keep ruling" on a spoken review request (../gg): closes it (review.closed
+     * 'declined'). Signed, no Idempotency-Key needed: the server answers 200 when already closed.
+     */
+    declineReview: (betId: string) =>
+      c.request('POST', `${bet(betId)}/review/decline`, { schema: ReviewDeclined }),
 
     // §2.15 judge-cam role
     setDeviceRole: (role: 'phone' | 'judge_cam', roomId?: string) =>

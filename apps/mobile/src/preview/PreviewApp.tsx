@@ -20,6 +20,9 @@ import { feel } from '../device/feedback';
 import { createPreviewFaceApi } from '../enroll/api';
 import { createPreviewEmbedder } from '../enroll/embedder';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
+import { GgPayoutScreen, RulingReview } from '../gg/GgScreens';
+import type { ReviewModel } from '../gg/model';
+import { previewGg, previewReview, previewReviewBet } from '../gg/preview';
 import {
   IncomingScreen,
   NegotiateScreen,
@@ -94,7 +97,9 @@ type Route =
   | 'market'
   | 'history'
   | 'profile'
-  | 'demo';
+  | 'demo'
+  | 'ggPayout'
+  | 'review';
 
 const APPEAL_WINDOW_MS = 10_000;
 const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
@@ -145,6 +150,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [ggBusy, setGgBusy] = useState(false);
   const [ggAlert, setGgAlert] = useState<string | null>(null);
   const [payoutPhase, setPayoutPhase] = useState<PayoutPhase>('processed');
+  /** The GG moment (../gg): Jake's GG, and a review someone asked the judge for. */
+  const ggSample = useMemo(previewGg, []);
+  const [review, setReview] = useState<ReviewModel | null>(null);
   const [turns, setTurns] = useState<{ name: string; state: TurnState }[]>([]);
   const [turnEnds, setTurnEnds] = useState<number | null>(null);
   const [hearingJudging, setHearingJudging] = useState(false);
@@ -274,6 +282,24 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       return;
     }
     openPayout(false);
+  };
+
+  const openGg = () => {
+    setResult('A_WINS');
+    setPayoutPhase('processed');
+    go('ggPayout');
+    later(900, () => setPayoutPhase('confirmed'));
+  };
+
+  /** The loser's ruling; 1.2 s in, someone says "check that again" and the sheet opens. */
+  const openReview = () => {
+    setResult('A_WINS');
+    setGgAlert(null);
+    setReview(null);
+    setAppealDeadline(Date.now() + APPEAL_WINDOW_MS);
+    go('review');
+    later(1200, () => setReview(previewReview(APPEAL_WINDOW_MS - 2200)));
+    later(APPEAL_WINDOW_MS + 1000, () => openPayout(false));
   };
 
   const openHearing = () => {
@@ -616,6 +642,48 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             onHome={() => go('home')}
           />
         );
+      case 'ggPayout':
+        return (
+          <GgPayoutScreen
+            view={view}
+            gg={ggSample}
+            me={me}
+            balanceCents={balance}
+            phase={payoutPhase === 'confirmed' ? 'confirmed' : 'processed'}
+            onHome={() => go('home')}
+          />
+        );
+      case 'review':
+        return (
+          <RulingReview
+            bet={previewReviewBet(review)}
+            me={me}
+            offsetMs={0}
+            reason={RULING_REASON}
+            confirm={async () => {
+              const r = await authorizeOwner(t(COPY.ruling.appealPrompt), {
+                simulateIfUnavailable: true,
+              });
+              if (!r.ok) throw Object.assign(new Error('auth'), { code: 'AUTH_FAILED' });
+              openAppeal();
+            }}
+            decline={async () => setReview((r) => r && { ...r, closed: 'declined' })}
+          >
+            {(tag) => (
+              <RulingScreen
+                view={view}
+                result="lost"
+                reason={RULING_REASON}
+                appealDeadlineMs={appealDeadline}
+                busy={ggBusy}
+                alert={ggAlert}
+                onGG={() => void gg()}
+                onAppeal={openAppeal}
+                tag={tag}
+              />
+            )}
+          </RulingReview>
+        );
       case 'hearing':
         return (
           <HearingScreen
@@ -799,6 +867,14 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return openAppeal();
       case 'market':
         return startLive(true);
+      case 'ggWinner':
+        return openGg();
+      case 'ggLoser':
+        setMe('B');
+        return openGg();
+      case 'reviewSheet':
+        setMe('B');
+        return openReview();
     }
   }
 
@@ -855,7 +931,10 @@ type MenuKey =
   | 'history'
   | 'historyLoading'
   | 'profile'
-  | 'demo';
+  | 'demo'
+  | 'ggWinner'
+  | 'ggLoser'
+  | 'reviewSheet';
 
 /** The screen index, by beat. "Full run" entries play on into the next screens. */
 const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] = [
@@ -927,6 +1006,14 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
       ['marketPanel', '28  Bet on Bitcoin (odds, stakes)'],
       ['termsMarket', '29  Market terms card'],
       ['market', '30  Waiting for market'],
+    ],
+  },
+  {
+    section: 'GG moment',
+    items: [
+      ['ggWinner', '30b  GG, winner'],
+      ['ggLoser', '30c  GG, loser'],
+      ['reviewSheet', '30d  Review requested'],
     ],
   },
   { section: 'Demo', items: [['demo', '31  Demo account']] },

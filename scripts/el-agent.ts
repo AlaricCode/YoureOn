@@ -5,6 +5,8 @@
 //
 //   npx tsx --env-file-if-exists=apps/server/.env scripts/el-agent.ts --dry-run --check-openapi
 //   npx tsx --env-file-if-exists=apps/server/.env scripts/el-agent.ts --check-openapi
+//   ... scripts/el-agent.ts --agent-name=youre-on-judge-test-x   (a throwaway TEST agent: shared
+//       tools / the secret are never PATCHed; see --help)
 //
 // Env (SETUP-CHECKLIST §7): ELEVENLABS_API_KEY, ELEVENLABS_TOOL_SECRET, PUBLIC_BASE_URL (the
 // public HTTPS host the webhook tools call), optional ELEVENLABS_JUDGE_VOICE_ID and
@@ -17,7 +19,12 @@ import {
   planSummary,
   USAGE,
 } from '../apps/server/src/voice/agent-cli';
-import { dryRunPlan, fetchElHttp, syncAgent } from '../apps/server/src/voice/agent-sync';
+import {
+  dryRunPlan,
+  fetchElHttp,
+  isTestAgent,
+  syncAgent,
+} from '../apps/server/src/voice/agent-sync';
 import { checkPlan, type OpenApiDoc } from '../apps/server/src/voice/openapi-check';
 
 const err = (l: string) => process.stderr.write(`${l}\n`);
@@ -78,6 +85,13 @@ async function main() {
   const r = await syncAgent(http, { ...cli.opts, log: (l) => out(l) });
   const writes = r.actions.filter((a) => a.action !== 'noop').length;
   out(writes === 0 ? 'no changes (no-op)' : `${writes} write(s)`);
+  if (isTestAgent(cli.opts)) {
+    // A throwaway test agent: never the server's ELEVENLABS_AGENT_ID.
+    out(
+      `TEST agent ${cli.opts.agentName}: ${r.agent_id} (not for ELEVENLABS_AGENT_ID; delete it when done)`,
+    );
+    return;
+  }
   for (const l of agentIdLines(r.agent_id, process.env.ELEVENLABS_AGENT_ID)) out(l);
 }
 
