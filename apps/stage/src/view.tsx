@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   explorerTx,
+  finalOutcomeOf,
   framesOf,
   type BetView,
   type PartyKey,
@@ -520,7 +521,11 @@ function PlayPanel({ bet, now, market }: { bet: BetView; now: number; market: Ma
 function PaidPanel({ bet }: { bet: BetView }) {
   const p = bet.payout!;
   const refund =
-    p.event === 'BetRefunded' || p.event === 'BetCancelled' || bet.ruling?.outcome === 'VOID';
+    p.event === 'BetRefunded' ||
+    p.event === 'BetCancelled' ||
+    p.event === 'Refund' ||
+    bet.state === 'VOIDED' ||
+    finalOutcomeOf(bet) === 'VOID';
   return (
     <div className="paid">
       <div className="headline">

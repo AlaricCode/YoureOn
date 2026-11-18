@@ -67,10 +67,11 @@ export interface PhaseStep {
 export function phaseSteps(b: BetView | null): PhaseStep[] {
   const market = b ? isMarketBet(b) : false;
   const refund =
-    b?.ruling?.outcome === 'VOID' ||
+    (b?.appeal_result?.final_outcome ?? b?.ruling?.outcome) === 'VOID' ||
     b?.state === 'VOIDED' ||
     b?.payout?.event === 'BetRefunded' ||
-    b?.payout?.event === 'BetCancelled';
+    b?.payout?.event === 'BetCancelled' ||
+    b?.payout?.event === 'Refund';
   const label: Record<PhaseKey, string> = {
     challenge: 'Challenge',
     terms: 'Terms',

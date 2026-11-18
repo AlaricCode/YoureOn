@@ -17,7 +17,7 @@ import {
   type FormEvent,
 } from 'react';
 import { WS_CLOSE } from '@youre-on/shared/api';
-import { applyFrame, initialTicker, type BetView } from './ticker';
+import { applyFrame, deadlineRefetches, initialTicker, type BetView } from './ticker';
 import {
   fetchBetSnapshot,
   fetchFrame,
@@ -220,6 +220,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const conn = useRef<StageConnection | null>(null);
   const seeded = useRef(new Set<string>());
+  /** Bets re-fetched once for their appeal deadline. */
+  const refetched = useRef(new Set<string>());
   /** Evidence frames already requested (`bet|attempt|count`), and their object URLs. */
   const framesAsked = useRef(new Set<string>());
   const frameUrls = useRef<string[]>([]);
@@ -268,6 +270,7 @@ export function App() {
     }) => {
       conn.current?.stop();
       seeded.current = new Set();
+      refetched.current = new Set();
       framesAsked.current = new Set();
       for (const u of frameUrls.current.splice(0)) URL.revokeObjectURL(u);
       dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
@@ -401,6 +404,23 @@ export function App() {
       );
     }
   }, [betIds, live]);
+
+  // RULED but no countdown yet (bet.state's reason did not carry appeal_deadline, and Streams'
+  // BetResolved has not come): the payout service writes bets.appeal_deadline at the confirmed
+  // resolve, so one more GET /v1/bets/:id fills it. Once per bet, only when the last snapshot
+  // predates the ruling.
+  const deadlineWanted = deadlineRefetches(state).join(',');
+  useEffect(() => {
+    if (!live || !deadlineWanted) return;
+    for (const id of deadlineWanted.split(',')) {
+      if (refetched.current.has(id)) continue;
+      refetched.current.add(id);
+      fetchBetSnapshot(live.serverUrl, live.token, id).then(
+        (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
+        () => undefined, // the card works without the countdown
+      );
+    }
+  }, [deadlineWanted, live]);
 
   // Evidence frames: attempt.evidence carries no frame_urls yet (the server keeps the JPEGs in
   // Postgres), so each frame is fetched once with the stage bearer and shown from a blob URL.

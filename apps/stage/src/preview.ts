@@ -119,6 +119,8 @@ export function bottleFrame(attempt: 1 | 2, i: number): string {
 
 interface Entry {
   at: number;
+  /** A chain.* event (QuickNode Streams); `previewAt(…, { chain: false })` leaves them out. */
+  chain?: boolean;
   action: (base: number) => TickerAction;
 }
 
@@ -162,6 +164,7 @@ function sequence(): Entry[] {
     const seq = (seqs[betId] = (seqs[betId] ?? 0) + 1);
     out.push({
       at,
+      chain: type.startsWith('chain.'),
       action: (base) => ({
         kind: 'frame',
         receivedAt: base + at,
@@ -196,6 +199,39 @@ function sequence(): Entry[] {
       chain_ack: onchain ? 'rpc' : 'none',
       pending_tx: null,
       reason: null,
+    }));
+  /**
+   * bet.state as the payout service publishes it once its own RPC confirms a tx: RULED carries the
+   * resolve and `appeal_deadline=<unix s>`, FINALIZED / PAID the payout tx.
+   */
+  const stateTx = (
+    at: number,
+    betId: string,
+    s: string,
+    prev: string,
+    onchain: string,
+    tx: { kind: string; signature: string; sentAt: number; confirmed: boolean },
+    reason: (base: number) => string | null = () => null,
+  ) =>
+    frame(at, betId, 'bet.state', (b) => ({
+      state: s,
+      prev,
+      onchain_status: onchain,
+      chain_ack: 'rpc',
+      pending_tx: {
+        kind: tx.kind,
+        signature: tx.signature,
+        submitted_at: iso(b + tx.sentAt),
+        rpc_processed_at: tx.confirmed ? iso(b + at - 400) : null,
+        rpc_confirmed_at: tx.confirmed ? iso(b + at) : null,
+      },
+      reason: reason(b),
+    }));
+  const confirmed = (at: number, betId: string, kind: string, signature: string) =>
+    frame(at, betId, 'tx.confirmed', () => ({
+      kind,
+      signature,
+      slot: 400_118_200 + Math.round(at / 400),
     }));
   let line = 0;
   const judge = (at: number, betId: string, text: string) =>
@@ -351,9 +387,18 @@ function sequence(): Entry[] {
     cited_frames: [7, 6],
     redo_reason: null,
   });
-  state(37_000, BET_FLIP, 'RULED', 'JUDGING', 'Locked');
   judge(37_300, BET_FLIP, 'Jake wins! Logan, you have ten seconds to appeal.');
-  frame(37_500, BET_FLIP, 'tx.submitted', () => ({ kind: 'resolve', signature: SIG.resolve }));
+  const flipResolve = { kind: 'resolve', signature: SIG.resolve, sentAt: 37_500, confirmed: true };
+  stateTx(
+    38_200,
+    BET_FLIP,
+    'RULED',
+    'JUDGING',
+    'Resolved',
+    flipResolve,
+    (b) => `appeal_deadline=${unix(b + 38_600) + 10}`,
+  );
+  confirmed(38_200, BET_FLIP, 'resolve', SIG.resolve);
   frame(38_600, BET_FLIP, 'chain.BetResolved', (b) => ({
     ...meta(SIG.resolve, b, 38_600),
     bet_id: BET_FLIP,
@@ -364,7 +409,11 @@ function sequence(): Entry[] {
     appeal_deadline: unix(b + 38_600) + 10,
     ts: unix(b + 38_600),
   }));
+  const flipPay = { kind: 'finalize', signature: SIG.pay, sentAt: 48_800, confirmed: false };
+  stateTx(48_800, BET_FLIP, 'FINALIZED', 'RULED', 'Resolved', flipPay);
   frame(48_800, BET_FLIP, 'tx.submitted', () => ({ kind: 'finalize', signature: SIG.pay }));
+  stateTx(49_400, BET_FLIP, 'PAID', 'FINALIZED', 'Settled', { ...flipPay, confirmed: true });
+  confirmed(49_400, BET_FLIP, 'finalize', SIG.pay);
   frame(49_600, BET_FLIP, 'chain.BetFinalized', (b) => ({
     ...meta(SIG.pay, b, 49_600),
     bet_id: BET_FLIP,
@@ -380,7 +429,6 @@ function sequence(): Entry[] {
     ts: unix(b + 49_600),
     caller: PK_X,
   }));
-  state(49_600, BET_FLIP, 'PAID', 'FINALIZED', 'Settled');
   judge(49_800, BET_FLIP, 'Paid. Jake takes ten dollars. GG, Logan.');
   frame(50_400, BET_FLIP, 'chain.BetClosed', (b) => ({
     ...meta(SIG.pay, b, 50_400),
@@ -464,9 +512,17 @@ function sequence(): Entry[] {
     },
     ruling_hash: hex('ruling-btc'),
   }));
-  state(80_000, BET_BTC, 'RULED', 'AWAITING_MARKET', 'Locked');
   judge(80_200, BET_BTC, 'Gemini says up. Logan takes the pot.');
-  frame(80_600, BET_BTC, 'tx.submitted', () => ({ kind: 'resolve', signature: SIG.resolve2 }));
+  stateTx(
+    80_800,
+    BET_BTC,
+    'RULED',
+    'AWAITING_MARKET',
+    'Resolved',
+    { kind: 'resolve', signature: SIG.resolve2, sentAt: 80_300, confirmed: true },
+    (b) => `appeal_deadline=${unix(b + 81_400)}`,
+  );
+  confirmed(80_800, BET_BTC, 'resolve', SIG.resolve2);
   frame(81_400, BET_BTC, 'chain.BetResolved', (b) => ({
     ...meta(SIG.resolve2, b, 81_400),
     bet_id: BET_BTC,
@@ -477,6 +533,11 @@ function sequence(): Entry[] {
     appeal_deadline: unix(b + 81_400),
     ts: unix(b + 81_400),
   }));
+  const btcPay = { kind: 'finalize', signature: SIG.pay2, sentAt: 81_600, confirmed: false };
+  stateTx(81_600, BET_BTC, 'FINALIZED', 'RULED', 'Resolved', btcPay);
+  frame(81_600, BET_BTC, 'tx.submitted', () => ({ kind: 'finalize', signature: SIG.pay2 }));
+  stateTx(81_800, BET_BTC, 'PAID', 'FINALIZED', 'Settled', { ...btcPay, confirmed: true });
+  confirmed(81_800, BET_BTC, 'finalize', SIG.pay2);
   frame(82_000, BET_BTC, 'chain.BetFinalized', (b) => ({
     ...meta(SIG.pay2, b, 82_000),
     bet_id: BET_BTC,
@@ -492,7 +553,6 @@ function sequence(): Entry[] {
     ts: unix(b + 82_000),
     caller: PK_X,
   }));
-  state(82_000, BET_BTC, 'PAID', 'FINALIZED', 'Settled');
   return out.sort((x, y) => x.at - y.at);
 }
 
@@ -669,6 +729,7 @@ export function previewAt(
   startMs: number,
   nowMs: number,
   step: string | null = null,
+  opts: { chain?: boolean } = {},
 ): PreviewFrame {
   const frozen = step && isPreviewStep(step) ? PREVIEW_STEPS[step] : null;
   const t = frozen ?? (((nowMs - startMs) % LOOP_MS) + LOOP_MS) % LOOP_MS;
@@ -677,6 +738,7 @@ export function previewAt(
   let s: TickerState = initialTicker;
   for (const e of SEQUENCE) {
     if (e.at > t) break;
+    if (e.chain && opts.chain === false) continue;
     s = applyFrame(s, e.action(base));
   }
   // 80 s of the BTC index (one point every 2 s), the newest at `now`

@@ -14,9 +14,18 @@
 // one (the seq-0 replay that follows a live event when the stage first sees a bet mid-flight,
 // or a snapshot fetched before newer live events) triggers a rebuild from the retained
 // per-bet history instead of being folded on top, so the card never regresses.
+//
+// Money and the appeal window do not depend on QuickNode Streams: the server's own RPC path
+// (apps/server/src/payout/service.ts) publishes bet.state RULED with the confirmed resolve in
+// pending_tx and `appeal_deadline=<unix s>` in its reason, and bet.state PAID / VOIDED with the
+// confirmed payout tx. The card derives the appeal countdown and the payout amounts (the shared
+// payout() rule over the terms' stakes and the final outcome) from those; the chain.* events,
+// when Streams delivers them, carry the same values and simply confirm them.
 import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
+import type { PendingTx } from '@youre-on/shared/bet-state';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
+import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
 
 export const MAX_EVENTS = 200;
@@ -328,6 +337,101 @@ function hearingOf(v: BetView, hearing_id: string): HearingView {
   return v.hearing?.hearing_id === hearing_id ? v.hearing : { hearing_id, open: null, turns: [] };
 }
 
+/** The money-moving instruction of each payout tx kind, as the chain names its event. */
+const PAYOUT_EVENT: Partial<Record<string, string>> = {
+  finalize: 'BetFinalized',
+  concede: 'BetConceded',
+  resolve_appeal: 'AppealResolved',
+  timeout_refund: 'BetRefunded',
+  cancel_open_bet: 'BetCancelled',
+};
+
+/** `appeal_deadline=<unix s>` in the reason of the server's bet.state RULED (markRuled). */
+export function appealDeadlineOf(reason: string | null | undefined): number | null {
+  const m = /\bappeal_deadline=(\d{9,11})\b/.exec(reason ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+const unixOf = (iso: string): number | null => {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+};
+
+/** The final offchain outcome: the appeal panel's when there was one, else the ruling's. */
+export const finalOutcomeOf = (b: BetView): string | null =>
+  b.appeal_result?.final_outcome ?? b.ruling?.outcome ?? null;
+
+/**
+ * What the escrow paid, without the chain event: the shared payout() rule (ESCROW §6, the same
+ * call the server makes in payout/service.ts settle) over the terms' stakes and the final
+ * outcome. VOIDED is always a refund. null when the stakes or a decisive outcome are unknown.
+ */
+export function derivedPayout(
+  b: BetView,
+  state: string,
+  tx: Pick<PendingTx, 'kind' | 'signature'> | null,
+  signature: string | null = null,
+): PayoutView | null {
+  const stakes = b.envelope?.terms.stakes;
+  if (!stakes) return null;
+  let a: bigint;
+  let total: bigint;
+  try {
+    a = BigInt(stakes.a);
+    total = a + BigInt(stakes.b);
+  } catch {
+    return null;
+  }
+  const final = finalOutcomeOf(b);
+  const outcome: OnchainOutcome | null =
+    state === 'VOIDED' || final === 'VOID'
+      ? 'Refund'
+      : final === 'A_WINS'
+        ? 'PartyA'
+        : final === 'B_WINS'
+          ? 'PartyB'
+          : null;
+  if (!outcome) return null;
+  const m = payoutOf(outcome, a, total);
+  const event = tx ? PAYOUT_EVENT[tx.kind] : undefined;
+  return {
+    to_a: m.to_a.toString(),
+    to_b: m.to_b.toString(),
+    event: event ?? (outcome === 'Refund' ? 'Refund' : 'Payout'),
+    signature: (event ? tx!.signature : null) ?? signature,
+  };
+}
+
+const MONEY_MOVED = new Set(['PAID', 'VOIDED']);
+
+/** bet.state from the server: also the RPC-path ruling (appeal window) and payout. */
+function foldState(b: BetView, e: Extract<RealtimeEvent, { type: 'bet.state' }>): BetView {
+  const p = e.payload;
+  let v: BetView = { ...b, state: p.state };
+  const tx = p.pending_tx;
+  if (p.state === 'RULED' && tx?.kind === 'resolve') {
+    const deadline = appealDeadlineOf(p.reason);
+    v = {
+      ...v,
+      resolved_at: v.resolved_at ?? unixOf(tx.rpc_confirmed_at ?? e.ts),
+      appeal_deadline: v.appealed || v.payout ? v.appeal_deadline : (v.appeal_deadline ?? deadline),
+      txs: { ...v.txs, resolve: v.txs.resolve ?? tx.signature },
+    };
+  }
+  if (MONEY_MOVED.has(p.state) && !v.payout) {
+    const paid = derivedPayout(v, p.state, tx);
+    if (paid)
+      v = {
+        ...v,
+        appeal_deadline: null,
+        payout: paid,
+        paid_at: v.paid_at ?? e.ts,
+        txs: paid.signature ? { ...v.txs, payout: v.txs.payout ?? paid.signature } : v.txs,
+      };
+  }
+  return v;
+}
+
 /** Folds one event into its bet's view. */
 export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
   const v: BetView = { ...b, updated_at: at };
@@ -335,7 +439,7 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'bet.invited':
       return { ...v, names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name } };
     case 'bet.state':
-      return { ...v, state: e.payload.state };
+      return foldState(v, e);
     case 'bet.invite_answered':
       return { ...v, invite: e.payload.answer };
     case 'terms.proposed':
@@ -358,7 +462,15 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'tx.failed': {
       const kind = e.payload.kind;
       const sig = e.payload.signature;
-      if (!LOCK_KINDS.has(kind)) return sig ? { ...v, txs: { ...v.txs, [kind]: sig } } : v;
+      if (!LOCK_KINDS.has(kind)) {
+        const resolved =
+          kind === 'resolve' && e.type === 'tx.confirmed'
+            ? (v.resolved_at ?? unixOf(e.ts))
+            : v.resolved_at;
+        return sig
+          ? { ...v, resolved_at: resolved, txs: { ...v.txs, [kind]: sig } }
+          : { ...v, resolved_at: resolved };
+      }
       const status =
         e.type === 'tx.submitted'
           ? 'submitted'
@@ -551,7 +663,21 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
   v.auth = { A: auth('A'), B: auth('B') };
   v.auth_count = Math.max(v.auth_count, (v.auth.A ? 1 : 0) + (v.auth.B ? 1 : 0));
   if (snap.latest_ruling && !v.ruling) v.ruling = rulingView(snap.latest_ruling);
-  if (snap.deadlines.appeal_deadline !== null && v.appeal_deadline === null && !snap.payout)
+  if (snap.appeal && !v.appeal_result)
+    v.appeal_result = {
+      final_outcome: snap.appeal.final_outcome,
+      flipped: snap.appeal.flipped,
+      decided_by: snap.appeal.decided_by,
+      tally: snap.appeal.tally,
+    };
+  const settled = MONEY_MOVED.has(snap.state);
+  if (
+    snap.deadlines.appeal_deadline !== null &&
+    v.appeal_deadline === null &&
+    !snap.payout &&
+    !settled &&
+    !v.payout
+  )
     v.appeal_deadline = snap.deadlines.appeal_deadline;
   const lockSig = snap.signatures.lock;
   if (lockSig && !v.lock)
@@ -573,6 +699,12 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
       event: 'payout',
       signature: snap.signatures.payout ?? null,
     };
+  // The projector does not write bets.payout_a/b yet: a settled bet's snapshot has no payout.
+  // paid_at stays null, so a cold start shows the result without replaying the PAID moment.
+  else if (settled && !v.payout) {
+    const paid = derivedPayout(v, snap.state, snap.pending_tx, snap.signatures.payout ?? null);
+    if (paid) v = { ...v, payout: paid, appeal_deadline: null };
+  }
   const txs = { ...v.txs };
   for (const [k, s] of Object.entries(snap.signatures)) if (k !== 'lock') txs[k] ??= s;
   v.txs = txs;
@@ -758,6 +890,26 @@ export function framesOf(s: Pick<TickerState, 'frameBlobs'>, b: BetView): string
   if (b.frame_urls.length || !b.evidence) return b.frame_urls;
   const got = s.frameBlobs[frameKey(b.bet_id, b.evidence.attempt_no)] ?? {};
   return Array.from({ length: b.evidence.frames }, (_, i) => got[i] ?? '');
+}
+
+/**
+ * RULED bets with no appeal countdown whose last REST snapshot predates the ruling: one more
+ * GET /v1/bets/:id gives deadlines.appeal_deadline (written by the payout service).
+ */
+export function deadlineRefetches(s: Pick<TickerState, 'bets' | 'snapshots'>): string[] {
+  return Object.values(s.bets)
+    .filter((b) => {
+      const snap = s.snapshots[b.bet_id];
+      return (
+        b.state === 'RULED' &&
+        b.appeal_deadline === null &&
+        !b.appealed &&
+        !b.payout &&
+        snap !== undefined &&
+        snap.state !== 'RULED'
+      );
+    })
+    .map((b) => b.bet_id);
 }
 
 /** Bets seen in events but not yet seeded from REST (the App fetches each once). */
