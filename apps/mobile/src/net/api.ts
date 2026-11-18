@@ -19,6 +19,12 @@ import {
   type PartyDecline,
 } from '@youre-on/shared/authorization';
 import type { CameraEvidence } from '@youre-on/shared/evidence';
+import { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import {
+  marketTermsPath,
+  MarketTermsResponse,
+  type MarketTermsRequest,
+} from '@youre-on/shared/judge/market-terms';
 import {
   termsConfirmPath,
   TermsConfirmResponse,
@@ -74,6 +80,19 @@ export const BetEventsResponse = z.object({
   events: z.array(z.unknown()),
   last_seq: z.number().int(),
 });
+
+/** §2.13 GET /v1/markets/btc5m/quote -> {result (ok only; refusals are 409), snapshot} */
+export const MarketQuoteResponse = z.object({
+  result: z.object({
+    ok: z.literal(true),
+    priceAtLock: z.string(),
+    priceSource: z.enum(['mid', 'last_in_spread']),
+    quotedAt: IsoUtc,
+    stakes: z.object({ a: MicroUsdc, b: MicroUsdc, currency: z.literal('USDC') }),
+  }),
+  snapshot: GeminiMarketSnapshot,
+});
+export type MarketQuoteResponse = z.infer<typeof MarketQuoteResponse>;
 
 const bet = (id: string) => `/v1/bets/${encodeURIComponent(id)}`;
 
@@ -136,6 +155,17 @@ export function createYoApi(c: ApiClient) {
         schema: TermsConfirmResponse,
         idempotencyKey,
       }),
+
+    // Beat 6: the Gemini BTC 5-minute closer (party A). The quote is a preview; the binding
+    // one is taken by POST …/terms/market.
+    marketQuote: (amountMicro: string, aSide: 'YES' | 'NO') =>
+      c.request(
+        'GET',
+        `/v1/markets/btc5m/quote?amount=${encodeURIComponent(amountMicro)}&a_side=${aSide}`,
+        { schema: MarketQuoteResponse },
+      ),
+    proposeMarketTerms: (betId: string, body: MarketTermsRequest) =>
+      c.request('POST', marketTermsPath(betId), { json: body, schema: MarketTermsResponse }),
 
     // §2.8 lock
     getLock: (betId: string) =>

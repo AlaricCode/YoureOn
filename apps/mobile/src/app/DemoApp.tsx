@@ -7,6 +7,9 @@
 //      device policy, hold -> Face ID -> sign -> PartyAuthorization; or the server pushes LOCKED)
 //   -> live / judge cam (record, frames, upload) -> ruling (GG = concede, Face ID) / REDO
 //   -> payout with GET /v1/me/balance.
+// Beat 6 (the closer): on A's negotiate screen "Bet on Bitcoin" (app/marketTerms) shows Gemini's
+// live odds and the fair split, proposes at the binding quote, then the same terms card and lock;
+// a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
 // No simulated Face ID here (that lives in src/preview only). Party screens never show chain
 // words: server text that reaches a screen goes through ui/copyRule first.
 import { StatusBar } from 'expo-status-bar';
@@ -24,6 +27,7 @@ import { StyleSheet, View } from 'react-native';
 
 import type { RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
+import { formatPrice } from '@youre-on/shared/settlement';
 
 import { extractFrames, readClip } from '../attempt/capture';
 import { initialLock, lockReducer } from '../bets/lock';
@@ -41,6 +45,7 @@ import { LockEndedScreen, TermsCardScreen } from '../screens/LockScreens';
 import {
   JudgeCamScreen,
   LiveScreen,
+  MarketScreen,
   PayoutScreen,
   RedoScreen,
   RulingScreen,
@@ -73,6 +78,21 @@ import {
   type AppEvent,
   type AppState,
 } from './machine';
+import {
+  canConfirmMarket,
+  canSubmitMarket,
+  confirmMarketTerms,
+  fetchMarketQuote,
+  initialMarket,
+  MARKET_STAKES_USD,
+  marketReducer,
+  QUOTE_POLL_MS,
+  shouldPoll,
+  splitLabel,
+  submitMarketTerms,
+  waitingForAcceptMarket,
+  type MarketStakeUsd,
+} from './marketTerms';
 import { getRuntime, type Runtime } from './runtime';
 import {
   canConfirm,
@@ -89,6 +109,8 @@ import {
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
+/** EXPO_PUBLIC_MARKET=off hides "Bet on Bitcoin" (the server refuses it without the Gemini relay). */
+const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET !== 'off';
 const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
@@ -142,6 +164,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [, rerender] = useReducer((x: number) => x + 1, 0);
   const [lock, lockDispatch] = useReducer(lockReducer, initialLock);
   const [typed, typedDispatch] = useReducer(typedReducer, initialTyped);
+  const [market, marketDispatch] = useReducer(marketReducer, initialMarket);
   /** The bet whose voice session failed (no key, token refused, SDK error): type it instead. */
   const [voiceFailedBet, setVoiceFailedBet] = useState<string | null>(null);
   const [walletKey, setWalletKey] = useState<string | null>(null);
@@ -336,6 +359,58 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     typedDispatch({ type: 'init', bet_id: bet.bet_id, bName: opponentName, typed: typedForced });
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
 
+  // ---- Bet on Bitcoin (A only, Beat 6): reset per bet; poll Gemini's odds while it is open ----
+  useEffect(() => {
+    if (!negotiating || !bet || !MARKET_ENABLED) return;
+    marketDispatch({ type: 'init', bet_id: bet.bet_id });
+  }, [negotiating, bet?.bet_id]);
+  const polling = negotiating && market.bet_id === bet?.bet_id && shouldPoll(market);
+  useEffect(() => {
+    if (!polling) return;
+    const pick = { side: market.side, stakeUsd: market.stakeUsd };
+    let live = true;
+    const ask = () =>
+      void fetchMarketQuote({ api: rt.api }, pick).then(
+        (quote) => live && marketDispatch({ type: 'quoted', ...pick, quote }),
+      );
+    ask();
+    const tm = setInterval(ask, QUOTE_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(tm);
+    };
+  }, [rt, polling, market.side, market.stakeUsd]);
+
+  const submitMarket = async () => {
+    if (!bet || !canSubmitMarket(market) || market.bet_id !== bet.bet_id) return;
+    marketDispatch({ type: 'submit' });
+    const outcome = await submitMarketTerms(
+      { api: rt.api },
+      { betId: bet.bet_id, side: market.side, stakeUsd: market.stakeUsd },
+    );
+    marketDispatch({ type: 'submitted', outcome });
+    if (outcome.kind !== 'proposed') feel('failed');
+  };
+
+  const confirmMarket = async () => {
+    const hash = bet?.envelope?.terms_hash ?? null;
+    if (!bet || !hash || !canConfirmMarket(market, hash, bet.inviteAnswer)) return;
+    marketDispatch({ type: 'confirm' });
+    const keyName = `confirm:${bet.bet_id}:${hash}`;
+    const r = await confirmMarketTerms(
+      { api: rt.api },
+      { betId: bet.bet_id, termsHash: hash, idempotencyKey: keyFor(keyName) },
+    );
+    if (r.kind === 'confirmed') marketDispatch({ type: 'confirmed' });
+    else {
+      keys.current.delete(keyName);
+      if (r.kind === 'requoted')
+        marketDispatch({ type: 'requoted', terms_hash: r.terms_hash, note: r.note });
+      else marketDispatch({ type: 'confirm_failed', note: r.note });
+      feel('failed');
+    }
+  };
+
   const voiceFailed = useCallback((id: string) => {
     setVoiceFailedBet(id);
     typedDispatch({ type: 'open' });
@@ -419,15 +494,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     if (b?.state === 'AWAITING_LOCK') lockDispatch({ type: 'submitted' });
   }, [rt, lockId, walletKey, mismatch, me]);
 
-  // Custodial path / cold start: already LOCKED -> the card shows Locked, then moves on.
+  // Custodial path / cold start: already LOCKED -> the card shows Locked, then moves on. A Gemini
+  // bet is locked straight into AWAITING_MARKET (one commit), so that counts as locked too.
+  const lockedNow = state === 'LOCKED' || state === 'AWAITING_MARKET';
   useEffect(() => {
-    if (state === 'LOCKED') lockDispatch({ type: 'confirmed' });
-    if (state === 'LOCKED' && betId) {
+    if (lockedNow) lockDispatch({ type: 'confirmed' });
+    if (lockedNow && betId) {
       const tm = setTimeout(() => dispatch({ type: 'lock_ack', bet_id: betId }), 1800);
       return () => clearTimeout(tm);
     }
     return undefined;
-  }, [state, betId]);
+  }, [lockedNow, betId]);
 
   // At RULED the GG card needs appeal_deadline (BetSnapshot.deadlines) if chain.BetResolved
   // hasn't arrived yet; also pick up a concede SignRequest we may have missed.
@@ -767,6 +844,52 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                   }
                 : undefined
             }
+            market={
+              negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id
+                ? {
+                    open: market.phase !== 'closed',
+                    side: market.side,
+                    stakeUsd: market.stakeUsd,
+                    stakes: MARKET_STAKES_USD,
+                    quote: market.quote
+                      ? {
+                          ok: market.quote.ok,
+                          refusal: market.quote.refusal,
+                          upPct: market.quote.upPct,
+                          strikeUsd: market.quote.strikeUsd,
+                          priceUsd: market.quote.priceUsd,
+                          split: splitLabel(market.quote),
+                          lockableUntilMs:
+                            market.quote.lockableUntilMs === null
+                              ? null
+                              : market.quote.lockableUntilMs - rt.clock.offsetMs,
+                        }
+                      : null,
+                    sending: market.phase === 'sending',
+                    confirming: market.phase === 'confirming' || market.phase === 'confirmed',
+                    canSubmit: canSubmitMarket(market),
+                    canConfirm: canConfirmMarket(
+                      market,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    ),
+                    waitingFor: waitingForAcceptMarket(
+                      market,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    )
+                      ? names.theirName
+                      : null,
+                    note: market.note,
+                    onOpen: () => marketDispatch({ type: 'open' }),
+                    onClose: () => marketDispatch({ type: 'close' }),
+                    onSide: (side) => marketDispatch({ type: 'side', side }),
+                    onStake: (usd) => marketDispatch({ type: 'stake', usd: usd as MarketStakeUsd }),
+                    onSubmit: () => void submitMarket(),
+                    onConfirm: () => void confirmMarket(),
+                  }
+                : undefined
+            }
             onDecline={() => {
               if (bet && me === 'B') void rt.api.declineInvite(bet.bet_id).catch(() => undefined);
               dismiss();
@@ -785,7 +908,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             onDecline={() => void declineLock()}
             onContinue={() => bet && dispatch({ type: 'lock_ack', bet_id: bet.bet_id })}
           />
-        ) : view && state === 'LOCKED' ? (
+        ) : view && lockedNow ? (
           <TermsCardScreen
             view={view}
             lock={lock}
@@ -820,6 +943,23 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           waiting
         );
       }
+      case 'market': {
+        const m = bet?.envelope?.terms.market;
+        if (!view || !bet || !m) return waiting;
+        // My side: A holds the Terms side, B the other one.
+        const aUp = m.side === 'YES';
+        const mineUp = me === 'A' ? aUp : !aUp;
+        const tick = bet.market?.eventTicker === m.eventTicker ? bet.market : null;
+        return (
+          <MarketScreen
+            view={view}
+            priceUsd={tick?.indexPrice ? formatPrice(tick.indexPrice) : '—'}
+            strikeUsd={m.strike.value ? formatPrice(m.strike.value) : '—'}
+            side={t(mineUp ? COPY.market.up : COPY.market.down)}
+            expiryMs={Date.parse(m.expiry) - rt.clock.offsetMs}
+          />
+        );
+      }
       case 'judgeCam':
         return (
           <JudgeCamScreen
@@ -851,6 +991,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <RulingScreen
             view={view}
             result={result}
+            judgeLabel={view.kind === 'market' ? t(COPY.market.gemini) : undefined}
             reason={safeData(bet.ruling?.ruling.reason, FALLBACK_REASON)}
             appealDeadlineMs={deadline}
             busy={busy}
