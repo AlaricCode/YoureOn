@@ -107,8 +107,6 @@ export function healthItems(h: DemoHealth): HealthItem[] {
       value: `${h.last_tx.kind} ${h.last_tx.status}`,
       level: h.last_tx.status === 'failed' ? 'warn' : 'ok',
     });
-  if (h.lock_signer)
-    items.push({ key: 'signer', label: 'Lock signer', value: h.lock_signer, level: 'idle' });
   return items;
 }
 

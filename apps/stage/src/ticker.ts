@@ -134,6 +134,16 @@ export interface BetView {
   paid_at: string | null;
   closed: boolean;
   last_judge_line: string | null;
+  /**
+   * The live caption: the newest line anyone said (the judge, or a player via party.line), a
+   * partial line until its final version arrives (the hall cannot always hear A's phone).
+   */
+  caption: {
+    speaker: 'judge' | PartyKey;
+    text: string;
+    final: boolean;
+    utterance_id: string;
+  } | null;
   last_cue: string | null;
   /** Other tx signatures by kind (resolve, payout, close …) for Explorer links. */
   txs: Record<string, string>;
@@ -256,6 +266,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     paid_at: null,
     closed: false,
     last_judge_line: null,
+    caption: null,
     last_cue: null,
     txs: {},
     updated_at: at,
@@ -473,7 +484,26 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'chain.BetClosed':
       return { ...v, closed: true, txs: { ...v.txs, close: e.payload.signature } };
     case 'judge.line':
-      return e.payload.final ? { ...v, last_judge_line: e.payload.text } : v;
+      return {
+        ...v,
+        last_judge_line: e.payload.final ? e.payload.text : v.last_judge_line,
+        caption: {
+          speaker: 'judge',
+          text: e.payload.text,
+          final: e.payload.final,
+          utterance_id: e.payload.utterance_id,
+        },
+      };
+    case 'party.line':
+      return {
+        ...v,
+        caption: {
+          speaker: e.payload.party,
+          text: e.payload.text,
+          final: e.payload.final,
+          utterance_id: e.payload.utterance_id,
+        },
+      };
     case 'judge.cue':
       return { ...v, last_cue: e.payload.cue };
     default:

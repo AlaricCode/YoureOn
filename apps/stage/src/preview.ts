@@ -216,6 +216,12 @@ function sequence(): Entry[] {
   state(0, BET_FLIP, 'DRAFTING', null);
   frame(1_500, BET_FLIP, 'bet.invite_answered', () => ({ party: 'B', answer: 'accepted' }));
   judge(3_000, BET_FLIP, "Alright, Logan. What's the bet?");
+  frame(4_500, BET_FLIP, 'party.line', () => ({
+    party: 'B',
+    utterance_id: uuid(++line),
+    text: 'Easy money. I never miss.',
+    final: true,
+  }));
   judge(6_000, BET_FLIP, 'Jake, does landing on the cap count? No? Upright on its base only.');
   frame(9_000, BET_FLIP, 'terms.proposed', (b) => ({ envelope: flip(b) }));
   state(9_000, BET_FLIP, 'TERMS_PROPOSED', 'DRAFTING');
