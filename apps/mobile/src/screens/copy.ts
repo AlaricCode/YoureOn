@@ -168,6 +168,7 @@ export const COPY = {
     loading: ['Loading', 'label'],
     offline: ["Can't connect", 'error'],
     failed: ['Try again', 'error'],
+    crashed: ['Something went wrong', 'error'],
   },
   demo: {
     title: ['Demo account', 'label'],
