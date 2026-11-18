@@ -30,6 +30,20 @@ const { applyEnv } = createRequire(import.meta.url)('../../app.config.js') as {
   applyEnv: (config: ExpoConfig, env: Record<string, string | undefined>) => ExpoConfig;
 };
 const appJson = (readJson('apps/mobile/app.json') as { expo: ExpoConfig }).expo;
+/** Set once the lead has run `eas init` and committed app.json (docs/IOS-BUILD.md step 2). */
+const linkedProjectId = appJson.extra?.eas?.projectId;
+
+/** The `updates` block app.config.js must derive for a project linked to `projectId`, or not. */
+function expectedUpdates(projectId: string | undefined) {
+  return projectId
+    ? {
+        enabled: true,
+        url: `https://u.expo.dev/${projectId}`,
+        checkAutomatically: 'ON_LOAD',
+        fallbackToCacheTimeout: 0,
+      }
+    : { enabled: false };
+}
 
 describe('app.config.js env overrides', () => {
   it("keeps app.json's values when nothing is set", () => {
@@ -84,10 +98,23 @@ describe('app.config.js EAS Update', () => {
   });
 
   it('keeps expo-updates off until the project is linked (free-team builds, CI)', () => {
-    const c = applyEnv(appJson, {});
-    expect(appJson.extra?.eas?.projectId).toBeUndefined();
+    // Synthetic, so the unlinked case stays covered after app.json is linked.
+    const unlinked = structuredClone(appJson);
+    delete unlinked.extra?.eas;
+    const c = applyEnv(unlinked, {});
     expect(c.updates).toEqual({ enabled: false });
     expect(c.runtimeVersion).toEqual({ policy: 'appVersion' });
+  });
+
+  it("follows app.json: off before `eas init`, on with app.json's project id after", () => {
+    // Either state is valid in the repo; app.json decides which one the builds get.
+    if (linkedProjectId !== undefined) {
+      // eas init writes the project's UUID; anything else would 404 at u.expo.dev.
+      expect(linkedProjectId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+    }
+    expect(applyEnv(appJson, {}).updates).toEqual(expectedUpdates(linkedProjectId));
   });
 
   it('derives the update URL from the project id `eas init` writes', () => {
@@ -339,8 +366,8 @@ describe('evaluated iOS config (expo config --type introspect, preview env)', ()
     expect(exp.ios?.infoPlist.UIBackgroundModes ?? []).not.toContain('remote-notification');
   });
 
-  it('keeps EAS Update off while app.json has no EAS project', () => {
-    expect((exp as { updates?: unknown }).updates).toEqual({ enabled: false });
+  it('turns EAS Update on exactly when app.json carries the EAS project id', () => {
+    expect((exp as { updates?: unknown }).updates).toEqual(expectedUpdates(linkedProjectId));
   });
 
   it('carries the EAS bundle ID and the team EAS injects', () => {
