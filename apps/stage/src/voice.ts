@@ -1,4 +1,5 @@
-// The projector's voice (API-CONTRACT §3.1 stage.voice, §4.5): the judge is always heard.
+// The projector's voice (API-CONTRACT §3.1 stage.voice, §4.5): the judge is always heard, and
+// only once (by the stage, or by A's phone when a voice judge hosts the bet).
 //
 // For each fresh voiced event (freshVoiceLines: ruling.issued, the payout's judge.cue PAID /
 // VOIDED, appeal.vote; packages/shared stageLineFor composes the words) the page waits up to
@@ -8,7 +9,17 @@
 // still not playable CLIP_WAIT_MS after its frame, it speaks the same line with the browser's
 // speechSynthesis instead. Lines play one at a time, in the order their events came; M (mute)
 // and V (voice off) skip them.
-import { stageLineFor, type StageVoiceName } from '@youre-on/shared/stage-voice';
+//
+// One judge at a time: in a bet a voice judge hosts (its history has a judge.line from A's
+// phone), the ruling and the payout are the phone's to say (leftToPhoneJudge), so those lines
+// come out marked `phone` and are never said here, clip or browser; the server sends no clip for
+// them either. Appeal votes stay on the stage. A preview has no phones: it voices every line.
+import {
+  hasPhoneJudge,
+  leftToPhoneJudge,
+  stageLineFor,
+  type StageVoiceName,
+} from '@youre-on/shared/stage-voice';
 import { FRESH_MS } from './sound';
 import type { TickerState } from './ticker';
 
@@ -28,6 +39,8 @@ export interface VoiceLine {
   key: string;
   voice: StageVoiceName;
   text: string;
+  /** The phone judge says this one (a voice judge hosts the bet): the stage stays quiet. */
+  phone?: true;
 }
 
 export const voiceKey = (betId: string, seq: number) => `${betId}:${seq}`;
@@ -35,17 +48,22 @@ export const voiceKey = (betId: string, seq: number) => `${betId}:${seq}`;
 /**
  * Lines for voiced events of `betId` not handled before (`seen` is updated). Old events (the
  * seq-0 replay of a bet that happened before the stage connected) are marked seen, unspoken.
+ * In a bet with a phone judge the ruling and payout lines are marked `phone` (StageVoice says
+ * nothing for them); `phoneJudge: false` (the preview: no phones) voices every line.
  */
 export function freshVoiceLines(
   s: Pick<TickerState, 'bets' | 'history'>,
   betId: string,
   seen: Set<string>,
   nowMs: number,
-  freshMs = FRESH_MS,
+  o: { freshMs?: number; phoneJudge?: boolean } = {},
 ): VoiceLine[] {
+  const freshMs = o.freshMs ?? FRESH_MS;
   const out: VoiceLine[] = [];
   const names = s.bets[betId]?.names ?? { A: null, B: null };
-  for (const e of s.history[betId] ?? []) {
+  const history = s.history[betId] ?? [];
+  let phone: boolean | null = null; // looked up once, only when a line needs it
+  for (const e of history) {
     if (!VOICED.has(e.type)) continue;
     const key = voiceKey(betId, e.seq);
     if (seen.has(key)) continue;
@@ -53,7 +71,9 @@ export function freshVoiceLines(
     const age = nowMs - Date.parse(e.ts);
     if (!(Number.isFinite(age) && age <= freshMs && age >= -freshMs)) continue;
     const line = stageLineFor(e, names);
-    if (line) out.push({ key, ...line });
+    if (!line) continue;
+    phone ??= o.phoneJudge !== false && hasPhoneJudge(history);
+    out.push(leftToPhoneJudge(e.type, phone) ? { key, ...line, phone: true } : { key, ...line });
   }
   return out;
 }
@@ -73,7 +93,8 @@ export interface VoiceIo {
   on(): boolean;
 }
 
-export type VoiceHow = 'clip' | 'speech' | 'skip';
+/** How a line was heard: its clip, the browser's voice, not at all (M / V), or by A's phone. */
+export type VoiceHow = 'clip' | 'speech' | 'skip' | 'phone';
 
 type Outcome = { kind: 'clip'; playable: Playable } | { kind: 'speech'; text: string };
 
@@ -95,6 +116,8 @@ function within<T>(p: Promise<T>, ms: number): Promise<T | void> {
 export class StageVoice {
   private readonly pending = new Map<string, Pending>();
   private readonly early = new Map<string, { url: string; text: string }>();
+  /** Recent lines the phone judge said (a late clip for one is ignored). */
+  private readonly phoneKeys = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
   /** How the latest line was heard (the health strip): a clip, the browser, or not at all. */
   last: VoiceHow | null = null;
@@ -110,6 +133,20 @@ export class StageVoice {
   /** A voiced event arrived: it will be heard, as a clip if one comes in time, else spoken. */
   expect(line: VoiceLine): void {
     if (this.pending.has(line.key)) return;
+    if (line.phone) {
+      // the phone judge says it: no wait, no clip (one that came first is dropped), no speech
+      this.early.delete(line.key);
+      this.phoneKeys.add(line.key);
+      while (this.phoneKeys.size > EARLY_CLIPS)
+        this.phoneKeys.delete(this.phoneKeys.keys().next().value!);
+      this.queue = this.queue
+        .then(() => {
+          this.last = 'phone';
+          this.onDone?.(line.key, 'phone');
+        })
+        .catch(() => undefined);
+      return;
+    }
     let resolve!: (o: Outcome) => void;
     const outcome = new Promise<Outcome>((r) => (resolve = r));
     const p: Pending = {
@@ -140,6 +177,7 @@ export class StageVoice {
 
   /** A stage.voice frame: the ElevenLabs clip of the line for event `key`. */
   clip(frame: { key: string; url: string; text: string }): void {
+    if (this.phoneKeys.has(frame.key)) return; // the phone judge's line: never played here
     const p = this.pending.get(frame.key);
     if (p) {
       if (!p.settled && !p.loading) this.startClip(p, frame);

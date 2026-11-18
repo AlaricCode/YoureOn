@@ -3,7 +3,10 @@
 // a ruling, a payout and three appeal votes reach the stage as stage.voice frames whose
 // audio_url (GET /v1/stage/tts/:clip_id, stage bearer only, immutable) is the ElevenLabs clip of
 // the stage line; the phones never get the frame. With the TTS off nothing is generated and the
-// stage speaks for itself. The cues' Sound Effects clips when SFX is live. ElevenLabs is a fake.
+// stage speaks for itself. A bet the voice judge hosts (A's phone relays its judge.line
+// transcript) leaves its ruling and payout to the phone: one judge voice in the hall. The cues'
+// Sound Effects clips when SFX is live. ElevenLabs is a fake.
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createDb } from '@youre-on/db';
@@ -16,6 +19,7 @@ import { emitBetEvent } from '../src/realtime/events';
 import { routeModules } from '../src/routes';
 import { createDeps } from '../src/server';
 import { CLIP_CACHE_CONTROL } from '../src/stage/audio';
+import { StageVoice } from '../src/stage/voice';
 import { createElevenLabsClient, type FetchLike } from '../src/voice/elevenlabs';
 import { ClipCache, DEFAULT_STAGE_VOICES, StageTts } from '../src/voice/tts';
 import {
@@ -292,6 +296,81 @@ describeDb('stage voice: ElevenLabs clips on the projector (fake ElevenLabs)', (
     const seqs = s.stage!.frames.filter((f) => f.op === 'stage.voice').map((f) => f.seq);
     expect(seqs).not.toContain(voidCue.seq);
     expect(seqs).not.toContain(stateEv.seq);
+  });
+
+  it("a bet the voice judge hosts: its ruling and payout are the phone's to say (no frame, no TTS); appeal votes stay on the stage", async () => {
+    const s = await h.setup();
+    // A's phone relays its agent's transcript (the voice judge spoke in Beat 2)
+    const relayed = await h.post(s.A, `/v1/bets/${s.betId}/voice/lines`, {
+      lines: [
+        {
+          utterance_id: randomUUID(),
+          role: 'judge',
+          text: 'Logan, does a flip that lands on its cap count?',
+          final: true,
+          at: new Date().toISOString(),
+        },
+      ],
+    });
+    expect(relayed.status).toBe(202);
+    expect(relayed.json).toMatchObject({ accepted: 1 });
+    await s.stage!.next((f) => f.type === 'judge.line');
+    const before = el.calls.length;
+    const reason = 'The phone judge says this one.';
+    const ruling = await h.emit(s.betId, 'ruling.issued', {
+      ruling: { ...RULING, bet_id: s.betId, reason },
+      ruling_hash: '1'.repeat(64),
+    });
+    const paid = await h.emit(
+      s.betId,
+      'judge.cue',
+      judgeCue(
+        'PAID',
+        { winner: 'Jake', amount: '$7.00', to_a: '$0.00', to_b: '$7.00' },
+        'Congratulate Jake in one line.',
+      ),
+    );
+    const v = await h.emit(s.betId, 'appeal.vote', vote(s.betId, 1, 'B_WINS'));
+    const frame = await s.stage!.next((f) => f.op === 'stage.voice');
+    expect(frame).toMatchObject({ seq: v.seq, type: 'appeal.vote', voice: 'seat_2' });
+    await h.ctx.deps.stageVoice!.idle();
+    await new Promise((r) => setTimeout(r, 50));
+    const seqs = s.stage!.frames.filter((f) => f.op === 'stage.voice').map((f) => f.seq);
+    expect(seqs).toEqual([v.seq]);
+    expect(seqs).not.toContain(ruling.seq);
+    expect(seqs).not.toContain(paid.seq);
+    // nothing billed for the lines the phone says (the vote's clip may be cached already)
+    expect(el.calls.slice(before).filter((c) => c.body.text !== frame.text)).toEqual([]);
+
+    // a restarted server (nothing in memory) reads the judge.line from bet_events
+    const fresh = new StageVoice(h.ctx.deps, fakeTts(el.fetch));
+    const againRuling = await h.emit(s.betId, 'ruling.issued', {
+      ruling: { ...RULING, bet_id: s.betId, reason: 'After a restart, still the phone.' },
+      ruling_hash: '2'.repeat(64),
+    });
+    await h.ctx.deps.stageVoice!.idle();
+    const calls = el.calls.length;
+    fresh.onBetEvent(againRuling, s.roomId);
+    await fresh.idle();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(el.calls.length).toBe(calls);
+    expect(s.stage!.frames.filter((f) => f.op === 'stage.voice').map((f) => f.seq)).toEqual([
+      v.seq,
+    ]);
+
+    // the same restarted server still voices a bet no phone judge hosts
+    const other = await h.setup();
+    const plain = await h.emit(other.betId, 'ruling.issued', {
+      ruling: { ...RULING, bet_id: other.betId, reason: 'No phone judge in this one.' },
+      ruling_hash: '3'.repeat(64),
+    });
+    // (the running server's frame first, then the restarted one's)
+    await other.stage!.next((f) => f.op === 'stage.voice' && f.seq === plain.seq);
+    fresh.onBetEvent(plain, other.roomId);
+    await fresh.idle();
+    expect(
+      await other.stage!.next((f) => f.op === 'stage.voice' && f.seq === plain.seq),
+    ).toMatchObject({ text: 'Jake wins. No phone judge in this one.' });
   });
 
   it('no stage on the room: nothing is generated (no clip nobody hears)', async () => {

@@ -1,7 +1,8 @@
 // The projector's voice (voice.ts): the ElevenLabs clip plays when its stage.voice frame comes in
 // time; otherwise, and whenever the clip fails, the browser speaks the same line; lines queue in
-// order; mute skips them. Plus which events are voiced (fresh ones, once), the stage.voice frame
-// in the ticker, the speechSynthesis adapter, and StageAudio playing a decoded clip.
+// order; mute skips them; a line the phone judge says (a voice judge hosts the bet) is never said
+// here. Plus which events are voiced (fresh ones, once; not the phone judge's), the stage.voice
+// frame in the ticker, the speechSynthesis adapter, and StageAudio playing a decoded clip.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GENERATED_FOR, StageAudio } from '../src/sound';
 import { applyFrame, initialTicker, type TickerState } from '../src/ticker';
@@ -151,6 +152,30 @@ describe('StageVoice: the clip, or the browser after the timeout', () => {
     expect(io.played).toEqual(['ruling', 'vote']);
   });
 
+  it("the phone judge's line: never said here, not even after the wait; a clip for it is ignored", async () => {
+    const io = fakeIo();
+    const { v, done } = voiceOf(io);
+    v.expect({ ...line(20, 'Jake wins. Clean flip.'), phone: true });
+    v.clip({ key: voiceKey(BET, 20), url: `/v1/stage/tts/${CLIP}`, text: 'Jake wins.' });
+    // the next line (an appeal vote) is still the stage's, in its turn
+    v.expect({ key: voiceKey(BET, 21), voice: 'seat_1', text: 'Judge 1 votes.' });
+    await vi.advanceTimersByTimeAsync(VOICE_WAIT_MS + CLIP_WAIT_MS);
+    expect(io.loads).toEqual([]);
+    expect(io.played).toEqual([]);
+    expect(io.spoken).toEqual(['Judge 1 votes.']);
+    expect(done).toEqual([
+      [voiceKey(BET, 20), 'phone'],
+      [voiceKey(BET, 21), 'speech'],
+    ]);
+    // a frame that came first (one render) is dropped too
+    v.clip({ key: voiceKey(BET, 22), url: '/v1/stage/tts/p', text: 'Paid. Jake takes $2.00.' });
+    v.expect({ ...line(22, 'Paid. Jake takes $2.00.'), phone: true });
+    await vi.advanceTimersByTimeAsync(VOICE_WAIT_MS + CLIP_WAIT_MS);
+    expect(io.loads).toEqual([]);
+    expect(io.spoken).toEqual(['Judge 1 votes.']);
+    expect(v.last).toBe('phone');
+  });
+
   it('muted (M) or voice off (V): the line is skipped', async () => {
     const io = fakeIo();
     io.on = false;
@@ -166,17 +191,60 @@ describe('which events are voiced', () => {
   const START = Date.parse('2026-11-20T15:00:00.000Z');
 
   it('the preview bet, heard live: the REDO, the ruling and the payout, once each', () => {
+    // a preview has no phones in the room: the stage says every line (App passes phoneJudge false)
     const seen = new Set<string>();
     const heard: string[] = [];
     for (let t = 0; t < 56_000; t += 250) {
       const f = previewAt(START, START + t);
       for (const id of Object.keys(f.state.bets))
-        heard.push(...freshVoiceLines(f.state, id, seen, f.now).map((l) => l.text));
+        for (const l of freshVoiceLines(f.state, id, seen, f.now, { phoneJudge: false })) {
+          expect(l.phone).toBeUndefined();
+          heard.push(l.text);
+        }
     }
     expect(heard).toHaveLength(3);
     expect(heard[0]).toMatch(/^Run it back\. /);
     expect(heard[1]).toMatch(/^Jake wins\. /);
     expect(heard[2]).toMatch(/^Paid\. Jake takes \$/);
+  });
+
+  it("live, a bet the voice judge hosts (its judge.line transcript): the ruling and payout are the phone's", () => {
+    // the preview bet's judge talks in Beat 2 (judge.line), as A's phone does live
+    const seen = new Set<string>();
+    const lines: Array<{ text: string; phone?: true }> = [];
+    for (let t = 0; t < 56_000; t += 250) {
+      const f = previewAt(START, START + t);
+      for (const id of Object.keys(f.state.bets))
+        lines.push(...freshVoiceLines(f.state, id, seen, f.now));
+    }
+    expect(lines.map((l) => [l.text.split('.')[0], l.phone])).toEqual([
+      ['Run it back', true],
+      ['Jake wins', true],
+      ['Paid', true],
+    ]);
+  });
+
+  it('a bet with no judge.line (no voice judge: typed terms, cp1-drive): the stage says its ruling', () => {
+    const f = previewAt(START, START, 'ruling');
+    const id = f.state.focusBetId!;
+    const noJudge = {
+      ...f.state,
+      history: {
+        ...f.state.history,
+        [id]: f.state.history[id]!.filter((e) => e.type !== 'judge.line'),
+      },
+    };
+    const ruling = noJudge.history[id]!.filter((e) => e.type === 'ruling.issued').at(-1)!;
+    const at = Date.parse(ruling.ts);
+    const [l] = freshVoiceLines(noJudge, id, new Set(), at).filter(
+      (x) => x.key === voiceKey(id, ruling.seq),
+    );
+    expect(l).toMatchObject({ voice: 'judge', text: expect.stringMatching(/^Jake wins\. /) });
+    expect(l!.phone).toBeUndefined();
+    const [p] = freshVoiceLines(f.state, id, new Set(), at).filter(
+      (x) => x.key === voiceKey(id, ruling.seq),
+    );
+    expect(p!.phone).toBe(true);
   });
 
   it('a stage that connects late (the seq-0 replay) says nothing, now or later', () => {

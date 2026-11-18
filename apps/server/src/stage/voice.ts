@@ -10,14 +10,23 @@
 // fresh (a re-published old event is not news). Without a frame the stage speaks the same line
 // with the browser's voice after ~800 ms, so the judge is heard either way.
 //
+// One judge at a time: in a bet a voice judge hosts (A's phone relayed a judge.line for it), the
+// ruling and the payout are the phone's to say (their judge.cue lines are speak:true), so no clip
+// and no frame for them (leftToPhoneJudge); the stage applies the same rule to its own history
+// and stays quiet too. Appeal votes are still voiced here. The judge.line events seen go into a
+// set; after a restart bet_events answers.
+//
 // Also the stage cues' Sound Effects (providers.sfx when it is live: SFX_PROVIDER=live, or the
 // default 'auto' with the key), cached like the clips and generated once at boot so the first
 // gavel does not wait on ElevenLabs.
 import { createHash } from 'node:crypto';
-import { eq, inArray } from 'drizzle-orm';
-import { bets, users } from '@youre-on/db';
+import { and, eq, inArray } from 'drizzle-orm';
+import { betEvents, bets, users } from '@youre-on/db';
 import { StageCueKind, type StageAudioResponse } from '@youre-on/shared/api';
 import {
+  leftToPhoneJudge,
+  PHONE_JUDGE_EVENT,
+  PHONE_JUDGE_SAYS,
   stageLineFor,
   stageSfxPath,
   VoicedEventType,
@@ -31,7 +40,7 @@ import { stageAudioGate, type ClipCache, type StageTts } from '../voice/tts';
 
 /** An event published this long after its ts is a re-publish, not news: not voiced. */
 export const VOICE_FRESH_MS = 30_000;
-/** Bets whose party names are remembered (they never change during a bet). */
+/** Bets whose party names (and phone judge) are remembered: neither changes back during a bet. */
 const NAMES_KEPT = 500;
 
 type VoiceDeps = Pick<AppDeps, 'db' | 'hub' | 'log' | 'now' | 'env' | 'providers'>;
@@ -44,6 +53,8 @@ const sfxKey = (kind: SfxCue) =>
 
 export class StageVoice {
   private readonly names = new Map<string, StageNames>();
+  /** Bets a voice judge hosts (a judge.line went out; bet events are append-only). */
+  private readonly phoneJudged = new Set<string>();
   private readonly pending = new Set<Promise<void>>();
 
   constructor(
@@ -55,7 +66,9 @@ export class StageVoice {
 
   /** hub.onBetEvent listener. Never throws or blocks the fan-out. */
   readonly onBetEvent = (env: BetEnvelope, roomId: string | null): void => {
-    if (!this.tts || !roomId || !VoicedEventType.safeParse(env.type).success) return;
+    if (!this.tts || !roomId) return;
+    if (env.type === PHONE_JUDGE_EVENT) return this.rememberPhoneJudge(env.bet_id);
+    if (!VoicedEventType.safeParse(env.type).success) return;
     if (!this.deps.hub.hasStage(roomId)) return;
     const ts = typeof env.ts === 'string' ? Date.parse(env.ts) : NaN;
     if (Number.isFinite(ts) && Math.abs(this.deps.now() - ts) > VOICE_FRESH_MS) return;
@@ -76,6 +89,16 @@ export class StageVoice {
     const names = env.type === 'judge.cue' ? { A: null, B: null } : await this.namesOf(env.bet_id);
     const line = stageLineFor({ type: env.type, payload: env.payload }, names);
     if (!line) return;
+    // (only the phone judge's types cost a lookup: an appeal vote is always the stage's)
+    const phone = PHONE_JUDGE_SAYS.has(env.type) && (await this.phoneJudge(env.bet_id));
+    if (leftToPhoneJudge(env.type, phone)) {
+      this.deps.log.info('stage_voice.phone_judge', {
+        bet_id: env.bet_id,
+        seq: env.seq,
+        type: env.type,
+      });
+      return;
+    }
     const clip = this.tts!.clip(line.voice, line.text);
     this.deps.hub.publishToStage(roomId, {
       op: 'stage.voice',
@@ -94,6 +117,25 @@ export class StageVoice {
       voice: line.voice,
       clip_id: clip.clip_id,
     });
+  }
+
+  private rememberPhoneJudge(betId: string): void {
+    if (this.phoneJudged.has(betId)) return;
+    if (this.phoneJudged.size >= NAMES_KEPT)
+      this.phoneJudged.delete(this.phoneJudged.values().next().value!);
+    this.phoneJudged.add(betId);
+  }
+
+  /** Does a voice judge host the bet (has it relayed a judge.line)? */
+  private async phoneJudge(betId: string): Promise<boolean> {
+    if (this.phoneJudged.has(betId)) return true;
+    const [row] = await this.deps.db
+      .select({ seq: betEvents.seq })
+      .from(betEvents)
+      .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, PHONE_JUDGE_EVENT)))
+      .limit(1);
+    if (row) this.rememberPhoneJudge(betId);
+    return row !== undefined;
   }
 
   private async namesOf(betId: string): Promise<StageNames> {

@@ -1253,7 +1253,7 @@ export function HealthStrip({
   room?: string | null;
   online?: { online: number; members: number } | null;
   sound?: 'locked' | 'on' | 'off' | null;
-  /** Whose voice the judge has here: 'ElevenLabs', 'browser', 'off (V)'. */
+  /** Whose voice the judge has here: 'ElevenLabs', 'browser', 'off (V)' (App.tsx voiceLabel). */
   voice?: string | null;
   onDisconnect?: () => void;
 }) {
@@ -1292,7 +1292,12 @@ export function HealthStrip({
       key: 'voice',
       label: 'Voice',
       value: voice,
-      level: voice === 'ElevenLabs' ? 'ok' : voice.startsWith('ElevenLabs') ? 'warn' : 'idle',
+      // warn: ElevenLabs is on but the browser said the last line (a late or failed clip)
+      level: !voice.startsWith('ElevenLabs')
+        ? 'idle'
+        : voice.includes('last line: browser')
+          ? 'warn'
+          : 'ok',
     });
   return (
     <footer className="health" aria-label="status">

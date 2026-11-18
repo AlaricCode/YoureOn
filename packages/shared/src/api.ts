@@ -703,6 +703,7 @@ export const WsStageCue = z.object({
  * Additive (stage sessions only): the ElevenLabs TTS clip of the stage line for bet event
  * (bet_id, seq), sent right after that event, before the clip is generated (the GET waits for
  * it). The stage speaks `text` itself when no frame comes within ~800 ms or the clip fails.
+ * Never sent for a line the phone judge says (stage-voice.ts leftToPhoneJudge).
  */
 export const WsStageVoice = z.object({
   op: z.literal('stage.voice'),
