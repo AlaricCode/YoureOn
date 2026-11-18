@@ -124,7 +124,8 @@ export function routeForBet(app: AppState, b: BetModel): Route {
   const recording =
     b.attempt !== null && app.deviceId !== null && b.attempt.recorder_device_id === app.deviceId;
   if (recording && (state === 'ATTEMPT' || state === 'LOCKED')) return 'judgeCam';
-  if (app.judgeCam && b.my_party === null && !isOver(state)) return 'judgeCam';
+  // A judge-cam device (a second device of A) only ever films: it never negotiates or signs.
+  if (app.judgeCam && !isOver(state)) return 'judgeCam';
   switch (state) {
     case 'DRAFTING':
     case 'TERMS_PROPOSED':
