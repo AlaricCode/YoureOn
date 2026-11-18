@@ -3,6 +3,7 @@
 // every string here comes from a Terms field, never from the server's presentation block.
 // Pure TS: tested in node.
 import { formatUsd, type MicroUsdc } from '@youre-on/shared/money';
+import { formatPrice } from '@youre-on/shared/settlement';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 import type { RulingOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type Terms } from '@youre-on/shared/terms';
@@ -32,6 +33,10 @@ export interface BetView {
   potUsd: string;
   /** "62/38" for a market bet (my share first), null otherwise. */
   odds: string | null;
+  /** Market bets: this phone's side ("Up" = Bitcoin at or above the line), else null. */
+  mySide: 'Up' | 'Down' | null;
+  /** Market bets: the line bound into the terms ("$64,389.60"), else null. */
+  lineUsd: string | null;
   deadline: string;
   termsCode: string;
   /** Attempts line: "1 try", "Best of 3". */
@@ -69,6 +74,8 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
     theirStakeUsd: formatUsd(stake(them)),
     potUsd: formatUsd(pot.toString()),
     odds: terms.type === 'real_world' ? `${myPct}/${100 - myPct}` : null,
+    mySide: terms.market ? ((terms.market.side === 'YES') === (me === 'A') ? 'Up' : 'Down') : null,
+    lineUsd: terms.market?.strike.value ? formatPrice(terms.market.strike.value) : null,
     deadline: terms.deadline,
     termsCode: termsCode(termsHash),
     attempts: ATTEMPTS[terms.attempts.rule](terms.attempts.count),

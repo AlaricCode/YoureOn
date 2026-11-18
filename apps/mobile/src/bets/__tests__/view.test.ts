@@ -45,6 +45,14 @@ describe('betView (SCHEMAS §2.6 BTC closer)', () => {
     expect([b.myStakeUsd, b.odds]).toEqual(['$3.80', '38/62']);
     expect(a.kind).toBe('market');
     expect(a.evidence).toBe('Gemini market');
+    // A holds YES (Up), B the other side; both see the line bound into the terms
+    expect([a.mySide, b.mySide]).toEqual(['Up', 'Down']);
+    expect(a.lineUsd).toBe('$97,250.03');
+    const bottle = bottleFlip('Logan');
+    expect(betView(bottle.terms, bottle.termsHash, 'A')).toMatchObject({
+      mySide: null,
+      lineUsd: null,
+    });
   });
 });
 
