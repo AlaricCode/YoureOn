@@ -5,6 +5,8 @@ node_modules/
 package-lock.json
 packages/shared/src/chain/generated/
 packages/db/migrations/meta/
+# a stray drizzle journal at the repo root (drizzle-kit once run from here); generated, like the above
+/migrations/meta/
 docs/reference/
 .claude/
 /migrations/

@@ -56,6 +56,11 @@ export const EnvSchema = z.object({
   ALLOW_P2P_REAL_WORLD: opt(boolStr),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
+  /**
+   * The agent LLM scripts/el-agent.ts set (its --llm / ELEVENLABS_AGENT_LLM; unset = the shared
+   * DEFAULT_AGENT_LLM). The post-call webhook warns `voice.llm_mismatch` when another model billed.
+   */
+  ELEVENLABS_AGENT_LLM: opt(str),
   // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)
   /** Spend guard: any `*_PROVIDER=live` refuses to start unless this is true. Never set in tests/CI. */
   ALLOW_SPEND: z.preprocess(unset, boolStr.default(false)),

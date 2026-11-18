@@ -34,6 +34,9 @@ import {
   requestBodySchema,
   type OpenApiDoc,
 } from '../src/voice/openapi-check';
+import { buildApp } from '../src/app';
+import { createDeps } from '../src/server';
+import { testEnv } from './helpers';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, '../../..');
@@ -81,7 +84,7 @@ function findEnum(node: any): string[] | null {
 }
 
 describe('el-agent bodies vs the ElevenLabs OpenAPI schema (fixture, offline)', () => {
-  it('the default plan (secret, 2 webhook + 3 client tools, agent) and its PATCH twins conform', () => {
+  it('the default plan (secret, 3 webhook + 3 client tools, agent) and its PATCH twins conform', () => {
     const plan = planFor();
     const reqs = plannedRequests(plan);
     expect(reqs.map((r) => `${r.method} ${pathTemplate(doc, r.path)}`)).toEqual([
@@ -158,7 +161,7 @@ describe('el-agent bodies vs the ElevenLabs OpenAPI schema (fixture, offline)', 
 });
 
 describe('el-agent CLI (flags + env)', () => {
-  it('defaults: the Haiku 5.5 judge, effort low, the two live webhook tools, the Fly URLs', () => {
+  it('defaults: the Haiku 5.5 judge, effort low, the three live webhook tools, the Fly URLs', () => {
     const plan = planFor();
     const prompt = agentBodyOf(plan).conversation_config.agent.prompt;
     expect(prompt).toMatchObject({
@@ -175,10 +178,28 @@ describe('el-agent CLI (flags + env)', () => {
       .filter((a) => a.resource === 'tool')
       .map((a) => (a.body as any).tool_config.api_schema?.url)
       .filter(Boolean);
-    expect(urls).toEqual([`${BASE}/el/tools/propose_terms`, `${BASE}/el/tools/confirm_terms`]);
-    // Every route a registered webhook tool names exists on the server (src/voice/routes.ts).
-    const routes = readFileSync(join(here, '../src/voice/routes.ts'), 'utf8');
-    for (const t of DEFAULT_WEBHOOK_TOOLS) expect(routes).toContain(`'/el/tools/${t}'`);
+    expect(urls).toEqual([
+      `${BASE}/el/tools/propose_terms`,
+      `${BASE}/el/tools/confirm_terms`,
+      `${BASE}/el/tools/get_market_odds`,
+    ]);
+    // The agent's prompt describes every registered tool, Beat 6's odds quote included.
+    expect(prompt.prompt).toContain('- get_market_odds: for a Bitcoin up-or-down');
+    expect(prompt.tool_ids).toContain('<tool_id of get_market_odds>');
+  });
+
+  it('every webhook tool the agent registers has a POST route on the server (no 404 mid-call)', () => {
+    // The real route table of the app main.ts serves (src/routes.ts), not a text scan: Beat 6's
+    // get_market_odds is registered by markets/bet-routes.ts, not voice/routes.ts.
+    const { deps } = createDeps({ env: testEnv(), rateLimit: false });
+    const posts = new Set(
+      buildApp(deps)
+        .routes.filter((r) => r.method === 'POST')
+        .map((r) => r.path),
+    );
+    expect(DEFAULT_WEBHOOK_TOOLS).toContain('get_market_odds');
+    for (const t of DEFAULT_WEBHOOK_TOOLS)
+      expect([t, posts.has(`/el/tools/${t}`)]).toEqual([t, true]);
   });
 
   it('the LLM is configurable (flag or ELEVENLABS_AGENT_LLM) and must be one ElevenLabs serves', () => {
@@ -286,6 +307,7 @@ describe('scripts/el-agent.ts --dry-run (subprocess)', () => {
     expect(r.stderr).toContain('every body matches');
     expect(r.stderr).toMatch(/^ELEVENLABS_AGENT_ID=<the agent_id/m);
     expect(r.stderr).toContain(`POST ${BASE}/el/tools/confirm_terms`);
+    expect(r.stderr).toContain(`POST ${BASE}/el/tools/get_market_odds`);
     expect(r.stdout + r.stderr).not.toContain(SECRET);
     expect(r.stdout + r.stderr).not.toContain(ENV.ELEVENLABS_API_KEY);
   }, 30_000);
