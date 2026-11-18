@@ -22,7 +22,7 @@
 // payout() rule over the terms' stakes and the final outcome) from those; the chain.* events,
 // when Streams delivers them, carry the same values and simply confirm them.
 import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
-import type { PendingTx } from '@youre-on/shared/bet-state';
+import { TERMINAL_BET_STATES, type PendingTx } from '@youre-on/shared/bet-state';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
 import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
@@ -32,6 +32,8 @@ export const MAX_EVENTS = 200;
 export const MAX_MARKET_POINTS = 150;
 /** Per-bet events kept for rebuilding the card (market.tick is not kept). */
 export const MAX_BET_HISTORY = 1000;
+/** An in-order event older than this (by the stage clock) is catch-up, not news: no focus move. */
+export const FOCUS_FRESH_MS = 30_000;
 
 export type ConnStatus = 'idle' | 'authorizing' | 'connecting' | 'open' | 'closed';
 
@@ -190,8 +192,15 @@ export interface TickerState {
   history: Record<string, RealtimeEvent[]>;
   /** Latest GET /v1/bets/:id per bet (slotted into a rebuild at its last_seq). */
   snapshots: Record<string, BetSnapshot>;
-  /** The bet with the most recent activity: what the big card shows. */
+  /**
+   * What the big card shows: the bet with the most recent live activity. Only news moves it: an
+   * older event (seq-0 replay, reconnect catch-up) never does, and neither does an event that
+   * leaves its bet over (a stray draft expiring, a rehearsal bet paying out) while another bet
+   * holds the screen.
+   */
   focusBetId: string | null;
+  /** ?bet= / the form's bet id: it keeps the focus until it is over. */
+  pinnedBetId: string | null;
   /** Fetched evidence JPEGs as object URLs: `${bet_id}:${attempt_no}` -> idx -> url. */
   frameBlobs: Record<string, Record<number, string>>;
   dropped: number;
@@ -214,6 +223,7 @@ export const initialTicker: TickerState = {
   history: {},
   snapshots: {},
   focusBetId: null,
+  pinnedBetId: null,
   frameBlobs: {},
   dropped: 0,
   errors: [],
@@ -745,6 +755,10 @@ export type TickerAction =
   | { kind: 'error'; message: string }
   /** A new connection (another room): forget every bet, event and market point. */
   | { kind: 'reset' }
+  /** Show this bet (a resumed session's last focus; `pin` for ?bet=). */
+  | { kind: 'focus'; bet_id: string; pin?: boolean }
+  /** The page could not load this bet: unpin it, and stop showing it unless its events came. */
+  | { kind: 'unfocus'; bet_id: string }
   | { kind: 'frame_blob'; bet_id: string; attempt_no: number; idx: number; url: string };
 
 function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: number): TickerState {
@@ -756,8 +770,55 @@ function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: numbe
   return { ...s, market: snap, marketHistory: hist };
 }
 
+/** Paid, refunded, cancelled, expired or closed. */
+export function isOver(b: BetView | undefined): boolean {
+  if (!b) return false;
+  return (
+    b.closed ||
+    b.payout !== null ||
+    (b.state !== null && (TERMINAL_BET_STATES as readonly string[]).includes(b.state))
+  );
+}
+
+/** The pinned bet while it is not over (also before its snapshot has loaded). */
+function holdingPin(s: TickerState, bets: Record<string, BetView>): string | null {
+  const pin = s.pinnedBetId;
+  return pin && !isOver(bets[pin]) ? pin : null;
+}
+
+/** Where the focus goes after event `e` folded into `view` (see TickerState.focusBetId). */
+function nextFocus(
+  s: TickerState,
+  e: RealtimeEvent,
+  view: BetView,
+  inOrder: boolean,
+  receivedAt: number,
+): string {
+  const pin = holdingPin(s, { ...s.bets, [e.bet_id]: view });
+  if (pin) return pin;
+  const cur = s.focusBetId;
+  if (!cur || cur === e.bet_id) return e.bet_id;
+  if (!inOrder) return cur;
+  const age = receivedAt + (s.clockOffsetMs ?? 0) - Date.parse(e.ts);
+  if (Number.isFinite(age) && age > FOCUS_FRESH_MS) return cur;
+  if (isOver(view)) return cur;
+  return e.bet_id;
+}
+
 export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   if (a.kind === 'reset') return initialTicker;
+  if (a.kind === 'focus')
+    return {
+      ...s,
+      focusBetId: a.bet_id,
+      pinnedBetId: a.pin ? a.bet_id : s.pinnedBetId,
+    };
+  if (a.kind === 'unfocus')
+    return {
+      ...s,
+      pinnedBetId: s.pinnedBetId === a.bet_id ? null : s.pinnedBetId,
+      focusBetId: s.focusBetId === a.bet_id && !s.bets[a.bet_id] ? null : s.focusBetId,
+    };
   if (a.kind === 'frame_blob') {
     const key = frameKey(a.bet_id, a.attempt_no);
     return {
@@ -784,11 +845,12 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
             updated_at: Math.max(prev.updated_at, a.receivedAt),
           }
         : foldSnapshot(prev ?? emptyBet(id), a.bet, a.receivedAt);
+    const bets = { ...s.bets, [id]: view };
     return {
       ...s,
-      bets: { ...s.bets, [id]: view },
+      bets,
       snapshots: { ...s.snapshots, [id]: a.bet },
-      focusBetId: s.focusBetId ?? id,
+      focusBetId: holdingPin(s, bets) ?? s.focusBetId ?? id,
     };
   }
 
@@ -875,7 +937,7 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
     events,
     bets: { ...s.bets, [e.bet_id]: view },
     history: { ...s.history, [e.bet_id]: hist },
-    focusBetId: e.bet_id,
+    focusBetId: nextFocus(s, e, view, inOrder, a.receivedAt),
     lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
   };
 }

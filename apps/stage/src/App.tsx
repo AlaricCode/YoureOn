@@ -274,6 +274,8 @@ export function App() {
       framesAsked.current = new Set();
       for (const u of frameUrls.current.splice(0)) URL.revokeObjectURL(u);
       dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
+      // ?bet= / the form's bet id keeps the focus until that bet is over
+      if (s.betId) dispatch({ kind: 'focus', bet_id: s.betId, pin: true });
       const serverUrl = resolveServer(s.serverUrl, origin());
       conn.current = new StageConnection({
         wsUrl: wsUrlFor(serverUrl),
@@ -296,9 +298,13 @@ export function App() {
       );
       if (s.betId) {
         seeded.current.add(s.betId);
-        fetchBetSnapshot(serverUrl, s.token, s.betId).then(
+        const pinned = s.betId;
+        fetchBetSnapshot(serverUrl, s.token, pinned).then(
           (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
-          (err: unknown) => dispatch({ kind: 'error', message: String(err) }),
+          (err: unknown) => {
+            dispatch({ kind: 'unfocus', bet_id: pinned });
+            dispatch({ kind: 'error', message: String(err) });
+          },
         );
       }
     },
