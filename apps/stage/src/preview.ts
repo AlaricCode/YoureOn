@@ -258,6 +258,21 @@ function sequence(): Entry[] {
   // ---- Beats 1-4: the bottle flip --------------------------------------------------------
   const flip = (base: number) => flipEnvelope(base);
   snapshot(0, BET_FLIP);
+  // A face challenge between rivals: the stage shows "Logan 4–7 Jake · Rivals" under VS.
+  frame(0, BET_FLIP, 'bet.invited', () => ({
+    challenger: { user_id: USER_A, pubkey: PK_A, display_name: NAMES.A, avatar_url: null },
+    room_id: ROOM,
+    rivalry: {
+      challenge_method: 'face',
+      a_wins: 4,
+      b_wins: 7,
+      pushes: 0,
+      total: 11,
+      streak: { party: 'B', length: 2 },
+      rival: true,
+      includes_seed: true,
+    },
+  }));
   state(0, BET_FLIP, 'DRAFTING', null);
   frame(1_500, BET_FLIP, 'bet.invite_answered', () => ({ party: 'B', answer: 'accepted' }));
   judge(3_000, BET_FLIP, "Alright, Logan. What's the bet?");

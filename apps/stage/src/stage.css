@@ -267,6 +267,22 @@ code,
   color: var(--dim);
   letter-spacing: 0.1em;
 }
+/* The face challenge's record so far ("Logan 4–7 Jake · Rivals"), centred under VS. */
+.rivalry {
+  margin: 0.45em 0 0;
+  text-align: center;
+  font-size: 1.15em;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rivalry.rivals {
+  color: var(--accent);
+}
 .party {
   display: flex;
   align-items: center;

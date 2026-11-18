@@ -1072,6 +1072,22 @@ GROUP BY user_id, opponent_id;
 SELECT wins, losses, net FROM head_to_head WHERE user_a = $me AND user_b = $them;
 ```
 
+**Rivalry fields (live scan, stage; built inline in `apps/server/src/face/service.ts` `headToHead()`, one statement, no migration).** On top of the aggregate above, each settled bet of the pair gets a `result` from `$me`'s side: `win` (outcome = my side), `loss` (the other side), `push` (`split` / `refund`).
+
+- `total = wins + losses + pushes`; `rival = total >= 3` (`RIVAL_MIN_SETTLED`).
+- `last_result`: the result of the newest bet, ordered `settled_at DESC NULLS LAST, id DESC` (equal times broken by id). Null with no settled bets.
+- `streak`: the run of `last_result` ending at the newest bet: `length` = the rows before the first one (in that order) whose result differs, or all of them. `holder` is `me` for a run of wins, `them` for a run of losses. Null when the newest is a push or there are none.
+- The default 4-7 seed (§11; demo-a wins bets 2, 5, 7, 10) gives demo-a `{total: 11, last_result: 'loss', streak: {holder: 'them', length: 1}, rival: true}`.
+
+```sql
+ordered AS (SELECT result, row_number() OVER (ORDER BY settled_at DESC NULLS LAST, id DESC) AS rn
+            FROM mine WHERE result IS NOT NULL),
+latest  AS (SELECT result FROM ordered WHERE rn = 1)
+-- streak length:
+coalesce((SELECT min(o.rn) - 1 FROM ordered o, latest l WHERE o.result <> l.result),
+         (SELECT count(*) FROM ordered))
+```
+
 ### 7.2 Room-scoped face-match candidates (query, deliberately not a view)
 
 This query runs in the face module only, under the `face_svc` role (§10). Ciphertext never appears in a general-purpose view.
@@ -1443,3 +1459,4 @@ The original proposals, kept for the record:
   - **§11.** Demo wallets are custodial and server-generated (no `DEMO_WALLET_*` env); `seed:chain` uses those seeds; `npm run db:demo-reset` (npm workspaces, not pnpm). §13 row updated.
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): `frame_keys` and the §9 frames row say 12 frames + one landing crop per try. No schema change: the crop is one more `attempt_frames` row (idx 12, the 204800 B CHECK holds it), and which row is the crop is read back from `attempts.evidence_canonical` (`frames[i].landing_crop`). `attempts.recorder = 'self'` is now also the two-phone demo's fallback (API-CONTRACT §2.9).
 - **2026-11-18 (Beat 5 appeal built, migration 0008).** §5.15 `appeals` / `appeal_votes` created as specified, plus the CHECKs listed under §5.15 and the deferred FK `rulings.appeal_id → appeals`. No new enum (0000 has them).
+- **2026-11-18, live rivalry scan (feat/rivalry-scan).** §7.1 documents the head-to-head rivalry fields (`total`, `last_result`, `streak`, `rival`), computed inline in the same single `headToHead()` statement. No migration and no schema change.

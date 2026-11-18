@@ -413,6 +413,20 @@ export const SealedEmbedding = z.object({
 });
 export type SealedEmbedding = z.infer<typeof SealedEmbedding>;
 
+/** A pair with at least this many settled bets (pushes included) is a rivalry. */
+export const RIVAL_MIN_SETTLED = 3;
+
+/** One settled bet, from the reader's side: won, lost, or a split/refund. */
+export const H2HResult = z.enum(['win', 'loss', 'push']);
+export type H2HResult = z.infer<typeof H2HResult>;
+
+/** The run of same-winner results ending at the latest settled bet. */
+export const H2HStreak = z.object({
+  holder: z.enum(['me', 'them']),
+  length: z.number().int().min(1),
+});
+export type H2HStreak = z.infer<typeof H2HStreak>;
+
 export const HeadToHead = z.object({
   wins: z.number().int(),
   losses: z.number().int(),
@@ -421,6 +435,16 @@ export const HeadToHead = z.object({
   net_display: z.string(),
   last_settled_at: IsoUtc.nullable(),
   includes_seed: z.boolean(),
+  // Rivalry fields (live scan, stage). Additive and optional so older replies still parse;
+  // this server always sends them.
+  /** wins + losses + pushes. */
+  total: z.number().int().nonnegative().optional(),
+  /** The latest settled bet's result; null with no settled bets. */
+  last_result: H2HResult.nullable().optional(),
+  /** The run of same-winner results ending at the latest settled bet; null if latest is a push or none. */
+  streak: H2HStreak.nullable().optional(),
+  /** total >= RIVAL_MIN_SETTLED. */
+  rival: z.boolean().optional(),
 });
 export type HeadToHead = z.infer<typeof HeadToHead>;
 
@@ -830,6 +854,41 @@ export const PRESENCE_ONLINE_GRACE_MS = 30_000;
 
 export const ChallengeMethod = z.enum(['face', 'list', 'link']);
 export type ChallengeMethod = z.infer<typeof ChallengeMethod>;
+
+/**
+ * `bet.invited.rivalry` (API-CONTRACT §3.4): the pair's record so far, in party terms (A is the
+ * challenger), for the projector's "Logan 4–7 Jake" line. Facts only, no score.
+ */
+export const StageRivalry = z.object({
+  challenge_method: ChallengeMethod,
+  a_wins: z.number().int().nonnegative(),
+  b_wins: z.number().int().nonnegative(),
+  pushes: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  streak: z.object({ party: Party, length: z.number().int().min(1) }).nullable(),
+  rival: z.boolean(),
+  includes_seed: z.boolean(),
+});
+export type StageRivalry = z.infer<typeof StageRivalry>;
+
+/**
+ * The stage rivalry of a new bet. `h2h` is party A's view (headToHead(db, aId, bId)): `me` maps
+ * to A and `them` to B. Fields an older HeadToHead lacks are derived (total, rival; streak null).
+ */
+export function rivalryOf(h2h: HeadToHead, method: ChallengeMethod): StageRivalry {
+  const total = h2h.total ?? h2h.wins + h2h.losses + h2h.pushes;
+  const s = h2h.streak ?? null;
+  return {
+    challenge_method: method,
+    a_wins: Math.max(0, h2h.wins),
+    b_wins: Math.max(0, h2h.losses),
+    pushes: Math.max(0, h2h.pushes),
+    total: Math.max(0, total),
+    streak: s ? { party: s.holder === 'me' ? 'A' : 'B', length: s.length } : null,
+    rival: h2h.rival ?? total >= RIVAL_MIN_SETTLED,
+    includes_seed: h2h.includes_seed,
+  };
+}
 
 /** POST /v1/bets. */
 export const CreateBetRequest = z.object({
