@@ -7,11 +7,12 @@
 //
 // connects with no typing (config.ts; `&demo=<DEMO_ADMIN_TOKEN>` is optional: the health strip
 // reads /v1/demo/health with the stage session's own bearer); ?preview plays a sample bet with
-// no server (preview.ts),
-// ?preview=gemini walks one Gemini bet (Beat 6) through its clock to Gemini's result
-// (preview-market.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
-// (verify.ts), and the projector says whether it verified.
-// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, H help.
+// no server (preview.ts), ?preview=gemini walks one Gemini bet (Beat 6) through its clock to
+// Gemini's result (preview-market.ts). A ruled Gemini bet's evidence chain is fetched and
+// re-checked here (verify.ts), and the projector says whether it verified. The judge is heard
+// on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
+// the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
+// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, M mute, V voice, H help.
 import {
   useCallback,
   useEffect,
@@ -21,13 +22,16 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { WS_CLOSE } from '@youre-on/shared/api';
+import { WS_CLOSE, type StageAudioResponse, type StageCueKind } from '@youre-on/shared/api';
+import type { z } from 'zod/v4';
 import { applyFrame, deadlineRefetches, initialTicker, type BetView } from './ticker';
 import {
+  fetchAudio,
   fetchBetSnapshot,
   fetchFrame,
   fetchMarket,
   fetchSettlement,
+  fetchStageAudio,
   openStageSession,
   StageConnection,
   wsUrlFor,
@@ -55,6 +59,7 @@ import { DemoHealthError, fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } fro
 import { PREVIEW_HEALTH, previewAt } from './preview';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
+import { browserSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
 import { settlementFetches, verifyEvidence, type Verification } from './verify';
 import {
   initialReplays,
@@ -260,6 +265,37 @@ function useDemoHealth(live: Live | null) {
   return { health, error };
 }
 
+type CueKind = z.infer<typeof StageCueKind>;
+
+/** GET /v1/stage/audio once per connection, then the ElevenLabs cue clips into `audio`. */
+function useStageAudio(live: Live | null, audio: { readonly current: StageAudio | null }) {
+  const [caps, setCaps] = useState<StageAudioResponse | null>(null);
+  useEffect(() => {
+    setCaps(null);
+    if (!live) return;
+    let stop = false;
+    fetchStageAudio(live.serverUrl, live.token).then(
+      async (c) => {
+        if (stop) return;
+        setCaps(c);
+        for (const [kind, url] of Object.entries(c.sfx ?? {})) {
+          try {
+            const raw = await fetchAudio(live.serverUrl, live.token, url);
+            if (!stop) audio.current?.setGenerated(kind as CueKind, raw);
+          } catch {
+            // that cue stays synthesized
+          }
+        }
+      },
+      () => undefined, // an older server: the browser voice and synthesized cues
+    );
+    return () => {
+      stop = true;
+    };
+  }, [live, audio]);
+  return caps;
+}
+
 function toggleFullscreen() {
   try {
     if (document.fullscreenElement) void document.exitFullscreen();
@@ -267,6 +303,13 @@ function toggleFullscreen() {
   } catch {
     // fullscreen not allowed (iframe / old browser)
   }
+}
+
+/** The health strip's voice item: whose voice the judge has on this projector. */
+export function voiceLabel(on: boolean, elevenLabs: boolean, last: VoiceHow | null): string {
+  if (!on) return 'off (V)';
+  if (!elevenLabs) return 'browser';
+  return last === 'speech' ? 'ElevenLabs (last line: browser)' : 'ElevenLabs';
 }
 
 /** The connect form's REPLAY line: how many clips are in memory yet. */
@@ -630,6 +673,49 @@ export function App() {
   const audio = useRef<StageAudio | null>(null);
   audio.current ??= new StageAudio();
   const [sound, setSound] = useState<'locked' | 'on' | 'off'>('locked');
+  const audioCaps = useStageAudio(live, audio);
+
+  // The judge's voice (voice.ts): each fresh ruling / payout / appeal vote is heard, as the
+  // ElevenLabs clip a stage.voice frame points at, else (no frame within ~800 ms, a failed clip)
+  // in the browser's voice. V turns the voice off and on; M mutes everything.
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const [voiceOn, setVoiceOn] = useState(true);
+  const voiceOnRef = useRef(voiceOn);
+  voiceOnRef.current = voiceOn;
+  const [voiceHow, setVoiceHow] = useState<VoiceHow | null>(null);
+  const voice = useRef<StageVoice | null>(null);
+  if (!voice.current) {
+    const speak = browserSpeech();
+    voice.current = new StageVoice({
+      load: async (url) => {
+        const l = liveRef.current;
+        if (!l) throw new Error('not connected');
+        const buf = await audio.current!.decode(await fetchAudio(l.serverUrl, l.token, url));
+        if (!buf) throw new Error('clip did not decode');
+        return {
+          play: () => audio.current!.playBuffer(buf) ?? Promise.reject(new Error('audio locked')),
+        };
+      },
+      speak: (line) => (speak ? speak(line) : Promise.resolve()),
+      on: () => !audio.current!.muted && voiceOnRef.current,
+    });
+    voice.current.onDone = (_key, how) => setVoiceHow(how);
+  }
+  const voiced = useRef(new Set<string>());
+  useEffect(() => {
+    for (const id of Object.keys(shown.bets))
+      for (const l of freshVoiceLines(shown, id, voiced.current, shownNow))
+        voice.current!.expect(l);
+  }, [shown, shownNow]);
+  const clipsSeen = useRef(new Set<string>());
+  useEffect(() => {
+    for (const c of state.voiceClips) {
+      if (clipsSeen.current.has(c.key)) continue;
+      clipsSeen.current.add(c.key);
+      voice.current!.clip(c);
+    }
+  }, [state.voiceClips]);
   const heard = useRef(new Set<string>());
   useEffect(() => {
     const fresh: Sfx[] = [];
@@ -639,12 +725,20 @@ export function App() {
     if (fresh.length) audio.current?.play(fresh[fresh.length - 1]!);
   }, [shown, shownNow]);
 
-  // Stage cues (gavel, drumroll, …): a flash on the projector, and the sound.
+  // Stage cues (gavel, drumroll, …): a flash on the projector, and the sound (the ElevenLabs
+  // clip once it is loaded; a cue naming one the page has not loaded loads it for next time).
   const [flash, setFlash] = useState<string | null>(null);
   useEffect(() => {
     if (!shown.cueCount || !shown.lastCue) return;
-    setFlash(shown.lastCue.kind);
-    if (isSfx(shown.lastCue.kind)) audio.current?.play(shown.lastCue.kind);
+    const { kind, audio_url } = shown.lastCue;
+    setFlash(kind);
+    if (isSfx(kind)) audio.current?.play(kind);
+    const l = liveRef.current;
+    if (audio_url && l && !audio.current?.hasGenerated(kind as CueKind))
+      fetchAudio(l.serverUrl, l.token, audio_url).then(
+        (raw) => audio.current?.setGenerated(kind as CueKind, raw),
+        () => undefined,
+      );
     const t = setTimeout(() => setFlash(null), 900);
     return () => clearTimeout(t);
   }, [shown.cueCount, shown.lastCue]);
@@ -678,7 +772,8 @@ export function App() {
         const a = audio.current!;
         a.muted = !a.muted;
         if (!a.muted) a.play('lock');
-      } else {
+      } else if (k === 'v') setVoiceOn((v) => !v);
+      else {
         const n = Number(e.key);
         if ((REPLAY_BEATS as readonly number[]).includes(n))
           setOverlay({ kind: 'replay', beat: n });
@@ -729,6 +824,7 @@ export function App() {
           replays={replays}
           roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
           sound={sound}
+          voice={voiceLabel(voiceOn, !pv && !!audioCaps?.tts, voiceHow)}
           lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
           verifications={pv ? undefined : verifications}
         />
