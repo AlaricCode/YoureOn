@@ -39,7 +39,8 @@ const KNOWN_FLAGS = [
 export const USAGE = `usage: npx tsx --env-file-if-exists=apps/server/.env scripts/el-agent.ts [flags]
 
 Creates or updates (find by name, PATCH only what differs) the workspace secret, the webhook
-and client tools and the private judge agent; prints ELEVENLABS_AGENT_ID. A second run is a no-op.
+and client tools and the private judge agent; prints ELEVENLABS_AGENT_ID. A second run without
+--rotate-secret is a no-op ("no changes (no-op)"); with it the secret is PATCHed every time.
 
 env: ELEVENLABS_API_KEY, ELEVENLABS_TOOL_SECRET, PUBLIC_BASE_URL (https),
      optional ELEVENLABS_JUDGE_VOICE_ID, ELEVENLABS_AGENT_LLM (default ${DEFAULT_AGENT_LLM})
@@ -48,7 +49,8 @@ env: ELEVENLABS_API_KEY, ELEVENLABS_TOOL_SECRET, PUBLIC_BASE_URL (https),
                             no ElevenLabs call, no key needed; the secret value is never printed
   --check-openapi[=<f|url>] check every body against ElevenLabs' public OpenAPI document
                             (default ${ELEVENLABS_OPENAPI_URL}; no key) and stop on a mismatch
-  --rotate-secret           PATCH the workspace secret to ELEVENLABS_TOOL_SECRET
+  --rotate-secret           PATCH the workspace secret to ELEVENLABS_TOOL_SECRET (always one
+                            write: the stored value is write-only, so it cannot be compared)
   --tools=a,b               webhook tools (default ${DEFAULT_WEBHOOK_TOOLS.join(',')})
   --llm=<id>                agent LLM (default ELEVENLABS_AGENT_LLM or ${DEFAULT_AGENT_LLM});
                             must be in ElevenLabs' LLM enum unless --llm-unchecked
