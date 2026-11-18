@@ -103,6 +103,7 @@ export const demoRoutes: RouteModule = {
           lock_signer: deps.env.LOCK_SIGNER,
           rpc: rt?.client.label ?? null,
           fee_payer: rt?.keys.feePayer.address ?? null,
+          fee_payer_pinned: rt?.feePayerPinned ?? null,
           fee_payer_sol: feePayerSol,
           judge: rt?.keys.judge?.address ?? null,
           custodial: { a: rt?.keys.demoA?.address ?? null, b: rt?.keys.demoB?.address ?? null },

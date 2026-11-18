@@ -34,11 +34,20 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
   const runtime =
     o.runtime ??
     (() => {
-      memo ??= chainRuntimeFromEnv(deps.env).catch((err: unknown) => {
-        deps.log.error('chain.runtime_failed', { err });
-        memo = null;
-        return null;
-      });
+      memo ??= chainRuntimeFromEnv(deps.env)
+        .then((rt) => {
+          if (rt && rt.feePayerPinned === false && deps.env.LOCK_SIGNER === 'phones')
+            deps.log.warn('chain.fee_payer_not_pinned', {
+              fee_payer: rt.keys.feePayer.address,
+              hint: 'phones refuse locks whose fee payer is not packages/shared FEE_PAYER_PUBKEY',
+            });
+          return rt;
+        })
+        .catch((err: unknown) => {
+          deps.log.error('chain.runtime_failed', { err });
+          memo = null;
+          return null;
+        });
       return memo;
     });
   const inflight = new Inflight(deps.log);
