@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies are loosely typed in tests */
-// GET /v1/me/bets (API-CONTRACT §2.14): party bets, a judge-cam device's room bets, outsiders,
-// status filters, the cursor, and the response shape the judge-cam phone polls
-// (apps/mobile DemoApp: `?status=active&limit=5`, then `items[].bet_id`).
+// GET /v1/me/bets (API-CONTRACT §2.14): party bets only (A's judge cam is a device of A),
+// outsiders, status filters, the cursor, and the response shape the judge-cam phone polls
+// (apps/mobile DemoApp: `?status=active&limit=5`, then GET + subscribe each `items[].bet_id`).
+// Every listed item must be GETtable by the calling device; a judge-cam device never gets
+// another pair's room bets it could not open.
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { devices } from '@youre-on/db';
 import { BetSnapshot, MeBetsResponse } from '@youre-on/shared/api';
@@ -33,15 +35,17 @@ describeDb('GET /v1/me/bets over Postgres', () => {
   let ctx: Ctx;
   let A: SignedUp; // party
   let B: SignedUp; // party
-  let C: SignedUp; // room member, not a party; her second device is the room's judge cam
+  let C: SignedUp; // room member, not a party of A-B; her second device is bound as a judge cam
   let D: SignedUp; // in another room with B
   let E: SignedUp; // outsider
+  let F: SignedUp; // room 1 member; F vs C is a newer active bet in room 1 than A vs B
   let aCam: SignedUp; // A's second device bound as judge_cam to room 1 (the demo setup)
   let cCam: SignedUp; // C's second device bound as judge_cam to room 1
   let room1: string;
   let active1: string; // A vs B in room 1, DRAFTING
   let cancelled1: string; // A vs B in room 1, CANCELLED (declined)
   let other2: string; // B vs D in room 2, DRAFTING
+  let foreign1: string; // C vs F in room 1, DRAFTING, created after active1
 
   const uid = (u: SignedUp) => u.session.user.user_id;
   const signed = async (u: SignedUp, method: string, path: string, body?: unknown) => {
@@ -112,19 +116,21 @@ describeDb('GET /v1/me/bets over Postgres', () => {
 
   beforeAll(async () => {
     ctx = await startTestServer();
-    [A, B, C, D, E] = await Promise.all([
+    [A, B, C, D, E, F] = await Promise.all([
       signUp(ctx.base, 'Logan'),
       signUp(ctx.base, 'Jake'),
       signUp(ctx.base, 'Carol'),
       signUp(ctx.base, 'Dana'),
       signUp(ctx.base, 'Eve'),
+      signUp(ctx.base, 'Fay'),
     ]);
-    room1 = await newRoom(A, B, C);
+    room1 = await newRoom(A, B, C, F);
     const room2 = await newRoom(B, D);
     cancelled1 = await challenge(A, B, room1);
     expect((await post(B, `/v1/bets/${cancelled1}/invite/decline`)).status).toBe(200);
     active1 = await challenge(A, B, room1);
     other2 = await challenge(B, D, room2);
+    foreign1 = await challenge(C, F, room1); // newest bet in room 1, and not A's
     aCam = await judgeCam(A, room1);
     cCam = await judgeCam(C, room1);
   });
@@ -140,7 +146,6 @@ describeDb('GET /v1/me/bets over Postgres', () => {
     const snap = BetSnapshot.parse((await get(A, `/v1/bets/${active1}`)).json);
     expect(BetSnapshot.parse(item)).toEqual(snap); // a phone can adopt the item as-is
     expect(item).toMatchObject({
-      access: 'party',
       my_party: 'A',
       state: 'DRAFTING',
       room_id: room1,
@@ -173,40 +178,38 @@ describeDb('GET /v1/me/bets over Postgres', () => {
     expect(p2.next_cursor).toBeNull();
   });
 
-  it("judge cam: A's own cam device (the demo) finds A's active bet in the room, as a party", async () => {
+  /** Every item the device lists, it can open (the DemoApp poll GETs then subscribes each). */
+  async function expectAllGettable(u: SignedUp, r: MeBetsResponse) {
+    for (const i of r.items) expect((await get(u, `/v1/bets/${i.bet_id}`)).status).toBe(200);
+  }
+
+  it("judge cam: A's own cam device (the demo) finds A's active bet, not a newer foreign bet in the room", async () => {
+    // foreign1 (C vs F) is in the same room and newer than active1: it must not sort first.
+    expect((await get(aCam, `/v1/bets/${foreign1}`)).status).toBe(404);
     const r = await myBets(aCam, '?status=active&limit=5');
     expect(ids(r)).toEqual([active1]);
-    expect(r.items[0]).toMatchObject({ access: 'party', my_party: 'A' });
+    expect(r.items[0]).toMatchObject({ my_party: 'A', room_id: room1 });
+    await expectAllGettable(aCam, r);
+    // Even a one-item poll lands on A's own bet.
+    expect(ids(await myBets(aCam, '?status=active&limit=1'))).toEqual([active1]);
+    await expectAllGettable(aCam, await myBets(aCam));
   });
 
-  it("judge cam of a non-party: the room's active bets only (not other rooms, not ended ones)", async () => {
+  it("judge cam of a non-party: only its own user's bets, never another pair's room bets", async () => {
+    // C is a party of foreign1 only; her cam in room 1 does not get A vs B.
     const r = await myBets(cCam, '?status=active&limit=5');
-    expect(ids(r)).toEqual([active1]);
-    expect(r.items[0]).toMatchObject({
-      access: 'judge_cam',
-      my_party: null,
-      opponent: null,
-      my_stake: null,
-      my_payout: null,
-      room_id: room1,
-    });
-    // status=all still shows only the room's ACTIVE bets to the cam (no history of others).
-    expect(ids(await myBets(cCam))).toEqual([active1]);
-    // C's ordinary phone is not a judge cam: nothing.
-    expect(ids(await myBets(C, '?status=active'))).toEqual([]);
-    // Rebinding the cam as a plain phone drops the room's bets.
-    const plain = await signed(cCam, 'PATCH', '/v1/devices/current', { role: 'phone' });
-    expect(plain.status).toBe(204);
-    expect(ids(await myBets(cCam, '?status=active'))).toEqual([]);
-    expect(
-      (await signed(cCam, 'PATCH', '/v1/devices/current', { role: 'judge_cam', room_id: room1 }))
-        .status,
-    ).toBe(204);
+    expect(ids(r)).toEqual([foreign1]);
+    expect(r.items[0]).toMatchObject({ my_party: 'A', opponent: { user_id: uid(F) } });
+    await expectAllGettable(cCam, r);
+    expect((await get(cCam, `/v1/bets/${active1}`)).status).toBe(404);
+    // Same list as C's ordinary phone: the device role does not widen what a user sees.
+    expect(ids(await myBets(C, '?status=active'))).toEqual([foreign1]);
   });
 
   it('outsider: sees none of these bets', async () => {
     expect(await myBets(E)).toEqual({ items: [], next_cursor: null });
     expect(ids(await myBets(D))).toEqual([other2]);
+    await expectAllGettable(B, await myBets(B));
   });
 
   it('auth + validation', async () => {

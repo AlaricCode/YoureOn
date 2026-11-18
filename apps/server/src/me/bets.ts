@@ -4,11 +4,15 @@
 // BetSummary list fields, so the judge-cam phone (apps/mobile DemoApp, which polls
 // `?status=active&limit=5` and reads `items[].bet_id`) can adopt it directly.
 //
-// Who sees what: every bet the caller is a party of; and, when the calling device is a
-// `judge_cam` bound to a room (devices.judge_room_id, PATCH /v1/devices/current), also that
-// room's active bets. Newest first (created_at, id); the cursor is the last item's bet_id.
-import { and, desc, eq, inArray, isNull, notInArray, or, sql, type SQL } from 'drizzle-orm';
-import { bets, devices } from '@youre-on/db';
+// Who sees what: only bets the caller is a party of, from any of the caller's devices. The demo
+// judge cam is a second device of party A (API-CONTRACT §2.9 "Judge-cam identity"), so it finds
+// A's bets here as a party. A judge-cam device's room bets of OTHER pairs are deliberately not
+// listed: GET /v1/bets/:id (stage/routes canRead) and the WS bet subscription
+// (realtime/access canSeeBet) are party-or-stage only, so the phone could not open them, and a
+// newer foreign bet sorting first would starve its own. Every item is GETtable by the caller.
+// Newest first (created_at, id); the cursor is the last item's bet_id.
+import { and, desc, eq, inArray, notInArray, or, sql, type SQL } from 'drizzle-orm';
+import { bets } from '@youre-on/db';
 import { MeBetsStatus, type MeBetItem, type MeBetsResponse } from '@youre-on/shared/api';
 import { TERMINAL_BET_STATES } from '@youre-on/shared/bet-state';
 import { BetId } from '@youre-on/shared/primitives';
@@ -53,26 +57,14 @@ export function parseMeBetsQuery(q: {
   return { status: status.data, limit, cursor };
 }
 
-/** The room a live judge-cam device is bound to, else null. */
-async function judgeRoomOf(deps: Pick<AppDeps, 'db'>, deviceId: string): Promise<string | null> {
-  const [d] = await deps.db
-    .select({ room_id: devices.judge_room_id })
-    .from(devices)
-    .where(and(eq(devices.id, deviceId), eq(devices.role, 'judge_cam'), isNull(devices.revoked_at)))
-    .limit(1);
-  return d?.room_id ?? null;
-}
-
 export async function listMyBets(
   deps: Pick<AppDeps, 'db' | 'log'>,
-  me: { user_id: string; device_id: string },
+  me: { user_id: string },
   q: MeBetsQuery,
 ): Promise<MeBetsResponse> {
-  const judgeRoom = await judgeRoomOf(deps, me.device_id);
   const active = notInArray(bets.state, [...TERMINAL_BET_STATES]);
   const party = or(eq(bets.party_a_id, me.user_id), eq(bets.party_b_id, me.user_id))!;
-  const visible = judgeRoom ? or(party, and(eq(bets.room_id, judgeRoom), active))! : party;
-  const where: SQL[] = [visible];
+  const where: SQL[] = [party];
   if (q.status === 'active') where.push(active);
   if (q.status === 'settled') where.push(inArray(bets.state, [...SETTLED_STATES]));
   if (q.cursor) {
@@ -114,13 +106,13 @@ async function toItem(
     return null;
   }
   const mine = partyOf(row, userId);
-  const stake = mine === 'A' ? row.stake_a : mine === 'B' ? row.stake_b : null;
-  const paid = mine === 'A' ? row.payout_a : mine === 'B' ? row.payout_b : null;
+  if (!mine) return null; // unreachable: the query is party-only
+  const stake = mine === 'A' ? row.stake_a : row.stake_b;
+  const paid = mine === 'A' ? row.payout_a : row.payout_b;
   return {
     ...snap,
-    access: mine ? 'party' : 'judge_cam',
     title: snap.envelope?.presentation.title ?? 'Challenge',
-    opponent: mine === 'A' ? snap.party_b : mine === 'B' ? snap.party_a : null,
+    opponent: mine === 'A' ? snap.party_b : snap.party_a,
     my_stake: stake?.toString() ?? null,
     my_payout: paid?.toString() ?? null,
     outcome: row.outcome ? FROM_PG[row.outcome] : null,

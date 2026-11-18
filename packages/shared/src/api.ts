@@ -463,14 +463,13 @@ export type BetSnapshot = z.infer<typeof BetSnapshot>;
 
 /**
  * §2.14 GET /v1/me/bets item: a whole BetSnapshot (a phone adopts it exactly like
- * GET /v1/bets/:bet_id) plus the contract's BetSummary list fields. `access` says why the caller
- * sees it: a party of the bet, or a judge-cam device bound to the bet's room (then `my_party`,
- * `opponent`, `my_stake` and `my_payout` are null unless the cam's user is also a party).
+ * GET /v1/bets/:bet_id) plus the contract's BetSummary list fields. Only bets the caller is a
+ * party of (any of the caller's devices, including A's judge cam), so each item is GETtable and
+ * subscribable by the caller.
  */
 export const MeBetItem = BetSnapshot.extend({
-  access: z.enum(['party', 'judge_cam']),
   title: z.string(),
-  opponent: UserRef.nullable(),
+  opponent: UserRef,
   my_stake: MicroUsdc.nullable(),
   my_payout: MicroUsdc.nullable(),
   outcome: OnchainOutcome.nullable(),
