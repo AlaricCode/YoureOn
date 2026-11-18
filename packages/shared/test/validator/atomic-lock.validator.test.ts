@@ -34,7 +34,7 @@ import {
   wireSize,
   type LockArgs,
   type NonceRef,
-} from '../escrow/lock-tx';
+} from '../../src/chain/lock-tx';
 import { measure } from '../escrow/measure';
 import {
   balance,

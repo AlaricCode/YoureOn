@@ -39,7 +39,7 @@ import {
   USDC,
   type Env,
 } from './harness';
-import { cosign, compileLock, lockBody } from './lock-tx';
+import { cosign, compileLock, lockBody } from '../../src/chain/lock-tx';
 import { measure } from './measure';
 
 const STAKE = 5n * USDC;
