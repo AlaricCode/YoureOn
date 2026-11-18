@@ -91,6 +91,8 @@ const LAST_ROOM_KEY = 'youreon.room.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
 const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
+/** How long A's judge session outlives its bet: the closing [EVENT] line, spoken (§4.5). */
+const VOICE_TAIL_MS = 20_000;
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
@@ -608,18 +610,42 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     refreshBalance();
   };
 
-  // The judge session lives for the whole bet on A's phone, and is gone once it failed (the
-  // controller already ended it; unmounting also drops the error boundary's box).
-  const voice =
+  // ---- the judge session (A's phone only, D6) ------------------------------------------------
+  // It lives for the whole bet and VOICE_TAIL_MS past its end, so the last [EVENT] line (PAID,
+  // VOIDED, DECLINED, EXPIRED, LOCK_FAILED, which arrive with or after the terminal state) is
+  // still spoken after the screen moves on. Gone at once when it failed (the controller already
+  // ended it; unmounting also drops the error boundary's box) or when this phone stops hosting.
+  const hostsVoice =
     VOICE_ENABLED &&
     !app.judgeCam &&
-    bet &&
+    bet !== null &&
     me === 'A' &&
     !isOver(bet.state) &&
-    voiceFailedBet !== bet.bet_id
-      ? (voiceVars.current.get(bet.bet_id) ?? null)
+    voiceFailedBet !== bet.bet_id &&
+    voiceVars.current.has(bet.bet_id);
+  const [voiceBetId, setVoiceBetId] = useState<string | null>(null);
+  useEffect(() => {
+    if (hostsVoice && bet) setVoiceBetId(bet.bet_id);
+  }, [hostsVoice, bet?.bet_id]);
+  useEffect(() => {
+    if (app.judgeCam || app.auth !== 'signedIn') setVoiceBetId(null);
+  }, [app.judgeCam, app.auth]);
+  const voiceBet = voiceBetId ? (rt.hub.get(voiceBetId) ?? null) : null;
+  const voiceBetOver = voiceBet ? isOver(voiceBet.state) : false;
+  useEffect(() => {
+    if (!voiceBetId || !voiceBetOver) return;
+    const tm = setTimeout(
+      () => setVoiceBetId((cur) => (cur === voiceBetId ? null : cur)),
+      VOICE_TAIL_MS,
+    );
+    return () => clearTimeout(tm);
+  }, [voiceBetId, voiceBetOver]);
+  const voice =
+    voiceBet && voiceFailedBet !== voiceBet.bet_id
+      ? (voiceVars.current.get(voiceBet.bet_id) ?? null)
       : null;
-  const voiceLive = voice !== null && voicePhase === 'connected';
+  const voiceLive =
+    voice !== null && voiceBet?.bet_id === bet?.bet_id && voicePhase === 'connected';
 
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
@@ -912,28 +938,28 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   return (
     <View style={styles.root}>
       {screen}
-      {voice && bet ? (
+      {voice && voiceBet ? (
         <PanelErrorBoundary
-          key={bet.bet_id}
+          key={voiceBet.bet_id}
           name="voice"
           onError={(m) => {
             console.warn('[yo] voice', m);
-            voiceFailed(bet.bet_id);
+            voiceFailed(voiceBet.bet_id);
           }}
         >
           <Suspense fallback={null}>
             <JudgeVoice
               rt={rt}
-              betId={bet.bet_id}
+              betId={voiceBet.bet_id}
               dynamicVariables={voice}
-              startAttempt={(n) => rt.api.startAttempt(bet.bet_id, n).then(() => undefined)}
-              micMuted={micMutedFor(bet.state)}
-              onShowTermsCard={() => showTermsCard(bet.bet_id)}
+              startAttempt={(n) => rt.api.startAttempt(voiceBet.bet_id, n).then(() => undefined)}
+              micMuted={micMutedFor(voiceBet.state)}
+              onShowTermsCard={() => showTermsCard(voiceBet.bet_id)}
               onPhase={setVoicePhase}
               onSpeaking={setJudgeSpeaking}
               onFailed={(reason) => {
                 console.warn('[yo] voice failed', reason);
-                voiceFailed(bet.bet_id);
+                voiceFailed(voiceBet.bet_id);
               }}
             />
           </Suspense>

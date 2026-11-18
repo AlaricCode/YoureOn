@@ -28,7 +28,9 @@ export const MAX_QUEUED_CUES = 8;
 /**
  * Bet states in which A's mic is muted: the terms card (hold + Face ID), the lock, and the
  * attempt through the ruling (the room cheers at the camera; the judge must not answer that).
- * One continuous span, because every mute toggle plays an iOS tone (LiveKit #344).
+ * One continuous span, because every mute toggle plays an iOS tone (LiveKit #344). And the
+ * terminal states: the session only lingers to speak the closing [EVENT] line, nobody is
+ * negotiating any more (a "let's do another" would talk to a finished bet).
  */
 export const MUTED_STATES: ReadonlySet<BetState> = new Set([
   'AWAITING_AUTHORIZATIONS',
@@ -36,6 +38,10 @@ export const MUTED_STATES: ReadonlySet<BetState> = new Set([
   'LOCKED',
   'ATTEMPT',
   'JUDGING',
+  'PAID',
+  'VOIDED',
+  'CANCELLED',
+  'EXPIRED',
 ]);
 export const micMutedFor = (state: BetState | null): boolean =>
   state !== null && MUTED_STATES.has(state);

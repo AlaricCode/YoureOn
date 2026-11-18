@@ -238,8 +238,11 @@ describe('judge session: mute, do not end (FINDINGS §4) + user activity', () =>
       'JUDGING',
     ] as const)
       expect([s, micMutedFor(s)]).toEqual([s, true]);
-    for (const s of ['RULED', 'HEARING', 'PAID', 'CANCELLED'] as const)
+    for (const s of ['RULED', 'HEARING', 'APPEALED', 'CONCEDED'] as const)
       expect([s, micMutedFor(s)]).toEqual([s, false]);
+    // The session lingers after the bet ends only to speak the closing [EVENT] line.
+    for (const s of ['PAID', 'VOIDED', 'CANCELLED', 'EXPIRED'] as const)
+      expect([s, micMutedFor(s)]).toEqual([s, true]);
     expect(micMutedFor(null)).toBe(false);
   });
 
