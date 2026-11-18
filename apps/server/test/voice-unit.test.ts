@@ -299,6 +299,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     expect(first.actions.map((a) => `${a.resource}:${a.name}:${a.action}`)).toEqual([
       'secret:yo-tool-secret:create',
       'tool:propose_terms:create',
+      'tool:confirm_terms:create',
       'tool:request_attempt:create',
       'tool:show_terms_card:create',
       'tool:cue:create',
@@ -414,6 +415,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       [
         `PATCH /v1/convai/secrets/${r.secret_id}`,
         `PATCH /v1/convai/tools/${r.tool_ids.propose_terms}`,
+        `PATCH /v1/convai/tools/${r.tool_ids.confirm_terms}`,
       ].sort(),
     );
     expect(store.secrets[0]._value).toBe('new');
@@ -430,6 +432,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     const plan = dryRunPlan(OPTS);
     expect(plan.map((a) => `${a.method} ${a.path}`)).toEqual([
       'POST /v1/convai/secrets',
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',

@@ -32,10 +32,10 @@ export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
 
 /**
  * Webhook tools registered today. Each name here must have a live `/el/tools/<name>` handler,
- * otherwise a call would hit a 404 mid-conversation. propose_terms is live (D0-J2);
- * confirm_terms lands in D1-J1, the rest later (FINDINGS §3.10 "later open_hearing, …").
+ * otherwise a call would hit a 404 mid-conversation. propose_terms (D0-J2) and confirm_terms
+ * (D1-J1) are live; the rest later (FINDINGS §3.10 "later open_hearing, …").
  */
-export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = ['propose_terms'];
+export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = ['propose_terms', 'confirm_terms'];
 export const CLIENT_TOOLS: readonly ClientToolName[] = [
   'request_attempt',
   'show_terms_card',
