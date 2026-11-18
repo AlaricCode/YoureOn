@@ -77,11 +77,16 @@ export function createServerKeeper(
   for (const t of chainLifecycleTasks(chain)) keeper.register(t);
   // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
   keeper.register(resolveDueTask(chain));
-  // Every 10 min: one chain.unhealthy line when anything needs a human (boot logs it always).
+  // Every 10 min: one chain.unhealthy line when anything needs a human. Its first run (the boot
+  // pass) is skipped: boot-reconcile already logged chain.boot_health.
+  let booted = false;
   keeper.register({
     name: 'chain-health',
     everyMs: HEALTH_LOG_MS,
-    run: () => logChainHealth(chain),
+    run: async () => {
+      if (!booted) return void (booted = true);
+      await logChainHealth(chain);
+    },
   });
   return keeper;
 }
