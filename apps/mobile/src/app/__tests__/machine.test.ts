@@ -21,6 +21,7 @@ import {
 import {
   authorizeRequest,
   BET,
+  danceEnvelope,
   DEVICE_A,
   DEVICE_CAM,
   envelope,
@@ -250,6 +251,65 @@ describe('route for a bet (server state drives the screen)', () => {
       routeForBet(A, fold(fromSnapshot(snapshot()), stateEv('CANCELLED', 3, 'declined'))),
     ).toBe('lockEnded');
     expect(routeForBet(A, fold(fromSnapshot(snapshot()), stateEv('EXPIRED', 3)))).toBe('lockEnded');
+  });
+});
+
+describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
+  const A = signedIn();
+  const B = signedIn(ME_B, 'dddddddd-dddd-4ddd-8ddd-dddddddddd0b');
+  const cam = appReducer(signedIn(ME_A, DEVICE_CAM), { type: 'judge_cam', on: true });
+  const ack = (s: AppState) => appReducer(s, { type: 'lock_ack', bet_id: BET });
+  const locked = (my_party: 'A' | 'B' = 'A') =>
+    fromSnapshot(snapshot({ state: 'LOCKED', envelope: danceEnvelope(), my_party, last_seq: 8 }));
+  const started = (recorder: string) =>
+    ev(
+      'attempt.started',
+      {
+        attempt_no: 1,
+        performer: 'A',
+        max_ms: 20_000,
+        recorder_device_id: recorder,
+        go_at: '2026-11-21T18:07:00.000Z',
+      },
+      10,
+    );
+
+  it('the locked card first; then A records and B watches', () => {
+    expect(routeForBet(A, locked())).toBe('terms');
+    expect(routeForBet(ack(A), locked())).toBe('dance');
+    expect(routeForBet(ack(B), locked('B'))).toBe('danceWatch');
+  });
+
+  it('two phones: A filming itself stays on the dance screen through the judging', () => {
+    let m = fold(locked(), stateEv('ATTEMPT', 9), started(DEVICE_A));
+    expect(routeForBet(ack(A), m)).toBe('dance');
+    m = fold(m, stateEv('JUDGING', 11));
+    expect(routeForBet(ack(A), m)).toBe('dance');
+    const b = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_A), stateEv('JUDGING', 11));
+    expect(routeForBet(ack(B), b)).toBe('danceWatch');
+  });
+
+  it("a judge cam in the room films it: no terms card there, and A's phone watches", () => {
+    expect(routeForBet(cam, locked())).toBe('dance');
+    const m = fold(locked(), stateEv('ATTEMPT', 9), started(DEVICE_CAM));
+    expect(routeForBet(cam, m)).toBe('dance');
+    expect(routeForBet(ack(A), m)).toBe('danceWatch');
+    // Before the lock the judge cam stands by, as for any bet.
+    const drafting = fromSnapshot(snapshot({ state: 'DRAFTING', envelope: danceEnvelope() }));
+    expect(routeForBet(cam, drafting)).toBe('judgeCam');
+  });
+
+  it('the ruling, GG and payout are the usual screens', () => {
+    const ruled = fold(locked(), stateEv('RULED', 12));
+    expect(routeForBet(ack(A), ruled)).toBe('ruling');
+    expect(routeForBet(ack(B), fold(locked('B'), stateEv('VOIDED', 12)))).toBe('ruling');
+    expect(routeForBet(ack(A), fold(ruled, stateEv('PAID', 13)))).toBe('payout');
+    expect(routeForBet(cam, fold(ruled, stateEv('PAID', 13)))).toBe('payout');
+  });
+
+  it('other bets keep their routes (the bottle flip after the lock)', () => {
+    const m = fromSnapshot(snapshot({ state: 'LOCKED', envelope: envelope() }));
+    expect(routeForBet(ack(A), m)).toBe('live');
   });
 });
 

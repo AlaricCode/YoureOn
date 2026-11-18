@@ -14,7 +14,7 @@ import { AppealResult, AppealVote } from './appeal';
 import { AuthorizationMethod, AuthorizeRequest, TxKind } from './authorization';
 import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
 import { ChainEvents } from './chain-events';
-import { CameraEvidence, GeminiSettlementRecord } from './evidence';
+import { CameraEvidence, DanceEvidence, GeminiSettlementRecord } from './evidence';
 import { GeminiMarketSnapshot } from './gemini';
 import { BetGgPayload, ReviewClosedPayload, ReviewRequestedPayload } from './gg';
 import { HearingRuling, HearingTrigger, HearingTurn } from './hearing';
@@ -25,6 +25,33 @@ import { Ruling } from './ruling';
 import { TermsEnvelope } from './terms';
 
 export const REALTIME_ENVELOPE_VERSION = 1 as const;
+
+/**
+ * DANCE-OFF §5: Claude's check of a dance round (never a winner). `skipped` (verdict 'skipped'):
+ * the LLM failed or timed out, so the round settled on the score with a canned line.
+ */
+export const DanceValidation = z
+  .object({
+    verdict: z.enum(['valid', 'invalid', 'skipped']),
+    notes: z.string().max(400),
+    skipped: z.boolean(),
+  })
+  .refine((v) => v.skipped === (v.verdict === 'skipped'), {
+    message: "skipped iff verdict = 'skipped'",
+    path: ['skipped'],
+  });
+export type DanceValidation = z.infer<typeof DanceValidation>;
+
+/** DANCE-OFF §5 `dance.scored`: in the same commit as ruling.issued (the market.settled precedent). */
+export const DanceScoredPayload = z.object({
+  evidence: DanceEvidence,
+  /** = hashJcs(evidence) = the ruling's evidence_hash. */
+  evidence_hash: Hex32,
+  validation: DanceValidation,
+  /** The cleaned announcer line (= the ruling's reason). */
+  announcer_line: z.string().max(280),
+});
+export type DanceScoredPayload = z.infer<typeof DanceScoredPayload>;
 
 const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType>(
   type: T,
@@ -54,6 +81,10 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
       room_id: Uuid,
       /** API-CONTRACT §3.4 NEW: the pair's record before this bet (A = challenger). */
       rivalry: StageRivalry.optional(),
+      /** DANCE-OFF §7 double or nothing: the terminal bet this rematch follows. */
+      rematch_of: BetId.optional(),
+      /** DANCE-OFF §7: 2 × the old per-side stake, capped at max_stake (dollars). */
+      suggested_stake_usd: z.number().positive().optional(),
     }),
   ),
   /** API-CONTRACT §3.4 NEW: B tapped accept/decline on the invite (not an authorization). */
@@ -165,6 +196,11 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
     'server',
     z.object({ record: GeminiSettlementRecord, evidence_hash: Hex32 }),
   ),
+  /**
+   * NEW (Dance Off): the server re-scored the round from the uploaded PoseSeries; ruling.issued
+   * follows in the same commit (evidence_hash = hashJcs(evidence)).
+   */
+  env('dance.scored', 'server', DanceScoredPayload),
   env('tx.submitted', 'server', z.object({ kind: TxKind, signature: Signature })),
   env(
     'tx.confirmed',

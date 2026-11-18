@@ -13,6 +13,7 @@
 import { z } from 'zod/v4';
 import { MAX_STAKE, MIN_STAKE } from '../constants';
 import { parseUsd } from '../money';
+import { parseDanceTermsRoutine } from '../dance/terms';
 import { checkOddsStakes } from '../odds-math';
 import { normTextDeep } from '../primitives';
 import {
@@ -161,11 +162,15 @@ export const PROPOSE_TERMS_DESCRIPTION =
   'Send the bet as terms. Call it once the bet is clear, again after every agreed edge case or change, ' +
   'and for any bet that sounds unsafe (the server decides refusals). Speak the returned `say` exactly.';
 
-/** What ElevenLabs POSTs to /el/tools/propose_terms. Unknown keys are stripped, not errors. */
+/**
+ * What ElevenLabs POSTs to /el/tools/propose_terms. Unknown keys are stripped, not errors.
+ * `type` also takes 'dance_off' (DANCE-OFF §1: the /terms/dance projection runs through the same
+ * pipeline), which PROPOSE_TERMS_BODY_SCHEMA deliberately does NOT offer the voice agent.
+ */
 export const ProposeTermsArgs = z.object({
   conversation_id: z.string().min(1).max(128),
   bet_id: z.string().min(1).max(64),
-  type: z.enum(['skill', 'real_world']),
+  type: z.enum(['skill', 'real_world', 'dance_off']),
   claim: z.string(),
   performer: z.enum(['A', 'B', 'none']),
   yes_party: z.enum(['A', 'B']),
@@ -283,6 +288,19 @@ export function mapProposeTermsArgs(raw: unknown): MapResult {
     if (t.amount_b !== null)
       cross.push({ path: 'stake_b_usd', message: 'real_world => empty (Gemini sets the split)' });
   }
+  if (t.type === 'dance_off') {
+    // DANCE-OFF §1: both dance (no performer), "A out-dances B" (yes_party A), one round, even
+    // money, and success_criteria[0] names a bundled routine by id, version and sha256.
+    if (t.performer !== null) cross.push({ path: 'performer', message: "dance_off => 'none'" });
+    if (t.yes_party !== 'A') cross.push({ path: 'yes_party', message: "dance_off => 'A'" });
+    if (t.attempts.rule !== 'single')
+      cross.push({ path: 'attempts', message: "dance_off => count 1, 'single'" });
+    if (t.amount_b !== null)
+      cross.push({ path: 'stake_b_usd', message: 'dance_off => empty (even money)' });
+    const routine = parseDanceTermsRoutine(t);
+    if (!routine.ok)
+      cross.push({ path: 'success_criteria', message: `dance_off routine: ${routine.reason}` });
+  }
   if (cross.length) return { ok: false, issues: cross };
   return { ok: true, proposal: t };
 }
@@ -303,7 +321,7 @@ export function stakeIssue(p: TermsProposal, maxStake: bigint = MAX_STAKE): Draf
   return null;
 }
 
-/** Fields still to agree. v1 asks for at least one edge case on a skill bet (BRIEF §3). */
+/** Fields still to agree: one edge case on a skill bet in v1 (BRIEF §3); none for a dance off. */
 export function missingFields(p: TermsProposal): Array<keyof TermsProposal> {
   return p.type === 'skill' && p.edge_cases.length === 0 ? ['edge_cases'] : [];
 }

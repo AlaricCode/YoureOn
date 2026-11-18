@@ -16,7 +16,7 @@ import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import type { HearingRuling } from '@youre-on/shared/hearing';
 import type { MicroUsdc } from '@youre-on/shared/money';
 import type { Party, UserRef } from '@youre-on/shared/primitives';
-import type { RealtimeEvent } from '@youre-on/shared/realtime';
+import type { DanceScoredPayload, RealtimeEvent } from '@youre-on/shared/realtime';
 import type { Ruling } from '@youre-on/shared/ruling';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
 
@@ -77,6 +77,12 @@ export interface BetModel {
   review: GgFields['review'];
   /** Odds offers and agreement (odds.* events, app/odds). */
   odds: OddsState;
+  /** Dance Off: the server's re-scored round and Claude's check (dance.scored), with the ruling. */
+  danceScored: DanceScoredPayload | null;
+  /** Double or nothing (bet.invited rematch_of, or this phone's rematch): the bet it follows. */
+  rematchOf: string | null;
+  /** Double or nothing: the stake (dollars per side) the pickers default to. */
+  suggestedStakeUsd: number | null;
 }
 
 export const emptyBet = (bet_id: string, my_party: Party | null = null): BetModel => ({
@@ -114,6 +120,9 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   gg: null,
   review: null,
   odds: emptyOdds,
+  danceScored: null,
+  rematchOf: null,
+  suggestedStakeUsd: null,
 });
 
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
@@ -168,6 +177,8 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
         challenger: e.payload.challenger,
         room_id: e.payload.room_id,
         my_party: m.my_party ?? 'B',
+        rematchOf: e.payload.rematch_of ?? m.rematchOf,
+        suggestedStakeUsd: e.payload.suggested_stake_usd ?? m.suggestedStakeUsd,
       };
     case 'bet.invite_answered':
       return { ...base, inviteAnswer: e.payload.answer };
@@ -181,8 +192,11 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
         pending_tx: p.pending_tx,
         end_reason: p.reason ?? base.end_reason,
       };
-      // A new attempt after REDO clears the last ruling's screen.
-      if (p.state === 'ATTEMPT' && m.state !== 'ATTEMPT') next.ruling = null;
+      // A new attempt after REDO clears the last ruling's screen (and a dance round's score).
+      if (p.state === 'ATTEMPT' && m.state !== 'ATTEMPT') {
+        next.ruling = null;
+        next.danceScored = null;
+      }
       return { ...next, ...foldGg(m, e) };
     }
     case 'terms.proposed': {
@@ -257,6 +271,8 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       return { ...base, market: e.payload.snapshot };
     case 'market.settled':
       return { ...base, settlement: e.payload.record };
+    case 'dance.scored':
+      return { ...base, danceScored: e.payload };
     case 'appeal.vote': {
       const v = e.payload.vote;
       const votes = [...m.appealVotes.filter((x) => x.seat !== v.seat), v];

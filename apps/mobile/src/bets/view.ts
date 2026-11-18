@@ -8,6 +8,7 @@ import {
   type AppealVote,
   type PanelProvider,
 } from '@youre-on/shared/appeal';
+import { DANCE_ROUND_SECONDS, parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import { formatUsd, type MicroUsdc } from '@youre-on/shared/money';
 import { ratioLabel, toWinLine } from '@youre-on/shared/odds-math';
 import { formatPrice } from '@youre-on/shared/settlement';
@@ -26,14 +27,15 @@ export interface BetView {
   me: Party;
   myName: string;
   theirName: string;
-  /** Who performs (skill bets); null for market bets. */
+  /** Who performs (skill bets); null for market bets and dance offs (both dance). */
   performerName: string | null;
   claim: string;
-  kind: 'skill' | 'market';
+  /** Terms.type as the screens branch on it: skill, the Gemini market, or a Dance Off. */
+  kind: BetKind;
   success: readonly string[];
   failure: readonly string[];
   edgeCases: readonly EdgeCaseView[];
-  /** "Camera" or "Gemini market". */
+  /** "Camera", "Gemini market" or "Pose score" (a dance off). */
   evidence: string;
   myStake: MicroUsdc;
   theirStake: MicroUsdc;
@@ -52,9 +54,22 @@ export interface BetView {
   lineUsd: string | null;
   deadline: string;
   termsCode: string;
-  /** Attempts line: "1 try", "Best of 3". */
+  /** Attempts line: "1 try", "Best of 3"; a dance off's round: "15 seconds". */
   attempts: string;
+  /** Dance offs: the bound routine's title ("Wave Pop"), verified against the bundled one. */
+  routineTitle: string | null;
 }
+
+export type BetKind = 'skill' | 'market' | 'dance';
+
+export const kindOf = (t: Pick<Terms, 'type'>): BetKind =>
+  t.type === 'skill' ? 'skill' : t.type === 'dance_off' ? 'dance' : 'market';
+
+const EVIDENCE: Readonly<Record<BetKind, string>> = {
+  skill: 'Camera',
+  market: 'Gemini market',
+  dance: 'Pose score',
+};
 
 const ATTEMPTS: Record<Terms['attempts']['rule'], (n: number) => string> = {
   single: () => '1 try',
@@ -72,17 +87,25 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
   const myPct = Number((mine * 100n + pot / 2n) / pot);
   const atOdds = terms.type === 'skill' && terms.stakes.a !== terms.stakes.b;
   const ratio = atOdds ? ratioLabel(mine, BigInt(stake(them))) : null;
+  const kind = kindOf(terms);
+  // A dance off's routine line ("Routine wave-pop v1 sha256:…") reads as the routine's title,
+  // only when it is the bundled routine the scorer uses (id, version and hash all match).
+  const routine = kind === 'dance' ? parseDanceTermsRoutine(terms) : null;
+  const routineTitle = routine?.ok ? routine.routine.title : null;
+  const success = routineTitle
+    ? [`${routineTitle}, ${DANCE_ROUND_SECONDS} seconds`, ...terms.success_criteria.slice(1)]
+    : terms.success_criteria;
   return {
     me,
     myName: party(me).display_name,
     theirName: party(them).display_name,
     performerName: terms.performer ? party(terms.performer).display_name : null,
     claim: terms.claim,
-    kind: terms.type === 'skill' ? 'skill' : 'market',
-    success: terms.success_criteria,
+    kind,
+    success,
     failure: terms.failure_criteria,
     edgeCases: terms.edge_cases.map(({ question, answer }) => ({ question, answer })),
-    evidence: terms.evidence_source === 'camera' ? 'Camera' : 'Gemini market',
+    evidence: EVIDENCE[kind],
     myStake: stake(me),
     theirStake: stake(them),
     myStakeUsd: formatUsd(stake(me)),
@@ -95,7 +118,11 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
     lineUsd: terms.market?.strike.value ? formatPrice(terms.market.strike.value) : null,
     deadline: terms.deadline,
     termsCode: termsCode(termsHash),
-    attempts: ATTEMPTS[terms.attempts.rule](terms.attempts.count),
+    attempts:
+      kind === 'dance'
+        ? `${DANCE_ROUND_SECONDS} seconds`
+        : ATTEMPTS[terms.attempts.rule](terms.attempts.count),
+    routineTitle,
   };
 }
 
@@ -131,7 +158,8 @@ export const RESULT_TITLE: Readonly<Record<MyResult, string>> = {
 
 /**
  * The loser may appeal a camera ruling until `appeal_deadline − 1 s` (ESCROW §8.3); market
- * bets never show "I appeal!" (SCHEMAS §7).
+ * bets never show "I appeal!" (SCHEMAS §7), nor do dance offs (the score is deterministic,
+ * DANCE-OFF §5).
  */
 export function canAppeal(
   view: Pick<BetView, 'kind'>,

@@ -1,0 +1,278 @@
+// The Dance Off display (DANCE-OFF §6.3). This is what the HDMI display shows (iOS mirroring),
+// so it is laid out like a broadcast: the two players' names and live match meters on top, the
+// beat bar, then two equal 9:16 panels side by side: the MIRRORED reference (the routine's video
+// when there is one, else its animated skeleton) and the live camera with A (green) and B (white)
+// drawn on the dancers, PERFECT / GOOD / MISS popups over each player's half, and the 3-2-1-GO
+// count-in over both. It fits portrait and landscape: the panels take the largest equal size the
+// space allows.
+import type { RoutineData } from '@youre-on/shared/dance/routine';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
+import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+
+import { importSafely } from '../app/importSafely';
+import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
+import { DANCE_COPY, dt } from './copy';
+import { useFrameClock } from './hooks';
+import { CameraSkeletons, DebugReadout, LiveMeters, PopupLayer } from './LiveParts';
+import { routineMedia } from './media';
+import type { LiveStore } from './model/liveStore';
+import { fitPanels, type Size } from './model/overlay';
+import { referencePoseAt, upcomingKeyMove } from './model/reference';
+import { beatAt, countInLabel, type RoundState } from './model/round';
+import { SkeletonLayer } from './SkeletonLayer';
+import { REFERENCE_TINT } from './theme';
+
+/** expo-video, only when a routine has a reference clip (none do yet: see media.ts). */
+const ReferenceVideo = lazy(() => importSafely(() => import('./ReferenceVideo')));
+
+const PANEL_GAP = space.x1;
+/** A beat flash fades over this long. */
+const FLASH_MS = 180;
+const BEATS_PER_BAR = 4;
+
+const nineSixteen = (r: Pick<RoutineData, 'w' | 'h'>) => r.w / r.h;
+
+// ---------------------------------------------------------------------------------------
+// Reference
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The mirrored reference. Before t0 it holds the first pose; from t0 (`startAt`, the same tick
+ * as startRound) it plays: the skeleton follows the clock at ~30 fps.
+ */
+export function ReferencePanel({
+  routine,
+  startAt,
+  size,
+}: {
+  routine: RoutineData;
+  /** The round's t0 on the nowMs clock, or null (not started). */
+  startAt: number | null;
+  size: Size;
+}) {
+  const media = routineMedia(routine);
+  const playing = startAt !== null;
+  const now = useFrameClock(playing && media.video === null, 30);
+  const elapsed = startAt === null ? 0 : Math.max(0, now - startAt);
+  const done = elapsed > routine.duration_ms;
+  if (media.video !== null) {
+    return (
+      <Suspense fallback={null}>
+        <ReferenceVideo source={media.video} startAt={startAt} />
+      </Suspense>
+    );
+  }
+  const k = referencePoseAt(routine, Math.min(elapsed, routine.duration_ms));
+  const beat = playing ? beatAt(routine, elapsed) : null;
+  const flash = beat ? Math.max(0, 1 - beat.sinceMs / FLASH_MS) : 0;
+  return (
+    <>
+      <View style={[StyleSheet.absoluteFill, styles.flash, { opacity: flash * 0.5 }]} />
+      <SkeletonLayer
+        size={size}
+        image={{ width: routine.w, height: routine.h }}
+        figures={[{ k, tint: REFERENCE_TINT, mirrored: true, opacity: done ? 0.4 : 1 }]}
+      />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// Beat bar: four beat dots (the current one lit, flashing on the beat), the routine's progress,
+// and the next key move.
+// ---------------------------------------------------------------------------------------
+
+export function BeatBar({ routine, startAt }: { routine: RoutineData; startAt: number | null }) {
+  const running = startAt !== null;
+  const now = useFrameClock(running, 30);
+  const elapsed = startAt === null ? 0 : Math.max(0, now - startAt);
+  const beat = running ? beatAt(routine, elapsed) : null;
+  const progress = Math.min(1, elapsed / routine.duration_ms);
+  const next = running ? upcomingKeyMove(routine, elapsed) : null;
+  const left = Math.max(0, Math.ceil((routine.duration_ms - elapsed) / 1000));
+  return (
+    <View style={styles.beatBar}>
+      <View style={styles.beatRow}>
+        <View style={styles.beatDots}>
+          {Array.from({ length: BEATS_PER_BAR }, (_, i) => {
+            const on = beat !== null && beat.index % BEATS_PER_BAR === i;
+            const flash = on && beat ? Math.max(0, 1 - beat.sinceMs / (FLASH_MS * 2)) : 0;
+            return (
+              <View
+                key={i}
+                style={[
+                  styles.beatDot,
+                  on && styles.beatDotOn,
+                  on && { transform: [{ scale: 1 + 0.35 * flash }] },
+                ]}
+              />
+            );
+          })}
+        </View>
+        <View style={styles.nextMove}>
+          {next ? (
+            <>
+              <Text style={styles.nextLabel}>{dt(DANCE_COPY.nextMove)}</Text>
+              <Text style={styles.nextName} numberOfLines={1}>
+                {next.name}
+              </Text>
+            </>
+          ) : null}
+        </View>
+        <Text style={styles.clock}>{running ? `0:${String(left).padStart(2, '0')}` : '0:15'}</Text>
+      </View>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// Count-in: 3, 2, 1 on the beat, then GO (green), over both panels.
+// ---------------------------------------------------------------------------------------
+
+export function CountInOverlay({
+  round,
+  beatMs,
+}: {
+  round: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>;
+  beatMs: number;
+}) {
+  const active = round.phase === 'countIn' || round.phase === 'dancing';
+  const now = useFrameClock(active, 30);
+  const label = active ? countInLabel(round, now, beatMs) : null;
+  if (label === null) return null;
+  const go = label === 'GO';
+  const beatStart =
+    round.phase === 'countIn' && round.countInAt !== null
+      ? round.countInAt + Math.floor((now - round.countInAt) / beatMs) * beatMs
+      : (round.goAt ?? now);
+  const age = Math.max(0, now - beatStart);
+  // Each numeral lands big and settles in one beat (scale 1.15 → 1), no bounce.
+  const scale = 1 + 0.15 * Math.max(0, 1 - age / Math.min(beatMs, 300));
+  return (
+    <View style={[StyleSheet.absoluteFill, styles.countIn]} pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, styles.scrim]} />
+      <Text
+        style={[
+          styles.countNumeral,
+          go && { color: palette.accent },
+          { transform: [{ scale }] },
+        ]}
+        accessibilityLiveRegion="assertive"
+      >
+        {go ? dt(DANCE_COPY.go) : label}
+      </Text>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// The whole display
+// ---------------------------------------------------------------------------------------
+
+export function DanceStage({
+  routine,
+  names,
+  me,
+  store,
+  round,
+  beatMs,
+  startAt,
+  camera,
+  cameraOverlay,
+  debug,
+  syncOffsetMs,
+  footer,
+}: {
+  routine: RoutineData;
+  names: { a: string; b: string };
+  me?: 'A' | 'B' | undefined;
+  store: LiveStore;
+  round: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>;
+  beatMs: number;
+  /** t0 on the nowMs clock (reference playback, the beat bar), null before GO. */
+  startAt: number | null;
+  /** The live camera view (DancePoseView), or a placeholder. Fills the camera panel. */
+  camera: ReactNode;
+  /** Extra layers over the camera panel (the framing guide). */
+  cameraOverlay?: ReactNode;
+  debug: boolean;
+  syncOffsetMs: number;
+  footer?: ReactNode;
+}) {
+  const [box, setBox] = useState<Size>({ width: 0, height: 0 });
+  const onLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (width !== box.width || height !== box.height) setBox({ width, height });
+  };
+  const panel = fitPanels(box, nineSixteen(routine), PANEL_GAP);
+  return (
+    <View style={styles.stage}>
+      <LiveMeters store={store} names={names} me={me} />
+      <BeatBar routine={routine} startAt={startAt} />
+      <View style={styles.panels} onLayout={onLayout}>
+        <View style={[styles.panel, panel]}>
+          <ReferencePanel routine={routine} startAt={startAt} size={panel} />
+        </View>
+        <View style={[styles.panel, panel]}>
+          {camera}
+          <CameraSkeletons store={store} size={panel} />
+          <PopupLayer store={store} size={panel} />
+          {cameraOverlay}
+        </View>
+        <CountInOverlay round={round} beatMs={beatMs} />
+        {debug ? (
+          <View style={styles.debugSlot} pointerEvents="none">
+            <DebugReadout store={store} syncOffsetMs={syncOffsetMs} />
+          </View>
+        ) : null}
+      </View>
+      {footer}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  stage: { flex: 1, gap: half.x15, paddingHorizontal: half.x15, paddingTop: space.x1 },
+  panels: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: PANEL_GAP,
+  },
+  panel: {
+    borderRadius: radius.lg,
+    backgroundColor: palette.surface,
+    overflow: 'hidden',
+  },
+  flash: { backgroundColor: palette.fill },
+  beatBar: { gap: space.x1 },
+  beatRow: { flexDirection: 'row', alignItems: 'center', gap: space.x2 },
+  beatDots: { flexDirection: 'row', gap: space.x1 },
+  beatDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: palette.fill },
+  beatDotOn: { backgroundColor: palette.accent },
+  nextMove: { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: space.x1 },
+  nextLabel: { ...type.section },
+  nextName: { ...type.heading, flexShrink: 1 },
+  clock: { ...type.amount, fontVariant: TABULAR },
+  progressTrack: {
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: palette.fill,
+    overflow: 'hidden',
+  },
+  progressFill: { height: '100%', backgroundColor: palette.accent },
+  countIn: { alignItems: 'center', justifyContent: 'center' },
+  scrim: { backgroundColor: palette.black, opacity: 0.45 },
+  countNumeral: {
+    ...type.moment,
+    fontSize: 160,
+    lineHeight: 176,
+    letterSpacing: -4,
+    color: palette.text,
+  },
+  debugSlot: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+});

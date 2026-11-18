@@ -309,6 +309,13 @@ describe('the voice host mic in RULED: decisive camera rulings only', () => {
     const gemini = { ...m, envelope: { terms: { evidence_source: 'gemini' } } };
     expect(reviewable(gemini)).toBe(false);
   });
+  it('never a Dance Off (camera, but its score is deterministic)', () => {
+    const m = ruled('A');
+    const dance = { ...m, envelope: { terms: { evidence_source: 'camera', type: 'dance_off' } } };
+    expect(reviewable(dance)).toBe(false);
+    const skill = { ...m, envelope: { terms: { evidence_source: 'camera', type: 'skill' } } };
+    expect(reviewable(skill)).toBe(true);
+  });
 });
 
 describe('the GG payout', () => {

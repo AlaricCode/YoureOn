@@ -497,3 +497,12 @@ describe('a locked Gemini bet on the phone', () => {
       expect(checkCopy(t(COPY.market[k]), 'label')).toEqual([]);
   });
 });
+
+describe('a double or nothing on the Bitcoin panel', () => {
+  it('init starts on the chip the rematch picked', () => {
+    const s = marketReducer(initialMarket, { type: 'init', bet_id: 'b9', stakeUsd: 10 });
+    expect(s.stakeUsd).toBe(10);
+    const plain = marketReducer(initialMarket, { type: 'init', bet_id: 'b9' });
+    expect(plain.stakeUsd).toBe(DEFAULT_MARKET_STAKE_USD);
+  });
+});

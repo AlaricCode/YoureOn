@@ -20,7 +20,7 @@ import {
   type TypedEvent,
   type TypedState,
 } from '../typedTerms';
-import { btcCloser } from '../../preview/data';
+import { btcCloser, danceOff } from '../../preview/data';
 import { BET, envelope, ev, snapshot } from './fixtures';
 
 const HASH = 'ab'.repeat(32);
@@ -517,5 +517,36 @@ describe('odds in the typed form', () => {
     );
     expect(r).toEqual({ ok: false, note: t(COPY.odds.pending), freshKey: true });
     expect(checkCopy(t(COPY.odds.pending), 'body')).toEqual([]);
+  });
+});
+
+describe('typed terms and the other bet kinds', () => {
+  it('a Dance Off card on screen is not the typed form\'s (the dance panel holds it)', () => {
+    const d = danceOff('Logan', 'Jake');
+    expect(typedCardOf({ terms: d.terms, terms_hash: d.termsHash })).toBeNull();
+  });
+
+  it('a double or nothing starts the form on the suggested stake, even off the chips', () => {
+    const s = run(initialTyped, {
+      type: 'init',
+      bet_id: BET,
+      bName: 'Jake',
+      typed: true,
+      stakeUsd: 2,
+    });
+    expect(s.stakeUsd).toBe(2);
+    expect(s.odds.baseUsd).toBe(2);
+    const picked = typedStakes(s);
+    expect(picked.ok && picked.stakes).toEqual({ a: '2000000', b: '2000000' });
+    // Whole dollars only (a market's $4.96 is $4); without one, the default chip.
+    const odd = run(initialTyped, {
+      type: 'init',
+      bet_id: BET,
+      bName: 'Jake',
+      typed: true,
+      stakeUsd: 4.96,
+    });
+    expect(odd.stakeUsd).toBe(4);
+    expect(typedOn().stakeUsd).toBe(DEFAULT_STAKE_USD);
   });
 });

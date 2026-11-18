@@ -8,7 +8,8 @@
 // its cited frame, the appeal window, the payout) and keeps the latest Gemini `stage.market`
 // snapshot plus a short index-price history for the odds widget. Gemini bets (Beat 6) also keep
 // their own latest market.tick (the live price of THEIR contract, which outlives the relay's
-// rollover) and Gemini's settled record (market.settled). A REST BetSnapshot
+// rollover) and Gemini's settled record (market.settled); a dance off keeps the server's re-score
+// of its round (dance.scored: both scores, the per-move grades, Claude's check). A REST BetSnapshot
 // (GET /v1/bets/:id) seeds a view on cold start; later events win over it.
 //
 // The card is always the fold of the bet's events in seq order, with the latest REST snapshot
@@ -32,6 +33,7 @@ import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
 import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
+import { danceViewOf, type DanceView } from './dance';
 import { foldGg, type GgView, type ReviewView } from './gg';
 import { foldOddsEvent, type OddsView } from './odds-state';
 
@@ -167,6 +169,8 @@ export interface BetView {
   paid_at: string | null;
   /** Gemini bets: Gemini's settled (or voided) contract, the ruling's evidence. */
   settlement: { record: GeminiSettlementRecord; evidence_hash: string } | null;
+  /** Dance offs: the server's re-score of the round (dance.scored, beside ruling.issued). */
+  dance: DanceView | null;
   closed: boolean;
   last_judge_line: string | null;
   /**
@@ -346,6 +350,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     payout: null,
     paid_at: null,
     settlement: null,
+    dance: null,
     closed: false,
     last_judge_line: null,
     caption: null,
@@ -630,6 +635,8 @@ function foldCard(b: BetView, e: RealtimeEvent, at: number): BetView {
         ...v,
         settlement: { record: e.payload.record, evidence_hash: e.payload.evidence_hash },
       };
+    case 'dance.scored':
+      return { ...v, dance: danceViewOf(e.payload) };
     case 'chain.BetResolved':
       return {
         ...v,
