@@ -7,7 +7,9 @@
 //
 // This suite runs in its OWN database (<DATABASE_URL db>_money): it owns nonce_pool and calls
 // POST /v1/demo/reset (which deletes every non-seed bet). Skips without DATABASE_URL or escrow.so.
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
@@ -786,4 +788,42 @@ run('money path hardening over LiteSVM', () => {
       await keeper.stop();
     }
   });
+
+  it('scripts/demo-check.ts against this server: GO per item, exit 0; a wrong key is NO-GO, exit 1', async () => {
+    await lc.lock.ensurePool(rt);
+    const runCheck = (key: string) =>
+      new Promise<{ code: number | null; out: string }>((resolve) => {
+        const env = { ...process.env };
+        // Never reach a real RPC / QuickNode from a test.
+        delete env.SOLANA_RPC_URL;
+        delete env.QN_API_KEY;
+        delete env.QN_STREAM_ID;
+        delete env.DEMO_ADMIN_TOKEN;
+        const child = spawn(
+          'npx',
+          ['tsx', 'scripts/demo-check.ts', '--server', ctx.base, '--demo-key', key],
+          { cwd: fileURLToPath(new URL('../../../', import.meta.url)), env },
+        );
+        let out = '';
+        child.stdout.on('data', (d) => (out += String(d)));
+        child.stderr.on('data', (d) => (out += String(d)));
+        child.on('close', (code) => resolve({ code, out }));
+      });
+    // The server clock of this suite runs hours ahead (advance()); demo-check compares it with
+    // this machine's, so line it up for the run.
+    const saved = offset;
+    offset = 0;
+    const good = await runCheck(ADMIN).finally(() => (offset = saved));
+    expect(good.out).toMatch(/^GO {5}server\.health/m);
+    expect(good.out).toMatch(/^GO {5}chain\.nonce_pool +3 free \/ 3/m);
+    expect(good.out).toMatch(/^GO {5}chain\.fee_payer_sol/m);
+    expect(good.out).toMatch(/^SKIP {3}rpc /m);
+    expect(good.out).toMatch(/^SKIP {3}stream\.status/m);
+    expect(good.out).toMatch(/^GO: /m);
+    expect(good.code).toBe(0);
+    const bad = await runCheck('not-the-key');
+    // (server.clock may be NO-GO here too: the suite's clock is ahead again.)
+    expect(bad.out).toMatch(/^NO-GO {2}demo\.health +HTTP 404/m);
+    expect(bad.code).toBe(1);
+  }, 60_000);
 });
