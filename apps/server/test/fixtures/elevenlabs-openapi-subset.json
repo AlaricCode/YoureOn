@@ -1,0 +1,2445 @@
+{
+  "$comment": "ElevenLabs OpenAPI 1.0, read 2026-11-18 from a saved copy of https://api.elevenlabs.io/openapi.json, pruned by scripts/el-openapi-subset.ts to the bodies scripts/el-agent.ts sends. Do not edit by hand.",
+  "info": { "version": "1.0" },
+  "paths": {
+    "/v1/convai/secrets": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["type", "name", "value"],
+                "title": "PostWorkspaceSecretRequest",
+                "properties": {
+                  "type": { "type": "string", "const": "new", "title": "Type" },
+                  "name": { "type": "string", "title": "Name" },
+                  "value": { "type": "string", "title": "Value" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convai/secrets/{secret_id}": {
+      "patch": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["type", "name", "value"],
+                "title": "PatchWorkspaceSecretRequest",
+                "properties": {
+                  "type": { "type": "string", "const": "update", "title": "Type" },
+                  "name": { "type": "string", "title": "Name" },
+                  "value": { "type": "string", "title": "Value" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convai/tools": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tool_config"],
+                "title": "ToolRequestModel",
+                "properties": {
+                  "tool_config": {
+                    "title": "Tool Config",
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": ["name", "description", "api_schema"],
+                        "title": "WebhookToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "webhook", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs",
+                            "minimum": 5,
+                            "maximum": 300
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "dynamic_variables": {},
+                          "execution_mode": {
+                            "type": "string",
+                            "enum": ["immediate", "post_tool_speech", "async"],
+                            "title": "ToolExecutionMode"
+                          },
+                          "api_schema": {
+                            "type": "object",
+                            "required": ["url"],
+                            "title": "WebhookToolApiSchemaConfig",
+                            "properties": {
+                              "request_headers": {
+                                "type": "object",
+                                "title": "Request Headers",
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    { "type": "string" },
+                                    {
+                                      "type": "object",
+                                      "required": ["secret_id"],
+                                      "title": "ConvAISecretLocator",
+                                      "properties": {
+                                        "secret_id": { "type": "string", "title": "Secret Id" }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["variable_name"],
+                                      "title": "ConvAIDynamicVariable",
+                                      "properties": { "variable_name": {} }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["env_var_label"],
+                                      "title": "ConvAIEnvVarLocator",
+                                      "properties": { "env_var_label": {} }
+                                    }
+                                  ]
+                                }
+                              },
+                              "url": { "type": "string", "title": "Url" },
+                              "method": {
+                                "type": "string",
+                                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                                "title": "Method"
+                              },
+                              "path_params_schema": {},
+                              "query_params_schema": {},
+                              "request_body_schema": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "title": "ObjectJsonSchemaProperty",
+                                    "properties": {
+                                      "property_kind": {},
+                                      "description": {},
+                                      "dynamic_variable": {},
+                                      "constant_value": {},
+                                      "is_omitted": {},
+                                      "type": {
+                                        "type": "string",
+                                        "const": "object",
+                                        "title": "Type"
+                                      },
+                                      "required": {
+                                        "type": "array",
+                                        "title": "Required",
+                                        "items": { "type": "string" }
+                                      },
+                                      "properties": {
+                                        "type": "object",
+                                        "title": "Properties",
+                                        "additionalProperties": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "required": ["type"],
+                                              "title": "LiteralJsonSchemaProperty",
+                                              "properties": {
+                                                "type": {
+                                                  "title": "Type",
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "boolean",
+                                                        "string",
+                                                        "integer",
+                                                        "number"
+                                                      ]
+                                                    },
+                                                    { "type": "array", "items": {} }
+                                                  ]
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "title": "Description"
+                                                },
+                                                "enum": {
+                                                  "title": "Enum",
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": { "type": "string" }
+                                                    },
+                                                    { "type": "null" }
+                                                  ]
+                                                },
+                                                "is_system_provided": {},
+                                                "dynamic_variable": {
+                                                  "type": "string",
+                                                  "title": "Dynamic Variable"
+                                                },
+                                                "allowed_values": {},
+                                                "allowed_values_dynamic_variable": {},
+                                                "constant_value": {},
+                                                "is_omitted": {}
+                                              }
+                                            },
+                                            {
+                                              "type": "object",
+                                              "title": "ObjectJsonSchemaProperty",
+                                              "properties": {
+                                                "property_kind": {},
+                                                "description": {
+                                                  "type": "string",
+                                                  "title": "Description"
+                                                },
+                                                "dynamic_variable": {
+                                                  "type": "string",
+                                                  "title": "Dynamic Variable"
+                                                },
+                                                "constant_value": {},
+                                                "is_omitted": {},
+                                                "type": {
+                                                  "type": "string",
+                                                  "const": "object",
+                                                  "title": "Type"
+                                                },
+                                                "required": {
+                                                  "type": "array",
+                                                  "title": "Required",
+                                                  "items": { "type": "string" }
+                                                },
+                                                "properties": {
+                                                  "type": "object",
+                                                  "title": "Properties",
+                                                  "additionalProperties": {
+                                                    "oneOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "required": ["type"],
+                                                        "title": "LiteralJsonSchemaProperty",
+                                                        "properties": {
+                                                          "type": {
+                                                            "title": "Type",
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "string",
+                                                                "enum": [
+                                                                  "boolean",
+                                                                  "string",
+                                                                  "integer",
+                                                                  "number"
+                                                                ]
+                                                              },
+                                                              { "type": "array", "items": {} }
+                                                            ]
+                                                          },
+                                                          "description": {
+                                                            "type": "string",
+                                                            "title": "Description"
+                                                          },
+                                                          "enum": {
+                                                            "title": "Enum",
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "array",
+                                                                "items": { "type": "string" }
+                                                              },
+                                                              { "type": "null" }
+                                                            ]
+                                                          },
+                                                          "is_system_provided": {},
+                                                          "dynamic_variable": {},
+                                                          "allowed_values": {},
+                                                          "allowed_values_dynamic_variable": {},
+                                                          "constant_value": {},
+                                                          "is_omitted": {}
+                                                        }
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "title": "ObjectJsonSchemaProperty",
+                                                        "properties": {
+                                                          "property_kind": {},
+                                                          "description": {
+                                                            "type": "string",
+                                                            "title": "Description"
+                                                          },
+                                                          "dynamic_variable": {},
+                                                          "constant_value": {},
+                                                          "is_omitted": {},
+                                                          "type": {
+                                                            "type": "string",
+                                                            "const": "object",
+                                                            "title": "Type"
+                                                          },
+                                                          "required": {},
+                                                          "properties": {},
+                                                          "required_constraints": {}
+                                                        },
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "title": "ArrayJsonSchemaProperty",
+                                                        "properties": {
+                                                          "property_kind": {},
+                                                          "description": {
+                                                            "type": "string",
+                                                            "title": "Description"
+                                                          },
+                                                          "dynamic_variable": {},
+                                                          "constant_value": {},
+                                                          "is_omitted": {},
+                                                          "type": {
+                                                            "type": "string",
+                                                            "const": "array",
+                                                            "title": "Type"
+                                                          },
+                                                          "items": {}
+                                                        },
+                                                        "additionalProperties": false
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required_constraints": {}
+                                              },
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "title": "ArrayJsonSchemaProperty",
+                                              "properties": {
+                                                "property_kind": {},
+                                                "description": {
+                                                  "type": "string",
+                                                  "title": "Description"
+                                                },
+                                                "dynamic_variable": {
+                                                  "type": "string",
+                                                  "title": "Dynamic Variable"
+                                                },
+                                                "constant_value": {},
+                                                "is_omitted": {},
+                                                "type": {
+                                                  "type": "string",
+                                                  "const": "array",
+                                                  "title": "Type"
+                                                },
+                                                "items": {
+                                                  "title": "Items",
+                                                  "oneOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "required": ["type"],
+                                                      "title": "LiteralJsonSchemaProperty",
+                                                      "properties": {
+                                                        "type": {
+                                                          "title": "Type",
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "string",
+                                                              "enum": [
+                                                                "boolean",
+                                                                "string",
+                                                                "integer",
+                                                                "number"
+                                                              ]
+                                                            },
+                                                            { "type": "array", "items": {} }
+                                                          ]
+                                                        },
+                                                        "description": {
+                                                          "type": "string",
+                                                          "title": "Description"
+                                                        },
+                                                        "enum": {},
+                                                        "is_system_provided": {},
+                                                        "dynamic_variable": {},
+                                                        "allowed_values": {},
+                                                        "allowed_values_dynamic_variable": {},
+                                                        "constant_value": {},
+                                                        "is_omitted": {}
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "object",
+                                                      "title": "ObjectJsonSchemaProperty",
+                                                      "properties": {
+                                                        "property_kind": {},
+                                                        "description": {
+                                                          "type": "string",
+                                                          "title": "Description"
+                                                        },
+                                                        "dynamic_variable": {},
+                                                        "constant_value": {},
+                                                        "is_omitted": {},
+                                                        "type": {
+                                                          "type": "string",
+                                                          "const": "object",
+                                                          "title": "Type"
+                                                        },
+                                                        "required": {
+                                                          "type": "array",
+                                                          "title": "Required",
+                                                          "items": { "type": "string" }
+                                                        },
+                                                        "properties": {
+                                                          "type": "object",
+                                                          "title": "Properties",
+                                                          "additionalProperties": {
+                                                            "oneOf": [
+                                                              {
+                                                                "type": "object",
+                                                                "required": ["type"],
+                                                                "title": "LiteralJsonSchemaProperty",
+                                                                "properties": {
+                                                                  "type": {
+                                                                    "title": "Type",
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "string",
+                                                                        "enum": [
+                                                                          "boolean",
+                                                                          "string",
+                                                                          "integer",
+                                                                          "number"
+                                                                        ]
+                                                                      },
+                                                                      {
+                                                                        "type": "array",
+                                                                        "items": {}
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "description": {
+                                                                    "type": "string",
+                                                                    "title": "Description"
+                                                                  },
+                                                                  "enum": {},
+                                                                  "is_system_provided": {},
+                                                                  "dynamic_variable": {},
+                                                                  "allowed_values": {},
+                                                                  "allowed_values_dynamic_variable": {},
+                                                                  "constant_value": {},
+                                                                  "is_omitted": {}
+                                                                }
+                                                              },
+                                                              {
+                                                                "type": "object",
+                                                                "title": "ObjectJsonSchemaProperty",
+                                                                "properties": {
+                                                                  "property_kind": {},
+                                                                  "description": {
+                                                                    "type": "string",
+                                                                    "title": "Description"
+                                                                  },
+                                                                  "dynamic_variable": {},
+                                                                  "constant_value": {},
+                                                                  "is_omitted": {},
+                                                                  "type": {
+                                                                    "type": "string",
+                                                                    "const": "object",
+                                                                    "title": "Type"
+                                                                  },
+                                                                  "required": {},
+                                                                  "properties": {},
+                                                                  "required_constraints": {}
+                                                                },
+                                                                "additionalProperties": false
+                                                              },
+                                                              {
+                                                                "type": "object",
+                                                                "title": "ArrayJsonSchemaProperty",
+                                                                "properties": {
+                                                                  "property_kind": {},
+                                                                  "description": {
+                                                                    "type": "string",
+                                                                    "title": "Description"
+                                                                  },
+                                                                  "dynamic_variable": {},
+                                                                  "constant_value": {},
+                                                                  "is_omitted": {},
+                                                                  "type": {
+                                                                    "type": "string",
+                                                                    "const": "array",
+                                                                    "title": "Type"
+                                                                  },
+                                                                  "items": {}
+                                                                },
+                                                                "additionalProperties": false
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        "required_constraints": {}
+                                                      },
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "object",
+                                                      "title": "ArrayJsonSchemaProperty",
+                                                      "properties": {
+                                                        "property_kind": {},
+                                                        "description": {
+                                                          "type": "string",
+                                                          "title": "Description"
+                                                        },
+                                                        "dynamic_variable": {},
+                                                        "constant_value": {},
+                                                        "is_omitted": {},
+                                                        "type": {
+                                                          "type": "string",
+                                                          "const": "array",
+                                                          "title": "Type"
+                                                        },
+                                                        "items": {}
+                                                      },
+                                                      "additionalProperties": false
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required_constraints": {}
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "response_body_schema": {},
+                              "response_filter": {},
+                              "content_type": {
+                                "type": "string",
+                                "enum": ["application/json", "application/x-www-form-urlencoded"],
+                                "title": "Content Type"
+                              },
+                              "auth_resolved_params": {},
+                              "auth_connection": {}
+                            }
+                          },
+                          "follow_redirects": {},
+                          "follow_redirects_allowed_domains": {}
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": ["name", "description"],
+                        "title": "ClientToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "client", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs",
+                            "minimum": -1,
+                            "maximum": 120
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "parameters": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "title": "ObjectJsonSchemaProperty",
+                                "properties": {
+                                  "property_kind": {},
+                                  "description": {},
+                                  "dynamic_variable": {},
+                                  "constant_value": {},
+                                  "is_omitted": {},
+                                  "type": { "type": "string", "const": "object", "title": "Type" },
+                                  "required": {
+                                    "type": "array",
+                                    "title": "Required",
+                                    "items": { "type": "string" }
+                                  },
+                                  "properties": {
+                                    "type": "object",
+                                    "title": "Properties",
+                                    "additionalProperties": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "required": ["type"],
+                                          "title": "LiteralJsonSchemaProperty",
+                                          "properties": {
+                                            "type": {
+                                              "title": "Type",
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": ["boolean", "string", "integer", "number"]
+                                                },
+                                                { "type": "array", "items": {} }
+                                              ]
+                                            },
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "enum": {
+                                              "title": "Enum",
+                                              "anyOf": [
+                                                { "type": "array", "items": { "type": "string" } },
+                                                { "type": "null" }
+                                              ]
+                                            },
+                                            "is_system_provided": {},
+                                            "dynamic_variable": {},
+                                            "allowed_values": {},
+                                            "allowed_values_dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {}
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ObjectJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "object",
+                                              "title": "Type"
+                                            },
+                                            "required": {},
+                                            "properties": {},
+                                            "required_constraints": {}
+                                          },
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ArrayJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "array",
+                                              "title": "Type"
+                                            },
+                                            "items": {}
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required_constraints": {}
+                                },
+                                "additionalProperties": false
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "expects_response": { "type": "boolean", "title": "Expects Response" },
+                          "dynamic_variables": {},
+                          "execution_mode": {
+                            "type": "string",
+                            "enum": ["immediate", "post_tool_speech", "async"],
+                            "title": "ToolExecutionMode"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": ["name", "params"],
+                        "title": "SystemToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "system", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs"
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "params": {}
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "description",
+                          "integration_type",
+                          "mcp_tool_name",
+                          "mcp_tool_description",
+                          "mcp_server_id",
+                          "mcp_server_name"
+                        ],
+                        "title": "MCPToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "mcp", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs",
+                            "minimum": 5,
+                            "maximum": 300
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "integration_type": {},
+                          "parameters": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "title": "ObjectJsonSchemaProperty",
+                                "properties": {
+                                  "property_kind": {},
+                                  "description": {},
+                                  "dynamic_variable": {},
+                                  "constant_value": {},
+                                  "is_omitted": {},
+                                  "type": { "type": "string", "const": "object", "title": "Type" },
+                                  "required": {
+                                    "type": "array",
+                                    "title": "Required",
+                                    "items": { "type": "string" }
+                                  },
+                                  "properties": {
+                                    "type": "object",
+                                    "title": "Properties",
+                                    "additionalProperties": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "required": ["type"],
+                                          "title": "LiteralJsonSchemaProperty",
+                                          "properties": {
+                                            "type": {
+                                              "title": "Type",
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": ["boolean", "string", "integer", "number"]
+                                                },
+                                                { "type": "array", "items": {} }
+                                              ]
+                                            },
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "enum": {
+                                              "title": "Enum",
+                                              "anyOf": [
+                                                { "type": "array", "items": { "type": "string" } },
+                                                { "type": "null" }
+                                              ]
+                                            },
+                                            "is_system_provided": {},
+                                            "dynamic_variable": {},
+                                            "allowed_values": {},
+                                            "allowed_values_dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {}
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ObjectJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "object",
+                                              "title": "Type"
+                                            },
+                                            "required": {},
+                                            "properties": {},
+                                            "required_constraints": {}
+                                          },
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ArrayJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "array",
+                                              "title": "Type"
+                                            },
+                                            "items": {}
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required_constraints": {}
+                                },
+                                "additionalProperties": false
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "approval_policy": {},
+                          "mcp_tool_name": {},
+                          "mcp_tool_description": {},
+                          "mcp_server_id": {},
+                          "mcp_server_name": {},
+                          "mcp_input_schema": {},
+                          "execution_mode": {
+                            "type": "string",
+                            "enum": ["immediate", "post_tool_speech", "async"],
+                            "title": "ToolExecutionMode"
+                          },
+                          "input_overrides": {}
+                        }
+                      }
+                    ]
+                  },
+                  "response_mocks": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convai/tools/{tool_id}": {
+      "patch": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tool_config"],
+                "title": "ToolRequestModel",
+                "properties": {
+                  "tool_config": {
+                    "title": "Tool Config",
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "required": ["name", "description", "api_schema"],
+                        "title": "WebhookToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "webhook", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs",
+                            "minimum": 5,
+                            "maximum": 300
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "dynamic_variables": {},
+                          "execution_mode": {
+                            "type": "string",
+                            "enum": ["immediate", "post_tool_speech", "async"],
+                            "title": "ToolExecutionMode"
+                          },
+                          "api_schema": {
+                            "type": "object",
+                            "required": ["url"],
+                            "title": "WebhookToolApiSchemaConfig",
+                            "properties": {
+                              "request_headers": {
+                                "type": "object",
+                                "title": "Request Headers",
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    { "type": "string" },
+                                    {
+                                      "type": "object",
+                                      "required": ["secret_id"],
+                                      "title": "ConvAISecretLocator",
+                                      "properties": {
+                                        "secret_id": { "type": "string", "title": "Secret Id" }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["variable_name"],
+                                      "title": "ConvAIDynamicVariable",
+                                      "properties": { "variable_name": {} }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["env_var_label"],
+                                      "title": "ConvAIEnvVarLocator",
+                                      "properties": { "env_var_label": {} }
+                                    }
+                                  ]
+                                }
+                              },
+                              "url": { "type": "string", "title": "Url" },
+                              "method": {
+                                "type": "string",
+                                "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                                "title": "Method"
+                              },
+                              "path_params_schema": {},
+                              "query_params_schema": {},
+                              "request_body_schema": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "title": "ObjectJsonSchemaProperty",
+                                    "properties": {
+                                      "property_kind": {},
+                                      "description": {},
+                                      "dynamic_variable": {},
+                                      "constant_value": {},
+                                      "is_omitted": {},
+                                      "type": {
+                                        "type": "string",
+                                        "const": "object",
+                                        "title": "Type"
+                                      },
+                                      "required": {
+                                        "type": "array",
+                                        "title": "Required",
+                                        "items": { "type": "string" }
+                                      },
+                                      "properties": {
+                                        "type": "object",
+                                        "title": "Properties",
+                                        "additionalProperties": {
+                                          "oneOf": [
+                                            {
+                                              "type": "object",
+                                              "required": ["type"],
+                                              "title": "LiteralJsonSchemaProperty",
+                                              "properties": {
+                                                "type": {
+                                                  "title": "Type",
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "boolean",
+                                                        "string",
+                                                        "integer",
+                                                        "number"
+                                                      ]
+                                                    },
+                                                    { "type": "array", "items": {} }
+                                                  ]
+                                                },
+                                                "description": {
+                                                  "type": "string",
+                                                  "title": "Description"
+                                                },
+                                                "enum": {
+                                                  "title": "Enum",
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "array",
+                                                      "items": { "type": "string" }
+                                                    },
+                                                    { "type": "null" }
+                                                  ]
+                                                },
+                                                "is_system_provided": {},
+                                                "dynamic_variable": {
+                                                  "type": "string",
+                                                  "title": "Dynamic Variable"
+                                                },
+                                                "allowed_values": {},
+                                                "allowed_values_dynamic_variable": {},
+                                                "constant_value": {},
+                                                "is_omitted": {}
+                                              }
+                                            },
+                                            {
+                                              "type": "object",
+                                              "title": "ObjectJsonSchemaProperty",
+                                              "properties": {
+                                                "property_kind": {},
+                                                "description": {
+                                                  "type": "string",
+                                                  "title": "Description"
+                                                },
+                                                "dynamic_variable": {
+                                                  "type": "string",
+                                                  "title": "Dynamic Variable"
+                                                },
+                                                "constant_value": {},
+                                                "is_omitted": {},
+                                                "type": {
+                                                  "type": "string",
+                                                  "const": "object",
+                                                  "title": "Type"
+                                                },
+                                                "required": {
+                                                  "type": "array",
+                                                  "title": "Required",
+                                                  "items": { "type": "string" }
+                                                },
+                                                "properties": {
+                                                  "type": "object",
+                                                  "title": "Properties",
+                                                  "additionalProperties": {
+                                                    "oneOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "required": ["type"],
+                                                        "title": "LiteralJsonSchemaProperty",
+                                                        "properties": {
+                                                          "type": {
+                                                            "title": "Type",
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "string",
+                                                                "enum": [
+                                                                  "boolean",
+                                                                  "string",
+                                                                  "integer",
+                                                                  "number"
+                                                                ]
+                                                              },
+                                                              { "type": "array", "items": {} }
+                                                            ]
+                                                          },
+                                                          "description": {
+                                                            "type": "string",
+                                                            "title": "Description"
+                                                          },
+                                                          "enum": {
+                                                            "title": "Enum",
+                                                            "anyOf": [
+                                                              {
+                                                                "type": "array",
+                                                                "items": { "type": "string" }
+                                                              },
+                                                              { "type": "null" }
+                                                            ]
+                                                          },
+                                                          "is_system_provided": {},
+                                                          "dynamic_variable": {},
+                                                          "allowed_values": {},
+                                                          "allowed_values_dynamic_variable": {},
+                                                          "constant_value": {},
+                                                          "is_omitted": {}
+                                                        }
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "title": "ObjectJsonSchemaProperty",
+                                                        "properties": {
+                                                          "property_kind": {},
+                                                          "description": {
+                                                            "type": "string",
+                                                            "title": "Description"
+                                                          },
+                                                          "dynamic_variable": {},
+                                                          "constant_value": {},
+                                                          "is_omitted": {},
+                                                          "type": {
+                                                            "type": "string",
+                                                            "const": "object",
+                                                            "title": "Type"
+                                                          },
+                                                          "required": {},
+                                                          "properties": {},
+                                                          "required_constraints": {}
+                                                        },
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "title": "ArrayJsonSchemaProperty",
+                                                        "properties": {
+                                                          "property_kind": {},
+                                                          "description": {
+                                                            "type": "string",
+                                                            "title": "Description"
+                                                          },
+                                                          "dynamic_variable": {},
+                                                          "constant_value": {},
+                                                          "is_omitted": {},
+                                                          "type": {
+                                                            "type": "string",
+                                                            "const": "array",
+                                                            "title": "Type"
+                                                          },
+                                                          "items": {}
+                                                        },
+                                                        "additionalProperties": false
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required_constraints": {}
+                                              },
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "title": "ArrayJsonSchemaProperty",
+                                              "properties": {
+                                                "property_kind": {},
+                                                "description": {
+                                                  "type": "string",
+                                                  "title": "Description"
+                                                },
+                                                "dynamic_variable": {
+                                                  "type": "string",
+                                                  "title": "Dynamic Variable"
+                                                },
+                                                "constant_value": {},
+                                                "is_omitted": {},
+                                                "type": {
+                                                  "type": "string",
+                                                  "const": "array",
+                                                  "title": "Type"
+                                                },
+                                                "items": {
+                                                  "title": "Items",
+                                                  "oneOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "required": ["type"],
+                                                      "title": "LiteralJsonSchemaProperty",
+                                                      "properties": {
+                                                        "type": {
+                                                          "title": "Type",
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "string",
+                                                              "enum": [
+                                                                "boolean",
+                                                                "string",
+                                                                "integer",
+                                                                "number"
+                                                              ]
+                                                            },
+                                                            { "type": "array", "items": {} }
+                                                          ]
+                                                        },
+                                                        "description": {
+                                                          "type": "string",
+                                                          "title": "Description"
+                                                        },
+                                                        "enum": {},
+                                                        "is_system_provided": {},
+                                                        "dynamic_variable": {},
+                                                        "allowed_values": {},
+                                                        "allowed_values_dynamic_variable": {},
+                                                        "constant_value": {},
+                                                        "is_omitted": {}
+                                                      }
+                                                    },
+                                                    {
+                                                      "type": "object",
+                                                      "title": "ObjectJsonSchemaProperty",
+                                                      "properties": {
+                                                        "property_kind": {},
+                                                        "description": {
+                                                          "type": "string",
+                                                          "title": "Description"
+                                                        },
+                                                        "dynamic_variable": {},
+                                                        "constant_value": {},
+                                                        "is_omitted": {},
+                                                        "type": {
+                                                          "type": "string",
+                                                          "const": "object",
+                                                          "title": "Type"
+                                                        },
+                                                        "required": {
+                                                          "type": "array",
+                                                          "title": "Required",
+                                                          "items": { "type": "string" }
+                                                        },
+                                                        "properties": {
+                                                          "type": "object",
+                                                          "title": "Properties",
+                                                          "additionalProperties": {
+                                                            "oneOf": [
+                                                              {
+                                                                "type": "object",
+                                                                "required": ["type"],
+                                                                "title": "LiteralJsonSchemaProperty",
+                                                                "properties": {
+                                                                  "type": {
+                                                                    "title": "Type",
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "string",
+                                                                        "enum": [
+                                                                          "boolean",
+                                                                          "string",
+                                                                          "integer",
+                                                                          "number"
+                                                                        ]
+                                                                      },
+                                                                      {
+                                                                        "type": "array",
+                                                                        "items": {}
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "description": {
+                                                                    "type": "string",
+                                                                    "title": "Description"
+                                                                  },
+                                                                  "enum": {},
+                                                                  "is_system_provided": {},
+                                                                  "dynamic_variable": {},
+                                                                  "allowed_values": {},
+                                                                  "allowed_values_dynamic_variable": {},
+                                                                  "constant_value": {},
+                                                                  "is_omitted": {}
+                                                                }
+                                                              },
+                                                              {
+                                                                "type": "object",
+                                                                "title": "ObjectJsonSchemaProperty",
+                                                                "properties": {
+                                                                  "property_kind": {},
+                                                                  "description": {
+                                                                    "type": "string",
+                                                                    "title": "Description"
+                                                                  },
+                                                                  "dynamic_variable": {},
+                                                                  "constant_value": {},
+                                                                  "is_omitted": {},
+                                                                  "type": {
+                                                                    "type": "string",
+                                                                    "const": "object",
+                                                                    "title": "Type"
+                                                                  },
+                                                                  "required": {},
+                                                                  "properties": {},
+                                                                  "required_constraints": {}
+                                                                },
+                                                                "additionalProperties": false
+                                                              },
+                                                              {
+                                                                "type": "object",
+                                                                "title": "ArrayJsonSchemaProperty",
+                                                                "properties": {
+                                                                  "property_kind": {},
+                                                                  "description": {
+                                                                    "type": "string",
+                                                                    "title": "Description"
+                                                                  },
+                                                                  "dynamic_variable": {},
+                                                                  "constant_value": {},
+                                                                  "is_omitted": {},
+                                                                  "type": {
+                                                                    "type": "string",
+                                                                    "const": "array",
+                                                                    "title": "Type"
+                                                                  },
+                                                                  "items": {}
+                                                                },
+                                                                "additionalProperties": false
+                                                              }
+                                                            ]
+                                                          }
+                                                        },
+                                                        "required_constraints": {}
+                                                      },
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "object",
+                                                      "title": "ArrayJsonSchemaProperty",
+                                                      "properties": {
+                                                        "property_kind": {},
+                                                        "description": {
+                                                          "type": "string",
+                                                          "title": "Description"
+                                                        },
+                                                        "dynamic_variable": {},
+                                                        "constant_value": {},
+                                                        "is_omitted": {},
+                                                        "type": {
+                                                          "type": "string",
+                                                          "const": "array",
+                                                          "title": "Type"
+                                                        },
+                                                        "items": {}
+                                                      },
+                                                      "additionalProperties": false
+                                                    }
+                                                  ]
+                                                }
+                                              },
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required_constraints": {}
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "response_body_schema": {},
+                              "response_filter": {},
+                              "content_type": {
+                                "type": "string",
+                                "enum": ["application/json", "application/x-www-form-urlencoded"],
+                                "title": "Content Type"
+                              },
+                              "auth_resolved_params": {},
+                              "auth_connection": {}
+                            }
+                          },
+                          "follow_redirects": {},
+                          "follow_redirects_allowed_domains": {}
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": ["name", "description"],
+                        "title": "ClientToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "client", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs",
+                            "minimum": -1,
+                            "maximum": 120
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "parameters": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "title": "ObjectJsonSchemaProperty",
+                                "properties": {
+                                  "property_kind": {},
+                                  "description": {},
+                                  "dynamic_variable": {},
+                                  "constant_value": {},
+                                  "is_omitted": {},
+                                  "type": { "type": "string", "const": "object", "title": "Type" },
+                                  "required": {
+                                    "type": "array",
+                                    "title": "Required",
+                                    "items": { "type": "string" }
+                                  },
+                                  "properties": {
+                                    "type": "object",
+                                    "title": "Properties",
+                                    "additionalProperties": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "required": ["type"],
+                                          "title": "LiteralJsonSchemaProperty",
+                                          "properties": {
+                                            "type": {
+                                              "title": "Type",
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": ["boolean", "string", "integer", "number"]
+                                                },
+                                                { "type": "array", "items": {} }
+                                              ]
+                                            },
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "enum": {
+                                              "title": "Enum",
+                                              "anyOf": [
+                                                { "type": "array", "items": { "type": "string" } },
+                                                { "type": "null" }
+                                              ]
+                                            },
+                                            "is_system_provided": {},
+                                            "dynamic_variable": {},
+                                            "allowed_values": {},
+                                            "allowed_values_dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {}
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ObjectJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "object",
+                                              "title": "Type"
+                                            },
+                                            "required": {},
+                                            "properties": {},
+                                            "required_constraints": {}
+                                          },
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ArrayJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "array",
+                                              "title": "Type"
+                                            },
+                                            "items": {}
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required_constraints": {}
+                                },
+                                "additionalProperties": false
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "expects_response": { "type": "boolean", "title": "Expects Response" },
+                          "dynamic_variables": {},
+                          "execution_mode": {
+                            "type": "string",
+                            "enum": ["immediate", "post_tool_speech", "async"],
+                            "title": "ToolExecutionMode"
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": ["name", "params"],
+                        "title": "SystemToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "system", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs"
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "params": {}
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "description",
+                          "integration_type",
+                          "mcp_tool_name",
+                          "mcp_tool_description",
+                          "mcp_server_id",
+                          "mcp_server_name"
+                        ],
+                        "title": "MCPToolConfig",
+                        "properties": {
+                          "type": { "type": "string", "const": "mcp", "title": "Type" },
+                          "name": { "type": "string", "title": "Name" },
+                          "description": { "type": "string", "title": "Description" },
+                          "response_timeout_secs": {
+                            "type": "integer",
+                            "title": "Response Timeout Secs",
+                            "minimum": 5,
+                            "maximum": 300
+                          },
+                          "disable_interruptions": {},
+                          "interruption_mode": {
+                            "type": "string",
+                            "enum": [
+                              "allow",
+                              "disable_during_tool",
+                              "disable_during_tool_and_turn"
+                            ],
+                            "title": "ToolInterruptionMode"
+                          },
+                          "force_pre_tool_speech": {},
+                          "pre_tool_speech": {
+                            "type": "string",
+                            "enum": ["auto", "force", "off"],
+                            "title": "PreToolSpeechMode"
+                          },
+                          "assignments": {},
+                          "tool_call_sound": {},
+                          "tool_call_sound_behavior": {},
+                          "tool_error_handling_mode": {
+                            "type": "string",
+                            "enum": ["auto", "summarized", "passthrough", "hide"],
+                            "title": "ToolErrorHandlingMode"
+                          },
+                          "integration_type": {},
+                          "parameters": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "title": "ObjectJsonSchemaProperty",
+                                "properties": {
+                                  "property_kind": {},
+                                  "description": {},
+                                  "dynamic_variable": {},
+                                  "constant_value": {},
+                                  "is_omitted": {},
+                                  "type": { "type": "string", "const": "object", "title": "Type" },
+                                  "required": {
+                                    "type": "array",
+                                    "title": "Required",
+                                    "items": { "type": "string" }
+                                  },
+                                  "properties": {
+                                    "type": "object",
+                                    "title": "Properties",
+                                    "additionalProperties": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "required": ["type"],
+                                          "title": "LiteralJsonSchemaProperty",
+                                          "properties": {
+                                            "type": {
+                                              "title": "Type",
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": ["boolean", "string", "integer", "number"]
+                                                },
+                                                { "type": "array", "items": {} }
+                                              ]
+                                            },
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "enum": {
+                                              "title": "Enum",
+                                              "anyOf": [
+                                                { "type": "array", "items": { "type": "string" } },
+                                                { "type": "null" }
+                                              ]
+                                            },
+                                            "is_system_provided": {},
+                                            "dynamic_variable": {},
+                                            "allowed_values": {},
+                                            "allowed_values_dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {}
+                                          }
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ObjectJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "object",
+                                              "title": "Type"
+                                            },
+                                            "required": {},
+                                            "properties": {},
+                                            "required_constraints": {}
+                                          },
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "title": "ArrayJsonSchemaProperty",
+                                          "properties": {
+                                            "property_kind": {},
+                                            "description": {
+                                              "type": "string",
+                                              "title": "Description"
+                                            },
+                                            "dynamic_variable": {},
+                                            "constant_value": {},
+                                            "is_omitted": {},
+                                            "type": {
+                                              "type": "string",
+                                              "const": "array",
+                                              "title": "Type"
+                                            },
+                                            "items": {}
+                                          },
+                                          "additionalProperties": false
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required_constraints": {}
+                                },
+                                "additionalProperties": false
+                              },
+                              { "type": "null" }
+                            ]
+                          },
+                          "approval_policy": {},
+                          "mcp_tool_name": {},
+                          "mcp_tool_description": {},
+                          "mcp_server_id": {},
+                          "mcp_server_name": {},
+                          "mcp_input_schema": {},
+                          "execution_mode": {
+                            "type": "string",
+                            "enum": ["immediate", "post_tool_speech", "async"],
+                            "title": "ToolExecutionMode"
+                          },
+                          "input_overrides": {}
+                        }
+                      }
+                    ]
+                  },
+                  "response_mocks": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convai/agents/create": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["conversation_config"],
+                "title": "Body_Create_Agent_v1_convai_agents_create_post",
+                "properties": {
+                  "conversation_config": {
+                    "type": "object",
+                    "title": "ConversationalConfigAPIModel",
+                    "properties": {
+                      "asr": {
+                        "type": "object",
+                        "title": "ASRConversationalConfig",
+                        "properties": {
+                          "quality": { "type": "string", "enum": ["high"], "title": "ASRQuality" },
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "elevenlabs",
+                              "scribe_realtime",
+                              "scribe_v2_turbo",
+                              "scribe_v3_live"
+                            ],
+                            "title": "ASRProvider"
+                          },
+                          "user_input_audio_format": {
+                            "type": "string",
+                            "enum": [
+                              "pcm_8000",
+                              "pcm_16000",
+                              "pcm_22050",
+                              "pcm_24000",
+                              "pcm_44100",
+                              "pcm_48000",
+                              "ulaw_8000"
+                            ],
+                            "title": "ASRInputFormat"
+                          },
+                          "keywords": {
+                            "type": "array",
+                            "title": "Keywords",
+                            "items": { "type": "string" }
+                          }
+                        }
+                      },
+                      "turn": {
+                        "type": "object",
+                        "title": "TurnConfig",
+                        "properties": {
+                          "turn_timeout": { "type": "number", "title": "Turn Timeout" },
+                          "initial_wait_time": {},
+                          "silence_end_call_timeout": {},
+                          "mode": {},
+                          "turn_eagerness": {
+                            "type": "string",
+                            "enum": ["patient", "normal", "eager"],
+                            "title": "TurnEagerness"
+                          },
+                          "spelling_patience": {},
+                          "speculative_turn": { "type": "boolean", "title": "Speculative Turn" },
+                          "retranscribe_on_turn_timeout": {},
+                          "turn_model": {},
+                          "interruption_ignore_terms": {},
+                          "interruption_ignore_term_languages": {},
+                          "merge_with_default_ignore_terms": {},
+                          "transcribe_on_disabled_interruptions": {},
+                          "soft_timeout_config": {
+                            "type": "object",
+                            "title": "SoftTimeoutConfig",
+                            "properties": {
+                              "timeout_seconds": { "type": "number", "title": "Timeout Seconds" },
+                              "message": { "type": "string", "title": "Message" },
+                              "additional_soft_timeout_messages": {
+                                "type": "array",
+                                "title": "Additional Soft Timeout Messages",
+                                "items": { "type": "string" }
+                              },
+                              "use_llm_generated_message": {},
+                              "randomize_fillers": {},
+                              "max_soft_timeouts_per_generation": {
+                                "type": "integer",
+                                "title": "Max Soft Timeouts Per Generation",
+                                "minimum": 1,
+                                "maximum": 8
+                              },
+                              "llm_generated_message_prompt_override": {},
+                              "disable_until_first_user_message": {}
+                            }
+                          },
+                          "noisy_environment_detection": {},
+                          "noisy_environment_message": {}
+                        }
+                      },
+                      "tts": {
+                        "type": "object",
+                        "title": "TTSConversationalConfig",
+                        "properties": {
+                          "model_id": {
+                            "type": "string",
+                            "enum": [
+                              "eleven_turbo_v2",
+                              "eleven_turbo_v2_5",
+                              "eleven_flash_v2",
+                              "eleven_flash_v2_5",
+                              "eleven_multilingual_v2",
+                              "eleven_v3_conversational",
+                              "eleven_v4",
+                              "eleven_v4_turbo"
+                            ],
+                            "title": "TTSConversationalModel"
+                          },
+                          "voice_id": { "type": "string", "title": "Voice Id" },
+                          "supported_voices": {},
+                          "expressive_mode": {},
+                          "suggested_audio_tags": {},
+                          "agent_output_audio_format": {
+                            "type": "string",
+                            "enum": [
+                              "pcm_8000",
+                              "pcm_16000",
+                              "pcm_22050",
+                              "pcm_24000",
+                              "pcm_44100",
+                              "pcm_48000",
+                              "ulaw_8000"
+                            ],
+                            "title": "TTSOutputFormat"
+                          },
+                          "optimize_streaming_latency": {},
+                          "stability": {},
+                          "speed": {
+                            "type": "number",
+                            "title": "Speed",
+                            "minimum": 0.7,
+                            "maximum": 1.2
+                          },
+                          "similarity_boost": {},
+                          "clone_strength": {},
+                          "text_normalisation_type": {},
+                          "pronunciation_dictionary_locators": {},
+                          "enable_phoneme_tags": {},
+                          "audio_effects": {}
+                        }
+                      },
+                      "conversation": {
+                        "type": "object",
+                        "title": "ConversationConfig",
+                        "properties": {
+                          "text_only": {},
+                          "max_duration_seconds": {
+                            "type": "integer",
+                            "title": "Max Duration Seconds"
+                          },
+                          "client_events": {
+                            "type": "array",
+                            "title": "Client Events",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "conversation_initiation_metadata",
+                                "asr_initiation_metadata",
+                                "ping",
+                                "audio",
+                                "interruption",
+                                "user_transcript",
+                                "tentative_user_transcript",
+                                "agent_response",
+                                "agent_response_correction",
+                                "client_tool_call",
+                                "mcp_tool_call",
+                                "mcp_connection_status",
+                                "agent_tool_request",
+                                "agent_tool_response",
+                                "agent_tool_response_full_payload",
+                                "agent_response_metadata",
+                                "vad_score",
+                                "agent_chat_response_part",
+                                "client_error",
+                                "guardrail_triggered",
+                                "dtmf_request",
+                                "agent_response_complete",
+                                "context_usage",
+                                "internal_turn_probability",
+                                "internal_tentative_agent_response"
+                              ],
+                              "title": "ClientEvent"
+                            }
+                          },
+                          "file_input": {},
+                          "monitoring_enabled": {},
+                          "monitoring_events": {},
+                          "dtmf_input_settings": {},
+                          "background_sound": {},
+                          "source_attribution": {}
+                        }
+                      },
+                      "language_presets": {},
+                      "vad": {},
+                      "agent": {
+                        "type": "object",
+                        "title": "AgentConfigAPIModel",
+                        "properties": {
+                          "first_message": { "type": "string", "title": "First Message" },
+                          "language": { "type": "string", "title": "Language" },
+                          "hinglish_mode": {},
+                          "dynamic_variables": {
+                            "type": "object",
+                            "title": "DynamicVariablesConfig",
+                            "properties": {
+                              "dynamic_variable_placeholders": {
+                                "type": "object",
+                                "title": "Dynamic Variable Placeholders",
+                                "additionalProperties": true
+                              }
+                            }
+                          },
+                          "disable_first_message_interruptions": {},
+                          "max_conversation_duration_message": {},
+                          "text_behavior_overrides": {},
+                          "subagent_config": {},
+                          "prompt": {
+                            "type": "object",
+                            "title": "PromptAgentAPIModel",
+                            "properties": {
+                              "prompt": { "type": "string", "title": "Prompt" },
+                              "llm": {
+                                "type": "string",
+                                "enum": [
+                                  "gpt-4o-mini",
+                                  "gpt-4o",
+                                  "gpt-4",
+                                  "gpt-4-turbo",
+                                  "gpt-4.1",
+                                  "gpt-4.1-mini",
+                                  "gpt-4.1-nano",
+                                  "gpt-5",
+                                  "gpt-5.1",
+                                  "gpt-5.2",
+                                  "gpt-5.2-chat-latest",
+                                  "gpt-5.4",
+                                  "gpt-5.4-mini",
+                                  "gpt-5.4-nano",
+                                  "gpt-5.5",
+                                  "gpt-5.6-sol",
+                                  "gpt-5.6-terra",
+                                  "gpt-5.6-luna",
+                                  "gpt-6-astra",
+                                  "gpt-6-sol",
+                                  "gpt-6-luna",
+                                  "gpt-6.1-sol",
+                                  "gpt-6.1-terra",
+                                  "gpt-5-mini",
+                                  "gpt-5-nano",
+                                  "gpt-3.5-turbo",
+                                  "gemini-1.5-pro",
+                                  "gemini-1.5-flash",
+                                  "gemini-2.0-flash",
+                                  "gemini-2.0-flash-lite",
+                                  "gemini-2.5-flash-lite",
+                                  "gemini-2.5-flash",
+                                  "gemini-3-pro-preview",
+                                  "gemini-3-flash-preview",
+                                  "gemini-3.1-pro-preview",
+                                  "gemini-3.1-flash-lite-preview",
+                                  "gemini-3.1-flash-lite",
+                                  "gemini-3.5-flash",
+                                  "gemini-3.5-flash-lite",
+                                  "gemini-3.6-flash",
+                                  "gemini-3.7-flash",
+                                  "gemini-3.8-flash",
+                                  "gemini-4-argon",
+                                  "gemini-4-hydrogen",
+                                  "claude-sonnet-4-5",
+                                  "claude-opus-4-6",
+                                  "claude-opus-4-7",
+                                  "claude-opus-4-8",
+                                  "claude-opus-5",
+                                  "claude-opus-5-5",
+                                  "claude-sonnet-4-6",
+                                  "claude-sonnet-5",
+                                  "claude-sonnet-5-5",
+                                  "claude-sonnet-4",
+                                  "claude-haiku-4-5",
+                                  "claude-haiku-5-5",
+                                  "claude-3-7-sonnet",
+                                  "claude-3-5-sonnet",
+                                  "claude-3-5-sonnet-v1",
+                                  "claude-3-haiku",
+                                  "custom-llm",
+                                  "qwen3-4b",
+                                  "qwen3-30b-a3b",
+                                  "qwen36-35b-a3b",
+                                  "qwen35-397b-a17b",
+                                  "gpt-oss-20b",
+                                  "gpt-oss-120b",
+                                  "glm-45-air-fp8",
+                                  "glm-52",
+                                  "deepseek-v41-flash",
+                                  "nemotron-35-super-vl-nvfp4",
+                                  "gemini-2.5-flash-preview-09-2025",
+                                  "gemini-2.5-flash-lite-preview-09-2025",
+                                  "gemini-2.5-flash-preview-05-20",
+                                  "gemini-2.5-flash-preview-04-17",
+                                  "gemini-2.5-flash-lite-preview-06-17",
+                                  "gemini-2.0-flash-lite-001",
+                                  "gemini-2.0-flash-001",
+                                  "gemini-1.5-flash-002",
+                                  "gemini-1.5-flash-001",
+                                  "gemini-1.5-pro-002",
+                                  "gemini-1.5-pro-001",
+                                  "claude-sonnet-4@20250514",
+                                  "claude-sonnet-4-5@20250929",
+                                  "claude-haiku-4-5@20251001",
+                                  "claude-3-7-sonnet@20250219",
+                                  "claude-3-5-sonnet@20240620",
+                                  "claude-3-5-sonnet-v2@20241022",
+                                  "claude-3-haiku@20240307",
+                                  "gpt-5-2025-08-07",
+                                  "gpt-5.1-2025-11-13",
+                                  "gpt-5.2-2025-12-11",
+                                  "gpt-5.4-2026-03-05",
+                                  "gpt-5.4-mini-2026-03-17",
+                                  "gpt-5.4-nano-2026-03-17",
+                                  "gpt-5.5-2026-04-23",
+                                  "gpt-5-mini-2025-08-07",
+                                  "gpt-5-nano-2025-08-07",
+                                  "gpt-4.1-2025-04-14",
+                                  "gpt-4.1-mini-2025-04-14",
+                                  "gpt-4.1-nano-2025-04-14",
+                                  "gpt-4o-mini-2024-07-18",
+                                  "gpt-4o-2024-11-20",
+                                  "gpt-4o-2024-08-06",
+                                  "gpt-4o-2024-05-13",
+                                  "gpt-4-0613",
+                                  "gpt-4-0314",
+                                  "gpt-4-turbo-2024-04-09",
+                                  "gpt-3.5-turbo-0125",
+                                  "gpt-3.5-turbo-1106",
+                                  "watt-tool-8b",
+                                  "watt-tool-70b"
+                                ],
+                                "title": "LLM"
+                              },
+                              "reasoning_effort": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "none",
+                                      "minimal",
+                                      "low",
+                                      "medium",
+                                      "high",
+                                      "xhigh",
+                                      "max"
+                                    ],
+                                    "title": "LLMReasoningEffort"
+                                  },
+                                  { "type": "null" }
+                                ]
+                              },
+                              "service_tier": {},
+                              "thinking_budget": {},
+                              "enable_reasoning_summary": {},
+                              "temperature": {
+                                "title": "Temperature",
+                                "anyOf": [{ "type": "number" }, { "type": "null" }]
+                              },
+                              "max_tokens": { "type": "integer", "title": "Max Tokens" },
+                              "tool_ids": {
+                                "type": "array",
+                                "title": "Tool Ids",
+                                "items": { "type": "string" }
+                              },
+                              "tool_ids_strict": {},
+                              "built_in_tools": {},
+                              "enable_parallel_tool_calls": {
+                                "type": "boolean",
+                                "title": "Enable Parallel Tool Calls"
+                              },
+                              "mcp_server_ids": {},
+                              "native_mcp_server_ids": {},
+                              "knowledge_base": {},
+                              "custom_llm": {},
+                              "ignore_default_personality": {
+                                "title": "Ignore Default Personality",
+                                "anyOf": [{ "type": "boolean" }, { "type": "null" }]
+                              },
+                              "rag": {},
+                              "timezone": {},
+                              "backup_llm_config": {
+                                "title": "Backup Llm Config",
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "title": "BackupLLMDefault",
+                                    "properties": {
+                                      "preference": {
+                                        "type": "string",
+                                        "const": "default",
+                                        "title": "Preference"
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "type": "object",
+                                    "title": "BackupLLMDisabled",
+                                    "properties": {
+                                      "preference": {
+                                        "type": "string",
+                                        "const": "disabled",
+                                        "title": "Preference"
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "type": "object",
+                                    "required": ["order"],
+                                    "title": "BackupLLMOverride",
+                                    "properties": {
+                                      "preference": {
+                                        "type": "string",
+                                        "const": "override",
+                                        "title": "Preference"
+                                      },
+                                      "order": {}
+                                    }
+                                  }
+                                ]
+                              },
+                              "cascade_timeout_seconds": {},
+                              "tools": {}
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "platform_settings": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "title": "AgentPlatformSettingsRequestModel",
+                        "properties": {
+                          "evaluation": {},
+                          "widget": {},
+                          "data_collection": {},
+                          "data_collection_scopes": {},
+                          "analysis_items": {},
+                          "overrides": {
+                            "type": "object",
+                            "title": "ConversationInitiationClientDataConfig",
+                            "properties": {
+                              "conversation_config_override": {
+                                "type": "object",
+                                "title": "ConversationConfigClientOverrideConfig",
+                                "properties": {
+                                  "asr": {},
+                                  "turn": {},
+                                  "tts": {
+                                    "type": "object",
+                                    "title": "TTSConversationalConfigOverrideConfig",
+                                    "properties": {
+                                      "model_id": { "type": "boolean", "title": "Model Id" },
+                                      "voice_id": {},
+                                      "supported_voices": {},
+                                      "stability": {},
+                                      "speed": {},
+                                      "similarity_boost": {},
+                                      "clone_strength": {},
+                                      "pronunciation_dictionary_locators": {}
+                                    }
+                                  },
+                                  "conversation": {},
+                                  "agent": {
+                                    "type": "object",
+                                    "title": "AgentConfigOverrideConfig",
+                                    "properties": {
+                                      "first_message": {
+                                        "type": "boolean",
+                                        "title": "First Message"
+                                      },
+                                      "language": {},
+                                      "max_conversation_duration_message": {},
+                                      "prompt": {
+                                        "type": "object",
+                                        "title": "PromptAgentAPIModelOverrideConfig",
+                                        "properties": {
+                                          "prompt": {},
+                                          "llm": { "type": "boolean", "title": "Llm" },
+                                          "reasoning_effort": {},
+                                          "tool_ids": {},
+                                          "tool_ids_strict": {},
+                                          "native_mcp_server_ids": {},
+                                          "knowledge_base": {}
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "custom_llm_extra_body": {},
+                              "enable_conversation_initiation_client_data_from_webhook": {},
+                              "enable_starting_workflow_node_id_from_client": {},
+                              "enable_procedure_ids_from_client": {}
+                            }
+                          },
+                          "workspace_overrides": {},
+                          "testing": {},
+                          "archived": {},
+                          "guardrails": {},
+                          "summary_language": {},
+                          "auto_translate_transcript_to_app_language": {},
+                          "auth": {
+                            "type": "object",
+                            "title": "AuthSettings",
+                            "properties": {
+                              "enable_auth": { "type": "boolean", "title": "Enable Auth" },
+                              "allowlist": {},
+                              "require_origin_header": {},
+                              "shareable_token": {}
+                            }
+                          },
+                          "call_limits": {
+                            "type": "object",
+                            "title": "AgentCallLimits",
+                            "properties": {
+                              "agent_concurrency_limit": {},
+                              "daily_limit": {},
+                              "bursting_enabled": { "type": "boolean", "title": "Bursting Enabled" }
+                            }
+                          },
+                          "queueing_config": {},
+                          "privacy": {
+                            "type": "object",
+                            "title": "PrivacyConfig",
+                            "properties": {
+                              "record_voice": { "type": "boolean", "title": "Record Voice" },
+                              "retention_days": { "type": "integer", "title": "Retention Days" },
+                              "delete_transcript_and_pii": {},
+                              "delete_audio": {},
+                              "apply_to_existing_conversations": {},
+                              "zero_retention_mode": {},
+                              "conversation_history_redaction": {}
+                            }
+                          },
+                          "trust_context": {},
+                          "analysis_llm": {},
+                          "topic_discovery": {},
+                          "sentiment_analysis": {},
+                          "alerting": {}
+                        }
+                      },
+                      { "type": "null" }
+                    ]
+                  },
+                  "workflow": {},
+                  "name": { "title": "Name", "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                  "tags": {
+                    "title": "Tags",
+                    "anyOf": [
+                      { "type": "array", "items": { "type": "string" } },
+                      { "type": "null" }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/convai/agents/{agent_id}": {
+      "patch": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "title": "Body_Patches_an_Agent_settings_v1_convai_agents__agent_id__patch",
+                "properties": {
+                  "conversation_config": {
+                    "title": "Conversation Config",
+                    "anyOf": [
+                      { "type": "object", "additionalProperties": true },
+                      { "type": "null" }
+                    ]
+                  },
+                  "platform_settings": {
+                    "title": "Platform Settings",
+                    "anyOf": [
+                      { "type": "object", "additionalProperties": true },
+                      { "type": "null" }
+                    ]
+                  },
+                  "workflow": {},
+                  "name": { "title": "Name", "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                  "tags": {
+                    "title": "Tags",
+                    "anyOf": [
+                      { "type": "array", "items": { "type": "string" } },
+                      { "type": "null" }
+                    ]
+                  },
+                  "version_description": {},
+                  "procedures": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
