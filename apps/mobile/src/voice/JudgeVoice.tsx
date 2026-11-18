@@ -30,6 +30,8 @@ export interface JudgeVoiceProps {
   startAttempt(attemptNo: number): Promise<void>;
   onShowTermsCard(): void;
   onStatus?(s: string): void;
+  /** The session could not start or broke (no key, token refused, SDK error): type it instead. */
+  onFailed?(reason: 'token' | 'session'): void;
 }
 
 export default function JudgeVoice(p: JudgeVoiceProps) {
@@ -47,6 +49,7 @@ function Session({
   startAttempt,
   onShowTermsCard,
   onStatus,
+  onFailed,
 }: JudgeVoiceProps) {
   const canAttempt = useRef(false);
   const seq = useRef(0);
@@ -93,7 +96,10 @@ function Session({
       });
     },
     onStatusChange: (s) => onStatus?.(String((s as { status?: unknown }).status ?? s)),
-    onError: (e) => console.warn('[yo] voice error', e),
+    onError: (e) => {
+      console.warn('[yo] voice error', e);
+      onFailed?.('session');
+    },
   });
   const convRef = useRef(conv);
   convRef.current = conv;
@@ -110,7 +116,10 @@ function Session({
           clientTools: tools,
         });
       },
-      (e: unknown) => console.warn('[yo] voice token failed', e),
+      (e: unknown) => {
+        console.warn('[yo] voice token failed', e);
+        if (live) onFailed?.('token');
+      },
     );
     return () => {
       live = false;
