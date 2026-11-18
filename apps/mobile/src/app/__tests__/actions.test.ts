@@ -200,6 +200,49 @@ describe('attempt upload', () => {
   });
 });
 
+describe('attempt upload retry', () => {
+  it('a resend under the same key reuses the first build: same evidence, same frame bytes', async () => {
+    const uploads: { e: unknown; frames: readonly Uint8Array[]; key: string }[] = [];
+    let extracted = 0;
+    let fail = true;
+    const d = {
+      api: {
+        async uploadFrames(e: unknown, frames: readonly Uint8Array[], key: string) {
+          uploads.push({ e, frames, key });
+          if (fail) throw new Error('network');
+          return { judging: true, frame_hashes: [] };
+        },
+      },
+      readClip: async () => new Uint8Array(4096).fill(1),
+      // A re-extraction would give different JPEG bytes (and a different body hash).
+      extractFrames: async (_u: string, ms: number) => {
+        const n = ++extracted;
+        return Array.from({ length: 8 }, (_, i) => ({
+          t_ms: (ms / 8) * i,
+          jpeg: new Uint8Array(500).fill(i + n),
+        }));
+      },
+      iso: (ms: number) => new Date(ms).toISOString(),
+    };
+    const a = {
+      bet_id: BET,
+      attempt_no: 1,
+      recorded_by: 'A' as const,
+      clip: { uri: 'file:///c.mov', durationMs: 5200, endedAtMs: Date.UTC(2026, 10, 21, 18, 7) },
+      idempotencyKey: 'k-4',
+    };
+    const cache = new Map();
+    await expect(sendAttempt(d, a, cache)).rejects.toThrow('network');
+    fail = false;
+    await sendAttempt(d, a, cache);
+    expect(extracted).toBe(1);
+    expect(uploads).toHaveLength(2);
+    expect(uploads[1]!.e).toBe(uploads[0]!.e);
+    expect(uploads[1]!.frames).toEqual(uploads[0]!.frames);
+    expect(uploads[1]!.key).toBe('k-4');
+  });
+});
+
 describe('app code rules', () => {
   const src = join(import.meta.dirname, '..', '..');
   const files = (dir: string): string[] =>

@@ -8,6 +8,7 @@
 import type { AuthorizationResult, PartySignature, SignRequest } from '@youre-on/shared/api';
 import type { AuthorizeRequest, PartyAuthorization } from '@youre-on/shared/authorization';
 import type { DevicePolicyVerdict } from '@youre-on/shared/device-policy';
+import type { CameraEvidence } from '@youre-on/shared/evidence';
 import { hashJcs } from '@youre-on/shared/jcs';
 import type { Party } from '@youre-on/shared/primitives';
 import { renderSignCard } from '@youre-on/shared/sign-card';
@@ -129,6 +130,17 @@ export interface ClipIn {
   endedAtMs: number;
 }
 
+/** One attempt's upload, built once: a resend (lost response, retry button) sends the same bytes. */
+export interface PreparedAttempt {
+  evidence: CameraEvidence;
+  frames: Uint8Array[];
+}
+
+/**
+ * Frames + evidence for one clip, then the multipart POST. With `cache` (keyed by the pinned
+ * Idempotency-Key) a retry reuses the first build, so the body matches the key on the server
+ * (a different body under the same key is 409 IDEMPOTENCY_KEY_REUSED).
+ */
 export async function sendAttempt(
   d: {
     api: Pick<YoApi, 'uploadFrames'>;
@@ -144,7 +156,21 @@ export async function sendAttempt(
     clip: ClipIn;
     idempotencyKey: string;
   },
+  cache?: Map<string, PreparedAttempt>,
 ) {
+  let prepared = cache?.get(a.idempotencyKey);
+  if (!prepared) {
+    prepared = await prepareAttempt(d, a);
+    cache?.set(a.idempotencyKey, prepared);
+  }
+  const res = await d.api.uploadFrames(prepared.evidence, prepared.frames, a.idempotencyKey);
+  return { evidence: prepared.evidence, res };
+}
+
+async function prepareAttempt(
+  d: Parameters<typeof sendAttempt>[0],
+  a: Parameters<typeof sendAttempt>[1],
+): Promise<PreparedAttempt> {
   const frames = await d.extractFrames(a.clip.uri, a.clip.durationMs);
   const clip = await d.readClip(a.clip.uri);
   const evidence = buildEvidence({
@@ -157,10 +183,5 @@ export async function sendAttempt(
     recorded_at: d.iso(a.clip.endedAtMs),
     frames,
   });
-  const res = await d.api.uploadFrames(
-    evidence,
-    frames.map((f) => f.jpeg),
-    a.idempotencyKey,
-  );
-  return { evidence, res };
+  return { evidence, frames: frames.map((f) => f.jpeg) };
 }

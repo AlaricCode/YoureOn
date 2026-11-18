@@ -25,7 +25,7 @@ import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
 import { RealtimeEvent } from '@youre-on/shared/realtime';
 import { z } from 'zod/v4';
 
-import { buildMultipart } from './multipart';
+import { boundaryFor, buildMultipart } from './multipart';
 import type { ApiClient } from './signedFetch';
 
 /** §2.14 GET /v1/me/balance */
@@ -143,15 +143,19 @@ export function createYoApi(c: ApiClient) {
       frames: readonly Uint8Array[],
       idempotencyKey: string,
     ) => {
-      const body = buildMultipart([
-        { name: 'evidence', contentType: 'application/json', body: JSON.stringify(evidence) },
-        ...frames.map((f, i) => ({
-          name: 'frame',
-          filename: `${String(i).padStart(2, '0')}.jpg`,
-          contentType: 'image/jpeg',
-          body: f,
-        })),
-      ]);
+      const body = buildMultipart(
+        [
+          { name: 'evidence', contentType: 'application/json', body: JSON.stringify(evidence) },
+          ...frames.map((f, i) => ({
+            name: 'frame',
+            filename: `${String(i).padStart(2, '0')}.jpg`,
+            contentType: 'image/jpeg',
+            body: f,
+          })),
+        ],
+        // Derived from the pinned key: the same upload rebuilt for a resend is the same bytes.
+        boundaryFor(idempotencyKey),
+      );
       return c.request('POST', `${bet(evidence.bet_id)}/attempts/${evidence.attempt_no}/frames`, {
         raw: { bytes: body.bytes, contentType: body.contentType },
         schema: FramesResponse,
