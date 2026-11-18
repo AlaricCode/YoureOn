@@ -1,9 +1,12 @@
 """SAM 3.1 on Modal: text-prompted segmentation and tracking over a short run of JPEG frames.
 
-The server sends the attempt's frames (the same 12 JPEGs the judge sees, or a single still) and a
-text prompt ("water bottle"). SAM 3.1 (facebook/sam3.1, sam3.1_multiplex.pt) finds every instance
-on the prompt frame and tracks it through the rest. The reply is per-frame objects with a score,
-a pixel box and the mask area, optional run-length-encoded masks, and timings.
+General purpose: nothing here knows what a challenge is. The caller sends a short run of frames
+(an attempt's sampled frames, or a single still) and one or more text prompts naming the things to
+find ("person", "ball", "hoop", "water bottle"...). For each prompt SAM 3.1 (facebook/sam3.1,
+sam3.1_multiplex.pt) finds every instance on the prompt frame, picks up new ones later, and tracks
+them through the rest. The reply has, per prompt, per-frame objects (score, pixel box, mask area,
+optional RLE mask) and a per-object track summary: plain measurements, never a verdict. Deciding
+what they mean for a given challenge is the caller's job.
 
 Deploy (from the repo root, with the workspace's Modal profile):
     MODAL_PROFILE=logan modal deploy services/sam3/modal_app.py
@@ -15,9 +18,13 @@ Weights are downloaded once into the `sam3-weights` Volume, not baked into the i
 API:
     GET  /health   -> {ok, model, gpu}   (no auth; wakes a GPU container, so it is not free)
     POST /segment  Authorization: Bearer <SAM3_API_TOKEN>
-         {prompt: str, frames: [base64 JPEG], prompt_frame?: int = 0, masks?: bool = false}
-         -> {model, gpu, prompt, frames: [{index, objects: [{id, score, box_xyxy, mask_area,
-            mask_rle?}]}], timing_ms, boot_ms}
+         {prompts: [str] (1-4) | prompt: str, frames: [base64 JPEG], prompt_frame?: int = 0,
+          masks?: bool = false}
+         -> {model, gpu, rev, results: [{prompt, frames: [{index, objects: [{id, score, box_xyxy,
+            box_all_xyxy, components, mask_area, mask_rle?}]}], tracks: [{id, frames, missing,
+            max_score, first, last}], timing_ms}], timing_ms, boot_ms}
+    box_xyxy is the box of the mask's largest connected blob (stable under motion blur, where a
+    few stray pixels can stretch the whole-mask box, box_all_xyxy, across the frame).
 """
 
 from __future__ import annotations
@@ -29,13 +36,14 @@ APP_NAME = "youre-on-sam3"
 SAM3_REF = "31cb7e624e4fe95301b1be1d4e809111593d2e45"
 MODEL = "facebook/sam3.1 (sam3.1_multiplex.pt)"
 # Bumped on every behavioural change, reported by /health, to tell which code a container runs.
-APP_REV = "2026-11-18.6"
+APP_REV = "2026-11-18.7"
 # 24 GB Ampere/Ada cards, in order of preference. On 2026-11-18 Modal had no L4 capacity for this
 # workspace (requests queued with zero runners) while A10G started at once.
 GPU = ["A10G", "L4"]
 MAX_FRAMES = 32
 MAX_FRAME_BYTES = 2 * 1024 * 1024
 MAX_PROMPT_CHARS = 120
+MAX_PROMPTS = 4
 
 app = modal.App(APP_NAME)
 weights = modal.Volume.from_name("sam3-weights", create_if_missing=True)
@@ -93,9 +101,17 @@ def _drop_unknown_init_kwargs(model) -> None:
     model.init_state = init_state
 
 
+def _shape(box) -> dict:
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    return {"box_xyxy": box, "w": w, "h": h, "aspect_h_over_w": round(h / w, 3) if w else None}
+
+
 def objects_of(outputs: dict, with_masks: bool) -> list[dict]:
-    """One frame's predictor outputs (out_obj_ids, out_probs, out_binary_masks) as plain JSON."""
+    """One frame's predictor outputs (out_obj_ids, out_probs, out_binary_masks) as plain JSON.
+    Boxes come from the masks, in pixels, so they never depend on the model's own box format."""
     import numpy as np
+    from scipy import ndimage
 
     ids = np.asarray(outputs.get("out_obj_ids", []))
     probs = outputs.get("out_probs")
@@ -108,17 +124,45 @@ def objects_of(outputs: dict, with_masks: bool) -> list[dict]:
         m = np.asarray(masks[i]).astype(bool) if masks is not None and len(masks) > i else None
         if m is not None and m.any():
             ys, xs = np.nonzero(m)
-            # The box comes from the mask itself, in pixels, so it never depends on the model's
-            # own box format.
+            o["box_all_xyxy"] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+            labels, n = ndimage.label(m)
+            sizes = np.bincount(labels.ravel())[1:]
+            main = labels == (int(np.argmax(sizes)) + 1)
+            ys, xs = np.nonzero(main)
             o["box_xyxy"] = [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
+            o["components"] = int(n)
             o["mask_area"] = int(m.sum())
             if with_masks:
                 o["mask_rle"] = rle(m)
         else:
-            o["box_xyxy"] = None
-            o["mask_area"] = 0
+            o.update(box_xyxy=None, box_all_xyxy=None, components=0, mask_area=0)
         objs.append(o)
     return objs
+
+
+def tracks_of(frames: list[dict]) -> list[dict]:
+    """Per object id: the frames it is on, the frames it is missing from inside its span, its best
+    score, and its shape on the first and last frame it appears on. Measurements only."""
+    seen: dict[int, list[tuple[int, dict]]] = {}
+    for f in frames:
+        for o in f["objects"]:
+            if o["mask_area"] > 0:
+                seen.setdefault(o["id"], []).append((f["index"], o))
+    tracks = []
+    for oid, hits in sorted(seen.items()):
+        idx = [i for i, _ in hits]
+        first, last = hits[0], hits[-1]
+        tracks.append(
+            {
+                "id": oid,
+                "frames": idx,
+                "missing": [i for i in range(idx[0], idx[-1] + 1) if i not in idx],
+                "max_score": max((o.get("score") or 0.0) for _, o in hits),
+                "first": {"index": first[0], "mask_area": first[1]["mask_area"], **_shape(first[1]["box_xyxy"])},
+                "last": {"index": last[0], "mask_area": last[1]["mask_area"], **_shape(last[1]["box_xyxy"])},
+            }
+        )
+    return tracks
 
 
 @app.cls(
@@ -160,12 +204,49 @@ class Sam3:
         self.api_token = os.environ["SAM3_API_TOKEN"]
         print(f"sam3.ready boot_ms={self.boot} gpu={self.gpu_name}")
 
-    def segment(self, frames: list[bytes], prompt: str, prompt_frame: int, with_masks: bool) -> dict:
-        import shutil
-        import tempfile
+    def _track(self, workdir: str, n: int, prompt: str, prompt_frame: int, with_masks: bool) -> dict:
+        """One session per prompt over the same frames, so prompts never share object ids."""
         import time
 
         import torch
+
+        p = self.predictor
+        t0 = time.perf_counter()
+        # The upstream notebooks run everything under bf16 autocast; propagate_in_video's detector
+        # backbone assumes it (else "mat1 and mat2 must have the same dtype"). Autocast is
+        # thread-local and FastAPI runs this on a worker thread, so it is entered here.
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            sid = p.handle_request({"type": "start_session", "resource_path": workdir})["session_id"]
+            t1 = time.perf_counter()
+            try:
+                first = p.handle_request(
+                    {"type": "add_prompt", "session_id": sid, "frame_index": prompt_frame, "text": prompt}
+                )
+                t2 = time.perf_counter()
+                per_frame = {prompt_frame: first["outputs"]}
+                if n > 1:
+                    for r in p.handle_stream_request({"type": "propagate_in_video", "session_id": sid}):
+                        per_frame[r["frame_index"]] = r["outputs"]
+                t3 = time.perf_counter()
+            finally:
+                p.handle_request({"type": "close_session", "session_id": sid})
+        frames = [{"index": i, "objects": objects_of(per_frame[i], with_masks)} for i in sorted(per_frame)]
+        return {
+            "prompt": prompt,
+            "prompt_frame": prompt_frame,
+            "frames": frames,
+            "tracks": tracks_of(frames),
+            "timing_ms": {
+                "load_frames": round((t1 - t0) * 1000),
+                "prompt": round((t2 - t1) * 1000),
+                "propagate": round((t3 - t2) * 1000),
+            },
+        }
+
+    def segment(self, frames: list[bytes], prompts: list[str], prompt_frame: int, with_masks: bool) -> dict:
+        import shutil
+        import tempfile
+        import time
 
         t0 = time.perf_counter()
         workdir = tempfile.mkdtemp(prefix="sam3-")
@@ -173,40 +254,16 @@ class Sam3:
             for i, jpg in enumerate(frames):
                 with open(f"{workdir}/{i:05d}.jpg", "wb") as f:
                     f.write(jpg)
-            p = self.predictor
-            # The upstream notebooks run everything under bf16 autocast; propagate_in_video's
-            # detector backbone assumes it (else "mat1 and mat2 must have the same dtype").
-            # Autocast is thread-local and FastAPI runs this on a worker thread, so enter it here.
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                sid = p.handle_request({"type": "start_session", "resource_path": workdir})["session_id"]
-                t1 = time.perf_counter()
-                try:
-                    first = p.handle_request(
-                        {"type": "add_prompt", "session_id": sid, "frame_index": prompt_frame, "text": prompt}
-                    )
-                    t2 = time.perf_counter()
-                    per_frame = {prompt_frame: first["outputs"]}
-                    if len(frames) > 1:
-                        for r in p.handle_stream_request({"type": "propagate_in_video", "session_id": sid}):
-                            per_frame[r["frame_index"]] = r["outputs"]
-                    t3 = time.perf_counter()
-                finally:
-                    p.handle_request({"type": "close_session", "session_id": sid})
+            results = [self._track(workdir, len(frames), q, prompt_frame, with_masks) for q in prompts]
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
         return {
             "model": MODEL,
             "sam3_ref": SAM3_REF,
+            "rev": APP_REV,
             "gpu": self.gpu_name,
-            "prompt": prompt,
-            "prompt_frame": prompt_frame,
-            "frames": [{"index": i, "objects": objects_of(per_frame[i], with_masks)} for i in sorted(per_frame)],
-            "timing_ms": {
-                "load_frames": round((t1 - t0) * 1000),
-                "prompt": round((t2 - t1) * 1000),
-                "propagate": round((t3 - t2) * 1000),
-                "total": round((time.perf_counter() - t0) * 1000),
-            },
+            "results": results,
+            "timing_ms": {"total": round((time.perf_counter() - t0) * 1000)},
             "boot_ms": self.boot,
         }
 
@@ -222,7 +279,8 @@ class Sam3:
         api = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
         class SegmentBody(BaseModel):
-            prompt: str = Field(min_length=1, max_length=MAX_PROMPT_CHARS)
+            prompt: str | None = Field(default=None, min_length=1, max_length=MAX_PROMPT_CHARS)
+            prompts: list[str] | None = Field(default=None, min_length=1, max_length=MAX_PROMPTS)
             frames: list[str] = Field(min_length=1, max_length=MAX_FRAMES)
             prompt_frame: int = 0
             masks: bool = False
@@ -242,6 +300,11 @@ class Sam3:
                 body = SegmentBody.model_validate(raw)
             except ValidationError as e:
                 raise HTTPException(status_code=422, detail=e.errors(include_url=False, include_input=False))
+            prompts = [q.strip() for q in (body.prompts or ([body.prompt] if body.prompt else []))]
+            if not prompts or any(not q or len(q) > MAX_PROMPT_CHARS for q in prompts):
+                raise HTTPException(status_code=422, detail=f"give prompt or prompts (1-{MAX_PROMPTS}, each 1-{MAX_PROMPT_CHARS} chars)")
+            if len(set(prompts)) != len(prompts):
+                raise HTTPException(status_code=422, detail="duplicate prompts")
             if not 0 <= body.prompt_frame < len(body.frames):
                 raise HTTPException(status_code=422, detail="prompt_frame out of range")
             frames = []
@@ -254,7 +317,7 @@ class Sam3:
                     raise HTTPException(status_code=422, detail=f"frames[{i}] is not a JPEG under 2 MB")
                 frames.append(jpg)
             try:
-                return self.segment(frames, body.prompt.strip(), body.prompt_frame, body.masks)
+                return self.segment(frames, prompts, body.prompt_frame, body.masks)
             except Exception as e:  # authorized callers get the cause, not a bare 500
                 import traceback
 
