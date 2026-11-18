@@ -36,7 +36,7 @@ body,
     'Segoe UI',
     Roboto,
     sans-serif;
-  font-size: clamp(14px, min(1.45vw, 2.6vh), 48px);
+  font-size: clamp(14px, min(1.6vw, 2.6vh), 48px);
   line-height: 1.25;
   -webkit-font-smoothing: antialiased;
 }
