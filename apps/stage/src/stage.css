@@ -250,6 +250,7 @@ code,
 .odds-grid > div {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 .odds-grid .num {
   font-size: 1.5em;
@@ -403,4 +404,17 @@ code,
 .market-result {
   font-size: 1.4em;
   margin: 8px 0 0;
+}
+.market-evidence {
+  margin: 4px 0 0;
+}
+.market .odds-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.market .odds-grid .num {
+  font-size: 1.15em;
+}
+/* a BTC price ($64,374.00) must fit its column on a 1440 px projector */
+.odds .odds-grid .num {
+  font-size: 1.25em;
 }
