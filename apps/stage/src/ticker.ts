@@ -21,8 +21,10 @@
 // (apps/server/src/payout/service.ts) publishes bet.state RULED with the confirmed resolve in
 // pending_tx and `appeal_deadline=<unix s>` in its reason, and bet.state PAID / VOIDED with the
 // confirmed payout tx. The card derives the appeal countdown and the payout amounts (the shared
-// payout() rule over the terms' stakes and the final outcome) from those; the chain.* events,
-// when Streams delivers them, carry the same values and simply confirm them.
+// payout() rule over the terms' stakes and the final outcome) from those; the chain.* events
+// carry the same values and simply confirm them. Those come from the QuickNode Stream or, when
+// it is off, the server's rpc_poll fallback: each says which in `observed_via` (SCHEMAS §10.2),
+// and only `quicknode_stream` ones may be presented as Streams.
 import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
 import { TERMINAL_BET_STATES, type PendingTx } from '@youre-on/shared/bet-state';
 import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
@@ -40,12 +42,17 @@ export const FOCUS_FRESH_MS = 30_000;
 
 export type ConnStatus = 'idle' | 'authorizing' | 'connecting' | 'open' | 'closed';
 
+/** ChainMeta.observed_via: who saw a chain.* event (every one has source 'chain'). */
+export type ObservedVia = 'quicknode_stream' | 'rpc_poll';
+
 export interface TickerEvent {
   bet_id: string;
   seq: number;
   type: string;
   ts: string;
   source: string;
+  /** chain.* only; null on every other event. */
+  observed_via: ObservedVia | null;
   /** Devnet Explorer link when the payload names a transaction signature. */
   explorer: string | null;
   payload: unknown;
@@ -59,11 +66,13 @@ export interface LockView {
   /** Signatures on the lock tx: atomic = fee payer + A + B (one tx), sequential = 2 each. */
   signers: number;
   status: 'submitted' | 'confirmed' | 'failed';
-  /** BetCreated / BetAccepted seen from the chain stream. */
+  /** BetCreated / BetAccepted seen on chain (Streams or rpc_poll; or the snapshot's chain_ack). */
   onchain: boolean;
+  /** Who saw that chain event; null until one is folded (a snapshot does not say). */
+  onchain_via: ObservedVia | null;
   slot: number | null;
   error: string | null;
-  /** Event ts of tx.submitted and of the first chain event (the Streams lag between them). */
+  /** Event ts of tx.submitted and of the first chain event (the Streams lag, if via Streams). */
   sent_at: string | null;
   onchain_at: string | null;
 }
@@ -270,6 +279,12 @@ export function findSignature(payload: unknown): string | null {
   return null;
 }
 
+function observedVia(e: RealtimeEvent): ObservedVia | null {
+  if (!e.type.startsWith('chain.')) return null;
+  const v = (e.payload as { observed_via?: unknown } | null)?.observed_via;
+  return v === 'quicknode_stream' || v === 'rpc_poll' ? v : null;
+}
+
 function toTicker(e: RealtimeEvent): TickerEvent {
   const sig = findSignature(e.payload);
   return {
@@ -278,6 +293,7 @@ function toTicker(e: RealtimeEvent): TickerEvent {
     type: e.type,
     ts: e.ts,
     source: e.source,
+    observed_via: observedVia(e),
     explorer: sig ? explorerTx(sig) : null,
     payload: e.payload,
   };
@@ -532,6 +548,7 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
           // a late tx.submitted never downgrades a confirmation
           status: prev?.status === 'confirmed' && status === 'submitted' ? 'confirmed' : status,
           onchain: prev?.onchain ?? false,
+          onchain_via: prev?.onchain_via ?? null,
           slot: e.type === 'tx.confirmed' ? e.payload.slot : (prev?.slot ?? null),
           error: e.type === 'tx.failed' ? e.payload.error : null,
           sent_at: e.type === 'tx.submitted' ? (prev?.sent_at ?? e.ts) : (prev?.sent_at ?? null),
@@ -542,13 +559,20 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'chain.BetCreated':
     case 'chain.BetAccepted': {
       const lock: LockView = v.lock
-        ? { ...v.lock, onchain: true, status: 'confirmed', onchain_at: v.lock.onchain_at ?? e.ts }
+        ? {
+            ...v.lock,
+            onchain: true,
+            status: 'confirmed',
+            onchain_at: v.lock.onchain_at ?? e.ts,
+            onchain_via: v.lock.onchain_via ?? e.payload.observed_via,
+          }
         : {
             kind: 'atomic_lock',
             signature: e.payload.signature,
             signers: 3,
             status: 'confirmed',
             onchain: true,
+            onchain_via: e.payload.observed_via,
             slot: e.payload.slot,
             error: null,
             sent_at: null,
@@ -737,6 +761,7 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
       signers: 3,
       status: 'confirmed',
       onchain: snap.chain_ack === 'stream',
+      onchain_via: null,
       slot: null,
       error: null,
       sent_at: null,
@@ -749,8 +774,10 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
       event: 'payout',
       signature: snap.signatures.payout ?? null,
     };
-  // The projector does not write bets.payout_a/b yet: a settled bet's snapshot has no payout.
-  // paid_at stays null, so a cold start shows the result without replaying the PAID moment.
+  // bets.payout_a/b are written when the chain fold applies the terminal event (chain/fold.ts;
+  // the timeout refund in payout/refund.ts too), which can trail bet.state PAID / VOIDED: until
+  // then a settled bet's snapshot has no payout and it is derived. paid_at stays null, so a cold
+  // start shows the result without replaying the PAID moment.
   else if (settled && !v.payout) {
     const paid = derivedPayout(v, snap.state, snap.pending_tx, snap.signatures.payout ?? null);
     if (paid) v = { ...v, payout: paid, appeal_deadline: null };

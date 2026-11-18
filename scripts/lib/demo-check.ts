@@ -575,17 +575,30 @@ export function evaluateDemoHealth(
   return out;
 }
 
+/**
+ * The Stream check's env: QUICKNODE_API_KEY (what scripts/qn-stream.ts reads), else the older
+ * QN_API_KEY alias, plus QN_STREAM_ID. null when either is missing (the check is skipped).
+ */
+export function streamEnv(
+  env: Record<string, string | undefined>,
+): { apiKey: string; streamId: string } | null {
+  const apiKey = env['QUICKNODE_API_KEY']?.trim() || env['QN_API_KEY']?.trim();
+  const streamId = env['QN_STREAM_ID']?.trim();
+  return apiKey && streamId ? { apiKey, streamId } : null;
+}
+
 /** QuickNode Streams REST: the Stream's status (SKIP when not configured). */
 export function evaluateStream(
   r: { status: number; body: unknown } | { error: string } | null,
   lastDeliveryAt: string | null | undefined,
+  streamId = '<id>',
 ): Check {
   const seen = lastDeliveryAt ? `, last delivery ${lastDeliveryAt}` : ', no delivery recorded';
   if (r === null)
     return {
       id: 'stream.status',
       verdict: 'SKIP',
-      detail: `QN_API_KEY / QN_STREAM_ID not set${seen}`,
+      detail: `QUICKNODE_API_KEY (or QN_API_KEY) / QN_STREAM_ID not set${seen}`,
     };
   if ('error' in r)
     return { id: 'stream.status', verdict: 'WARN', detail: `unreachable: ${r.error}` };
@@ -600,7 +613,13 @@ export function evaluateStream(
     detail: `${status}${seen}`,
     ...(status === 'active'
       ? {}
-      : { fix: 'POST /v1/demo/stream/reset-start then activate (QuickNode dashboard)' }),
+      : {
+          // a paused Stream resumes where it paused: move start_range to the tip first
+          fix:
+            status === 'paused'
+              ? `npm run qn-stream -- reset-start ${streamId} && npm run qn-stream -- resume ${streamId}`
+              : `npm run qn-stream -- get ${streamId} (status ${status}); pause, reset-start, resume`,
+        }),
   };
 }
 
