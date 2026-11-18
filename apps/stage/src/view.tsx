@@ -20,6 +20,7 @@ import {
 } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { isCachedRulingModel } from '@youre-on/shared/ruling';
 import { formatPrice } from '@youre-on/shared/settlement';
 import {
   explorerTx,
@@ -480,6 +481,15 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
           : r.stage === 'hearing'
             ? 'THE JUDGE RULES · AFTER THE HEARING'
             : `THE JUDGE RULES${r.attempt_no ? ` · ATTEMPT ${r.attempt_no}` : ''}`}
+        {/* CACHED_RULING: a stored verdict, no model call (ARCHITECTURE §7.2): say so on screen */}
+        {isCachedRulingModel(r.model) && (
+          <>
+            {' '}
+            <span className="replay-badge inline" title={r.model}>
+              replay ruling
+            </span>
+          </>
+        )}
       </span>
       <div className="verdict">{outcomeLine(bet)}</div>
       <div className="ruling-row">
