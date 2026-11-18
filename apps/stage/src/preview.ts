@@ -107,8 +107,8 @@ export function bottleFrame(attempt: 1 | 2, i: number): string {
     : '';
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">` +
-    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#323848"/>` +
-    `<stop offset="1" stop-color="#161a22"/></linearGradient></defs>` +
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2e2e32"/>` +
+    `<stop offset="1" stop-color="#141416"/></linearGradient></defs>` +
     `<rect width="160" height="120" fill="url(#g)"/>` +
     `<rect y="90" width="160" height="30" fill="#6b4f35"/><rect y="90" width="160" height="2" fill="#8a6a4a"/>` +
     bottle +
@@ -261,6 +261,21 @@ function sequence(): Entry[] {
   // ---- Beats 1-4: the bottle flip --------------------------------------------------------
   const flip = (base: number) => flipEnvelope(base);
   snapshot(0, BET_FLIP);
+  // A face challenge between rivals: the stage shows "Logan 4–7 Jake · Rivals" under VS.
+  frame(0, BET_FLIP, 'bet.invited', () => ({
+    challenger: { user_id: USER_A, pubkey: PK_A, display_name: NAMES.A, avatar_url: null },
+    room_id: ROOM,
+    rivalry: {
+      challenge_method: 'face',
+      a_wins: 4,
+      b_wins: 7,
+      pushes: 0,
+      total: 11,
+      streak: { party: 'B', length: 2 },
+      rival: true,
+      includes_seed: true,
+    },
+  }));
   state(0, BET_FLIP, 'DRAFTING', null);
   frame(1_500, BET_FLIP, 'bet.invite_answered', () => ({ party: 'B', answer: 'accepted' }));
   judge(3_000, BET_FLIP, "Alright, Logan. What's the bet?");
