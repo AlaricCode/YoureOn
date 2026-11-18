@@ -38,7 +38,8 @@ export interface JudgeVoiceProps {
   dynamicVariables: VoiceDynamicVariables;
   /** Mute, don't end (FINDINGS §4): true from the terms card on, except in a hearing. */
   micMuted: boolean;
-  startAttempt(attemptNo: number): Promise<void>;
+  /** Resolves with who films (../attempt/recorder): the judge cam, or this phone. */
+  startAttempt(attemptNo: number): Promise<'judge_cam' | 'self' | void>;
   onShowTermsCard(): void;
   onPhase?(p: SessionPhase): void;
   /** The judge is talking (SDK mode 'speaking') vs listening. */

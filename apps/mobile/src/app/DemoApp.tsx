@@ -39,6 +39,7 @@ import { otherParty, type Party } from '@youre-on/shared/primitives';
 import { formatPrice } from '@youre-on/shared/settlement';
 
 import { extractFrames, readClip } from '../attempt/capture';
+import { startAttemptVia, startsAttempt, type Recorder } from '../attempt/recorder';
 import { initialLock, lockReducer, type AuthFailure } from '../bets/lock';
 import { emptyBet, endReasonOf, lockSignals, type BetModel } from '../bets/store';
 import { betView, myResult, type BetView } from '../bets/view';
@@ -510,6 +511,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     () => (bet?.envelope && me ? betView(bet.envelope.terms, bet.envelope.terms_hash, me) : null),
     [bet?.envelope?.terms_hash, me],
   );
+  /** Who performs: the non-performer's phone has Start and may film (../attempt/recorder). */
+  const performer: Party | null = bet?.envelope?.terms.performer ?? bet?.attempt?.performer ?? null;
+  const canStart = startsAttempt(me, performer);
 
   // ---- typed terms (A only): reset per bet; the form is the default without voice ------------
   const negotiating = route === 'negotiate' && me === 'A' && !app.judgeCam;
@@ -900,11 +904,25 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       .catch(() => undefined);
   };
 
+  /**
+   * POST /attempts for `b` from this phone (party `as`): the judge cam if the room has one, else
+   * this phone films (two phones; never the performer's, ../attempt/recorder).
+   */
+  const startAttemptFor = useCallback(
+    (b: BetModel, attemptNo: number, as: Party | null): Promise<Recorder> =>
+      startAttemptVia(
+        (recorder) => rt.api.startAttempt(b.bet_id, attemptNo, recorder),
+        as,
+        b.envelope?.terms.performer ?? b.attempt?.performer ?? null,
+      ).then((s) => s.recorder),
+    [rt],
+  );
+
   const startAttempt = async () => {
     if (!bet) return;
     setBusy(true);
     try {
-      await rt.api.startAttempt(bet.bet_id, nextAttemptNo(bet));
+      await startAttemptFor(bet, nextAttemptNo(bet), me);
     } catch (e) {
       // Quiet on the benign races; 'No judge cam' when the room has none on the server.
       const note = attemptStartAlert(e);
@@ -1372,7 +1390,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             view={view}
             phase={phase}
             attemptNo={bet?.attempt?.attempt_no ?? 1}
-            onStart={me === 'A' ? () => void startAttempt() : undefined}
+            onStart={canStart ? () => void startAttempt() : undefined}
             startBusy={busy}
           />
         ) : (
@@ -1398,7 +1416,15 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         );
       }
       case 'judgeCam':
-        return <JudgeCamScreen arm={arm} onSend={sendClip} onBack={() => setJudgeCam(false)} />;
+        // This phone films: as the room's judge cam, or (two phones) as the non-performer's own
+        // phone for this attempt only, which has no judge-cam mode to leave.
+        return (
+          <JudgeCamScreen
+            arm={arm}
+            onSend={sendClip}
+            onBack={app.judgeCam ? () => setJudgeCam(false) : undefined}
+          />
+        );
       case 'redo':
         return (
           <RedoScreen
@@ -1406,7 +1432,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             maxAttempts={3}
             tip={FILMING_TIP}
             onReady={() => {
-              if (me === 'A') void startAttempt();
+              if (canStart) void startAttempt();
             }}
           />
         );
@@ -1465,7 +1491,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               rt={rt}
               betId={voiceBet.bet_id}
               dynamicVariables={voice}
-              startAttempt={(n) => rt.api.startAttempt(voiceBet.bet_id, n).then(() => undefined)}
+              startAttempt={(n) => startAttemptFor(voiceBet, n, 'A')}
               micMuted={micMutedFor(voiceBet.state)}
               onShowTermsCard={() => showTermsCard(voiceBet.bet_id)}
               onPhase={setVoicePhase}
