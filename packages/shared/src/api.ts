@@ -536,6 +536,16 @@ export const MeBetsResponse = z.object({
 });
 export type MeBetsResponse = z.infer<typeof MeBetsResponse>;
 
+/**
+ * §2.14 GET /v1/bets/:bet_id/events?after=<seq>&limit=200: the page size the contract prints,
+ * which is also the most one page returns. The response schema is `BetEventsResponse` in
+ * ./realtime (it embeds RealtimeEvent, and this module must not import ./realtime).
+ */
+export const BET_EVENTS_LIMIT = 200;
+/** The REST resync path: the bet's log after `after`, oldest first, at most `limit` envelopes. */
+export const betEventsPath = (betId: string, after: number, limit: number = BET_EVENTS_LIMIT) =>
+  `/v1/bets/${encodeURIComponent(betId)}/events?after=${after}&limit=${limit}`;
+
 /** §2.3 */
 export const RoomMember = z.object({
   user: UserRef,

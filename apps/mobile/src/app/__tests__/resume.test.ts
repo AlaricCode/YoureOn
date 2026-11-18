@@ -77,8 +77,8 @@ describe('BetHub.restore (cold start mid-bet)', () => {
     const m = await hub.restore(snapshot({ my_party: 'B', state: 'TERMS_PROPOSED', last_seq: 5 }));
     expect(m.state).toBe('TERMS_PROPOSED');
     expect(hub.lastSeq(BET)).toBe(5);
-    // ...except the challenger, which is always party A: B gets the invite back (the live
-    // server has no GET /v1/bets/:id/events yet, so this is the path it takes today).
+    // ...except the challenger, which is always party A: B gets the invite back (also the path
+    // a server without GET /v1/bets/:id/events takes: it answers 404).
     expect(m.challenger?.user_id).toBe(ME_A.user_id);
     expect(m.inviteAnswer).toBeNull();
     let app = appReducer(initialApp, { type: 'booted', me: ME_B, deviceId: DEVICE_A });
