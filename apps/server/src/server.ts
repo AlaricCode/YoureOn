@@ -13,6 +13,7 @@ import { IdempotencyCache } from './http/idempotency';
 import { RateLimiter } from './http/rate-limit';
 import { createServerKeeper } from './keeper';
 import { createLogger, type Logger } from './log';
+import { createPayoutService } from './payout';
 import { createProviders } from './providers/registry';
 import type { Providers } from './providers/types';
 import { dbHubAccess } from './realtime/access';
@@ -55,6 +56,12 @@ export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbH
     rateLimit: o.rateLimit === false ? null : new RateLimiter(now),
     // Spend guard: throws SPEND_DISABLED here if a *_PROVIDER=live lacks ALLOW_SPEND=true.
     providers: createProviders(o.env, { overrides: o.providers }),
+  };
+  // Judge -> payout seam: a decisive or VOID ruling sends `resolve` on chain (src/payout).
+  // REDO keeps the bet in JUDGING for the next attempt, so it never reaches the chain.
+  deps.onRuling = async (betId, ruling) => {
+    if (ruling.outcome === 'REDO') return;
+    await createPayoutService(deps).onRuling(betId, ruling);
   };
   if (o.keeper ?? o.env.NODE_ENV !== 'test') deps.keeper = createServerKeeper(deps);
   return { deps, dbHandle };

@@ -10,6 +10,7 @@ import type { IdempotencyCache } from './http/idempotency';
 import type { RateLimiter } from './http/rate-limit';
 import type { Keeper } from './keeper/keeper';
 import type { Providers } from './providers/types';
+import type { Ruling } from '@youre-on/shared/ruling';
 
 /** Who is calling, after `requireSession` (bearer) or the WS hello. */
 export interface AuthContext {
@@ -48,6 +49,12 @@ export interface AppDeps {
   providers: Providers;
   /** Periodic Postgres sweeps (src/keeper); started/stopped by startServer. Absent in tests by default. */
   keeper?: Keeper;
+  /**
+   * Called by the judge pipeline (src/judge) after every persisted attempt ruling has been
+   * committed and pushed, REDO included. The payout stream (src/payout) sends `resolve` for
+   * decisive / VOID rulings. Unset = no-op. Errors are logged, never surfaced to the uploader.
+   */
+  onRuling?: (betId: string, ruling: Ruling) => Promise<void> | void;
 }
 
 export type AppVariables = {

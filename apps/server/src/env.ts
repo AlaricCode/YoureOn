@@ -54,6 +54,11 @@ export const EnvSchema = z.object({
   STT_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
   /** mock = generated beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
   SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
+  // --- judge pipeline (src/judge, Beat 4)
+  /** Anthropic model for the attempt ruling (12 frames; Opus is too slow for the 10 s cap). */
+  JUDGE_MODEL: z.preprocess(unset, str.default('claude-sonnet-5-5')),
+  /** Demo fallback (ARCHITECTURE §7.2 cached_ruling): rule from a stored verdict, no LLM call. */
+  CACHED_RULING: z.preprocess(unset, boolStr.default(false)),
   // --- Solana / QuickNode (secret)
   SOLANA_DEVNET_RPC: opt(z.url()),
   SOLANA_DEVNET_WS: opt(z.url()),
