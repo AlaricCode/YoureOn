@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   getAddressEncoder,
@@ -449,7 +449,8 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
     await quiet();
     expect(await versions(betId)).toBe(1);
 
-    // 5. Spoken "deal" before B accepted the challenge on their own phone: not consent.
+    // 5. Spoken "deal" before B accepted the challenge on their own phone: not consent. Not
+    //    replayed (a repeat is checked again), and audited with the terms it was refused for.
     const pending = await tool('confirm_terms', { ...ids, heard: 'both' });
     expect(pending.status).toBe(200);
     expect(pending.json).toEqual({
@@ -457,10 +458,28 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
       fix: 'INVITE_PENDING',
       say: 'Jake has to accept the challenge on their phone first.',
     });
+    expect((await tool('confirm_terms', { ...ids, heard: 'both' })).json).toEqual(pending.json);
     expect((await betRow(betId)).state).toBe('TERMS_PROPOSED');
+    const refusedAudits = await audits(betId, 'terms.confirm_refused');
+    expect(refusedAudits).toHaveLength(2);
+    expect(refusedAudits[0]).toMatchObject({
+      actor_kind: 'judge',
+      details: { reason: 'invite_pending', terms_hash: (await betRow(betId)).terms_hash },
+    });
 
-    // 6. B accepts; the judge confirms: frozen now, the custodial lock in the background.
+    // 6. B accepts: the judge, told to wait, gets a spoken [EVENT] line to confirm again (it
+    //    only hears the room, so nothing else would end the silence). It confirms: frozen now,
+    //    the custodial lock in the background.
     expect((await signed(ctx, B, `/v1/bets/${betId}/invite/accept`)).status).toBe(200);
+    const resume = await wsA.next(
+      (e) => e.type === 'judge.cue' && e.bet_id === betId && e.payload.cue === 'INVITE_ACCEPTED',
+    );
+    expect(parseRealtimeEvent(resume).ok).toBe(true);
+    expect(resume.payload).toEqual({
+      cue: 'INVITE_ACCEPTED',
+      speak: true,
+      text: '[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.',
+    });
     const confirmed = await tool('confirm_terms', { ...ids, heard: 'both' });
     expect(confirmed.status).toBe(200);
     const hash = (await betRow(betId)).terms_hash!;
@@ -502,6 +521,7 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
       'terms.proposed',
       'bet.state:TERMS_PROPOSED',
       'bet.invite_answered',
+      'judge.cue:INVITE_ACCEPTED',
       'bet.state:AWAITING_AUTHORIZATIONS',
       'terms.proposed', // the frozen (final) envelope
       'terms.authorized',
@@ -519,6 +539,90 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
     );
     expect(locked.payload.speak).toBe(true);
     expect(locked.payload.text).toMatch(/^\[EVENT\] LOCKED .* :: .*request_attempt/);
+  });
+
+  it("confirm_terms racing the propose_terms sink: B's accept is checked under the row lock", async () => {
+    const p = await freshPair();
+    const { betId, ids } = await voiceBet({ a: p.a, b: p.b, room: p.room });
+    /** Sessions of this database waiting on a lock (the bet row). */
+    const lockWaiters = async () => {
+      const rows = await ctx.deps.db.execute(
+        sql`SELECT count(*)::int AS n FROM pg_stat_activity
+            WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+      );
+      return (rows as unknown as Array<{ n: number }>)[0]!.n;
+    };
+    // Hold the bet row, so the sink's DRAFTING -> TERMS_PROPOSED transaction and then
+    // confirm_terms' freeze queue behind it in that order (Postgres grants row locks FIFO).
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held!: () => void;
+    const holding = new Promise<void>((r) => (held = r));
+    const holder = ctx.deps.db.transaction(async (tx) => {
+      await tx.select({ id: bets.id }).from(bets).where(eq(bets.id, betId)).for('update');
+      held();
+      await gate;
+    });
+    await holding;
+    try {
+      const proposed = await tool('propose_terms', { ...ids, ...BOTTLE });
+      expect(proposed.json).toMatchObject({ ok: true, next: 'readback' });
+      await expect.poll(lockWaiters, { timeout: 3_000 }).toBe(1); // the sink
+      // What confirm_terms' binding read sees: the sink has not committed yet.
+      expect((await betRow(betId)).state).toBe('DRAFTING');
+      const confirm = tool('confirm_terms', { ...ids, heard: 'both' });
+      await expect.poll(lockWaiters, { timeout: 3_000 }).toBe(2); // + the freeze
+      release();
+      await holder;
+      // The sink committed TERMS_PROPOSED first; the freeze then saw no accept from B.
+      expect((await confirm).json).toEqual({
+        ok: false,
+        fix: 'INVITE_PENDING',
+        say: 'Jake has to accept the challenge on their phone first.',
+      });
+    } finally {
+      release();
+      await holder.catch(() => undefined);
+    }
+    await lc.idle();
+    const row = await betRow(betId);
+    expect(row.state).toBe('TERMS_PROPOSED');
+    expect(row.terms_final_at).toBeNull();
+    expect(await audits(betId, 'terms.confirm_refused')).toHaveLength(1);
+    expect(await labels(betId)).not.toContain('bet.state:AWAITING_AUTHORIZATIONS');
+    // B's accept now hands the waiting judge its cue.
+    expect((await signed(ctx, p.b, `/v1/bets/${betId}/invite/accept`)).status).toBe(200);
+    expect((await labels(betId)).slice(-2)).toEqual([
+      'bet.invite_answered',
+      'judge.cue:INVITE_ACCEPTED',
+    ]);
+  });
+
+  it('the INVITE_ACCEPTED cue follows only a refused voice confirm of the same terms', async () => {
+    // B accepts before anyone asked to confirm: nothing to resume, no cue.
+    const p = await freshPair();
+    const early = await voiceBet({ a: p.a, b: p.b, room: p.room });
+    await tool('propose_terms', { ...early.ids, ...BOTTLE });
+    await settledTo(early.betId, 'TERMS_PROPOSED');
+    expect((await signed(ctx, p.b, `/v1/bets/${early.betId}/invite/accept`)).status).toBe(200);
+    expect(await labels(early.betId)).not.toContain('judge.cue:INVITE_ACCEPTED');
+
+    // Refused for one set of terms, then the terms changed: the yes was for the old terms.
+    const q = await freshPair();
+    const changed = await voiceBet({ a: q.a, b: q.b, room: q.room });
+    await tool('propose_terms', { ...changed.ids, ...BOTTLE });
+    await settledTo(changed.betId, 'TERMS_PROPOSED');
+    expect((await tool('confirm_terms', { ...changed.ids, heard: 'both' })).json).toMatchObject({
+      fix: 'INVITE_PENDING',
+    });
+    const before = (await betRow(changed.betId)).terms_hash;
+    await tool('propose_terms', { ...changed.ids, ...BOTTLE, amount_usd: '6' });
+    await expect
+      .poll(async () => (await betRow(changed.betId)).terms_hash, { timeout: 3_000 })
+      .not.toBe(before);
+    expect((await signed(ctx, q.b, `/v1/bets/${changed.betId}/invite/accept`)).status).toBe(200);
+    expect(await labels(changed.betId)).not.toContain('judge.cue:INVITE_ACCEPTED');
+    expect((await betRow(changed.betId)).state).toBe('TERMS_PROPOSED');
   });
 
   // ---- refusals --------------------------------------------------------------------------

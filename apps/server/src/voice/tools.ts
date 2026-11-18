@@ -12,7 +12,8 @@
 // confirm_terms: the read-back is done and both said yes out loud (theatre, not binding): freeze
 // the terms -> AWAITING_AUTHORIZATIONS, answer now, then LockService.start in the background
 // (nonce lease + build + simulate, terms.authorize_request; LOCK_SIGNER=server signs custodially).
-// B must have accepted the invite on B's own phone first ({ok:false, fix:'INVITE_PENDING'}).
+// B must have accepted the invite on B's own phone first ({ok:false, fix:'INVITE_PENDING'},
+// checked under the bet row lock); B's accept then cues the judge to call it again.
 //
 // Conventions (§4.2): always HTTP 200 with JSON < 300 B, except 401 for a bad secret; business
 // errors are {ok:false, fix, say}; the binding check resolves conversation_id -> voice_sessions
@@ -31,13 +32,12 @@ import {
   type ProposeEvaluation,
   type ToolReply,
 } from '@youre-on/shared/judge/reply';
-import { priorAnswers } from '../bets/routes';
 import { loadUserRefs } from '../bets/snapshot';
 import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
 import { lifecycleOf } from '../lock/runtime';
-import { confirmTerms, persistEvaluation } from '../lock/terms';
+import { confirmTerms, persistEvaluation, type ConfirmOptions } from '../lock/terms';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
 
 /** States in which the judge may (re)propose terms (SCHEMAS §9.2: edits before the freeze). */
@@ -387,14 +387,13 @@ export function confirmSay(a: string, b: string): string {
 export async function confirmAndLock(
   deps: AppDeps,
   betId: string,
-  o: {
-    heard?: string;
-    requestId?: string;
-    actor?: 'judge' | 'system' | 'user';
-    actorUserId?: string;
-  } = {},
+  o: ConfirmOptions = {},
 ): Promise<ToolReply> {
   const r = await confirmTerms(deps, betId, o);
+  if (!r.ok && r.fix === 'INVITE_PENDING') {
+    const b = (await loadUserRefs(deps.db, [r.party_b_id])).get(r.party_b_id);
+    return { ok: false, fix: 'INVITE_PENDING', say: invitePendingSay(b?.display_name ?? 'They') };
+  }
   if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
   if (!r.already) lifecycleOf(deps).lock.startInBackground(betId);
   const t = r.envelope.terms;
@@ -480,30 +479,24 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
       }
       // B's consent is B's own tap on the invite, never what the judge heard (a spoken "deal"
       // is theatre, §4.1). With LOCK_SIGNER=server the lock signs B's stake custodially, so
-      // freezing before B accepted would spend B's money on A's word. Same gate as typed
-      // terms (terms/routes.ts). Not replayed: it turns into a success once B taps accept.
-      if (
-        session.bet_state === 'TERMS_PROPOSED' &&
-        !(await priorAnswers(deps.db, betId)).has('accepted')
-      ) {
-        const b = (await loadUserRefs(deps.db, [session.party_b_id])).get(session.party_b_id);
-        deps.log.info('el_tool.call', {
-          tool: name,
-          bet_id: betId,
-          ok: false,
-          fix: 'INVITE_PENDING',
-          request_id: requestId,
-        });
-        return reply(c, {
-          ok: false,
-          fix: 'INVITE_PENDING',
-          say: invitePendingSay(b?.display_name ?? 'They'),
-        });
-      }
-      const r = await confirmAndLock(deps, betId, { heard, requestId });
-      // Only a success is replayed: NOT_PROPOSED may turn into a success a second later.
+      // freezing before B accepted would spend B's money on A's word. Checked inside the
+      // freeze, under the row lock: the binding's bet_state above may already be stale (the
+      // propose_terms sink is not awaited). B's later accept sends the judge an [EVENT]
+      // INVITE_ACCEPTED line to call this again (bets/invite.ts).
+      const r = await confirmAndLock(deps, betId, {
+        heard,
+        requestId,
+        requireInviteAccepted: true,
+      });
+      // Only a success is replayed: NOT_PROPOSED / INVITE_PENDING may turn into one a second later.
       if (r.ok) opts.state.store(dedupeKey, now, r);
-      deps.log.info('el_tool.call', { tool: name, bet_id: betId, ok: r.ok, request_id: requestId });
+      deps.log.info('el_tool.call', {
+        tool: name,
+        bet_id: betId,
+        ok: r.ok,
+        fix: r.fix,
+        request_id: requestId,
+      });
       return reply(c, r);
     } catch (e) {
       deps.log.error('el_tool.failed', {
