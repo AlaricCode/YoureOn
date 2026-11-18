@@ -1,0 +1,43 @@
+# Beat 6 on phone A, after 04-challenge.yaml (and B's 05-accept.yaml): "Bet on Bitcoin" opens
+# the market panel; Gemini's odds arrive (GET /v1/markets/btc5m/quote every 2 s; a local server
+# with MARKETS_FEED=replay serves a recorded round, labelled REPLAY); Up, $2, "Send terms" ->
+# POST /v1/bets/:id/terms/market -> the market card, and "Lock it in" once B has accepted.
+# Never taps Lock it in. Gemini refuses to price the last 2 minutes of a round, so the panel may
+# count down to the next one first: the flow waits up to 3 minutes for a price.
+#   maestro --device <udid A> test e2e/maestro/market-terms.yaml
+appId: dev.youreon.app
+name: market-terms
+---
+- extendedWaitUntil:
+    visible:
+      id: market-open
+    timeout: 20000
+- tapOn:
+    id: market-open
+- extendedWaitUntil:
+    visible:
+      id: market-side-UP
+    timeout: 10000
+- assertVisible:
+    id: market-side-DOWN
+- tapOn:
+    id: market-stake-2
+- takeScreenshot: 50-market-panel
+- extendedWaitUntil:
+    visible:
+      id: market-send
+      enabled: true
+    timeout: 180000
+- takeScreenshot: 51-market-priced
+- tapOn:
+    id: market-send
+- extendedWaitUntil:
+    visible:
+      id: market-confirm|market-waiting
+    timeout: 20000
+- assertVisible: Draft terms
+# The card scrolls into view above "Lock it in" (it used to sit cut off under the button).
+- waitForAnimationToEnd:
+    timeout: 2000
+- assertVisible: .* vs .* · you Up
+- takeScreenshot: 52-market-card

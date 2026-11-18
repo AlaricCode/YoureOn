@@ -1,0 +1,30 @@
+# Restart mid-bet on a "Bet on Bitcoin" card, challenger side: after market-terms.yaml (B has
+# accepted), kill and relaunch A. The bet comes back with the market card, and the panel reopens
+# on it (A's call, the stake, the odds polling) with "Lock it in", instead of the typed form at
+# $1 under a card it could not confirm. Never taps Lock it in.
+#   maestro --device <udid A> test e2e/maestro/resume-market.yaml
+appId: dev.youreon.app
+name: resume-market
+---
+- assertVisible:
+    id: market-confirm
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: market-side-UP
+    timeout: 30000
+- extendedWaitUntil:
+    visible:
+      id: market-confirm
+    timeout: 10000
+- assertVisible:
+    id: market-side-UP
+    selected: true
+- assertVisible:
+    id: market-stake-2
+    selected: true
+- assertNotVisible:
+    id: typed-send
+- assertVisible: Draft terms
+- takeScreenshot: 73-challenger-resumed-on-market-card
