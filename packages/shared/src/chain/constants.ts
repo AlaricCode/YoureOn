@@ -7,7 +7,7 @@
 import { NONCE_SEED_MAX } from '../constants';
 
 /** Escrow program ID = `declare_id!` in programs/escrow (keypair: target/deploy/escrow-keypair.json). */
-export const ESCROW_ID = 'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm';
+export const ESCROW_ID = 'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp';
 
 /** Circle devnet USDC: classic SPL Token, 6 decimals, freeze authority set (ESCROW §2, DATA-MODEL §3.1). */
 export const USDC_MINT_DEVNET = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
@@ -22,7 +22,7 @@ export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
  * Server fee payer = durable-nonce authority (SETUP-CHECKLIST KP3), made by `npm run keys`
  * (2026-11-15). Phones re-derive the nonce pool from it, so rotating it needs a new app build.
  */
-export const FEE_PAYER_PUBKEY: string | null = 'E9JtQxzH3zuMNpnddeSgzimDZRk3Zx1fVoL15os7zbbk';
+export const FEE_PAYER_PUBKEY: string | null = 'ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8';
 
 /** PDA seeds (ESCROW §2), UTF-8. Bet and vault append the 16 RFC 4122 bytes of bet_id. */
 export const CONFIG_SEED = 'config';

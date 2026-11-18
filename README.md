@@ -85,7 +85,7 @@ The full design is in [`docs/planning/ARCHITECTURE.md`](docs/planning/ARCHITECTU
 
 | Item                                   | Value                                                                  |
 | -------------------------------------- | ---------------------------------------------------------------------- |
-| Escrow program ID                      | `FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm` (devnet deploy pending) |
+| Escrow program ID                      | `BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp` (devnet deploy pending) |
 | USDC mint (Circle devnet)              | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`                         |
 | IDL                                    | `packages/shared/idl/escrow.json`                                      |
 | Config PDA                             | PENDING (after deploy + `init-config`)                                 |

@@ -53,7 +53,7 @@ Roles: `deployer` (upgrade authority = Config admin; password manager only, neve
   preview build #3 (TASKS D1); phones verify the nonce pool from it.
 
 The program keypair (`programs/escrow/target/deploy/escrow-keypair.json`, program ID
-`FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm`) already exists; never regenerate, copy or commit it.
+`BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp`) already exists; never regenerate, copy or commit it.
 
 ## 2. Build and test
 
@@ -83,7 +83,7 @@ solana program deploy target/deploy/escrow.so \
   --url "$SOLANA_RPC_URL" --with-compute-unit-price 1000 --use-rpc
 ```
 
-Check: `solana program show FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm` shows the deployer as
+Check: `solana program show BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp` shows the deployer as
 authority.
 
 ## 4. Publish the IDL
@@ -93,11 +93,11 @@ Anchor IDL account protocol moved to `anchor legacy-idl`, deprecated). Skip `ini
 already uploaded it.
 
 ```bash
-anchor idl init    -f target/idl/escrow.json FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm \
+anchor idl init    -f target/idl/escrow.json BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp \
   --provider.cluster "$SOLANA_RPC_URL" --provider.wallet "$KEYS/deployer-keypair.json"
-anchor idl upgrade -f target/idl/escrow.json FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm \
+anchor idl upgrade -f target/idl/escrow.json BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp \
   --provider.cluster "$SOLANA_RPC_URL" --provider.wallet "$KEYS/deployer-keypair.json"   # later changes
-anchor idl fetch FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm --provider.cluster "$SOLANA_RPC_URL"  # verify
+anchor idl fetch BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp --provider.cluster "$SOLANA_RPC_URL"  # verify
 cd ../..
 ```
 
@@ -191,9 +191,9 @@ Explorer "verified" badge.
 
 ```bash
 cd programs/escrow && anchor build
-anchor upgrade target/deploy/escrow.so --program-id FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm \
+anchor upgrade target/deploy/escrow.so --program-id BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp \
   --provider.cluster "$SOLANA_RPC_URL" --provider.wallet "$KEYS/deployer-keypair.json"
-anchor idl upgrade -f target/idl/escrow.json FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm \
+anchor idl upgrade -f target/idl/escrow.json BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp \
   --provider.cluster "$SOLANA_RPC_URL" --provider.wallet "$KEYS/deployer-keypair.json"
 ```
 

@@ -116,12 +116,14 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
       'expo-camera',
       'expo-video',
       'expo-audio',
-      'expo-notifications',
       '@livekit/react-native-expo-plugin',
       '@config-plugins/react-native-webrtc',
     ]) {
       expect(names, name).toContain(name);
     }
+    // Free Apple Personal Team signing: no aps-environment entitlement, so the
+    // expo-notifications config plugin stays out (APNs is on the cut line).
+    expect(names).not.toContain('expo-notifications');
     expect(new Set(names).size).toBe(names.length);
   });
 
