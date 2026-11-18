@@ -6,7 +6,9 @@
 // On top of the raw ticker it folds each bet's events into a BetView (the pitch card: parties,
 // terms + terms code, per-party authorization, the lock tx and its signer count, the ruling and
 // its cited frame, the appeal window, the payout) and keeps the latest Gemini `stage.market`
-// snapshot plus a short index-price history for the odds widget. A REST BetSnapshot
+// snapshot plus a short index-price history for the odds widget. Gemini bets (Beat 6) also keep
+// their own latest market.tick (the live price of THEIR contract, which outlives the relay's
+// rollover) and Gemini's settled record (market.settled). A REST BetSnapshot
 // (GET /v1/bets/:id) seeds a view on cold start; later events win over it.
 //
 // The card is always the fold of the bet's events in seq order, with the latest REST snapshot
@@ -15,6 +17,7 @@
 // or a snapshot fetched before newer live events) triggers a rebuild from the retained
 // per-bet history instead of being folded on top, so the card never regresses.
 import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
+import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
@@ -86,6 +89,8 @@ export interface BetView {
   appeal_deadline: number | null;
   appealed: boolean;
   payout: PayoutView | null;
+  /** Gemini bets: Gemini's settled (or voided) contract, the ruling's evidence. */
+  settlement: { record: GeminiSettlementRecord; evidence_hash: string } | null;
   closed: boolean;
   last_judge_line: string | null;
   last_cue: string | null;
@@ -106,6 +111,8 @@ export interface TickerState {
   marketTicks: number;
   market: GeminiMarketSnapshot | null;
   marketHistory: Array<{ t: number; price: number }>;
+  /** Each Gemini bet's latest market.tick (its own contract's live price). */
+  betTicks: Record<string, GeminiMarketSnapshot>;
   bets: Record<string, BetView>;
   /** Each bet's card-relevant events, sorted by seq (the source a rebuild folds). */
   history: Record<string, RealtimeEvent[]>;
@@ -128,6 +135,7 @@ export const initialTicker: TickerState = {
   marketTicks: 0,
   market: null,
   marketHistory: [],
+  betTicks: {},
   bets: {},
   history: {},
   snapshots: {},
@@ -190,6 +198,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     appeal_deadline: null,
     appealed: false,
     payout: null,
+    settlement: null,
     closed: false,
     last_judge_line: null,
     last_cue: null,
@@ -304,6 +313,11 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
       return { ...v, frame_urls: e.payload.frame_urls };
     case 'ruling.issued':
       return { ...v, ruling: rulingView(e.payload) };
+    case 'market.settled':
+      return {
+        ...v,
+        settlement: { record: e.payload.record, evidence_hash: e.payload.evidence_hash },
+      };
     case 'chain.BetResolved':
       return {
         ...v,
@@ -512,11 +526,13 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   const events = [...s.events, toTicker(e)]
     .sort((x, y) => (x.ts === y.ts ? x.seq - y.seq : x.ts < y.ts ? -1 : 1))
     .slice(-MAX_EVENTS);
-  // market.tick is 1 Hz chatter: it doesn't steal the focus or touch the card.
+  // market.tick is 1 Hz chatter: it doesn't steal the focus or touch the card, it only moves
+  // that bet's live price.
   if (e.type === 'market.tick')
     return {
       ...s,
       events,
+      betTicks: { ...s.betTicks, [e.bet_id]: e.payload.snapshot },
       focusBetId: s.focusBetId ?? e.bet_id,
       lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
     };

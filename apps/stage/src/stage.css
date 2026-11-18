@@ -381,3 +381,26 @@ code,
   position: static;
   font-size: 0.55em;
 }
+
+/* Beat 6: the live Gemini market bet */
+.market {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line, #333);
+  border-radius: 12px;
+}
+.market-head,
+.market-sides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.market-sides {
+  font-size: 1.4em;
+}
+.market-result {
+  font-size: 1.4em;
+  margin: 8px 0 0;
+}

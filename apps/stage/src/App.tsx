@@ -2,11 +2,15 @@
 // Connect with STAGE_KEY (POST /v1/stage/session) or a pasted stage token, then one WebSocket
 // for the room: the focused bet's card (parties, terms + terms code, Face ID per party, the lock
 // tx with its signer count, the ruling + cited frame + appeal countdown, the payout), the chain
-// ticker with devnet Explorer links, and the Gemini BTC 5-minute odds widget.
+// ticker with devnet Explorer links, and the Gemini BTC 5-minute odds widget. A Gemini bet
+// (Beat 6) gets the live market panel: who holds Up / Down at what stake, the line, BTC live,
+// who is ahead, the countdown to the contract's expiry, then Gemini's settled result.
 // Keys 1-6 play the pre-recorded beat clips (public/replay/beat{n}.mp4) full screen, labelled
 // REPLAY; Esc closes.
 import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from 'react';
+import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { formatUsd } from '@youre-on/shared/money';
+import { formatPrice } from '@youre-on/shared/settlement';
 import {
   applyFrame,
   explorerTx,
@@ -130,7 +134,119 @@ function outcomeLine(b: BetView): string {
   return `Void${r.void_reason ? ` · ${r.void_reason.replace('_', ' ')}` : ''} · refund`;
 }
 
-export function BetCard({ bet, now }: { bet: BetView; now: number }) {
+/** Beat 6 on the projector: the live market bet, then Gemini's settled result. */
+export function MarketPanel({
+  bet,
+  tick,
+  now,
+}: {
+  bet: BetView;
+  /** The latest snapshot of THIS bet's contract (market.tick, or the relay's if it matches). */
+  tick: GeminiMarketSnapshot | null;
+  now: number;
+}) {
+  const t = bet.envelope?.terms;
+  const m = t?.market;
+  if (!t || !m) return null;
+  const aUp = m.side === 'YES';
+  const up = aUp ? t.party_a.display_name : t.party_b.display_name;
+  const down = aUp ? t.party_b.display_name : t.party_a.display_name;
+  const upStake = aUp ? t.stakes.a : t.stakes.b;
+  const downStake = aUp ? t.stakes.b : t.stakes.a;
+  const pot = (BigInt(t.stakes.a) + BigInt(t.stakes.b)).toString();
+  const left = Date.parse(m.expiry) - now;
+  const s = bet.settlement?.record;
+  const live = tick && tick.eventTicker === m.eventTicker ? tick.indexPrice : null;
+  const line = m.strike.value;
+  const ahead = live !== null && line !== null ? (Number(live) >= Number(line) ? up : down) : null;
+  const pct = Math.round(Number(m.priceAtLock) * 100);
+  return (
+    <div className="market" aria-label="market bet">
+      <div className="market-head">
+        <span className="label">BTC 5-MIN · GEMINI</span>
+        <span className="muted">
+          Up {pct}% · locked at Gemini {m.priceSource === 'mid' ? 'mid' : 'last trade'}
+        </span>
+      </div>
+      <div className="market-sides">
+        <span className={s?.contract.resolutionSide === 'yes' ? 'good' : undefined}>
+          ▲ {up} Up {usd(upStake)}
+        </span>
+        <span className={s?.contract.resolutionSide === 'no' ? 'good' : undefined}>
+          ▼ {down} Down {usd(downStake)}
+        </span>
+        <span className="muted">pot {usd(pot)}</span>
+      </div>
+      <div className="odds-grid">
+        <div>
+          <span className="label">LINE</span>
+          <span className="num">{line === null ? 'pending' : formatPrice(line)}</span>
+        </div>
+        <div>
+          <span className="label">{s ? 'SETTLED' : 'BTC'}</span>
+          <span
+            className={`num ${
+              s
+                ? s.contract.resolutionSide === 'yes'
+                  ? 'up'
+                  : 'down'
+                : live !== null && line !== null
+                  ? Number(live) >= Number(line)
+                    ? 'up'
+                    : 'down'
+                  : ''
+            }`}
+          >
+            {s
+              ? s.contract.settlementValue === null
+                ? '—'
+                : formatPrice(s.contract.settlementValue)
+              : live === null
+                ? '—'
+                : formatPrice(live)}
+          </span>
+        </div>
+        <div>
+          <span className="label">{left > 0 ? 'SETTLES IN' : 'EXPIRED'}</span>
+          <span className="num">{left > 0 ? clock(left) : m.expiry.slice(11, 16)}</span>
+        </div>
+      </div>
+      {s ? (
+        <p className="market-result">
+          {s.contract.status === 'invalid' ? (
+            <span className="bad">Gemini voided the contract · both stakes back</span>
+          ) : (
+            <span className="good">
+              Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
+              {s.contract.resolutionSide === 'yes' ? up : down} wins
+            </span>
+          )}{' '}
+          <span className="muted">
+            evidence <code>{bet.settlement!.evidence_hash.slice(0, 8)}</code> ·{' '}
+            <a className="explorer" href={s.source_url} target="_blank" rel="noreferrer">
+              Gemini ↗
+            </a>
+          </span>
+        </p>
+      ) : left > 0 ? (
+        ahead && <p className="muted">{ahead} is ahead</p>
+      ) : (
+        <p className="countdown">Waiting for Gemini to settle…</p>
+      )}
+    </div>
+  );
+}
+
+export function BetCard({
+  bet,
+  now,
+  tick = null,
+}: {
+  bet: BetView;
+  now: number;
+  /** Gemini bets: the latest snapshot of the bet's contract. */
+  tick?: GeminiMarketSnapshot | null;
+}) {
   const t = bet.envelope?.terms ?? null;
   const cited = bet.ruling?.cited_frames[0];
   const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
@@ -176,6 +292,8 @@ export function BetCard({ bet, now }: { bet: BetView; now: number }) {
           {partyAuth(bet, 'B')}
         </div>
       </div>
+
+      {t?.market && <MarketPanel bet={bet} tick={tick} now={now} />}
 
       {bet.lock && (
         <div className="lock">
@@ -364,7 +482,16 @@ export function StageView({
       <main className="layout">
         <div className="left">
           {bet ? (
-            <BetCard bet={bet} now={now} />
+            <BetCard
+              bet={bet}
+              now={now}
+              tick={
+                state.betTicks[bet.bet_id] ??
+                (state.market?.eventTicker === bet.envelope?.terms.market?.eventTicker
+                  ? state.market
+                  : null)
+              }
+            />
           ) : (
             <section className="card">
               <p className="big muted">Waiting for a challenge…</p>
