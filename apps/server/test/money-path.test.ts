@@ -29,6 +29,7 @@ import {
   BetStatus,
   ESCROW_PROGRAM_ADDRESS,
   findBetPda,
+  getAppealInstructionAsync,
   getBetDecoder,
 } from '@youre-on/shared/escrow-client';
 import { betIdToBytes } from '@youre-on/shared/primitives';
@@ -428,6 +429,41 @@ run('money path hardening over LiteSVM', () => {
       .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'resolve')));
     expect((await lc.refund.sweep(now())).refunded).toContain(betId);
     expect((await betRow(betId))!.terms_hash).toBe(row.terms_hash);
+  });
+
+  it('timeout-refund from Appealed: an appeal nobody decided is refunded at appeal_resolve_deadline', async () => {
+    const aBefore = await usdc(signerA);
+    const bBefore = await usdc(signerB);
+    const betId = await lockedBet();
+    await lc.payout.onRuling(betId, ruling(betId, (await betRow(betId))!.terms_hash!, 'A_WINS'));
+    await lc.idle();
+    // B (the loser) appeals onchain inside the 10 s window; the server has no appeal path yet,
+    // so the row stays RULED with no appeal_resolve_deadline.
+    const [pda] = await findBetPda({ betId: betIdToBytes(betId) });
+    await send(svm.svm, svm.s, [
+      await getAppealInstructionAsync({ payer: svm.s, appellant: signerB, bet: pda }),
+    ]);
+    expect((await onchainBet(betId))!.status).toBe(BetStatus.Appealed);
+    advance(12_000);
+    expect(await lc.payout.finalizeDue(now())).not.toContain(betId); // finalize skips Appealed
+    advance(60_000); // RULED a minute past the window: the refund sweep probes the chain
+    expect((await lc.refund.sweep(now())).refunded).toEqual([]);
+    const row = (await betRow(betId))!;
+    expect(row.appeal_resolve_deadline!.getTime()).toBe(
+      Number((await onchainBet(betId))!.appealResolveDeadline) * 1000,
+    );
+    advance(300_000); // past appeal_resolve_deadline (300 s after the appeal)
+    const r = await lc.refund.sweep(now());
+    expect(r.refunded).toEqual([betId]);
+    expect(await betRow(betId)).toMatchObject({
+      state: 'EXPIRED',
+      end_reason: 'appeal_timeout',
+      payout_via: 'timeout_refund',
+      payout_a: USDC,
+      payout_b: USDC,
+    });
+    expect(await usdc(signerA)).toBe(aBefore);
+    expect(await usdc(signerB)).toBe(bBefore);
   });
 
   // ---- retry safety of the other money txs ---------------------------------------------------

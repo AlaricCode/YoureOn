@@ -86,6 +86,8 @@ export const ORPHAN_SWEEP_MS = 60_000;
 export const REFUND_BATCH = 10;
 /** A bet whose Bet PDA is unreadable / unexpected is re-read at most this often. */
 export const REFUND_ANOMALY_BACKOFF_MS = 5 * 60_000;
+/** A RULED bet this long past its appeal window is re-read in case the loser appealed. */
+export const RULED_APPEAL_PROBE_MS = 60_000;
 
 /** Offchain states whose Bet is Locked onchain (no resolve has landed). */
 export const LOCKED_FAMILY: readonly BetState[] = [
@@ -196,14 +198,27 @@ export class RefundService {
       .from(bets)
       .where(
         or(
+          // Locked: the judge never ruled before resolve_deadline (or it is not known yet).
           and(
             inArray(bets.state, [...LOCKED_FAMILY]),
             or(isNull(bets.resolve_deadline), lte(bets.resolve_deadline, due)),
           ),
+          // Appealed: the appeal was never decided before appeal_resolve_deadline.
           and(
             inArray(bets.state, [...APPEAL_FAMILY]),
             isNotNull(bets.appeal_resolve_deadline),
             lte(bets.appeal_resolve_deadline, due),
+          ),
+          // An appeal the DB may not know about: APPEALED without its deadline, or RULED a
+          // minute past the appeal window (finalize-due would have paid it out by now).
+          and(
+            inArray(bets.state, ['APPEALED', 'APPEAL_RESOLVED']),
+            isNull(bets.appeal_resolve_deadline),
+          ),
+          and(
+            eq(bets.state, 'RULED'),
+            isNull(bets.appeal_resolve_deadline),
+            lte(bets.appeal_deadline, new Date(nowMs - RULED_APPEAL_PROBE_MS)),
           ),
         ),
       )
@@ -238,11 +253,17 @@ export class RefundService {
   ): Promise<'refunded' | 'pending' | 'not_due' | 'skipped' | 'failed'> {
     if (await this.blocked(betId)) return 'skipped';
     const onchain = await readBetAccount(rt, betId);
+    if (onchain?.status === BetStatus.Resolved) {
+      // A RULED probe whose finalize is still being retried (finalize-due owns it), or a
+      // resolve the DB has not caught up with (resolve-due / reconcile own it): look again later.
+      this.anomalies.set(betId, nowMs + RULED_APPEAL_PROBE_MS);
+      return 'skipped';
+    }
     if (
       !onchain ||
       (onchain.status !== BetStatus.Locked && onchain.status !== BetStatus.Appealed)
     ) {
-      // Closed, Resolved (a resolve the DB has not caught up with), terminal: not ours to refund.
+      // Closed or terminal while the row is live: not ours to refund (logged, re-read later).
       this.anomalies.set(betId, nowMs + REFUND_ANOMALY_BACKOFF_MS);
       this.deps.log.warn('refund.unexpected_onchain', {
         bet_id: betId,
