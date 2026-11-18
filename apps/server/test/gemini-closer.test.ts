@@ -699,6 +699,36 @@ describeDb(
       expect(ruled[0]!.ruling.outcome).toBe('B_WINS');
     });
 
+    it('the fast path (timers): armed at expiry + 5 s, re-polls every 1 s in the band, settles', async () => {
+      const { betId } = await lockedBet('UP');
+      const timed = installSettlement(ctx.deps, new SettlementService(ctx.deps)); // timers on
+      try {
+        clock.t = T0240 + 5_000; // the first check is due now
+        g.routes.set(eventPath(TICKER), closedNoSide()); // not settled at +5 s
+        const calls0 = g.calls.length;
+        const terms = Terms.parse(
+          JSON.parse(
+            (
+              await ctx.deps.db
+                .select()
+                .from(betTermsVersions)
+                .where(and(eq(betTermsVersions.bet_id, betId), eq(betTermsVersions.is_final, true)))
+            )[0]!.canonical_json,
+          ),
+        );
+        timed.follow(betId, terms);
+        await expect.poll(() => g.calls.length - calls0, { timeout: 2_000 }).toBeGreaterThan(0);
+        expect(ruled).toHaveLength(0);
+        g.routes.set(eventPath(TICKER), F.event_0240_settled); // Gemini settles; 1 s later we see it
+        await expect.poll(() => ruled.length, { timeout: 3_000 }).toBe(1);
+        expect(ruled[0]).toMatchObject({ betId, ruling: { outcome: 'B_WINS' } });
+        await timed.idle();
+      } finally {
+        timed.stop();
+        svc = installSettlement(ctx.deps, new SettlementService(ctx.deps, { timers: false }));
+      }
+    });
+
     it('two keepers checking at once commit one ruling and call onRuling once', async () => {
       const { betId } = await lockedBet('UP');
       g.routes.set(eventPath(TICKER), F.event_0240_settled);

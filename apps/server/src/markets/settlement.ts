@@ -60,6 +60,9 @@ import { cleanDecimal, isoOrNull, toStrike } from './gemini';
 export const SETTLE_FIRST_CHECK_MS = 5_000;
 /** Fast-path poll interval (API-CONTRACT §7.3 "poll that endpoint every 2 s from expiry"). */
 export const SETTLE_POLL_MS = 2_000;
+/** Inside the settlement band (spike 05: 5.7-8.8 s after expiry) the fast path polls every 1 s. */
+export const SETTLE_BAND_MS = 12_000;
+export const SETTLE_BAND_POLL_MS = 1_000;
 /** The fast path stops after this past expiry; the keeper sweep carries on. */
 export const SETTLE_FAST_WINDOW_MS = 120_000;
 /** The sweep checks one bet at most this often. */
@@ -180,7 +183,10 @@ export class SettlementService {
     this.arm(betId, expiryMs + SETTLE_FIRST_CHECK_MS);
   }
 
-  /** The fast path: check() at `atMs`, then every SETTLE_POLL_MS inside the fast window. */
+  /**
+   * The fast path: check() at `atMs`, then every SETTLE_BAND_POLL_MS until expiry +
+   * SETTLE_BAND_MS (where Gemini settles), then every SETTLE_POLL_MS inside the fast window.
+   */
   arm(betId: string, atMs: number): void {
     if (this.o.timers === false) return;
     const prev = this.timers.get(betId);
@@ -191,8 +197,12 @@ export class SettlementService {
         void this.track(
           this.check(betId).then((r) => {
             const w = this.watching.get(betId);
-            if (r === 'pending' && w && this.deps.now() < w.expiryMs + SETTLE_FAST_WINDOW_MS)
-              this.arm(betId, this.deps.now() + SETTLE_POLL_MS);
+            const t = this.deps.now();
+            if (r === 'pending' && w && t < w.expiryMs + SETTLE_FAST_WINDOW_MS)
+              this.arm(
+                betId,
+                t + (t < w.expiryMs + SETTLE_BAND_MS ? SETTLE_BAND_POLL_MS : SETTLE_POLL_MS),
+              );
             return r;
           }),
         );
