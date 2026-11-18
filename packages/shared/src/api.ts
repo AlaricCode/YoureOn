@@ -21,7 +21,7 @@ import {
   UserRef,
   Uuid,
 } from './primitives';
-import { Ruling } from './ruling';
+import { OnchainOutcome, Ruling } from './ruling';
 import { TermsEnvelope } from './terms';
 
 // ---------------------------------------------------------------------------------------
@@ -460,6 +460,35 @@ export const BetSnapshot = z.object({
   last_seq: z.number().int(),
 });
 export type BetSnapshot = z.infer<typeof BetSnapshot>;
+
+/**
+ * §2.14 GET /v1/me/bets item: a whole BetSnapshot (a phone adopts it exactly like
+ * GET /v1/bets/:bet_id) plus the contract's BetSummary list fields. `access` says why the caller
+ * sees it: a party of the bet, or a judge-cam device bound to the bet's room (then `my_party`,
+ * `opponent`, `my_stake` and `my_payout` are null unless the cam's user is also a party).
+ */
+export const MeBetItem = BetSnapshot.extend({
+  access: z.enum(['party', 'judge_cam']),
+  title: z.string(),
+  opponent: UserRef.nullable(),
+  my_stake: MicroUsdc.nullable(),
+  my_payout: MicroUsdc.nullable(),
+  outcome: OnchainOutcome.nullable(),
+  settled_at: IsoUtc.nullable(),
+  is_seed: z.boolean(),
+});
+export type MeBetItem = z.infer<typeof MeBetItem>;
+
+/** `active` = not terminal; `settled` = PAID / VOIDED; `all` (the default) = everything. */
+export const MeBetsStatus = z.enum(['active', 'settled', 'all']);
+export type MeBetsStatus = z.infer<typeof MeBetsStatus>;
+
+export const MeBetsResponse = z.object({
+  items: z.array(MeBetItem),
+  /** Opaque; pass back as `cursor` for the next (older) page. null on the last page. */
+  next_cursor: z.string().nullable(),
+});
+export type MeBetsResponse = z.infer<typeof MeBetsResponse>;
 
 /** §2.3 */
 export const RoomMember = z.object({
