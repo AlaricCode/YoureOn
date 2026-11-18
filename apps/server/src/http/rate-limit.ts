@@ -18,9 +18,21 @@ interface Bucket {
   updated: number;
 }
 
+/** Hard cap on live buckets: past it the least recently used ones go (a key flood can't OOM us). */
+export const MAX_BUCKETS = 50_000;
+
 export class RateLimiter {
+  /** Insertion order = least recently used first (take() re-inserts the key it touches). */
   private readonly buckets = new Map<string, Bucket>();
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly maxBuckets: number = MAX_BUCKETS,
+  ) {}
+
+  /** Live buckets (tests). */
+  get size(): number {
+    return this.buckets.size;
+  }
 
   /** Takes one token from `name:key`, or throws 429 RATE_LIMITED with Retry-After. */
   take(name: string, key: string, spec: BucketSpec): void {
@@ -30,6 +42,7 @@ export class RateLimiter {
     const b = this.buckets.get(k) ?? { tokens: spec.limit, updated: now };
     b.tokens = Math.min(spec.limit, b.tokens + (now - b.updated) * rate);
     b.updated = now;
+    this.buckets.delete(k);
     if (b.tokens < 1) {
       this.buckets.set(k, b);
       const retryAfter = Math.max(1, Math.ceil((1 - b.tokens) / rate / 1000));
@@ -44,10 +57,17 @@ export class RateLimiter {
     }
     b.tokens -= 1;
     this.buckets.set(k, b);
-    if (this.buckets.size > 50_000) this.sweep(now, spec.windowMs);
+    if (this.buckets.size > this.maxBuckets) this.sweep(now, spec.windowMs);
   }
 
   private sweep(now: number, windowMs: number) {
     for (const [k, b] of this.buckets) if (now - b.updated > windowMs) this.buckets.delete(k);
+    // Still over the cap (a flood of fresh keys): drop the least recently used ones, down to
+    // 90 % so the next few new keys don't each pay for a full sweep.
+    const keep = Math.floor(this.maxBuckets * 0.9);
+    for (const k of this.buckets.keys()) {
+      if (this.buckets.size <= keep) break;
+      this.buckets.delete(k);
+    }
   }
 }

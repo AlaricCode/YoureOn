@@ -6,7 +6,9 @@
 // On top of the raw ticker it folds each bet's events into a BetView (the pitch card: parties,
 // terms + terms code, per-party authorization, the lock tx and its signer count, the ruling and
 // its cited frame, the appeal window, the payout) and keeps the latest Gemini `stage.market`
-// snapshot plus a short index-price history for the odds widget. A REST BetSnapshot
+// snapshot plus a short index-price history for the odds widget. Gemini bets (Beat 6) also keep
+// their own latest market.tick (the live price of THEIR contract, which outlives the relay's
+// rollover) and Gemini's settled record (market.settled). A REST BetSnapshot
 // (GET /v1/bets/:id) seeds a view on cold start; later events win over it.
 //
 // The card is always the fold of the bet's events in seq order, with the latest REST snapshot
@@ -14,15 +16,27 @@
 // one (the seq-0 replay that follows a live event when the stage first sees a bet mid-flight,
 // or a snapshot fetched before newer live events) triggers a rebuild from the retained
 // per-bet history instead of being folded on top, so the card never regresses.
+//
+// Money and the appeal window do not depend on QuickNode Streams: the server's own RPC path
+// (apps/server/src/payout/service.ts) publishes bet.state RULED with the confirmed resolve in
+// pending_tx and `appeal_deadline=<unix s>` in its reason, and bet.state PAID / VOIDED with the
+// confirmed payout tx. The card derives the appeal countdown and the payout amounts (the shared
+// payout() rule over the terms' stakes and the final outcome) from those; the chain.* events,
+// when Streams delivers them, carry the same values and simply confirm them.
 import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
+import { TERMINAL_BET_STATES, type PendingTx } from '@youre-on/shared/bet-state';
+import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
+import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
 
 export const MAX_EVENTS = 200;
 export const MAX_MARKET_POINTS = 150;
 /** Per-bet events kept for rebuilding the card (market.tick is not kept). */
 export const MAX_BET_HISTORY = 1000;
+/** An in-order event older than this (by the stage clock) is catch-up, not news: no focus move. */
+export const FOCUS_FRESH_MS = 30_000;
 
 export type ConnStatus = 'idle' | 'authorizing' | 'connecting' | 'open' | 'closed';
 
@@ -49,6 +63,9 @@ export interface LockView {
   onchain: boolean;
   slot: number | null;
   error: string | null;
+  /** Event ts of tx.submitted and of the first chain event (the Streams lag between them). */
+  sent_at: string | null;
+  onchain_at: string | null;
 }
 
 export interface RulingView {
@@ -60,6 +77,34 @@ export interface RulingView {
   stage: string;
   void_reason: string | null;
   ruling_hash: string;
+  /** The attempt it rules on (attempt-stage rulings only). */
+  attempt_no: number | null;
+  redo_reason: string | null;
+}
+
+export interface VoteView {
+  seat: number;
+  provider: string;
+  model: string;
+  status: string;
+  outcome: string;
+  confidence: number;
+  reason: string;
+  counted_as: string;
+}
+
+export interface AppealResultView {
+  final_outcome: string;
+  flipped: boolean;
+  decided_by: string;
+  tally: { A_WINS: number; B_WINS: number; ABSTAIN: number };
+}
+
+export interface HearingView {
+  hearing_id: string;
+  /** The turn whose clock is running. */
+  open: { party: PartyKey; closes_at: string } | null;
+  turns: Array<{ party: PartyKey; transcript: string }>;
 }
 
 export interface PayoutView {
@@ -73,6 +118,12 @@ export interface BetView {
   bet_id: string;
   state: string | null;
   names: { A: string | null; B: string | null };
+  /** Opt-in profile photos (UserRef / TermsPresentation); initials when null. */
+  avatars: Record<PartyKey, string | null>;
+  /** From the REST snapshot: maps room presence onto the parties. */
+  user_ids: Record<PartyKey, string | null>;
+  /** B's answer to the challenge (bet.invite_answered). */
+  invite: 'accepted' | 'declined' | null;
   envelope: TermsEnvelope | null;
   terms_code: string | null;
   auth: Record<PartyKey, { method: string; at: string } | null>;
@@ -81,13 +132,40 @@ export interface BetView {
   declined: PartyKey | null;
   lock: LockView | null;
   attempt_no: number | null;
+  performer: PartyKey | null;
   frame_urls: string[];
+  /**
+   * The latest attempt.evidence: which attempt and how many frames. The server sends no
+   * frame_urls yet (frames live in Postgres), so the page fetches each JPEG with its bearer
+   * (GET /v1/bets/:id/attempts/:n/frames/:idx) into TickerState.frameBlobs.
+   */
+  evidence: { attempt_no: number; frames: number } | null;
   ruling: RulingView | null;
+  /** BetResolved.ts: when the appeal window opened (unix s). */
+  resolved_at: number | null;
   appeal_deadline: number | null;
   appealed: boolean;
+  hearing: HearingView | null;
+  /** Appeal panel votes by seat (0-2), as they stream in. */
+  votes: VoteView[];
+  appeal_result: AppealResultView | null;
   payout: PayoutView | null;
+  /** Event ts of the money-moved event (the PAID moment fires only for a fresh one). */
+  paid_at: string | null;
+  /** Gemini bets: Gemini's settled (or voided) contract, the ruling's evidence. */
+  settlement: { record: GeminiSettlementRecord; evidence_hash: string } | null;
   closed: boolean;
   last_judge_line: string | null;
+  /**
+   * The live caption: the newest line anyone said (the judge, or a player via party.line), a
+   * partial line until its final version arrives (the hall cannot always hear A's phone).
+   */
+  caption: {
+    speaker: 'judge' | PartyKey;
+    text: string;
+    final: boolean;
+    utterance_id: string;
+  } | null;
   last_cue: string | null;
   /** Other tx signatures by kind (resolve, payout, close …) for Explorer links. */
   txs: Record<string, string>;
@@ -101,18 +179,37 @@ export interface TickerState {
   closeCode: number | null;
   events: TickerEvent[];
   lastSeq: Record<string, number>;
-  presence: { room_id: string; online: number; members: number } | null;
+  presence: {
+    room_id: string;
+    online: number;
+    members: number;
+    /** user_id -> online, for the per-party "offline" badge. */
+    online_by_user?: Record<string, boolean>;
+  } | null;
   lastCue: { bet_id: string; kind: string } | null;
+  /** Increments with every stage.cue (the page flashes / plays the cue on each). */
+  cueCount: number;
   marketTicks: number;
   market: GeminiMarketSnapshot | null;
   marketHistory: Array<{ t: number; price: number }>;
+  /** Each Gemini bet's latest market.tick (its own contract's live price). */
+  betTicks: Record<string, GeminiMarketSnapshot>;
   bets: Record<string, BetView>;
   /** Each bet's card-relevant events, sorted by seq (the source a rebuild folds). */
   history: Record<string, RealtimeEvent[]>;
   /** Latest GET /v1/bets/:id per bet (slotted into a rebuild at its last_seq). */
   snapshots: Record<string, BetSnapshot>;
-  /** The bet with the most recent activity: what the big card shows. */
+  /**
+   * What the big card shows: the bet with the most recent live activity. Only news moves it: an
+   * older event (seq-0 replay, reconnect catch-up) never does, and neither does an event that
+   * leaves its bet over (a stray draft expiring, a rehearsal bet paying out) while another bet
+   * holds the screen.
+   */
   focusBetId: string | null;
+  /** ?bet= / the form's bet id: it keeps the focus until it is over. */
+  pinnedBetId: string | null;
+  /** Fetched evidence JPEGs as object URLs: `${bet_id}:${attempt_no}` -> idx -> url. */
+  frameBlobs: Record<string, Record<number, string>>;
   dropped: number;
   errors: string[];
 }
@@ -125,13 +222,17 @@ export const initialTicker: TickerState = {
   lastSeq: {},
   presence: null,
   lastCue: null,
+  cueCount: 0,
   marketTicks: 0,
   market: null,
   marketHistory: [],
+  betTicks: {},
   bets: {},
   history: {},
   snapshots: {},
   focusBetId: null,
+  pinnedBetId: null,
+  frameBlobs: {},
   dropped: 0,
   errors: [],
 };
@@ -178,6 +279,9 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     bet_id,
     state: null,
     names: { A: null, B: null },
+    avatars: { A: null, B: null },
+    user_ids: { A: null, B: null },
+    invite: null,
     envelope: null,
     terms_code: null,
     auth: { A: null, B: null },
@@ -185,13 +289,22 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     declined: null,
     lock: null,
     attempt_no: null,
+    performer: null,
     frame_urls: [],
+    evidence: null,
     ruling: null,
+    resolved_at: null,
     appeal_deadline: null,
     appealed: false,
+    hearing: null,
+    votes: [],
+    appeal_result: null,
     payout: null,
+    paid_at: null,
+    settlement: null,
     closed: false,
     last_judge_line: null,
+    caption: null,
     last_cue: null,
     txs: {},
     updated_at: at,
@@ -206,6 +319,10 @@ function withEnvelope(b: BetView, env: TermsEnvelope): BetView {
     names: {
       A: env.terms.party_a.display_name,
       B: env.terms.party_b.display_name,
+    },
+    avatars: {
+      A: env.presentation.party_a_avatar_url ?? b.avatars.A,
+      B: env.presentation.party_b_avatar_url ?? b.avatars.B,
     },
   };
 }
@@ -230,7 +347,108 @@ function rulingView(r: {
     stage: typeof r.ruling.stage === 'string' ? r.ruling.stage : 'hearing',
     void_reason: r.ruling.void_reason ?? null,
     ruling_hash: r.ruling_hash,
+    attempt_no: typeof r.ruling.attempt_no === 'number' ? r.ruling.attempt_no : null,
+    redo_reason: typeof r.ruling.redo_reason === 'string' ? r.ruling.redo_reason : null,
   };
+}
+
+function hearingOf(v: BetView, hearing_id: string): HearingView {
+  return v.hearing?.hearing_id === hearing_id ? v.hearing : { hearing_id, open: null, turns: [] };
+}
+
+/** The money-moving instruction of each payout tx kind, as the chain names its event. */
+const PAYOUT_EVENT: Partial<Record<string, string>> = {
+  finalize: 'BetFinalized',
+  concede: 'BetConceded',
+  resolve_appeal: 'AppealResolved',
+  timeout_refund: 'BetRefunded',
+  cancel_open_bet: 'BetCancelled',
+};
+
+/** `appeal_deadline=<unix s>` in the reason of the server's bet.state RULED (markRuled). */
+export function appealDeadlineOf(reason: string | null | undefined): number | null {
+  const m = /\bappeal_deadline=(\d{9,11})\b/.exec(reason ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+const unixOf = (iso: string): number | null => {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+};
+
+/** The final offchain outcome: the appeal panel's when there was one, else the ruling's. */
+export const finalOutcomeOf = (b: BetView): string | null =>
+  b.appeal_result?.final_outcome ?? b.ruling?.outcome ?? null;
+
+/**
+ * What the escrow paid, without the chain event: the shared payout() rule (ESCROW §6, the same
+ * call the server makes in payout/service.ts settle) over the terms' stakes and the final
+ * outcome. VOIDED is always a refund. null when the stakes or a decisive outcome are unknown.
+ */
+export function derivedPayout(
+  b: BetView,
+  state: string,
+  tx: Pick<PendingTx, 'kind' | 'signature'> | null,
+  signature: string | null = null,
+): PayoutView | null {
+  const stakes = b.envelope?.terms.stakes;
+  if (!stakes) return null;
+  let a: bigint;
+  let total: bigint;
+  try {
+    a = BigInt(stakes.a);
+    total = a + BigInt(stakes.b);
+  } catch {
+    return null;
+  }
+  const final = finalOutcomeOf(b);
+  const outcome: OnchainOutcome | null =
+    state === 'VOIDED' || final === 'VOID'
+      ? 'Refund'
+      : final === 'A_WINS'
+        ? 'PartyA'
+        : final === 'B_WINS'
+          ? 'PartyB'
+          : null;
+  if (!outcome) return null;
+  const m = payoutOf(outcome, a, total);
+  const event = tx ? PAYOUT_EVENT[tx.kind] : undefined;
+  return {
+    to_a: m.to_a.toString(),
+    to_b: m.to_b.toString(),
+    event: event ?? (outcome === 'Refund' ? 'Refund' : 'Payout'),
+    signature: (event ? tx!.signature : null) ?? signature,
+  };
+}
+
+const MONEY_MOVED = new Set(['PAID', 'VOIDED']);
+
+/** bet.state from the server: also the RPC-path ruling (appeal window) and payout. */
+function foldState(b: BetView, e: Extract<RealtimeEvent, { type: 'bet.state' }>): BetView {
+  const p = e.payload;
+  let v: BetView = { ...b, state: p.state };
+  const tx = p.pending_tx;
+  if (p.state === 'RULED' && tx?.kind === 'resolve') {
+    const deadline = appealDeadlineOf(p.reason);
+    v = {
+      ...v,
+      resolved_at: v.resolved_at ?? unixOf(tx.rpc_confirmed_at ?? e.ts),
+      appeal_deadline: v.appealed || v.payout ? v.appeal_deadline : (v.appeal_deadline ?? deadline),
+      txs: { ...v.txs, resolve: v.txs.resolve ?? tx.signature },
+    };
+  }
+  if (MONEY_MOVED.has(p.state) && !v.payout) {
+    const paid = derivedPayout(v, p.state, tx);
+    if (paid)
+      v = {
+        ...v,
+        appeal_deadline: null,
+        payout: paid,
+        paid_at: v.paid_at ?? e.ts,
+        txs: paid.signature ? { ...v.txs, payout: v.txs.payout ?? paid.signature } : v.txs,
+      };
+  }
+  return v;
 }
 
 /** Folds one event into its bet's view. */
@@ -240,7 +458,9 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'bet.invited':
       return { ...v, names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name } };
     case 'bet.state':
-      return { ...v, state: e.payload.state };
+      return foldState(v, e);
+    case 'bet.invite_answered':
+      return { ...v, invite: e.payload.answer };
     case 'terms.proposed':
       return withEnvelope(v, e.payload.envelope);
     case 'terms.authorize_request':
@@ -261,7 +481,15 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'tx.failed': {
       const kind = e.payload.kind;
       const sig = e.payload.signature;
-      if (!LOCK_KINDS.has(kind)) return sig ? { ...v, txs: { ...v.txs, [kind]: sig } } : v;
+      if (!LOCK_KINDS.has(kind)) {
+        const resolved =
+          kind === 'resolve' && e.type === 'tx.confirmed'
+            ? (v.resolved_at ?? unixOf(e.ts))
+            : v.resolved_at;
+        return sig
+          ? { ...v, resolved_at: resolved, txs: { ...v.txs, [kind]: sig } }
+          : { ...v, resolved_at: resolved };
+      }
       const status =
         e.type === 'tx.submitted'
           ? 'submitted'
@@ -280,13 +508,15 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
           onchain: prev?.onchain ?? false,
           slot: e.type === 'tx.confirmed' ? e.payload.slot : (prev?.slot ?? null),
           error: e.type === 'tx.failed' ? e.payload.error : null,
+          sent_at: e.type === 'tx.submitted' ? (prev?.sent_at ?? e.ts) : (prev?.sent_at ?? null),
+          onchain_at: prev?.onchain_at ?? null,
         },
       };
     }
     case 'chain.BetCreated':
     case 'chain.BetAccepted': {
       const lock: LockView = v.lock
-        ? { ...v.lock, onchain: true, status: 'confirmed' }
+        ? { ...v.lock, onchain: true, status: 'confirmed', onchain_at: v.lock.onchain_at ?? e.ts }
         : {
             kind: 'atomic_lock',
             signature: e.payload.signature,
@@ -295,18 +525,39 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
             onchain: true,
             slot: e.payload.slot,
             error: null,
+            sent_at: null,
+            onchain_at: e.ts,
           };
       return { ...v, lock };
     }
     case 'attempt.started':
-      return { ...v, attempt_no: e.payload.attempt_no, frame_urls: [] };
+      return {
+        ...v,
+        attempt_no: e.payload.attempt_no,
+        performer: e.payload.performer,
+        frame_urls: [],
+        evidence: null,
+      };
     case 'attempt.evidence':
-      return { ...v, frame_urls: e.payload.frame_urls };
+      return {
+        ...v,
+        frame_urls: e.payload.frame_urls,
+        evidence: {
+          attempt_no: e.payload.evidence.attempt_no,
+          frames: e.payload.evidence.frames.length,
+        },
+      };
     case 'ruling.issued':
       return { ...v, ruling: rulingView(e.payload) };
+    case 'market.settled':
+      return {
+        ...v,
+        settlement: { record: e.payload.record, evidence_hash: e.payload.evidence_hash },
+      };
     case 'chain.BetResolved':
       return {
         ...v,
+        resolved_at: e.payload.ts,
         appeal_deadline: e.payload.appeal_deadline,
         txs: { ...v.txs, resolve: e.payload.signature },
       };
@@ -317,8 +568,55 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
         appeal_deadline: null,
         txs: { ...v.txs, appeal: e.payload.signature },
       };
-    case 'appeal.result':
-      return v;
+    case 'hearing.opened':
+      return { ...v, hearing: { hearing_id: e.payload.hearing_id, open: null, turns: [] } };
+    case 'hearing.turn_open':
+      return {
+        ...v,
+        hearing: {
+          ...hearingOf(v, e.payload.hearing_id),
+          open: { party: e.payload.party, closes_at: e.payload.closes_at },
+        },
+      };
+    case 'hearing.turn': {
+      const h = hearingOf(v, e.payload.turn.hearing_id);
+      const turn = { party: e.payload.turn.party, transcript: e.payload.turn.transcript };
+      return {
+        ...v,
+        hearing: {
+          ...h,
+          open: h.open?.party === turn.party ? null : h.open,
+          turns: [...h.turns.filter((t) => t.party !== turn.party), turn],
+        },
+      };
+    }
+    case 'appeal.vote': {
+      const x = e.payload.vote;
+      const vote: VoteView = {
+        seat: x.seat,
+        provider: x.provider,
+        model: x.model,
+        status: x.status,
+        outcome: x.outcome,
+        confidence: x.confidence,
+        reason: x.reason,
+        counted_as: x.counted_as,
+      };
+      const votes = [...v.votes.filter((o) => o.seat !== vote.seat), vote];
+      return { ...v, votes: votes.sort((a, b) => a.seat - b.seat) };
+    }
+    case 'appeal.result': {
+      const r = e.payload.result;
+      return {
+        ...v,
+        appeal_result: {
+          final_outcome: r.final_outcome,
+          flipped: r.flipped,
+          decided_by: r.decided_by,
+          tally: r.tally,
+        },
+      };
+    }
     // The program emits no BetPaid: money moves in these five, then BetClosed.
     case 'chain.BetFinalized':
     case 'chain.BetConceded':
@@ -334,12 +632,32 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
           event: e.type.slice('chain.'.length),
           signature: e.payload.signature,
         },
+        paid_at: v.paid_at ?? e.ts,
         txs: { ...v.txs, payout: e.payload.signature },
       };
     case 'chain.BetClosed':
       return { ...v, closed: true, txs: { ...v.txs, close: e.payload.signature } };
     case 'judge.line':
-      return e.payload.final ? { ...v, last_judge_line: e.payload.text } : v;
+      return {
+        ...v,
+        last_judge_line: e.payload.final ? e.payload.text : v.last_judge_line,
+        caption: {
+          speaker: 'judge',
+          text: e.payload.text,
+          final: e.payload.final,
+          utterance_id: e.payload.utterance_id,
+        },
+      };
+    case 'party.line':
+      return {
+        ...v,
+        caption: {
+          speaker: e.payload.party,
+          text: e.payload.text,
+          final: e.payload.final,
+          utterance_id: e.payload.utterance_id,
+        },
+      };
     case 'judge.cue':
       return { ...v, last_cue: e.payload.cue };
     default:
@@ -353,10 +671,15 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
     ...b,
     state: snap.state,
     names: { A: snap.party_a.display_name, B: snap.party_b.display_name },
+    avatars: {
+      A: snap.party_a.avatar_url ?? b.avatars.A,
+      B: snap.party_b.avatar_url ?? b.avatars.B,
+    },
+    user_ids: { A: snap.party_a.user_id, B: snap.party_b.user_id },
     attempt_no: snap.attempt_no ?? b.attempt_no,
     updated_at: Math.max(b.updated_at, at),
   };
-  if (snap.envelope) v = { ...withEnvelope(v, snap.envelope), names: v.names };
+  if (snap.envelope) v = { ...withEnvelope(v, snap.envelope), names: v.names, avatars: v.avatars };
   const auth = (p: PartyKey) => {
     const a = snap.authorizations[p];
     return a ? { method: a.method, at: a.authorized_at } : v.auth[p];
@@ -364,7 +687,21 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
   v.auth = { A: auth('A'), B: auth('B') };
   v.auth_count = Math.max(v.auth_count, (v.auth.A ? 1 : 0) + (v.auth.B ? 1 : 0));
   if (snap.latest_ruling && !v.ruling) v.ruling = rulingView(snap.latest_ruling);
-  if (snap.deadlines.appeal_deadline !== null && v.appeal_deadline === null && !snap.payout)
+  if (snap.appeal && !v.appeal_result)
+    v.appeal_result = {
+      final_outcome: snap.appeal.final_outcome,
+      flipped: snap.appeal.flipped,
+      decided_by: snap.appeal.decided_by,
+      tally: snap.appeal.tally,
+    };
+  const settled = MONEY_MOVED.has(snap.state);
+  if (
+    snap.deadlines.appeal_deadline !== null &&
+    v.appeal_deadline === null &&
+    !snap.payout &&
+    !settled &&
+    !v.payout
+  )
     v.appeal_deadline = snap.deadlines.appeal_deadline;
   const lockSig = snap.signatures.lock;
   if (lockSig && !v.lock)
@@ -376,6 +713,8 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
       onchain: snap.chain_ack === 'stream',
       slot: null,
       error: null,
+      sent_at: null,
+      onchain_at: null,
     };
   if (snap.payout && !v.payout)
     v.payout = {
@@ -384,6 +723,12 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
       event: 'payout',
       signature: snap.signatures.payout ?? null,
     };
+  // The projector does not write bets.payout_a/b yet: a settled bet's snapshot has no payout.
+  // paid_at stays null, so a cold start shows the result without replaying the PAID moment.
+  else if (settled && !v.payout) {
+    const paid = derivedPayout(v, snap.state, snap.pending_tx, snap.signatures.payout ?? null);
+    if (paid) v = { ...v, payout: paid, appeal_deadline: null };
+  }
   const txs = { ...v.txs };
   for (const [k, s] of Object.entries(snap.signatures)) if (k !== 'lock') txs[k] ??= s;
   v.txs = txs;
@@ -421,7 +766,14 @@ export type TickerAction =
   | { kind: 'frame'; raw: unknown; receivedAt: number }
   | { kind: 'snapshot'; bet: BetSnapshot; receivedAt: number }
   | { kind: 'market'; snapshot: GeminiMarketSnapshot | null; receivedAt: number }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  /** A new connection (another room): forget every bet, event and market point. */
+  | { kind: 'reset' }
+  /** Show this bet (a resumed session's last focus; `pin` for ?bet=). */
+  | { kind: 'focus'; bet_id: string; pin?: boolean }
+  /** The page could not load this bet: unpin it, and stop showing it unless its events came. */
+  | { kind: 'unfocus'; bet_id: string }
+  | { kind: 'frame_blob'; bet_id: string; attempt_no: number; idx: number; url: string };
 
 function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: number): TickerState {
   if (!snap) return { ...s, market: null };
@@ -432,7 +784,62 @@ function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: numbe
   return { ...s, market: snap, marketHistory: hist };
 }
 
+/** Paid, refunded, cancelled, expired or closed. */
+export function isOver(b: BetView | undefined): boolean {
+  if (!b) return false;
+  return (
+    b.closed ||
+    b.payout !== null ||
+    (b.state !== null && (TERMINAL_BET_STATES as readonly string[]).includes(b.state))
+  );
+}
+
+/** The pinned bet while it is not over (also before its snapshot has loaded). */
+function holdingPin(s: TickerState, bets: Record<string, BetView>): string | null {
+  const pin = s.pinnedBetId;
+  return pin && !isOver(bets[pin]) ? pin : null;
+}
+
+/** Where the focus goes after event `e` folded into `view` (see TickerState.focusBetId). */
+function nextFocus(
+  s: TickerState,
+  e: RealtimeEvent,
+  view: BetView,
+  inOrder: boolean,
+  receivedAt: number,
+): string {
+  const pin = holdingPin(s, { ...s.bets, [e.bet_id]: view });
+  if (pin) return pin;
+  const cur = s.focusBetId;
+  if (!cur || cur === e.bet_id) return e.bet_id;
+  if (!inOrder) return cur;
+  const age = receivedAt + (s.clockOffsetMs ?? 0) - Date.parse(e.ts);
+  if (Number.isFinite(age) && age > FOCUS_FRESH_MS) return cur;
+  if (isOver(view)) return cur;
+  return e.bet_id;
+}
+
 export function applyFrame(s: TickerState, a: TickerAction): TickerState {
+  if (a.kind === 'reset') return initialTicker;
+  if (a.kind === 'focus')
+    return {
+      ...s,
+      focusBetId: a.bet_id,
+      pinnedBetId: a.pin ? a.bet_id : s.pinnedBetId,
+    };
+  if (a.kind === 'unfocus')
+    return {
+      ...s,
+      pinnedBetId: s.pinnedBetId === a.bet_id ? null : s.pinnedBetId,
+      focusBetId: s.focusBetId === a.bet_id && !s.bets[a.bet_id] ? null : s.focusBetId,
+    };
+  if (a.kind === 'frame_blob') {
+    const key = frameKey(a.bet_id, a.attempt_no);
+    return {
+      ...s,
+      frameBlobs: { ...s.frameBlobs, [key]: { ...s.frameBlobs[key], [a.idx]: a.url } },
+    };
+  }
   if (a.kind === 'status')
     return {
       ...s,
@@ -452,11 +859,12 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
             updated_at: Math.max(prev.updated_at, a.receivedAt),
           }
         : foldSnapshot(prev ?? emptyBet(id), a.bet, a.receivedAt);
+    const bets = { ...s.bets, [id]: view };
     return {
       ...s,
-      bets: { ...s.bets, [id]: view },
+      bets,
       snapshots: { ...s.snapshots, [id]: a.bet },
-      focusBetId: s.focusBetId ?? id,
+      focusBetId: holdingPin(s, bets) ?? s.focusBetId ?? id,
     };
   }
 
@@ -481,10 +889,17 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
             room_id: frame.room_id,
             members: frame.members.length,
             online: frame.members.filter((m) => m.online).length,
+            online_by_user: Object.fromEntries(
+              frame.members.map((m) => [m.user.user_id, m.online]),
+            ),
           },
         };
       case 'stage.cue':
-        return { ...s, lastCue: { bet_id: frame.bet_id, kind: frame.kind } };
+        return {
+          ...s,
+          lastCue: { bet_id: frame.bet_id, kind: frame.kind },
+          cueCount: s.cueCount + 1,
+        };
       case 'stage.market':
         return { ...withMarket(s, frame.snapshot, a.receivedAt), marketTicks: s.marketTicks + 1 };
       case 'subscribed':
@@ -503,6 +918,22 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   const parsed = parseRealtimeEvent(raw);
   if (!parsed.ok) return { ...s, dropped: s.dropped + 1 };
   const e = parsed.event;
+  // market.tick is 1 Hz chatter (API-CONTRACT §3.4, persisted: ~400 per Gemini bet). It stays out
+  // of the ticker (it would evict every chain / tx row from MAX_EVENTS) and out of the card's
+  // history, so it is deduped by lastSeq. It never moves the focus or touches the card, it only
+  // moves that bet's live price (betTicks); but a bet first seen through a tick (a reload while
+  // AWAITING_MARKET) gets its card entry, so the App subscribes it from seq 0 and fetches its
+  // snapshot.
+  if (e.type === 'market.tick') {
+    if (e.seq <= (s.lastSeq[e.bet_id] ?? 0)) return s;
+    return {
+      ...s,
+      bets: s.bets[e.bet_id] ? s.bets : { ...s.bets, [e.bet_id]: emptyBet(e.bet_id, a.receivedAt) },
+      betTicks: { ...s.betTicks, [e.bet_id]: e.payload.snapshot },
+      focusBetId: s.focusBetId ?? e.bet_id,
+      lastSeq: { ...s.lastSeq, [e.bet_id]: e.seq },
+    };
+  }
   const past = s.history[e.bet_id] ?? [];
   if (
     past.some((x) => x.seq === e.seq) ||
@@ -512,14 +943,6 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   const events = [...s.events, toTicker(e)]
     .sort((x, y) => (x.ts === y.ts ? x.seq - y.seq : x.ts < y.ts ? -1 : 1))
     .slice(-MAX_EVENTS);
-  // market.tick is 1 Hz chatter: it doesn't steal the focus or touch the card.
-  if (e.type === 'market.tick')
-    return {
-      ...s,
-      events,
-      focusBetId: s.focusBetId ?? e.bet_id,
-      lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
-    };
   const inOrder = e.seq > foldedSeq(s, e.bet_id);
   const hist = (inOrder ? [...past, e] : [...past, e].sort((x, y) => x.seq - y.seq)).slice(
     -MAX_BET_HISTORY,
@@ -536,9 +959,41 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
     events,
     bets: { ...s.bets, [e.bet_id]: view },
     history: { ...s.history, [e.bet_id]: hist },
-    focusBetId: e.bet_id,
+    focusBetId: nextFocus(s, e, view, inOrder, a.receivedAt),
     lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
   };
+}
+
+export const frameKey = (betId: string, attemptNo: number) => `${betId}:${attemptNo}`;
+
+/**
+ * The frames to show for a bet: the event's frame_urls when the server sent them, else the
+ * JPEGs fetched so far for its latest evidence ('' for one still loading).
+ */
+export function framesOf(s: Pick<TickerState, 'frameBlobs'>, b: BetView): string[] {
+  if (b.frame_urls.length || !b.evidence) return b.frame_urls;
+  const got = s.frameBlobs[frameKey(b.bet_id, b.evidence.attempt_no)] ?? {};
+  return Array.from({ length: b.evidence.frames }, (_, i) => got[i] ?? '');
+}
+
+/**
+ * RULED bets with no appeal countdown whose last REST snapshot predates the ruling: one more
+ * GET /v1/bets/:id gives deadlines.appeal_deadline (written by the payout service).
+ */
+export function deadlineRefetches(s: Pick<TickerState, 'bets' | 'snapshots'>): string[] {
+  return Object.values(s.bets)
+    .filter((b) => {
+      const snap = s.snapshots[b.bet_id];
+      return (
+        b.state === 'RULED' &&
+        b.appeal_deadline === null &&
+        !b.appealed &&
+        !b.payout &&
+        snap !== undefined &&
+        snap.state !== 'RULED'
+      );
+    })
+    .map((b) => b.bet_id);
 }
 
 /** Bets seen in events but not yet seeded from REST (the App fetches each once). */

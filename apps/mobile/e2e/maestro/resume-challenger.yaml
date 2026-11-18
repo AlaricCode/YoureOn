@@ -1,0 +1,26 @@
+# Restart mid-bet, challenger side: in a room with OPPONENT online, challenge, then kill and
+# relaunch the app. It comes back on the typed-terms form of the same bet (GET /v1/me/bets
+# ?status=active + the bet's event log), not on home with the bet stranded.
+#   maestro --device <udid> test -e OPPONENT="Sim A" e2e/maestro/resume-challenger.yaml
+# Pair with resume-invited.yaml on the other phone.
+appId: dev.youreon.app
+name: resume-challenger
+---
+- launchApp
+- extendedWaitUntil:
+    visible: ${OPPONENT}
+    timeout: 30000
+- tapOn: Challenge
+- extendedWaitUntil:
+    visible:
+      id: typed-claim
+    timeout: 20000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: typed-claim
+    timeout: 30000
+- assertVisible:
+    id: typed-send
+- takeScreenshot: 70-challenger-resumed

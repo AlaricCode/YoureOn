@@ -4,6 +4,8 @@
 // as the contract prints them. Some of these routes are still being built server-side.
 import {
   AuthorizationResult,
+  BET_EVENTS_LIMIT,
+  betEventsPath,
   BetSnapshot,
   CreateBetResponse,
   CreateRoomResponse,
@@ -19,6 +21,13 @@ import {
   type PartyDecline,
 } from '@youre-on/shared/authorization';
 import type { CameraEvidence } from '@youre-on/shared/evidence';
+import { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import {
+  marketTermsPath,
+  MarketTermsResponse,
+  type MarketTermsRequest,
+} from '@youre-on/shared/judge/market-terms';
+import { faceMatchPath, FaceMatchResponse, type FaceMatchRequest } from '@youre-on/shared/face';
 import {
   termsConfirmPath,
   TermsConfirmResponse,
@@ -26,11 +35,14 @@ import {
   TypedTermsResponse,
   type TypedTermsRequest,
 } from '@youre-on/shared/judge/typed-terms';
-import { FaceMatchResponse, type FaceMatchRequest } from '@youre-on/shared/face';
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
 import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
-import { RealtimeEvent } from '@youre-on/shared/realtime';
+import {
+  BetEventsResponse,
+  parseRealtimeEvent,
+  type RealtimeEvent,
+} from '@youre-on/shared/realtime';
 import { z } from 'zod/v4';
 
 import { boundaryFor, buildMultipart } from './multipart';
@@ -70,17 +82,80 @@ export const FramesResponse = z.object({
 });
 /** §2.10 POST /v1/bets/:id/concede -> 202 */
 export const SubmittedResponse = z.object({ status: z.literal('submitted'), signature: Signature });
-/** §2.14 GET /v1/bets/:id/events */
-export const BetEventsResponse = z.object({
-  events: z.array(z.unknown()),
-  last_seq: z.number().int(),
+/**
+ * §2.14 GET /v1/bets/:id/events: the shared BetEventsResponse with its events left unparsed, so
+ * one envelope this build can't read is dropped on its own (SCHEMAS §10.1) instead of failing
+ * the page.
+ */
+export const BetEventsPage = BetEventsResponse.extend({ events: z.array(z.unknown()) });
+
+/** One page of a bet's log, as BetHub reads it (../app/betHub BetHubApi). */
+export interface BetEventsRead {
+  /** The envelopes that parse, in the order sent (seq order). */
+  events: RealtimeEvent[];
+  /** The bet's newest seq when the page was read. */
+  last_seq: number;
+  /**
+   * The highest seq the page held, dropped envelopes included (`after` for an empty page): the
+   * next page starts here, and a seq at or below it that is not in `events` is not coming.
+   */
+  through: number;
+}
+
+const seqOf = (raw: unknown): number | null => {
+  const seq = (raw as { seq?: unknown } | null)?.seq;
+  return typeof seq === 'number' && Number.isInteger(seq) ? seq : null;
+};
+
+/** Parses a BetEventsPage read after `after`: keeps the RealtimeEvents, notes the rest. */
+export function readBetEventsPage(
+  page: z.infer<typeof BetEventsPage>,
+  after: number,
+  log: (msg: string, extra?: unknown) => void = () => undefined,
+): BetEventsRead {
+  let through = after;
+  const events: RealtimeEvent[] = [];
+  for (const raw of page.events) {
+    through = Math.max(through, seqOf(raw) ?? through);
+    const p = parseRealtimeEvent(raw);
+    if (p.ok) events.push(p.event);
+    else log('events.drop_event', (raw as { type?: unknown } | null)?.type);
+  }
+  return { events, last_seq: page.last_seq, through };
+}
+
+/** §2.13 GET /v1/markets/btc5m/quote -> {result (ok only; refusals are 409), snapshot} */
+export const MarketQuoteResponse = z.object({
+  result: z.object({
+    ok: z.literal(true),
+    priceAtLock: z.string(),
+    priceSource: z.enum(['mid', 'last_in_spread']),
+    quotedAt: IsoUtc,
+    stakes: z.object({ a: MicroUsdc, b: MicroUsdc, currency: z.literal('USDC') }),
+  }),
+  snapshot: GeminiMarketSnapshot,
+});
+export type MarketQuoteResponse = z.infer<typeof MarketQuoteResponse>;
+
+/** §2.13 GET /v1/markets/btc5m/current (the fields the phone reads). */
+export const MarketCurrentResponse = z.object({
+  lockable: z.boolean(),
+  next_window_start: IsoUtc.nullable(),
 });
 
 const bet = (id: string) => `/v1/bets/${encodeURIComponent(id)}`;
 
+/** §2.14 GET /v1/me/bets: items stay unparsed here (app/history parses each one on its own). */
+export const MeBetsPage = z.object({
+  items: z.array(z.unknown()),
+  next_cursor: z.string().nullable(),
+});
+
 export function createYoApi(c: ApiClient) {
   return {
     balance: () => c.request('GET', '/v1/me/balance', { schema: Balance }),
+    myBets: (status: 'active' | 'settled' | 'all', limit: number) =>
+      c.request('GET', `/v1/me/bets?status=${status}&limit=${limit}`, { schema: MeBetsPage }),
 
     // §2.3 rooms
     createRoom: (name?: string) =>
@@ -97,36 +172,28 @@ export function createYoApi(c: ApiClient) {
         schema: RoomPresenceResponse,
       }),
 
-    // §2.5 challenge (pick-from-list path; face match is cut from the live demo)
-    createBet: (roomId: string, opponentUserId: string, voiceConversationId?: string) =>
-      c.request('POST', '/v1/bets', {
-        json: {
-          room_id: roomId,
-          opponent_user_id: opponentUserId,
-          challenge_method: 'list',
-          ...(voiceConversationId ? { voice_conversation_id: voiceConversationId } : {}),
-        },
-        schema: CreateBetResponse,
-      }),
-    // §2.4 face match (Beat 1): the probe embedding only, never the photo.
-    faceMatch: (roomId: string, body: FaceMatchRequest) =>
-      c.request('POST', `/v1/rooms/${encodeURIComponent(roomId)}/face-match`, {
-        json: body,
-        schema: FaceMatchResponse,
-      }),
-    /** §2.5 challenge someone the face scan found: needs the 60 s match_ticket. */
-    createBetFromScan: (
-      roomId: string,
-      opponentUserId: string,
-      matchTicket: string,
-      voiceConversationId?: string,
-    ) =>
+    // §2.4 face match (Beat 1): the probe embedding only; a match addresses, never authorizes
+    faceMatch: (roomId: string, req: FaceMatchRequest) =>
+      c.request('POST', faceMatchPath(roomId), { json: req, schema: FaceMatchResponse }),
+    /** §2.5 challenge addressed by a face match: the 60 s ticket from faceMatch(). */
+    createFaceBet: (roomId: string, opponentUserId: string, matchTicket: string) =>
       c.request('POST', '/v1/bets', {
         json: {
           room_id: roomId,
           opponent_user_id: opponentUserId,
           challenge_method: 'face',
           match_ticket: matchTicket,
+        },
+        schema: CreateBetResponse,
+      }),
+
+    // §2.5 challenge (pick-from-list path; also the face_pick_list fallback)
+    createBet: (roomId: string, opponentUserId: string, voiceConversationId?: string) =>
+      c.request('POST', '/v1/bets', {
+        json: {
+          room_id: roomId,
+          opponent_user_id: opponentUserId,
+          challenge_method: 'list',
           ...(voiceConversationId ? { voice_conversation_id: voiceConversationId } : {}),
         },
         schema: CreateBetResponse,
@@ -138,16 +205,16 @@ export function createYoApi(c: ApiClient) {
 
     // §2.14 reads / resync
     getBet: (betId: string) => c.request('GET', bet(betId), { schema: BetSnapshot }),
-    /** Events after `after`; entries that fail RealtimeEvent parse are dropped (§10.1). */
-    async getBetEvents(betId: string, after: number) {
-      const r = await c.request('GET', `${bet(betId)}/events?after=${after}&limit=200`, {
-        schema: BetEventsResponse,
+    /**
+     * One page of the bet's log after `after` (≤ 200 envelopes); entries that fail RealtimeEvent
+     * parse are dropped (§10.1). BetHub pages on to `last_seq`. A server without the route
+     * answers 404: the caller falls back to GET /v1/bets/:id.
+     */
+    async getBetEvents(betId: string, after: number, limit = BET_EVENTS_LIMIT) {
+      const page = await c.request('GET', betEventsPath(betId, after, limit), {
+        schema: BetEventsPage,
       });
-      const events = r.events.flatMap((e) => {
-        const p = RealtimeEvent.safeParse(e);
-        return p.success ? [p.data] : [];
-      });
-      return { events, last_seq: r.last_seq };
+      return readBetEventsPage(page, after);
     },
 
     // typed terms (Beat 2 without the voice judge; party A only)
@@ -160,6 +227,19 @@ export function createYoApi(c: ApiClient) {
         schema: TermsConfirmResponse,
         idempotencyKey,
       }),
+
+    // Beat 6: the Gemini BTC 5-minute closer (party A). The quote is a preview; the binding
+    // one is taken by POST …/terms/market.
+    marketQuote: (amountMicro: string, aSide: 'YES' | 'NO') =>
+      c.request(
+        'GET',
+        `/v1/markets/btc5m/quote?amount=${encodeURIComponent(amountMicro)}&a_side=${aSide}`,
+        { schema: MarketQuoteResponse },
+      ),
+    marketCurrent: () =>
+      c.request('GET', '/v1/markets/btc5m/current', { schema: MarketCurrentResponse }),
+    proposeMarketTerms: (betId: string, body: MarketTermsRequest) =>
+      c.request('POST', marketTermsPath(betId), { json: body, schema: MarketTermsResponse }),
 
     // §2.8 lock
     getLock: (betId: string) =>

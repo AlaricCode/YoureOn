@@ -12,6 +12,7 @@ import { FAIR, fairStakes, type FairRefusal, type FairStakesResult } from '@your
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import type { MicroUsdc } from '@youre-on/shared/money';
 import type { Logger } from '../log';
+import type { FeedMode, RoutedClient } from './replay';
 import {
   btcContract,
   cleanDecimal,
@@ -25,6 +26,8 @@ import {
 } from './gemini';
 
 export const MARKET_POLL_MS = 2_000;
+/** While Gemini keeps failing, the poll backs off (doubling from pollMs) up to this. */
+export const MARKET_BACKOFF_MAX_MS = 16_000;
 export const MARKET_DISCOVERY_MS = 60_000;
 /** §2.13 recommended_lock_by = window start + 90 s. */
 export const RECOMMENDED_LOCK_AFTER_START_MS = 90_000;
@@ -77,7 +80,10 @@ export class MarketService {
   private readonly strikes = new Map<string, string>();
   private indexPrice: string | null = null;
   private snap: GeminiMarketSnapshot | null = null;
-  private inFlight: Promise<GeminiMarketSnapshot | null> | null = null;
+  /** The poll in flight and the feed generation it was started under (see setFeed). */
+  private inFlight: { gen: number; p: Promise<GeminiMarketSnapshot | null> } | null = null;
+  /** Bumped by setFeed: a poll started under an older generation drops its result. */
+  private gen = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private readonly listeners = new Set<(s: GeminiMarketSnapshot) => void>();
@@ -86,6 +92,8 @@ export class MarketService {
   lastOkAt: number | null = null;
   lastError: string | null = null;
   rollovers = 0;
+  /** Polls failed in a row (0 after a success): drives the backoff and the log volume. */
+  failures = 0;
 
   readonly pollMs: number;
   readonly discoveryMs: number;
@@ -97,6 +105,50 @@ export class MarketService {
 
   get snapshot(): GeminiMarketSnapshot | null {
     return this.snap;
+  }
+
+  /** The REST client (the settlement keeper fetches a bet's own event with it). */
+  get client(): GeminiClient {
+    return this.o.client;
+  }
+
+  /** 'live' or 'replay' with a routed client (markets/replay.ts); null for a plain client. */
+  get feed(): FeedMode | null {
+    const c = this.o.client as Partial<RoutedClient>;
+    return typeof c.setMode === 'function' ? (c.mode ?? null) : null;
+  }
+
+  /**
+   * Switches a routed client's feed and forgets the current contract, its quote and the chart,
+   * so the next poll re-discovers. Bets keep settling from the feed they were quoted on (the
+   * routed client routes ticker-scoped calls by ticker). False for a plain client.
+   *
+   * A poll of the old feed still in flight is disowned (its result is dropped, its failure
+   * not counted), the backoff resets, and the timer poll is brought forward: the switch exists
+   * for an outage, when the old feed's poll is the one likely to fail. The next refresh() is
+   * a fresh poll of the new feed.
+   */
+  setFeed(mode: FeedMode): boolean {
+    const c = this.o.client as Partial<RoutedClient>;
+    if (typeof c.setMode !== 'function') return false;
+    c.setMode(mode);
+    this.gen++;
+    this.cur = null;
+    this.events = [];
+    this.snap = null;
+    this.lastDiscoveryAt = Number.NEGATIVE_INFINITY;
+    this.lastStrikeTryAt = Number.NEGATIVE_INFINITY;
+    this.ring.length = 0;
+    this.failures = 0;
+    this.lastError = null;
+    this.o.log.info('markets.feed', { mode });
+    if (this.started) this.schedule(this.pollMs);
+    return true;
+  }
+
+  /** The relay's current contract, if it is `eventTicker` (raw fields the snapshot drops). */
+  contractOf(eventTicker: string): { event: RawEvent; contract: RawContract } | null {
+    return this.cur && this.cur.event.ticker === eventTicker ? this.cur : null;
   }
 
   get isStarted(): boolean {
@@ -112,39 +164,83 @@ export class MarketService {
   start(): void {
     if (this.started) return;
     this.started = true;
-    const loop = () => {
-      if (!this.started) return;
-      void this.refresh().finally(() => {
-        if (!this.started) return;
-        this.timer = setTimeout(loop, this.pollMs);
-        this.timer.unref?.();
-      });
-    };
-    loop();
+    this.loop();
+  }
+
+  private loop(): void {
+    if (!this.started) return;
+    this.timer = null;
+    void this.refresh().finally(() => {
+      // a setFeed during the poll already scheduled the next one
+      if (this.started && this.timer === null) this.schedule(this.nextPollMs());
+    });
+  }
+
+  /** (Re)arms the timer poll `ms` from now. */
+  private schedule(ms: number): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.loop(), ms);
+    this.timer.unref?.();
   }
 
   async stop(): Promise<void> {
     this.started = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    await this.inFlight?.catch(() => null);
+    await this.inFlight?.p.catch(() => null);
   }
 
-  /** One poll; concurrent callers share it. Never throws (errors land in lastError). */
+  /**
+   * The delay before the next timer poll: pollMs, doubled per failure in a row up to
+   * MARKET_BACKOFF_MAX_MS (an outage is not hammered at 0.5 Hz with a warn line each time).
+   */
+  nextPollMs(): number {
+    if (this.failures === 0) return this.pollMs;
+    return Math.min(MARKET_BACKOFF_MAX_MS, this.pollMs * 2 ** Math.min(this.failures, 8));
+  }
+
+  /**
+   * One poll; concurrent callers share it. Never throws (errors land in lastError). After a
+   * setFeed, a caller never gets the old feed's in-flight poll: it waits for it to finish, then
+   * polls the new feed.
+   */
   refresh(): Promise<GeminiMarketSnapshot | null> {
-    this.inFlight ??= this.doRefresh()
+    const gen = this.gen;
+    if (this.inFlight?.gen === gen) return this.inFlight.p;
+    const prev = this.inFlight?.p;
+    const poll = prev
+      ? prev.catch(() => null).then(() => this.doRefresh(gen))
+      : this.doRefresh(gen);
+    const p: Promise<GeminiMarketSnapshot | null> = poll
+      .then((snap) => {
+        if (gen !== this.gen) return this.snap; // disowned by setFeed
+        if (this.failures > 0)
+          this.o.log.info('markets.recovered', { after_failures: this.failures });
+        this.failures = 0;
+        return snap;
+      })
       .catch((err: unknown) => {
+        if (gen !== this.gen) return this.snap;
         this.lastError = err instanceof Error ? err.message : String(err);
-        this.o.log.warn('markets.refresh_failed', { err });
+        this.failures++;
+        // the first failure and then every 10th: an outage logs a line a minute or so
+        if (this.failures === 1 || this.failures % 10 === 0)
+          this.o.log.warn('markets.refresh_failed', { err, failures: this.failures });
         return this.snap;
       })
       .finally(() => {
-        this.inFlight = null;
+        if (this.inFlight?.p === p) this.inFlight = null;
       });
-    return this.inFlight;
+    this.inFlight = { gen, p };
+    return p;
   }
 
-  private async doRefresh(): Promise<GeminiMarketSnapshot | null> {
+  /**
+   * One poll under feed generation `gen`. Every write to the relay state happens only while
+   * `gen` is still current: a poll disowned by setFeed returns without touching it.
+   */
+  private async doRefresh(gen: number): Promise<GeminiMarketSnapshot | null> {
+    const stale = () => gen !== this.gen;
     const now = this.o.now();
     const c = this.o.client;
     const expired = this.cur !== null && now >= Date.parse(this.cur.contract.expiryDate);
@@ -160,9 +256,11 @@ export class MarketService {
       try {
         events = await c.listActiveCrypto();
       } catch (err) {
+        if (stale()) return null;
         if (expired) this.cur = null; // the old contract is over; don't keep quoting it
         throw err;
       }
+      if (stale()) return null;
       this.events = events;
       this.lastDiscoveryAt = now;
       const picked = pickCurrent(events, now);
@@ -179,6 +277,7 @@ export class MarketService {
       this.cur = picked;
     } else if (this.cur) {
       const ev = await c.getEvent(this.cur.event.ticker);
+      if (stale() || !this.cur) return null;
       const contract =
         ev.contracts.find((x) => x.instrumentSymbol === this.cur!.contract.instrumentSymbol) ??
         btcContract(ev);
@@ -186,6 +285,7 @@ export class MarketService {
     }
 
     const idx = await index;
+    if (stale()) return null;
     if (idx !== null) this.indexPrice = idx;
 
     const cur = this.cur;
@@ -213,6 +313,7 @@ export class MarketService {
       } catch (err) {
         this.o.log.warn('markets.strike_failed', { eventTicker: ticker, err });
       }
+      if (stale()) return null;
     }
     // keep the latch map small: only tickers still listed (plus the current one)
     if (this.strikes.size > 32) {

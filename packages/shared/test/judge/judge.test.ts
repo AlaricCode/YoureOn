@@ -428,6 +428,15 @@ describe('persona (D0-J3)', () => {
     );
   });
 
+  it('a refused confirm (INVITE_PENDING) is spoken and retried, never claimed as locked', () => {
+    const p = buildJudgePrompt(new Set(['propose_terms', 'confirm_terms']));
+    expect(p).toContain('If confirm_terms answers ok false, speak its "say" and wait');
+    expect(p).toContain('INVITE_PENDING');
+    // B's tap arrives as an [EVENT] line (bets/invite.ts), the judge's cue to call it again.
+    expect(p).toContain('"[EVENT] INVITE_ACCEPTED" tells you when they have');
+    expect(buildJudgePrompt(new Set(['propose_terms']))).not.toContain('INVITE_PENDING');
+  });
+
   it('dynamic variables render', () => {
     expect(renderPersona(FIRST_MESSAGE, { party_a_name: 'Logan', party_b_name: 'Jake' })).toBe(
       "Order. Court is in session. Logan, Jake: what's the bet?",

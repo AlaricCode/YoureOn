@@ -9,4 +9,5 @@ export * from './outbox';
 export * from './chain';
 export * from './lifecycle';
 export * from './judge';
+export * from './markets';
 export * from './face';

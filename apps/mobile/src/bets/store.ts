@@ -10,6 +10,8 @@
 import type { BetSnapshot, SignRequest } from '@youre-on/shared/api';
 import type { AuthorizeRequest } from '@youre-on/shared/authorization';
 import type { BetState, ChainAck, OnchainStatus, PendingTx } from '@youre-on/shared/bet-state';
+import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
+import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import type { HearingRuling } from '@youre-on/shared/hearing';
 import type { MicroUsdc } from '@youre-on/shared/money';
 import type { Party, UserRef } from '@youre-on/shared/primitives';
@@ -59,6 +61,10 @@ export interface BetModel {
   /** Caption lines from judge.line / party.line (final ones replace partials by utterance). */
   lines: readonly { id: string; who: 'judge' | 'a' | 'b'; text: string }[];
   lastCue: { cue: string; text: string; speak: boolean } | null;
+  /** Gemini bets: the latest market.tick of the bet's contract (the live price). */
+  market: GeminiMarketSnapshot | null;
+  /** Gemini bets: Gemini's settled result (market.settled), the ruling's evidence. */
+  settlement: GeminiSettlementRecord | null;
 }
 
 export const emptyBet = (bet_id: string, my_party: Party | null = null): BetModel => ({
@@ -89,6 +95,8 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   lockFailed: false,
   lines: [],
   lastCue: null,
+  market: null,
+  settlement: null,
 });
 
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
@@ -118,7 +126,12 @@ export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
 
 const who = (p: Party): 'a' | 'b' => (p === 'A' ? 'a' : 'b');
 
-function upsertLine(lines: BetModel['lines'], id: string, w: 'judge' | 'a' | 'b', text: string) {
+export function upsertLine(
+  lines: BetModel['lines'],
+  id: string,
+  w: 'judge' | 'a' | 'b',
+  text: string,
+) {
   const i = lines.findIndex((l) => l.id === id);
   if (i < 0) return [...lines, { id, who: w, text }].slice(-40);
   const next = lines.slice();
@@ -221,6 +234,10 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       };
     case 'chain.BetResolved':
       return { ...base, appeal_deadline: Number(e.payload.appeal_deadline) || m.appeal_deadline };
+    case 'market.tick':
+      return { ...base, market: e.payload.snapshot };
+    case 'market.settled':
+      return { ...base, settlement: e.payload.record };
     default:
       return base;
   }

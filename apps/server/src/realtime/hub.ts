@@ -43,8 +43,16 @@ export interface HubAccess {
   canSeeBet(auth: AuthContext, betId: string): Promise<boolean>;
   /** May this session see room_id? false -> close 4403. */
   canSeeRoom(auth: AuthContext, roomId: string): Promise<boolean>;
-  /** Envelopes with seq > afterSeq in seq order, and the bet's current last_seq. */
-  replay(betId: string, afterSeq: number): Promise<{ events: BetEnvelope[]; last_seq: number }>;
+  /**
+   * Envelopes with seq > afterSeq in seq order (at most `limit`; the access's own cap when
+   * omitted), and the bet's current last_seq. The socket replay and the REST resync
+   * (GET /v1/bets/:bet_id/events) both read through this.
+   */
+  replay(
+    betId: string,
+    afterSeq: number,
+    limit?: number,
+  ): Promise<{ events: BetEnvelope[]; last_seq: number }>;
 }
 
 export interface HubOptions {
@@ -100,6 +108,15 @@ export class RealtimeHub {
 
   get heartbeatMs() {
     return this.opts.heartbeatMs ?? WS_HEARTBEAT_MS;
+  }
+
+  /**
+   * Who may see what, and the replay query. REST resync (GET /v1/bets/:bet_id/events,
+   * ./resync.ts) goes through this same object, so it allows exactly the sessions `subscribe`
+   * allows and returns exactly the envelopes the socket replay sends.
+   */
+  get access(): HubAccess {
+    return this.opts.access;
   }
 
   /** Starts the ping loop. Idempotent. */

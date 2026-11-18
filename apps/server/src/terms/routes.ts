@@ -19,6 +19,7 @@
 import type { Context } from 'hono';
 import { isTerminalBetState } from '@youre-on/shared/bet-state';
 import { MAX_STAKE } from '@youre-on/shared/constants';
+import { newRoundLine } from '@youre-on/shared/judge/market-terms';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import {
   TermsConfirmRequest,
@@ -34,9 +35,10 @@ import type { BucketSpec } from '../http/rate-limit';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import type { BetRow } from '../bets/snapshot';
 import { readBet } from '../lock/common';
-import { priorAnswers } from '../bets/routes';
+import { priorAnswers } from '../bets/invite';
 import { betIdParam } from '../lock/routes';
-import { displayCode, persistEvaluation } from '../lock/terms';
+import { displayCode, loadEnvelope, persistEvaluation } from '../lock/terms';
+import { marketMessage } from '../markets/routes';
 import { confirmAndLock, PROPOSABLE_STATES } from '../voice/tools';
 
 /** Typed proposals + confirms: 12/min per (bet, user). Plenty for a person, stops a loop. */
@@ -45,7 +47,7 @@ export const TYPED_TERMS_BUCKET: BucketSpec = { limit: 12, windowMs: 60_000 };
 const isProposable = (state: string) => (PROPOSABLE_STATES as readonly string[]).includes(state);
 
 /** Loads the bet and checks the caller is party A; takes the route's rate-limit token. */
-async function partyABet(c: Context<AppEnv>): Promise<{ bet: BetRow; userId: string }> {
+export async function partyABet(c: Context<AppEnv>): Promise<{ bet: BetRow; userId: string }> {
   const deps = c.get('deps');
   const me = appAuth(c);
   const betId = betIdParam(c.req.param('bet_id') ?? '');
@@ -154,18 +156,47 @@ export const termsRoutes: RouteModule = {
         });
       // B said yes to the challenge. Typing terms before that is fine; freezing them (and, with
       // LOCK_SIGNER=server, signing B's stake) is not. A decline cancels the bet, so it fails the
-      // state check above, and confirmAndLock re-checks TERMS_PROPOSED under the row lock.
-      if (!frozen && !(await priorAnswers(deps.db, bet.id)).has('accepted'))
-        throw new HttpError('INVALID_STATE', 'Waiting for them to accept.', {
+      // state check above. The early check answers without a write; confirmAndLock re-checks
+      // both TERMS_PROPOSED and B's accept under the row lock.
+      const invitePending = () =>
+        new HttpError('INVALID_STATE', 'Waiting for them to accept.', {
           state: bet.state,
           reason: 'invite_pending',
         });
+      if (!frozen && !(await priorAnswers(deps.db, bet.id)).has('accepted')) throw invitePending();
       const r = await confirmAndLock(deps, bet.id, {
         heard: 'typed',
         requestId: c.get('requestId'),
         actor: 'user',
         actorUserId: userId,
+        requireInviteAccepted: true,
       });
+      if (!r.ok && r.fix === 'INVITE_PENDING') throw invitePending();
+      // Gemini bets: a quote too old to lock was re-quoted (new terms: review them again); when
+      // the old round stopped pricing, the re-quote is the next round (new line and end).
+      if (r.fix === 'REQUOTED') {
+        const newRound = r.new_round === true;
+        const m = newRound ? (await loadEnvelope(deps.db, bet.id))?.envelope.terms.market : null;
+        throw new HttpError(
+          'TERMS_HASH_MISMATCH',
+          m
+            ? `${newRoundLine(m)} Review the new split.`
+            : "Gemini's odds moved. Review the new split.",
+          { terms_hash: r.terms_hash, reason: 'requoted', new_round: newRound },
+        );
+      }
+      // ...or Gemini can't price it at all now: its own reason (e.g. TOO_CLOSE_TO_EXPIRY, so the
+      // phone goes back to the next-round countdown instead of offering the dead card).
+      if (r.fix === 'QUOTE_STALE') {
+        const reason = typeof r.reason === 'string' ? r.reason : 'QUOTE_STALE';
+        throw new HttpError(
+          'MARKET_UNAVAILABLE',
+          reason === 'QUOTE_STALE'
+            ? "Gemini can't price this round anymore."
+            : marketMessage(reason),
+          { reason },
+        );
+      }
       if (!r.ok || typeof r.code !== 'string')
         throw new HttpError('INVALID_STATE', 'There are no terms to lock in yet.', {
           state: (await readBet(deps.db, bet.id))?.state ?? null,

@@ -5,18 +5,26 @@
 //   COMMIT, then publish the chain.* envelopes to the WS hub.
 //
 // Duplicates alone produce an empty RETURNING, so a replayed delivery is a cheap no-op (§8.3),
-// with one exception: a duplicate of a row parked as 'not_ours' (the Stream delivered the lock
-// before the tx sender recorded its signature) is handed to the projector again, so the
-// reconciler's / startup sweep's rpc_poll copy of the same event un-parks it.
+// with two exceptions: a duplicate of a PARKED row (REFOLDABLE_ERRORS: 'not_ours' = no server
+// lock signature matched yet, 'unknown_bet' = no bets row yet, 'projector_failed' = stored by the
+// deterministic-failure fallback, 'projection_rejected' = the bets write was refused) is handed
+// to the projector again, so a later copy of the same event un-parks it; and a Stream copy of a
+// row rpc_poll stored first backfills its block position and chain_txs.stream_seen_at (and logs
+// chain.stream_seen after COMMIT, so the Streams latency is measured whichever copy came first).
 // No RPC calls happen in here: the ack budget is p95 ≤ 150 ms.
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { chainEvents } from '@youre-on/db';
+import { chainEvents, chainTxs } from '@youre-on/db';
+import type { Logger } from '../log';
 import type { AppDeps } from '../context';
 import {
   APPLY_ERROR,
+  logStreamSeen,
+  REFOLDABLE_ERRORS,
+  streamSeenCols,
   type ChainProjector,
   type Fanout,
   type InsertedChainEvent,
+  type StreamSeen,
   type Tx,
 } from './projector';
 import type { ParsedChainEvent } from './streams';
@@ -39,7 +47,7 @@ export interface IngestResult {
 }
 
 export async function ingestChainEvents(
-  deps: Pick<AppDeps, 'db' | 'hub' | 'now'>,
+  deps: Pick<AppDeps, 'db' | 'hub' | 'now'> & Partial<Pick<AppDeps, 'log'>>,
   projector: ChainProjector,
   events: readonly ParsedChainEvent[],
   o: { deliveryId: string | null; source?: 'stream' | 'rpc_poll' },
@@ -47,7 +55,7 @@ export async function ingestChainEvents(
   if (events.length === 0) return { received: 0, inserted: 0, duplicates: 0, published: 0 };
   const nowMs = deps.now();
   const rows = toRows(events, o, nowMs);
-  const { inserted, fanout } = await deps.db.transaction(async (tx) => {
+  const { inserted, fanout, seen } = await deps.db.transaction(async (tx) => {
     const ins = await tx
       .insert(chainEvents)
       .values(rows)
@@ -62,7 +70,9 @@ export async function ingestChainEvents(
       });
     const fresh = new Set(ins.map(keyOf));
     const dupes = rows.filter((r) => !fresh.has(keyOf(r)));
-    const parked = dupes.length ? await parkedDuplicates(tx, dupes) : [];
+    const { parked, seen } = dupes.length
+      ? await storedDuplicates(tx, dupes, nowMs)
+      : { parked: [], seen: [] };
     const toApply: InsertedChainEvent[] = [
       ...ins.map(({ id, bet_id, event_name, apply_error }) => ({
         id,
@@ -73,10 +83,11 @@ export async function ingestChainEvents(
       // Parked rows go in as fresh (apply_error cleared) so the projector re-checks attribution.
       ...parked.map((r) => ({ ...r, apply_error: null })),
     ];
-    const out = toApply.length ? await projector.apply(tx, toApply, nowMs) : [];
-    return { inserted: ins.length, fanout: out };
+    const out = toApply.length ? await projector.apply(tx, toApply, nowMs, deps.log) : [];
+    return { inserted: ins.length, fanout: out, seen };
   });
-  for (const f of fanout) deps.hub.publishBetEvent(f.envelope, f.room_id);
+  publishFanout(deps, fanout);
+  if (deps.log) logStreamSeen(deps.log, seen, nowMs);
   return {
     received: events.length,
     inserted,
@@ -110,43 +121,84 @@ function toRows(
   }));
 }
 
-/** Stored rows matching these keys that are still parked as 'not_ours' (never applied). */
-async function parkedDuplicates(
+/** After COMMIT: bet:<id> (+ the room's stage), and both parties' user channels when given. */
+export function publishFanout(deps: Pick<AppDeps, 'hub'>, fanout: readonly Fanout[]): void {
+  for (const f of fanout) {
+    deps.hub.publishBetEvent(f.envelope, f.room_id);
+    for (const u of f.user_ids ?? []) deps.hub.publishToUser(u, f.envelope);
+  }
+}
+
+/**
+ * The stored twins of this delivery's duplicates. Returns the ones still parked
+ * (REFOLDABLE_ERRORS) for the projector. A Stream copy of a row an rpc_poll copy stored first also
+ * backfills what getTransaction could not give (block_height, tx_index: attribution orders by
+ * them) and stamps chain_txs.stream_seen_at (the Stream did see the tx); `seen` is what it
+ * stamped, for the chain.stream_seen latency log (the projector logs it for first copies).
+ */
+async function storedDuplicates(
   tx: Tx,
-  keys: readonly { signature: string; outer_ix: number; inner_ix: number }[],
-): Promise<InsertedChainEvent[]> {
-  const want = new Set(keys.map(keyOf));
+  dupes: readonly ReturnType<typeof toRows>[number][],
+  nowMs: number,
+): Promise<{ parked: InsertedChainEvent[]; seen: StreamSeen[] }> {
+  const incoming = new Map(dupes.map((d) => [keyOf(d), d]));
   const rows = await tx
     .select({
       ...parkedCols,
       signature: chainEvents.signature,
       outer_ix: chainEvents.outer_ix,
       inner_ix: chainEvents.inner_ix,
+      block_height: chainEvents.block_height,
+      tx_index: chainEvents.tx_index,
+      source: chainEvents.source,
     })
     .from(chainEvents)
-    .where(
-      and(
-        inArray(chainEvents.signature, [...new Set(keys.map((k) => k.signature))]),
-        eq(chainEvents.apply_error, APPLY_ERROR.notOurs),
-        isNull(chainEvents.applied_at),
-      ),
-    );
-  return rows
-    .filter((r) => want.has(keyOf(r)))
-    .map(({ id, bet_id, event_name, apply_error }) => ({ id, bet_id, event_name, apply_error }));
+    .where(inArray(chainEvents.signature, [...new Set(dupes.map((k) => k.signature))]));
+  const mine = rows.filter((r) => incoming.has(keyOf(r)));
+  /** signature -> the source of its stored copy, for the Stream copies of this delivery. */
+  const backfilled = new Map<string, 'stream' | 'rpc_poll'>();
+  for (const r of mine) {
+    const d = incoming.get(keyOf(r))!;
+    if (d.source !== 'stream') continue;
+    backfilled.set(r.signature, r.source === 'rpc_poll' ? 'rpc_poll' : 'stream');
+    const block_height = r.block_height ?? d.block_height;
+    const tx_index = r.tx_index ?? d.tx_index;
+    if (block_height !== r.block_height || tx_index !== r.tx_index)
+      await tx.update(chainEvents).set({ block_height, tx_index }).where(eq(chainEvents.id, r.id));
+  }
+  const stamped = backfilled.size
+    ? await tx
+        .update(chainTxs)
+        .set({ stream_seen_at: new Date(nowMs) })
+        .where(
+          and(inArray(chainTxs.signature, [...backfilled.keys()]), isNull(chainTxs.stream_seen_at)),
+        )
+        .returning({ ...streamSeenCols, signature: chainTxs.signature })
+    : [];
+  return {
+    parked: mine
+      .filter((r) => r.apply_error !== null && REFOLDABLE_ERRORS.includes(r.apply_error))
+      .map(({ id, bet_id, event_name, apply_error }) => ({ id, bet_id, event_name, apply_error })),
+    seen: stamped.map(({ signature, ...s }) => ({
+      ...s,
+      first_copy: backfilled.get(signature!) ?? 'stream',
+    })),
+  };
 }
 
 /**
- * Re-folds the parked ('not_ours') rows of these bets inside the caller's transaction. The
- * LockService calls this in the transaction that records a lock signature (chain_txs), so a
- * Stream delivery that beat the signature write is applied at once. Publish the returned fanout
- * after COMMIT (deps.hub.publishBetEvent).
+ * Re-folds the parked rows (REFOLDABLE_ERRORS) of these bets inside the caller's transaction, e.g.
+ * from a transaction that records a lock signature, so a Stream delivery that beat the signature
+ * write is applied at once. (The LockService records chain_txs.signature before it sends, so on
+ * the normal path nothing is ever parked for a server lock.) Publish the returned fanout after
+ * COMMIT with publishFanout.
  */
 export async function refoldParkedInTx(
   tx: Tx,
   projector: ChainProjector,
   betIds: readonly string[],
   nowMs: number,
+  log?: Logger,
 ): Promise<Fanout[]> {
   if (betIds.length === 0) return [];
   const rows = await tx
@@ -155,8 +207,7 @@ export async function refoldParkedInTx(
     .where(
       and(
         inArray(chainEvents.bet_id, [...betIds]),
-        eq(chainEvents.apply_error, APPLY_ERROR.notOurs),
-        isNull(chainEvents.applied_at),
+        inArray(chainEvents.apply_error, [...REFOLDABLE_ERRORS]),
       ),
     );
   return rows.length
@@ -164,6 +215,7 @@ export async function refoldParkedInTx(
         tx,
         rows.map((r) => ({ ...r, apply_error: null })),
         nowMs,
+        log,
       )
     : [];
 }

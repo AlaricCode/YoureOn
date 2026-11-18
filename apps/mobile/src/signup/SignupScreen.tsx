@@ -3,7 +3,14 @@
 // The phone's own key is the login (API-CONTRACT §2.1), so a returning user, even after a
 // reinstall, never sees this screen. Face enrollment is offered right after (D3-M3).
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import {
   AlertLine,
@@ -14,7 +21,7 @@ import {
   QuietButton,
   TextField,
 } from '../ui/kit';
-import { Screen } from '../ui/parts';
+import { OperatorHold, Screen } from '../ui/parts';
 import { palette, space } from '../ui/tokens';
 import { SignupApiError, type SignedUpUser, type SignupApi } from './api';
 import { SIGNUP_COPY } from './copy';
@@ -73,11 +80,12 @@ export function SignupScreen({
           {preview ? <Label variant="small">{SIGNUP_COPY.previewTag}</Label> : null}
         </View>
         <View style={styles.body}>
-          <Pressable onLongPress={onTitleLongPress} delayLongPress={1200} accessible={false}>
+          <OperatorHold onHold={onTitleLongPress}>
             <Label variant="display">{SIGNUP_COPY.title}</Label>
-          </Pressable>
+          </OperatorHold>
           <BodyText style={styles.gap}>{SIGNUP_COPY.body}</BodyText>
-          <View style={styles.flex} />
+          {/* Tapping the empty space puts the keyboard away. */}
+          <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />
           <TextField
             testID="signup-name"
             label={SIGNUP_COPY.nameLabel}

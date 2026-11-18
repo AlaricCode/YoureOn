@@ -1,0 +1,43 @@
+# Fresh install -> sign-up -> home. A REAL sign-up on whatever EXPO_PUBLIC_API_URL the build
+# points at: every run makes a new user (state and keychain are cleared, so the phone gets a new
+# device key and wallet).
+#   maestro --device <udid> test -e NAME="Sim A" e2e/maestro/01-signup.yaml
+# Pass NAME with -e: a flow-level `env:` default would override the -e value in Maestro 2.x.
+appId: dev.youreon.app
+name: signup
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+# Boot: the stored-session check, then a silent login that finds this device unknown.
+- extendedWaitUntil:
+    visible:
+      id: signup-name
+    timeout: 30000
+- takeScreenshot: 01-signup
+- tapOn:
+    id: signup-name
+- inputText: ${NAME}
+# The form rides above the keyboard (KeyboardAvoidingView): no need to put it away.
+# Continue stays disabled until the 18+ box is ticked.
+- assertVisible:
+    id: signup-continue
+    enabled: false
+- tapOn:
+    id: signup-age
+- assertVisible:
+    id: signup-continue
+    enabled: true
+- takeScreenshot: 02-signup-filled
+- tapOn:
+    id: signup-continue
+# The signed sign-up (device key + wallet binding) went through: home, with a balance.
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- assertVisible:
+    id: room-code
+- assertNotVisible:
+    id: reconnect-banner
+- takeScreenshot: 03-home

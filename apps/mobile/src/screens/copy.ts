@@ -1,6 +1,7 @@
 // Every fixed string the bet screens show, by screen, with its copy role, so one node test can
 // check them all against ui/copyRule (TASKS D5-M2 crypto-copy audit). Templates with {name},
 // {amount} or {n} are CONTRACT_COPY lines; fill them with the helpers below.
+import type { ScanMiss } from '../app/scan';
 import type { CopyRole } from '../ui/copyRule';
 
 type Line = readonly [text: string, role: CopyRole];
@@ -19,6 +20,14 @@ export const COPY = {
     history: ['History', 'label'],
     profile: ['Profile', 'label'],
     badCode: ['Room not found', 'error'],
+    createFailed: ['Room not created', 'error'],
+    challengeFailed: ['Challenge not sent', 'error'],
+    pairBusy: ['Bet already open', 'error'],
+    tooManyBets: ['Finish open bets', 'error'],
+    notInRoom: ['Not in room', 'error'],
+    slowDown: ['Try again soon', 'error'],
+    joinRoomFirst: ['Join room first', 'error'],
+    judgeCamFailed: ['Camera not set', 'error'],
   },
   scan: {
     title: ['Challenge', 'label'],
@@ -30,6 +39,16 @@ export const COPY = {
     allowCamera: ['Allow camera', 'label'],
     openSettings: ['Open settings', 'label'],
     cameraNeeded: ['Camera access needed', 'error'],
+    // Why a scan found nobody to address (app/scan ScanMiss), shown as the red line.
+    noFace: ['No face found', 'error'],
+    closer: ['Move closer', 'error'],
+    scanAgain: ['Scan again', 'error'],
+    joinRoom: ['Join the room', 'error'],
+    slowDown: ['Slow down', 'error'],
+    betOpen: ['Bet in progress', 'error'],
+    failed: ['Try again', 'error'],
+    // A face screen crashed (a native module missing from the build): face is off until restart.
+    unavailable: ['Face scan unavailable', 'error'],
   },
   incoming: {
     accept: ['Accept', 'label'],
@@ -84,6 +103,7 @@ export const COPY = {
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
     start: ['Start', 'label'],
+    noJudgeCam: ['No judge cam', 'error'],
   },
   judgeCam: {
     title: ['Judge cam', 'label'],
@@ -94,6 +114,7 @@ export const COPY = {
     sending: ['Sending', 'label'],
     sent: ['Sent', 'label'],
     start: ['Start', 'label'],
+    noCamera: ['No camera', 'error'],
   },
   ruling: {
     judge: ['Judge', 'label'],
@@ -136,6 +157,22 @@ export const COPY = {
     odds: ['Odds', 'label'],
     settlesIn: ['Settles in', 'label'],
     waiting: ['Waiting for Gemini', 'label'],
+    // Beat 6 on A's negotiate screen ("Bet on Bitcoin", app/marketTerms)
+    open: ['Bet on Bitcoin', 'label'],
+    panel: ['Bitcoin, 5 minutes', 'label'],
+    up: ['Up', 'label'],
+    down: ['Down', 'label'],
+    stake: ['Stake each', 'label'],
+    line: ['Line', 'label'],
+    closesIn: ['Closes in', 'label'],
+    split: ['Split', 'label'],
+    propose: ['Send terms', 'label'],
+    pricing: ['Getting odds', 'label'],
+    back: ['Back', 'label'],
+    gemini: ['Gemini', 'label'],
+    settled: ['Gemini settled', 'label'],
+    replay: ['Replay', 'label'],
+    nextRound: ['Next round', 'label'],
   },
   history: {
     title: ['History', 'label'],
@@ -159,6 +196,7 @@ export const COPY = {
     loading: ['Loading', 'label'],
     offline: ["Can't connect", 'error'],
     failed: ['Try again', 'error'],
+    crashed: ['Something went wrong', 'error'],
   },
   demo: {
     title: ['Demo account', 'label'],
@@ -167,10 +205,23 @@ export const COPY = {
     done: ['Signed in', 'label'],
     badCode: ['Code expired', 'error'],
     continue: ['Continue', 'label'],
+    useLink: ['Use this account', 'label'],
   },
 } as const satisfies Record<string, Record<string, Line>>;
 
 export const t = (line: Line): string => line[0];
+
+/** The red line for each scan miss (1-3 words; "No match" is the friendly abstain line). */
+export const SCAN_MISS_COPY: Readonly<Record<ScanMiss, Line>> = {
+  no_face: COPY.scan.noFace,
+  too_far: COPY.scan.closer,
+  no_match: COPY.scan.noMatch,
+  expired: COPY.scan.scanAgain,
+  not_in_room: COPY.scan.joinRoom,
+  busy: COPY.scan.slowDown,
+  pair_busy: COPY.scan.betOpen,
+  failed: COPY.scan.failed,
+};
 
 /** CONTRACT_COPY fillers (ui/copyRule). */
 export const fill = {

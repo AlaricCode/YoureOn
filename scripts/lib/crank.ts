@@ -2,7 +2,8 @@
 // anyone with a funded key can push every escrow Bet whose deadline has passed to its exit, and
 // return its rent to the stored rent payer. Shared by scripts/crank.ts (CLI) and the e2e fixture.
 //
-// Per Bet, from the chain clock (the instructions' own rules, §5.2 / §8.2):
+// Per Bet, from the chain clock (the instructions' own rules, §5.2 / §8.2; the table lives in
+// packages/shared/src/chain/exits.ts, which the server's timeout-refund sweep uses too):
 //   Open      now >= accept_deadline           -> [timeout_refund, close_bet]
 //   Locked    now >= resolve_deadline          -> [timeout_refund, close_bet]
 //   Appealed  now >= appeal_resolve_deadline   -> [timeout_refund, close_bet]
@@ -24,6 +25,7 @@ import {
   getCreateAssociatedTokenIdempotentInstructionAsync,
 } from '@solana-program/token';
 
+import { exitActionFor, type ExitAction } from '@youre-on/shared/chain/exits';
 import {
   BET_DISCRIMINATOR,
   BetStatus,
@@ -38,27 +40,10 @@ import {
 
 import { buildSimulated, sendAndConfirm, type ChainRpc } from './chain';
 
-export type CrankAction = 'timeout_refund' | 'finalize' | 'close_bet';
+export type CrankAction = ExitAction;
 
-/** What the crank does for `bet` at chain time `now`, or null when nothing is due. */
-export function crankActionFor(bet: Bet, now: bigint): CrankAction | null {
-  switch (bet.status) {
-    case BetStatus.Open:
-      return now >= bet.acceptDeadline ? 'timeout_refund' : null;
-    case BetStatus.Locked:
-      return now >= bet.resolveDeadline ? 'timeout_refund' : null;
-    case BetStatus.Appealed:
-      return now >= bet.appealResolveDeadline ? 'timeout_refund' : null;
-    case BetStatus.Resolved:
-      return now >= bet.appealDeadline ? 'finalize' : null;
-    case BetStatus.Settled:
-    case BetStatus.Refunded:
-    case BetStatus.Cancelled:
-      return 'close_bet';
-    default:
-      return null;
-  }
-}
+/** What the crank does for `bet` at chain time `now`, or null when nothing is due (shared table). */
+export const crankActionFor: (bet: Bet, now: bigint) => CrankAction | null = exitActionFor;
 
 export type LiveBet = { address: Address; bet: Bet };
 
@@ -173,11 +158,20 @@ export async function crankOnce(
   rpc: ChainRpc,
   payer: TransactionSigner,
   now: bigint,
-  opts: { dryRun?: boolean; log?: (line: string) => void } = {},
+  opts: {
+    dryRun?: boolean;
+    log?: (line: string) => void;
+    /** Only these Bet PDAs (base58). Empty/undefined = every bet. */
+    only?: ReadonlySet<string>;
+    /** Never these Bet PDAs, e.g. bets a live server still owns. */
+    skip?: ReadonlySet<string>;
+  } = {},
 ): Promise<CrankResult[]> {
   const log = opts.log ?? (() => {});
   const out: CrankResult[] = [];
   for (const live of await fetchAllBets(rpc)) {
+    if (opts.only?.size && !opts.only.has(live.address)) continue;
+    if (opts.skip?.has(live.address)) continue;
     const action = crankActionFor(live.bet, now);
     const base = { address: live.address, status: live.bet.status, action };
     if (!action || opts.dryRun) {

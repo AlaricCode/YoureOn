@@ -10,7 +10,14 @@ import {
   initialTicker,
   type TickerAction,
 } from '../src/ticker';
-import { fetchStageToken, StageConnection, wsUrlFor, type WsLike } from '../src/connection';
+import {
+  fetchFrame,
+  fetchStageToken,
+  framePath,
+  StageConnection,
+  wsUrlFor,
+  type WsLike,
+} from '../src/connection';
 
 const BET = '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f';
 const SIG = '5'.repeat(88);
@@ -30,18 +37,25 @@ const frame = (raw: unknown): TickerAction => ({
 });
 
 describe('stage page', () => {
-  it('renders the connect form and an empty ticker', () => {
+  it('renders the connect form with the no-typing URL tip', () => {
     const html = renderToString(<App />);
-    expect(html).toContain('You&#x27;re On');
+    expect(html).toContain('You&#x27;re <span class="on">On</span>');
+    expect(html).toContain('Room code');
+    expect(html).toContain('Stage key');
     expect(html).toContain('Connect');
-    expect(html).toContain('No events yet.');
+    expect(html).toContain('href="?preview"');
+    expect(html).toContain('/stage/?room=ABC234#key=STAGE_KEY');
   });
 
   it('renders events newest first with Explorer links', () => {
     let s = applyFrame(initialTicker, frame(txEvent(1)));
-    s = applyFrame(s, frame(txEvent(2)));
+    s = applyFrame(
+      s,
+      frame({ ...txEvent(2), type: 'tx.confirmed', payload: { ...txEvent(2).payload, slot: 7 } }),
+    );
     const html = renderToString(<Ticker state={s} />);
-    expect(html.indexOf('#<!-- -->2')).toBeLessThan(html.indexOf('#<!-- -->1'));
+    expect(html.indexOf('Lock tx confirmed')).toBeGreaterThan(-1);
+    expect(html.indexOf('Lock tx confirmed')).toBeLessThan(html.indexOf('Lock tx sent'));
     expect(html).toContain(explorerTx(SIG).replace(/&/g, '&amp;'));
   });
 });
@@ -89,7 +103,9 @@ describe('ticker reducer', () => {
     s = applyFrame(s, frame({ op: 'subscribed', bet_id: BET, last_seq: 9, replayed: 9 }));
     expect(s.lastSeq[BET]).toBe(9);
     s = applyFrame(s, frame({ op: 'room.presence', room_id: BET, members: [] }));
-    expect(s.presence).toEqual({ room_id: BET, members: 0, online: 0 });
+    expect(s.presence).toMatchObject({ room_id: BET, members: 0, online: 0 });
+    expect(s.cueCount).toBe(1);
+    expect(applyFrame(s, { kind: 'reset' })).toBe(initialTicker);
   });
 
   it('findSignature looks one level down', () => {
@@ -139,6 +155,27 @@ function harness() {
   });
   return { conn, sockets, urls, timers, actions };
 }
+
+describe('evidence frames over REST', () => {
+  it('fetchFrame GETs the JPEG with the stage bearer; errors carry the status', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const ok = (async (u: string, i?: RequestInit) => {
+      calls.push([u, i]);
+      return new Response(new Uint8Array([0xff, 0xd8, 0xff]), {
+        headers: { 'content-type': 'image/jpeg' },
+      });
+    }) as unknown as typeof fetch;
+    const blob = await fetchFrame('https://h.dev', 'yo_s_t', BET, 2, 7, ok);
+    expect(blob.size).toBe(3);
+    expect(calls[0]![0]).toBe(`https://h.dev/v1/bets/${BET}/attempts/2/frames/7`);
+    expect((calls[0]![1]!.headers as Record<string, string>).authorization).toBe('Bearer yo_s_t');
+    expect(framePath(BET, 1, 0)).toBe(`/v1/bets/${BET}/attempts/1/frames/0`);
+    const nf = (async () => new Response('{}', { status: 404 })) as unknown as typeof fetch;
+    await expect(fetchFrame('https://h.dev', 't', BET, 2, 9, nf)).rejects.toThrow(
+      'frame 9: HTTP 404',
+    );
+  });
+});
 
 describe('stage WebSocket client', () => {
   it('hello with the token in the first frame (not the URL), then subscribe_room', () => {

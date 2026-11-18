@@ -2,10 +2,14 @@
 // src/chain/decoder.ts, written independently so a round trip is a real check), sample payloads
 // for every escrow event, and getBlock-shaped blocks carrying emit_cpi! inner instructions.
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { getAddressDecoder, getAddressEncoder, getBase58Decoder, type Address } from '@solana/kit';
 import { betIdToBytes } from '@youre-on/shared';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
 import idlJson from '@youre-on/shared/idl/escrow.json' with { type: 'json' };
+import { quickNodeSignature } from '../src/chain/quicknode';
 
 type T = string | { array: [T, number] } | { vec: T } | { defined: { name: string } };
 interface Idl {
@@ -311,5 +315,224 @@ export function block(
     parentSlot: o.parentSlot ?? 519_807_090,
     previousBlockhash: '9TmP9DSp8AL7hBi3U6XC3sXq1YJ5LPHZwcgbnS45i4G',
     transactions,
+  };
+}
+
+// ---- one bet's consistent lifecycle (projector tests) ------------------------------------------
+
+/** The binding facts of one bet, shared by its row and every event the chain emits for it. */
+export interface BetFacts {
+  bet_id: string;
+  party_a: string;
+  party_b: string;
+  mint: string;
+  stake_a: string;
+  stake_b: string;
+  terms_hash: string;
+  bet: string;
+  vault: string;
+  rent_payer: string;
+  judge: string;
+  /** unix seconds of the lock (other timestamps follow it). */
+  t0: number;
+}
+
+export function betFacts(over: Partial<BetFacts> = {}): BetFacts {
+  return {
+    bet_id: randomUUID(),
+    party_a: randomPubkey(),
+    party_b: randomPubkey(),
+    mint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+    stake_a: '5000000',
+    stake_b: '5000000',
+    terms_hash: hex32(),
+    bet: randomPubkey(),
+    vault: randomPubkey(),
+    rent_payer: randomPubkey(),
+    judge: randomPubkey(),
+    t0: 1_795_284_400,
+    ...over,
+  };
+}
+
+type Outcome = 'PartyA' | 'PartyB' | 'Split' | 'Refund';
+
+/** Payout per ESCROW §6 over V = stake_a + stake_b (B gets the odd unit on Split). */
+export function payoutOf(f: BetFacts, outcome: Outcome): { to_a: string; to_b: string } {
+  const a = BigInt(f.stake_a);
+  const v = a + BigInt(f.stake_b);
+  const to_a =
+    outcome === 'PartyA' ? v : outcome === 'PartyB' ? 0n : outcome === 'Split' ? v / 2n : a;
+  return { to_a: to_a.toString(), to_b: (v - to_a).toString() };
+}
+
+/** DATA-MODEL §5.9 payloads for every event of the bet `f`, consistent with each other. */
+export function lifecycle(f: BetFacts) {
+  const DEFAULT_KEY = '11111111111111111111111111111111';
+  const terminal = (final_status: string, outcome: Outcome, ts: number) => {
+    const p = payoutOf(f, outcome);
+    return {
+      bet_id: f.bet_id,
+      final_status,
+      outcome,
+      mint: f.mint,
+      party_a: f.party_a,
+      party_b: f.party_b,
+      party_a_token: p.to_a === '0' ? DEFAULT_KEY : randomPubkey(),
+      party_b_token: p.to_b === '0' ? DEFAULT_KEY : randomPubkey(),
+      ...p,
+      ts,
+    };
+  };
+  return {
+    created: () => ({
+      bet_id: f.bet_id,
+      bet: f.bet,
+      vault: f.vault,
+      party_a: f.party_a,
+      party_b: f.party_b,
+      mint: f.mint,
+      stake_a: f.stake_a,
+      stake_b: f.stake_b,
+      terms_hash: f.terms_hash,
+      judge_authority: f.judge,
+      appeal_authority: randomPubkey(),
+      accept_deadline: f.t0 + 300,
+      rent_payer: f.rent_payer,
+      ts: f.t0,
+    }),
+    accepted: () => ({
+      bet_id: f.bet_id,
+      party_a: f.party_a,
+      party_b: f.party_b,
+      terms_hash: f.terms_hash,
+      stake_a: f.stake_a,
+      stake_b: f.stake_b,
+      vault_amount: (BigInt(f.stake_a) + BigInt(f.stake_b)).toString(),
+      resolve_deadline: f.t0 + 3600,
+      ts: f.t0,
+    }),
+    resolved: (outcome: Outcome, o: { ruling_hash?: string; evidence_hash?: string } = {}) => ({
+      bet_id: f.bet_id,
+      judge: f.judge,
+      outcome,
+      evidence_hash: o.evidence_hash ?? 'cd'.repeat(32),
+      ruling_hash: o.ruling_hash ?? 'ab'.repeat(32),
+      appeal_deadline: f.t0 + 70,
+      ts: f.t0 + 60,
+    }),
+    appealed: (original: Outcome) => ({
+      bet_id: f.bet_id,
+      appellant: original === 'PartyA' ? f.party_b : f.party_a,
+      original_outcome: original,
+      appeal_resolve_deadline: f.t0 + 700,
+      ts: f.t0 + 65,
+    }),
+    conceded: (outcome: Outcome) => ({
+      ...terminal('Settled', outcome, f.t0 + 66),
+      conceded_by: outcome === 'PartyA' ? f.party_b : f.party_a,
+    }),
+    finalized: (outcome: Outcome) => ({
+      ...terminal('Settled', outcome, f.t0 + 71),
+      caller: f.rent_payer,
+    }),
+    appealResolved: (outcome: Outcome, original: Outcome) => ({
+      ...terminal('Settled', outcome, f.t0 + 90),
+      original_outcome: original,
+      appeal_ruling_hash: 'ef'.repeat(32),
+      overturned: outcome !== original,
+    }),
+    refunded: (from: 'Open' | 'Locked' | 'Appealed') => ({
+      ...terminal('Refunded', from === 'Open' ? 'PartyA' : 'Refund', f.t0 + 3601),
+      outcome: 'Refund',
+      ...(from === 'Open'
+        ? { to_a: f.stake_a, to_b: '0', party_b_token: DEFAULT_KEY }
+        : payoutOf(f, 'Refund')),
+      from_status: from,
+      caller: f.rent_payer,
+    }),
+    closed: (final_status: string, ts = f.t0 + 72) => ({
+      bet_id: f.bet_id,
+      final_status,
+      rent_payer: f.rent_payer,
+      rent_returned: '3062880',
+      residual_to_a: '0',
+      ts,
+    }),
+  };
+}
+
+// ---- webhook deliveries (the filter.js envelope, API-CONTRACT §5.2) ---------------------------
+
+export type DeliveryEvent = {
+  outerIx: number;
+  innerIx?: number;
+  name: string;
+  payload: Record<string, unknown>;
+};
+
+/** A filter output envelope with the given txs (events encoded with the IDL). */
+export function delivery(
+  txs: { signature: string; blockHeight?: number; txIndex?: number; events: DeliveryEvent[] }[],
+) {
+  return {
+    v: 1,
+    programId: ESCROW_ID,
+    network: 'solana-devnet',
+    dataset: 'block',
+    batchStart: 519_807_088,
+    batchEnd: 519_807_092,
+    txs: txs.map((t) => ({
+      signature: t.signature,
+      blockHeight: t.blockHeight ?? 400_118_207,
+      parentSlot: 519_807_090,
+      blockTime: 1_795_284_425,
+      txIndex: t.txIndex ?? 0,
+      events: t.events.map((e) => ({
+        outerIx: e.outerIx,
+        innerIx: e.innerIx ?? 0,
+        name: e.name,
+        eventBase64: Buffer.from(encodeEvent(e.name, e.payload)).toString('base64'),
+      })),
+    })),
+  };
+}
+
+/** infra/quicknode/<p> (filter.js, stream.json, fixtures/*). */
+export const INFRA_QN = (p: string): string =>
+  fileURLToPath(new URL(`../../../infra/quicknode/${p}`, import.meta.url));
+
+/** filter.js run the way QuickNode runs it: main(stream) in a sandbox without host APIs. */
+export interface QnFilter {
+  main(stream: unknown): ReturnType<typeof delivery> | null;
+  CONFIG: { programId: string; eventAuthority: string; eventIxTag: number[] };
+}
+export function loadQnFilter(): QnFilter {
+  const module = { exports: {} as QnFilter };
+  runInNewContext(readFileSync(INFRA_QN('filter.js'), 'utf8'), {
+    module,
+    BigInt: undefined,
+    atob: undefined,
+    btoa: undefined,
+    Buffer: undefined,
+    TextDecoder: undefined,
+    TextEncoder: undefined,
+    require: undefined,
+  });
+  return module.exports;
+}
+
+/** X-QN-* headers QuickNode would send for `body` (hex HMAC-SHA256(token, nonce ‖ ts ‖ body)). */
+export function qnSignedHeaders(body: Uint8Array, secret: string, tsMs: number) {
+  const nonce = randomBytes(8).toString('hex');
+  const ts = String(Math.floor(tsMs / 1000));
+  return {
+    'content-type': 'application/json',
+    'x-qn-nonce': nonce,
+    'x-qn-timestamp': ts,
+    'x-qn-signature': quickNodeSignature(secret, nonce, ts, body),
+    'batch-start-range': '519807088',
+    'batch-end-range': '519807092',
+    'stream-dataset': 'block',
   };
 }

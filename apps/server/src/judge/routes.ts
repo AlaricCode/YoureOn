@@ -496,7 +496,6 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
       app.post('/v1/bets/:bet_id/attempts', requireSignedRequest, async (c) => {
         const me = appAuth(c);
         const betId = uuidOr404(c.req.param('bet_id'), 'bet');
-        deps.rateLimit?.take('attempts', betId, ATTEMPTS_BUCKET);
         const body = await readBody(c, StartAttemptRequest);
 
         const [bet0] = await deps.db.select().from(bets).where(eq(bets.id, betId)).limit(1);
@@ -504,6 +503,9 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         if (!partyOf(bet0, me.user_id)) {
           throw new HttpError('NOT_A_PARTY', "You're not in this bet.");
         }
+        // The per-bet bucket is taken only for a party: a stranger's 403s (bet ids are public
+        // onchain) must not spend the parties' tokens and lock them out of judging.
+        deps.rateLimit?.take('attempts', betId, ATTEMPTS_BUCKET);
         if (!ATTEMPT_FROM.includes(bet0.state)) {
           throw new HttpError('INVALID_STATE', undefined, { state: bet0.state });
         }
@@ -630,7 +632,6 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         const nRaw = c.req.param('n');
         if (!/^[1-9][0-9]{0,4}$/.test(nRaw)) throw new HttpError('NOT_FOUND', 'No such attempt.');
         const n = Number(nRaw);
-        deps.rateLimit?.take('attempts', betId, ATTEMPTS_BUCKET);
 
         const [bet0] = await deps.db.select().from(bets).where(eq(bets.id, betId)).limit(1);
         if (!bet0) throw new HttpError('NOT_FOUND', 'No such bet.');
@@ -662,6 +663,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             throw notRecorder();
           }
         }
+        // Only the recorder spends the per-bet bucket (see POST /attempts).
+        deps.rateLimit?.take('attempts', betId, ATTEMPTS_BUCKET);
 
         // Parse the multipart body (the signing middleware already buffered it).
         const ct = c.req.header('content-type') ?? '';

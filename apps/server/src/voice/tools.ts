@@ -12,6 +12,8 @@
 // confirm_terms: the read-back is done and both said yes out loud (theatre, not binding): freeze
 // the terms -> AWAITING_AUTHORIZATIONS, answer now, then LockService.start in the background
 // (nonce lease + build + simulate, terms.authorize_request; LOCK_SIGNER=server signs custodially).
+// B must have accepted the invite on B's own phone first ({ok:false, fix:'INVITE_PENDING'},
+// checked under the bet row lock); B's accept then cues the judge to call it again.
 //
 // Conventions (§4.2): always HTTP 200 with JSON < 300 B, except 401 for a bad secret; business
 // errors are {ok:false, fix, say}; the binding check resolves conversation_id -> voice_sessions
@@ -22,6 +24,7 @@ import type { Context } from 'hono';
 import { auditLog, bets, voiceSessions } from '@youre-on/db';
 import { jcs } from '@youre-on/shared/jcs';
 import { MAX_STAKE } from '@youre-on/shared/constants';
+import { formatUsd } from '@youre-on/shared/money';
 import { Uuid } from '@youre-on/shared/primitives';
 import {
   evaluateProposeTerms,
@@ -30,11 +33,15 @@ import {
   type ProposeEvaluation,
   type ToolReply,
 } from '@youre-on/shared/judge/reply';
+import { loadUserRefs } from '../bets/snapshot';
 import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
 import { lifecycleOf } from '../lock/runtime';
-import { confirmTerms, persistEvaluation } from '../lock/terms';
+import { newRoundLine } from '@youre-on/shared/judge/market-terms';
+import { confirmTerms, isNewRound, persistEvaluation, type ConfirmOptions } from '../lock/terms';
+import { realWorldEnabled } from '../markets/quote';
+import { realWorldReply } from '../markets/voice-tool';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
 
 /** States in which the judge may (re)propose terms (SCHEMAS §9.2: edits before the freeze). */
@@ -328,12 +335,17 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
 
       // 6. evaluate (pure: normText, map, strip-parse, prefilter, stake, market)
       const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
-      const evaluation = evaluateProposeTerms(body, { maxStake, realWorldEnabled: false });
+      // real_world (the Gemini BTC 5-minute closer) only with the relay on (markets/quote.ts).
+      const evaluation = evaluateProposeTerms(body, {
+        maxStake,
+        realWorldEnabled: realWorldEnabled(deps),
+      });
       const rev =
         evaluation.kind === 'proposal'
           ? opts.state.revision(betId, sha256Hex(jcs(evaluation.proposal)))
           : undefined;
-      const r = proposeTermsReply(evaluation, { rev, maxStake });
+      // real_world: Gemini's split (or its refusal) in the spoken reply (markets/voice-tool.ts)
+      const r = realWorldReply(deps, evaluation, proposeTermsReply(evaluation, { rev, maxStake }));
       opts.state.store(dedupeKey, now, r);
       if (evaluation.kind === 'refused') opts.state.markRefused(betId, r);
 
@@ -365,7 +377,13 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
 
 const CONFIRM_SAY = {
   NOT_PROPOSED: "Nothing to confirm yet. What's the bet?",
+  QUOTE_STALE: "Gemini can't price this round anymore. Let's take the next one.",
 } as const;
+
+/** "Jake has to accept the challenge on their phone first." (fits the 200-char `say`). */
+export function invitePendingSay(b: string): string {
+  return `${b.slice(0, 40)} has to accept the challenge on their phone first.`;
+}
 
 /** "Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do." */
 export function confirmSay(a: string, b: string): string {
@@ -379,14 +397,37 @@ export function confirmSay(a: string, b: string): string {
 export async function confirmAndLock(
   deps: AppDeps,
   betId: string,
-  o: {
-    heard?: string;
-    requestId?: string;
-    actor?: 'judge' | 'system' | 'user';
-    actorUserId?: string;
-  } = {},
+  o: ConfirmOptions = {},
 ): Promise<ToolReply> {
   const r = await confirmTerms(deps, betId, o);
+  if (!r.ok && r.fix === 'INVITE_PENDING') {
+    const b = (await loadUserRefs(deps.db, [r.party_b_id])).get(r.party_b_id);
+    return { ok: false, fix: 'INVITE_PENDING', say: invitePendingSay(b?.display_name ?? 'They') };
+  }
+  if (!r.ok && r.fix === 'REQUOTED') {
+    // A market quote too old to lock: re-quoted as new terms (terms.proposed already pushed).
+    // If the old round stopped pricing, the re-quote is the NEXT round: say so (new line, end).
+    const s = r.envelope.terms.stakes;
+    const m = r.envelope.terms.market!;
+    const split = `${formatUsd(s.a)} against ${formatUsd(s.b)}`;
+    const newRound = isNewRound(r);
+    return fitReply({
+      ok: false,
+      fix: 'REQUOTED',
+      terms_hash: r.envelope.terms_hash,
+      new_round: newRound,
+      say: newRound
+        ? `That round closed. ${newRoundLine(m)} ${split}. Say yes to lock it.`
+        : `Gemini's odds moved: ${split} now. Say yes to lock it.`,
+    });
+  }
+  if (!r.ok && r.fix === 'QUOTE_STALE')
+    return {
+      ok: false,
+      fix: 'QUOTE_STALE',
+      reason: r.refusal ?? 'QUOTE_STALE',
+      say: CONFIRM_SAY.QUOTE_STALE,
+    };
   if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
   if (!r.already) lifecycleOf(deps).lock.startInBackground(betId);
   const t = r.envelope.terms;
@@ -418,8 +459,26 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
       conversationId = typeof ids.conversation_id === 'string' ? ids.conversation_id : undefined;
       const betId = typeof ids.bet_id === 'string' ? ids.bet_id : undefined;
       const heard = typeof ids.heard === 'string' ? ids.heard.slice(0, 8) : undefined;
-      if (!conversationId || !betId || conversationId.length > 128)
+      if (!conversationId || !betId || conversationId.length > 128) {
+        // §4.1: every WRONG_BET writes an audit row (off the reply path).
+        void deps.db
+          .insert(auditLog)
+          .values({
+            actor_kind: 'judge',
+            action: 'el_tool.wrong_bet',
+            bet_id: betId && Uuid.safeParse(betId).success ? betId : null,
+            request_id: requestId,
+            details: {
+              tool: name,
+              conversation_id: conversationId?.slice(0, 128) ?? null,
+              claimed_bet_id: betId?.slice(0, 64) ?? null,
+              bound_bet_id: null,
+              reason: 'missing_ids',
+            },
+          })
+          .catch((e: unknown) => deps.log.error('el_tool.audit_failed', { err: String(e) }));
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
+      }
       try {
         deps.rateLimit?.take('el/tools', conversationId, EL_TOOLS_BUCKET);
       } catch (e) {
@@ -452,10 +511,26 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
           .catch((e: unknown) => deps.log.error('el_tool.audit_failed', { err: String(e) }));
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
       }
-      const r = await confirmAndLock(deps, betId, { heard, requestId });
-      // Only a success is replayed: NOT_PROPOSED may turn into a success a second later.
+      // B's consent is B's own tap on the invite, never what the judge heard (a spoken "deal"
+      // is theatre, §4.1). With LOCK_SIGNER=server the lock signs B's stake custodially, so
+      // freezing before B accepted would spend B's money on A's word. Checked inside the
+      // freeze, under the row lock: the binding's bet_state above may already be stale (the
+      // propose_terms sink is not awaited). B's later accept sends the judge an [EVENT]
+      // INVITE_ACCEPTED line to call this again (bets/invite.ts).
+      const r = await confirmAndLock(deps, betId, {
+        heard,
+        requestId,
+        requireInviteAccepted: true,
+      });
+      // Only a success is replayed: NOT_PROPOSED / INVITE_PENDING may turn into one a second later.
       if (r.ok) opts.state.store(dedupeKey, now, r);
-      deps.log.info('el_tool.call', { tool: name, bet_id: betId, ok: r.ok, request_id: requestId });
+      deps.log.info('el_tool.call', {
+        tool: name,
+        bet_id: betId,
+        ok: r.ok,
+        fix: r.fix,
+        request_id: requestId,
+      });
       return reply(c, r);
     } catch (e) {
       deps.log.error('el_tool.failed', {

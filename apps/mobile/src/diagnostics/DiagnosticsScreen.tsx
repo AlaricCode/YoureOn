@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { importSafely } from '../app/importSafely';
 import { AUTO_CHECKS } from './autoChecks';
 import { CHECKS, type CameraPanel, type CheckId } from './catalog';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
@@ -28,15 +29,19 @@ import {
   type CheckResults,
 } from './runner';
 
-const VisionCameraPanel = lazy(() => import('./VisionCameraPanel'));
-const ExpoCameraPanel = lazy(() => import('./ExpoCameraPanel'));
-/** The real face pipeline: crop + embedding + cosine between captures (TASKS D1-M3). */
-const FaceEmbedPanel = lazy(() => import('./FaceEmbedPanel'));
+const VisionCameraPanel = lazy(() => importSafely(() => import('./VisionCameraPanel')));
+const ExpoCameraPanel = lazy(() => importSafely(() => import('./ExpoCameraPanel')));
 /** Every app screen on stand-in data, until auth (D0-M4), realtime and navigation exist. */
-const PreviewApp = lazy(() => import('../preview/PreviewApp'));
+const PreviewApp = lazy(() => importSafely(() => import('../preview/PreviewApp')));
 
-/** The model is 13.6 MB; over a Metro tunnel the first load can take a while. */
-const TIMEOUTS_MS: Partial<Record<CheckId, number>> = { 'tflite-warmup': 90_000 };
+/**
+ * The model is 13.6 MB; over a Metro tunnel the first load can take a while. The Face ID check
+ * waits for a person (and, without Face ID, for the passcode to be typed).
+ */
+const TIMEOUTS_MS: Partial<Record<CheckId, number>> = {
+  'tflite-warmup': 90_000,
+  'faceid-gate': 60_000,
+};
 
 const COLORS: Record<CheckResult['status'], string> = {
   idle: '#9e9e9e',
@@ -50,7 +55,6 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
   const [results, setResults] = useState<CheckResults>({});
   const [running, setRunning] = useState(false);
   const [panel, setPanel] = useState<CameraPanel | null>(null);
-  const [faceEmbed, setFaceEmbed] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const setResult = useCallback((id: CheckId, result: CheckResult) => {
@@ -141,13 +145,6 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
             onPress={() => setPanel((p) => (p === 'expo' ? null : 'expo'))}
           />
           {panel ? <Button title="Close camera" onPress={() => setPanel(null)} /> : null}
-          <Button
-            title={faceEmbed ? 'Close face embed' : 'Face embed'}
-            onPress={() => {
-              setPanel(null);
-              setFaceEmbed((f) => !f);
-            }}
-          />
         </View>
 
         <View style={styles.row}>
@@ -168,14 +165,6 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
             />
           ) : null}
         </View>
-
-        {faceEmbed && !panel ? (
-          <PanelErrorBoundary name="Face embed" onError={() => undefined}>
-            <Suspense fallback={<ActivityIndicator />}>
-              <FaceEmbedPanel />
-            </Suspense>
-          </PanelErrorBoundary>
-        ) : null}
 
         {panel ? (
           <PanelErrorBoundary

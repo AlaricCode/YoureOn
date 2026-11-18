@@ -40,11 +40,27 @@ export const EnvSchema = z.object({
    * accept_bet as demo-a / demo-b (DEMO_A/B_SECRET_KEY) right after confirm_terms (D-A).
    */
   LOCK_SIGNER: z.preprocess(unset, z.enum(['phones', 'server']).default('phones')),
+  /**
+   * Priority fee (micro-lamports per CU) on the server-only txs (resolve, finalize, refunds,
+   * orphan exits, nonce advances, rebalance). Unset = none; devnet congestion insurance. The
+   * phone-signed lock and concede are never changed.
+   */
+  CU_PRICE_MICROLAMPORTS: opt(intStr),
   /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
   SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
+  /**
+   * SCHEMAS §2.2: real_world (Gemini BTC 5-minute) bets on our escrow are a devnet demo
+   * exception. Unset = follow DEMO_MODE. They also need the market relay (MARKETS_FEED).
+   */
+  ALLOW_P2P_REAL_WORLD: opt(boolStr),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
+  /**
+   * The agent LLM scripts/el-agent.ts set (its --llm / ELEVENLABS_AGENT_LLM; unset = the shared
+   * DEFAULT_AGENT_LLM). The post-call webhook warns `voice.llm_mismatch` when another model billed.
+   */
+  ELEVENLABS_AGENT_LLM: opt(str),
   // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)
   /** Spend guard: any `*_PROVIDER=live` refuses to start unless this is true. Never set in tests/CI. */
   ALLOW_SPEND: z.preprocess(unset, boolStr.default(false)),
@@ -63,11 +79,19 @@ export const EnvSchema = z.object({
   SOLANA_DEVNET_RPC: opt(z.url()),
   SOLANA_DEVNET_WS: opt(z.url()),
   QN_STREAM_SECURITY_TOKEN: opt(str),
+  /**
+   * How long after a server tx's send the Stream-gap reconciler waits for the Stream before it
+   * polls getTransaction (src/chain/reconciler.ts rpcPollFallbackMs). Unset: 30 s when
+   * QN_STREAM_SECURITY_TOKEN is set (a Stream is expected), else 5 s (SCHEMAS STREAM_FALLBACK_MS).
+   */
+  RPC_POLL_FALLBACK_MS: opt(intStr),
   // --- server keypairs (secret; base58 or solana-keygen JSON)
   FEE_PAYER_SECRET_KEY: opt(str),
   JUDGE_AUTHORITY_SECRET_KEY: opt(str),
   APPEAL_AUTHORITY_SECRET_KEY: opt(str),
   TREASURY_SECRET_KEY: opt(str),
+  /** The treasury's address, for the read-only USDC check in /v1/demo/health when its secret is not on the server. */
+  TREASURY_PUBKEY: opt(pubkey),
   /** Custodial demo party keys (scripts/keys.ts demo-a / demo-b), used when LOCK_SIGNER=server. */
   DEMO_A_SECRET_KEY: opt(str),
   DEMO_B_SECRET_KEY: opt(str),
@@ -98,14 +122,18 @@ export const EnvSchema = z.object({
   STAGE_KEY: opt(str),
   /** Comma-separated origins allowed to call the stage routes (CORS); unset = Vite dev origins. */
   STAGE_ORIGIN: opt(str),
-  /** Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test. */
-  MARKETS_FEED: opt(z.enum(['on', 'off'])),
+  /**
+   * Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test.
+   * 'replay' = on, serving the recorded round (markets/replay.ts, labelled REPLAY everywhere);
+   * POST /v1/demo/gemini switches live <-> replay at runtime.
+   */
+  MARKETS_FEED: opt(z.enum(['on', 'off', 'replay'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
-  /** true = refuse `plain-v0` embeddings (API-CONTRACT §2.2); false while sealing is not built. */
+  /** HMAC key for face match tickets (src/face/config.ts); falls back to SESSION_SECRET. */
+  FACE_TICKET_SECRET: opt(str),
+  /** API-CONTRACT §2.2: when true, `plain-v0` embeddings are refused (sealing is not built yet). */
   FACE_SEAL_REQUIRED: z.preprocess(unset, boolStr.default(false)),
-  /** HMAC key for face-match tickets (src/bets/match-ticket.ts), ≥ 32 bytes. Unset = per process. */
-  MATCH_TICKET_SECRET: opt(str),
   // --- optional
   EXPO_ACCESS_TOKEN: opt(str),
 });

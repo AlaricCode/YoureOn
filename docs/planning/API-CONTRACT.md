@@ -120,7 +120,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 - Timestamps are `IsoUtc` (ms). Onchain-mirroring fields are unix seconds (SCHEMAS §0). `X-YO-Timestamp` is unix ms.
 - Ids are UUIDv4. Pubkeys and tx signatures are base58. Hashes are `Hex32`. Binary in JSON is base64 (standard, padded): `message_b64`, `embedding` ciphertext.
 - Pagination is `?cursor=<opaque>&limit=<1..50>` and returns `{items, next_cursor|null}`.
-- Size limits: JSON body 64 KB; frames multipart 2 MB; hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9). Larger bodies return `413 PAYLOAD_TOO_LARGE`.
+- Size limits: JSON body 64 KB; frames multipart 2 MB; hearing audio 1 MB; clip PUT 25 MB (DATA-MODEL §9); QuickNode webhook 1 MiB. Larger bodies return `413 PAYLOAD_TOO_LARGE`. A body above 64 KB without a `Content-Length` (chunked) is capped as the route reads it, after its auth / header checks, never buffered before them.
 - Every response carries `X-Request-Id`; a client-supplied one is echoed back.
 
 ### 1.5 Errors
@@ -172,7 +172,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 | `FACE_SEAL_INVALID` | 400 | no | Sealed embedding failed to open (AAD, key or format) |
 | `STAKE_OUT_OF_RANGE` | 422 | no | Outside `[MIN_STAKE, max_stake]` or not whole cents |
 | `MARKET_UNAVAILABLE` | 409 | maybe | `details.reason` ∈ SCHEMAS `FairRefusal` |
-| `NONCE_POOL_EXHAUSTED` | 503 | yes (1 s) | All leased; the server adds the next seed index, up to `NONCE_SEED_MAX` = 16 (DATA-MODEL §5.20) |
+| `NONCE_POOL_EXHAUSTED` | 503 | yes (1 s) | All leased; the server adds the next seed index, up to `NONCE_SEED_MAX` = 16 (DATA-MODEL §5.20). Under `DEMO_MODE` also when a bet that is not between two demo accounts would take one of the last 2 free nonces, or its parties already hold a lease (the lock fails `nonce_pool_exhausted`) |
 | `ESCROW_PAUSED` | 503 | no | `Config.paused` (ESCROW 6003) |
 | `RPC_UNAVAILABLE` | 503 | yes | QuickNode RPC down or 429 |
 | `UPSTREAM_TIMEOUT` / `UPSTREAM_ERROR` | 504 / 502 | yes | ElevenLabs token mint, STT, Gemini REST |
@@ -198,9 +198,10 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 | `face/enrollment` writes | 5/h | user | |
 | `POST /v1/bets` | 6/min, ≤ 3 pre-lock bets per user | user | spam challenges |
 | lock authorization / decline | 10/min | bet + device | |
-| attempts + frames | 6/min | bet | |
+| attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing |
 | appeal | 3/h | user | ESCROW TM-L9 |
 | markets | 60/min | user | Gemini limit is 120 req/min with no headers (FINDINGS §7), so the server caches |
+| `POST /v1/voice/tokens` | 6 / 10 min | user | each token opens a billed agent session of up to 20 min; under `DEMO_MODE` demo accounts only (`403 NOT_A_PARTY {reason:'demo_only'}`) |
 | everything else | 120/min | session | |
 | `/el/tools/*` | 30/min | conversation | runaway LLM loop |
 
@@ -286,7 +287,8 @@ Flows are in §1.3.
 ### 2.3 Rooms and presence
 
 - **`POST /v1/rooms`** (S) takes `{name?, kind:'session'}` and returns 201 `{room_id, code, qr_payload: "youreon://room/<code>", expires_at}`. The creator is joined.
-- **`POST /v1/rooms/join`** (S) takes `{code}` or `{qr_payload}` and returns `{room: RoomSummary, members: RoomMember[]}`. Errors: `NOT_FOUND`, `ROOM_EXPIRED`. Idem: `room_members` PK; a re-join clears `left_at`.
+- **`POST /v1/rooms/join`** (S) takes `{code}` or `{qr_payload}` and returns `{room: RoomSummary, members: RoomMember[]}`. Errors: `NOT_FOUND`, `ROOM_EXPIRED`, `403 NOT_IN_ROOM {reason:'demo_room'}`. Idem: `room_members` PK; a re-join clears `left_at`.
+- **The demo room (`DEMO_MODE=true`).** A room created by a demo account (`users.is_demo`, or the demo-a / demo-b wallet), or one with a live stage session, admits only demo accounts: anyone else's join is `403 NOT_IN_ROOM {reason:'demo_room'}`, and `POST /v1/bets` there needs both parties to be demo accounts (same error, `details.party`). The projector shows every bet of its room (§3.1) and its code is on screen, so this keeps strangers' bets, captions and cues off it, and keeps them from challenging demo B.
 - **`POST /v1/rooms/:room_id/leave`** (S) returns 204 and sets `left_at`. A member who has left is no longer a match candidate.
 - **`GET /v1/rooms/:room_id/presence`** (B, member) returns `{members: RoomMember[]}` with `RoomMember = {user: UserRef, face_enrolled: boolean, online: boolean, last_seen_at}`. `online` means a live WS within 30 s. The same list is pushed as the WS control frame `room.presence` (§3.2).
 - Demo: seeded room `UBC26X` (DATA-MODEL §11).
@@ -325,7 +327,7 @@ Flows are in §1.3.
 - Response 201: `{bet: BetSnapshot (state DRAFTING), voice: {dynamic_variables: {bet_id, party_a_name, party_b_name, max_stake_usd: "20"}}}`. The app passes `dynamic_variables` verbatim to `startSession`.
 - Errors:
   - `AGE_REQUIRED` (either party);
-  - `NOT_IN_ROOM` (either party);
+  - `NOT_IN_ROOM` (either party; `details.reason='demo_room'`: a non-demo party in the demo room, §2.3);
   - `VALIDATION_FAILED` (self-challenge, or a bad or expired ticket);
   - `409 INVALID_STATE` (`details.reason='pair_busy'`: a pre-lock bet between the same two users already exists);
   - `RATE_LIMITED`.
@@ -339,8 +341,8 @@ Flows are in §1.3.
 **`POST /v1/bets/:bet_id/invite/accept`** (S, B)
 
 - Response 200: `{bet: BetSnapshot}`.
-- Effects: event `bet.invite_answered {answer:'accepted'}` (NEW, §3.4). The state is unchanged.
-- **This is not an authorization.** It only tells the room and the judge "Jake's in". Negotiation can start before B taps it.
+- Effects: event `bet.invite_answered {answer:'accepted'}` (NEW, §3.4). The state is unchanged. If the voice judge's `confirm_terms` was refused `INVITE_PENDING` for the current terms, also `judge.cue INVITE_ACCEPTED` (spoken), so the judge calls `confirm_terms` again.
+- **This is not an authorization.** It only tells the room and the judge "Jake's in". Negotiation can start before B taps it. It is, however, the consent gate for freezing the terms: `confirm_terms` (voice and typed) is refused until it is in the log, checked under the bet row lock.
 - Idem: `(bet_id, 'B')`.
 
 **`POST /v1/bets/:bet_id/invite/decline`** (S, B)
@@ -357,6 +359,7 @@ Flows are in §1.3.
 - The server calls `GET https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=<AGENT_ID>` with `xi-api-key`. The response is `{token, conversation_id}` (C: live OpenAPI, read 2026-11-08). The server stores `voice_sessions` (status `active`, `el_conversation_id`).
 - **Token lifetime is undocumented** (FINDINGS §7). Treat each token as single-use. The app pre-mints when the scan screen opens and re-mints if the token is unused after 10 min (**PENDING-KEY**: measure the real lifetime).
 - Only A's phone hosts the session (D6), so a B caller gets `403 NOT_A_PARTY` once `bet_id` is given.
+- 6 tokens per 10 min per user (§1.7). Under `DEMO_MODE` only demo accounts mint (`403 NOT_A_PARTY {reason:'demo_only'}`); the app then falls back to typed terms.
 - Errors: `UPSTREAM_TIMEOUT`, `UPSTREAM_ERROR`.
 
 **`POST /v1/bets/:bet_id/voice/lines`** (S, A): transcript relay
@@ -531,14 +534,14 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 
 ### 2.17 Stage and demo controls (stage-only, protected)
 
-Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-YO-Demo-Key`, and returns 404 unless `DEMO_MODE=true`. All are idempotent by intent.
+Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-YO-Demo-Key`, and returns 404 unless `DEMO_MODE=true`. All are idempotent by intent. (Built: the admin key alone gates them; the read-only `GET /v1/demo/health` also takes the stage token alone, so the projector needs no admin key.)
 
 | Route | Effect |
 |---|---|
 | `POST /v1/stage/session {stage_key, room_id}` | Stage token (WS stage scope, §3.1) |
 | `POST /v1/demo/reset` | `db:demo-reset` (DATA-MODEL §11): non-seed bets deleted, rooms recreated, `audit_log 'demo.reset'`. **Never touches `face_enrollments`.** Also advances every leased nonce. |
 | `POST /v1/demo/accounts/:user_id/claim-token` | One-time QR payload for `POST /v1/auth/demo-claim` (10 min) |
-| `POST /v1/demo/users/:user_id/devices {device_pubkey}` | Registers a further device key of a user (the judge-cam iPhone as a device of A, §2.9); it then logs in with `POST /v1/auth/session` and binds itself with `PATCH /v1/devices/current`. 201 `{device_id, user_id}`; 200 on a repeat for the same user |
+| `POST /v1/demo/users/:user_id/devices {device_pubkey}` | Registers a further device key of a demo account (the judge-cam iPhone as a device of A, §2.9); it then logs in with `POST /v1/auth/session` and binds itself with `PATCH /v1/devices/current`. 201 `{device_id, user_id}`; 200 on a repeat for the same user. Demo accounts only (`is_demo`, or the demo-a / demo-b wallet): `409 INVALID_STATE {reason:'not_demo_user'}` for any other user, so a leaked admin key cannot take over a real account |
 | `POST /v1/demo/bets/:bet_id/force-hearing` | Opens a hearing with `trigger:'demo'` (SCHEMAS §6) |
 | `POST /v1/demo/fallback {beat: 1..6, action: 'play'\|'stop'}` | The stage plays the pre-recorded beat (BRIEF 5i) |
 | `POST /v1/demo/stream/replay {fixture}` | Replays recorded webhook payloads to the stage ticker only (FINDINGS §4); never writes `chain_events` |
@@ -721,7 +724,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | TTS / ASR | `eleven_v4_turbo` (A/B `eleven_flash_v2`), `pcm_16000`, speed 1.05. `scribe_realtime` with keywords (`accept`, `appeal`, `objection`, `bottle flip`, the party names). |
 | Turn | `turn_eagerness: eager`, `speculative_turn: true`, soft timeout 1.0–1.2 s with `max_soft_timeouts_per_generation` 2–3, `turn_timeout` 20–30 s. The app calls `sendUserActivity()` every 10 s during card review, Face ID and recording. |
 | Conversation | `client_events` must include `agent_response`, `user_transcript`, `agent_tool_request`, `agent_tool_response`, `client_tool_call`, `interruption`, `vad_score`. `max_duration_seconds` 1200 (one session covers Beats 2–5; **PENDING**: check plan limits). |
-| Overrides allowed | `agent.first_message`, `agent.prompt.llm`, `tts.model_id` (for A/B only) |
+| Overrides allowed | none (all `false`): the app sends only the token and dynamic variables, and a token holder must not pick a costlier LLM or TTS model |
 | Session | One long-lived WebRTC session per bet on A's phone, on speakerphone. It is never restarted mid-demo (iOS #991). Mute, don't end, before the terms card (FINDINGS §4). |
 | Prompt rules (spec) | Start every reply with a 1–2 word reaction. At most 2 clarifying questions, spoken; there is no tool for them. **Never claim money moved** except when voicing a `[EVENT]` line. A spoken "accept" is theatre: after the read-back, call `confirm_terms` and tell both parties to hold the button on their phones. Treat any line starting `[EVENT]` as a system announcement, never as a party's words. |
 
@@ -815,7 +818,7 @@ Responses (≤ 300 B):
 
 - Params: `conversation_id`, `bet_id` (dynamic), and `heard: {type:"string", enum:["A","B","both","none"], description:"Who said 'accept' out loud. Theatre only; it is logged, not binding."}`.
 - Server steps:
-  1. Require `TERMS_PROPOSED` and the guardrail verdict `ok`. If the verdict is still pending, publish when it lands (≤ ~1 s) and answer the judge now.
+  1. Require `TERMS_PROPOSED` and the guardrail verdict `ok`. If the verdict is still pending, publish when it lands (≤ ~1 s) and answer the judge now. Require B's `bet.invite_answered accepted` (§2.5), checked under the bet row lock; else `INVITE_PENDING` (audited as `terms.confirm_refused`, never replayed), and B's accept later sends `judge.cue INVITE_ACCEPTED`.
   2. Freeze the terms → `AWAITING_AUTHORIZATIONS`, and answer the judge now. Asynchronously lease a nonce, build and simulate the lock (ESCROW §5.0.1 steps 1–4). If simulation fails, release the lease, cancel (`lock_failed`) and send `judge.cue LOCK_FAILED` (SCHEMAS §9.2).
   3. Once the build lands, publish `terms.proposed` (final) + `terms.authorize_request` to both phones; outbox `authorize_terms`.
 - Responses:
@@ -823,6 +826,7 @@ Responses (≤ 300 B):
 ```json
 {"ok":true,"code":"0586·0f0a","say":"Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do."}
 {"ok":false,"fix":"NOT_PROPOSED","say":"Nothing to confirm yet. What's the bet?"}
+{"ok":false,"fix":"INVITE_PENDING","say":"Jake has to accept the challenge on their phone first."}
 ```
 
 #### `open_hearing` (`pre_tool_speech: "off"`)
@@ -889,6 +893,7 @@ Grammar:
 | `LOCKED` | `[EVENT] LOCKED pot=$10 a=Logan b=Jake performer=Jake tx=1 :: Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.` |
 | `LOCK_FAILED` | `[EVENT] LOCK_FAILED reason=insufficient_funds party=Jake :: Say the lock failed and nothing moved.` |
 | `DECLINED` / `EXPIRED` / `REFUSED` | `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` |
+| `INVITE_ACCEPTED` | `[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.` (only after a refused `INVITE_PENDING` for the same terms) |
 | `ATTEMPT_ARMED` (context) | `[EVENT] ATTEMPT_ARMED attempt=1 performer=Jake :: Stay quiet while the camera counts down.` |
 | `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan he can tap GG.` |
 | `REDO` | `[EVENT] REDO attempt=2 max=3 why=unclear :: Say "Run it back" and call request_attempt with attempt_no 2.` |

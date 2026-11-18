@@ -1,0 +1,68 @@
+# iOS Simulator build only (no camera, no Face ID enrolled, no MLKit face detector): the hidden
+# operator screen (long-press the balance) runs every auto check and opens each camera panel
+# without crashing the app. On a phone, use it as the pre-stage checklist instead.
+#   maestro --device <udid> test e2e/maestro/sim-diagnostics.yaml   (signed in, on home)
+appId: dev.youreon.app
+name: sim-diagnostics
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- longPressOn:
+    id: balance-header
+- extendedWaitUntil:
+    visible: Build diagnostics
+    timeout: 10000
+- waitForAnimationToEnd
+- tapOn: Run checks
+# The Face ID check prompts. Run this with Face ID NOT enrolled (e2e/sim-faceid.sh <udid>
+# unenroll): the gate then falls back to the passcode sheet, which takes any passcode in the
+# simulator. The sheet is a system view Maestro cannot read, so: still running a few seconds
+# in means the sheet is up; type a passcode blind. (Enrolled instead, answer from the host:
+# e2e/sim-faceid.sh <udid> match; the system sheet would otherwise cover the app.)
+- waitForAnimationToEnd:
+    timeout: 4000
+- runFlow:
+    when:
+      notVisible: Run checks
+    commands:
+      - takeScreenshot: 20a-passcode-fallback
+      - inputText: '1234'
+      - pressKey: Enter
+- extendedWaitUntil:
+    visible: Run checks
+    timeout: 90000
+- takeScreenshot: 20-diagnostics-ran
+# The model, the Keychain, the mic + LiveKit + ElevenLabs imports and the worklets all run here.
+- assertVisible: .*512-d finite.*
+- assertVisible: write, read-back and delete OK.*
+- assertVisible: mic=granted; LiveKit \+ ElevenLabs imported.*
+- scrollUntilVisible:
+    element: .*nothing signed.*|.*at the passcode prompt.*
+    direction: DOWN
+- takeScreenshot: 21-diagnostics-faceid
+- scrollUntilVisible:
+    element: VisionCamera
+    direction: UP
+# VisionCamera: the panel needs the face detector the simulator build leaves out, so it fails
+# in place (it used to abort the app).
+- tapOn: VisionCamera
+- extendedWaitUntil:
+    visible: VisionCamera panel failed to load
+    timeout: 10000
+- takeScreenshot: 22-diagnostics-visioncamera
+- tapOn: Close camera
+# expo-camera: no camera in the simulator; the panel opens and the app stays up.
+- tapOn: expo-camera
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot: 23-diagnostics-expocamera
+- tapOn: Close camera
+- assertVisible: Build diagnostics
+# The stand-in design preview loads (only its face-capture step needs the detector).
+- tapOn: App preview
+- waitForAnimationToEnd:
+    timeout: 5000
+- takeScreenshot: 24-diagnostics-preview

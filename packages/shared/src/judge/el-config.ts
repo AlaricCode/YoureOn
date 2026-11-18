@@ -12,6 +12,7 @@ import {
   PROPOSE_TERMS_DESCRIPTION,
   type ElObjectProperty,
 } from './propose-terms';
+import type { ElReasoningEffort, ElTtsModel } from './el-enums';
 import {
   ASR_KEYWORDS,
   buildJudgePrompt,
@@ -23,6 +24,26 @@ import {
 } from './persona';
 
 export const TOOL_SECRET_HEADER = 'X-YO-Tool-Secret';
+/**
+ * FINDINGS §3.8. In ElevenLabs' `LLM` enum (./el-enums, read 2026-11-18), so the Agents platform
+ * serves it; whether it is really Haiku 5.5 that answers shows in post-call
+ * metadata.charging.llm_usage (API-CONTRACT §4.6). el-agent --llm / ELEVENLABS_AGENT_LLM overrides.
+ */
+export const DEFAULT_AGENT_LLM = 'claude-haiku-5-5';
+/**
+ * The lowest effort the Anthropic API accepts on Claude Haiku 5.5 ('low'..'max'; it has no
+ * 'none' / 'minimal', and its own default is 'medium'). ElevenLabs proxies the value.
+ */
+export const DEFAULT_REASONING_EFFORT: ElReasoningEffort = 'low';
+/**
+ * The agent LLM's output cap per turn. Not 300: Claude Haiku 5.5 thinks adaptively by default
+ * (reasoning_effort 'low' only lowers it) and thinking counts against max_tokens, on top of the
+ * pre-tool speech and a complete propose_terms call (the whole bet as tool arguments, ~170
+ * tokens for 01-bottle-flip). A cut-off tool call (stop_reason max_tokens) would break the
+ * read-back, and backup_llm_config is disabled. The prompt keeps the spoken reply short.
+ */
+export const AGENT_MAX_TOKENS = 1024;
+export const DEFAULT_TTS_MODEL: ElTtsModel = 'eleven_v4_turbo';
 export const TOOL_SECRET_NAME = 'yo-tool-secret';
 export const AGENT_TAGS = ['youre-on'];
 
@@ -32,10 +53,16 @@ export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
 
 /**
  * Webhook tools registered today. Each name here must have a live `/el/tools/<name>` handler,
- * otherwise a call would hit a 404 mid-conversation. propose_terms (D0-J2) and confirm_terms
- * (D1-J1) are live; the rest later (FINDINGS §3.10 "later open_hearing, …").
+ * otherwise a call would hit a 404 mid-conversation (apps/server test/el-agent.test.ts checks the
+ * route table). propose_terms (D0-J2), confirm_terms (D1-J1) and get_market_odds (Beat 6,
+ * apps/server/src/markets/voice-tool.ts) are live; open_hearing and file_appeal later
+ * (FINDINGS §3.10).
  */
-export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = ['propose_terms', 'confirm_terms'];
+export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = [
+  'propose_terms',
+  'confirm_terms',
+  'get_market_odds',
+];
 export const CLIENT_TOOLS: readonly ClientToolName[] = [
   'request_attempt',
   'show_terms_card',
@@ -210,40 +237,38 @@ export interface AgentOptions {
   toolIds: string[];
   /** ELEVENLABS_JUDGE_VOICE_ID (Voice Design voice). Omitted -> the ElevenLabs default voice. */
   voiceId?: string;
-  /** FINDINGS §3.8: claude-haiku-5-5 unless FINDINGS §6 step 1 picks another. */
+  /** Default DEFAULT_AGENT_LLM (FINDINGS §3.8) unless FINDINGS §6 step 1 picks another. */
   llm?: string;
-  /**
-   * PENDING-KEY: "the lowest accepted reasoning_effort". 'low' is the lowest effort the Anthropic
-   * API accepts for Haiku 5.5; ElevenLabs also lists 'none'/'minimal'. null omits the field.
-   */
-  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | null;
+  /** Default DEFAULT_REASONING_EFFORT; null omits the field (the model's own default). */
+  reasoningEffort?: ElReasoningEffort | null;
   /** The tools the prompt mentions (registered webhook tools + client tools). */
   promptTools: ReadonlySet<JudgeToolName>;
   /** DATA-MODEL §10 "minimum available" retention (PENDING-KEY: check the dashboard minimum). */
   retentionDays?: number;
-  ttsModel?: 'eleven_v4_turbo' | 'eleven_flash_v2';
+  /** Default DEFAULT_TTS_MODEL (A/B: eleven_flash_v2). */
+  ttsModel?: ElTtsModel;
 }
 
 /** Body for POST /v1/convai/agents/create and PATCH /v1/convai/agents/{id}. */
 export function agentBody(o: AgentOptions) {
   const prompt: Record<string, unknown> = {
     prompt: buildJudgePrompt(o.promptTools),
-    llm: o.llm ?? 'claude-haiku-5-5',
+    llm: o.llm ?? DEFAULT_AGENT_LLM,
     // Explicit null: the schema default is 0.0, and "null omits the parameter from the LLM
     // request entirely". Claude 5.x rejects non-default sampling values (FINDINGS §7), which
     // would otherwise silently cascade to a backup model.
     temperature: null,
-    max_tokens: 300,
+    max_tokens: AGENT_MAX_TOKENS,
     enable_parallel_tool_calls: false,
     backup_llm_config: { preference: 'disabled' },
     tool_ids: o.toolIds,
     ignore_default_personality: true,
   };
-  const effort = o.reasoningEffort === undefined ? 'low' : o.reasoningEffort;
+  const effort = o.reasoningEffort === undefined ? DEFAULT_REASONING_EFFORT : o.reasoningEffort;
   if (effort !== null) prompt.reasoning_effort = effort;
 
   const tts: Record<string, unknown> = {
-    model_id: o.ttsModel ?? 'eleven_v4_turbo',
+    model_id: o.ttsModel ?? DEFAULT_TTS_MODEL,
     agent_output_audio_format: 'pcm_16000',
     speed: 1.05,
   };
@@ -286,10 +311,13 @@ export function agentBody(o: AgentOptions) {
       auth: { enable_auth: true },
       call_limits: { bursting_enabled: false },
       privacy: { record_voice: false, retention_days: o.retentionDays ?? 1 },
+      // No client overrides: the app sends only the token and dynamic variables, and a token
+      // holder must not pick a costlier LLM / TTS model or rewrite the opening line. Explicit
+      // false, so a sync also turns them off on the existing agent.
       overrides: {
         conversation_config_override: {
-          agent: { first_message: true, prompt: { llm: true } },
-          tts: { model_id: true },
+          agent: { first_message: false, prompt: { llm: false } },
+          tts: { model_id: false },
         },
       },
     },

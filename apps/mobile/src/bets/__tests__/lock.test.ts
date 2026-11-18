@@ -55,6 +55,39 @@ describe('terms card lock state (SCHEMAS §9.4)', () => {
     expect(s.authFailed).toBe(true);
   });
 
+  it('a send that failed after Face ID passed is not a Face ID failure: try again', () => {
+    const s = run(
+      { type: 'policy', ok: true },
+      { type: 'hold_complete' },
+      { type: 'auth_result', ok: false, failure: 'send' },
+    );
+    expect(s.phase).toBe('ready');
+    expect(s.authFailed).toBe(false);
+    expect(s.sendFailed).toBe(true);
+    expect(holdEnabled(s)).toBe(true);
+    // The next hold clears it.
+    expect(lockReducer(s, { type: 'hold_complete' }).sendFailed).toBe(false);
+  });
+
+  it('a device-policy refusal at signing time refuses the card for good', () => {
+    const s = run(
+      { type: 'policy', ok: true },
+      { type: 'hold_complete' },
+      { type: 'auth_result', ok: false, failure: 'policy' },
+    );
+    expect(s.phase).toBe('refused');
+    expect(holdEnabled(s)).toBe(false);
+  });
+
+  it("an explicit 'auth' failure is the Face ID case", () => {
+    const s = run(
+      { type: 'policy', ok: true },
+      { type: 'hold_complete' },
+      { type: 'auth_result', ok: false, failure: 'auth' },
+    );
+    expect(s).toMatchObject({ phase: 'ready', authFailed: true, sendFailed: false });
+  });
+
   it('decline works after signing, but not once the lock is sent', () => {
     const signed = run(
       { type: 'policy', ok: true },
@@ -71,5 +104,26 @@ describe('terms card lock state (SCHEMAS §9.4)', () => {
     const ended = run({ type: 'policy', ok: true }, { type: 'end', reason: 'expired' });
     expect(lockReducer(ended, { type: 'confirmed' }).phase).toBe('ended');
     expect(lockReducer(ended, { type: 'reset' })).toEqual(initialLock);
+  });
+
+  it('a restart after this phone signed comes back signed, not "Hold to lock" again', () => {
+    // The card effect's order after a cold start: policy, then the snapshot's own signature.
+    const s = run({ type: 'policy', ok: true }, { type: 'already_signed' });
+    expect(s.phase).toBe('signed');
+    expect(holdEnabled(s)).toBe(false);
+    expect(declineEnabled(s)).toBe(true);
+    // Before the wallet key is known (no policy yet) it is signed too; the late policy is moot.
+    const early = run({ type: 'already_signed' }, { type: 'policy', ok: true });
+    expect(early.phase).toBe('signed');
+    // Both signatures in (AWAITING_LOCK) moves on to locking.
+    expect(lockReducer(s, { type: 'submitted' }).phase).toBe('locking');
+  });
+
+  it('already_signed never overrides a refused card or one further along', () => {
+    expect(run({ type: 'policy', ok: false }, { type: 'already_signed' }).phase).toBe('refused');
+    const authorizing = run({ type: 'policy', ok: true }, { type: 'hold_complete' });
+    expect(lockReducer(authorizing, { type: 'already_signed' }).phase).toBe('authorizing');
+    const locking = run({ type: 'policy', ok: true }, { type: 'submitted' });
+    expect(lockReducer(locking, { type: 'already_signed' }).phase).toBe('locking');
   });
 });

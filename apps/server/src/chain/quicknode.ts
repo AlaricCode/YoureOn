@@ -74,6 +74,20 @@ export function parseQnTimestampMs(ts: string): number | null {
 }
 
 /**
+ * The checks that need no body (headers present, timestamp fresh, signature 64 hex): the
+ * webhook runs them before it reads the body, so a forged request is refused without buffering.
+ */
+export function precheckQuickNodeHeaders(
+  i: Pick<QuickNodeSigInput, 'secret' | 'nonce' | 'timestamp' | 'signature' | 'nowMs'>,
+): Exclude<QuickNodeRejectReason, 'bad_body'> | null {
+  if (!i.secret || !i.nonce || !i.timestamp || !i.signature) return 'missing';
+  const tsMs = parseQnTimestampMs(i.timestamp);
+  if (tsMs === null || Math.abs(i.nowMs - tsMs) > QN_MAX_SKEW_S * 1000) return 'stale';
+  if (!/^[0-9a-f]{64}$/.test(i.signature.trim().toLowerCase())) return 'bad_signature';
+  return null;
+}
+
+/**
  * Verifies the X-QN-* headers against the (decompressed) body. The cheap checks (headers present,
  * timestamp fresh) run before the HMAC; the compare is constant-time over equal-length buffers.
  * Returns the decompressed body on success so the caller parses exactly the bytes that were signed.
@@ -83,11 +97,9 @@ export async function verifyQuickNodeSignature(
 ): Promise<QuickNodeVerifyResult> {
   if (!i.secret || !i.nonce || !i.timestamp || !i.signature)
     return { ok: false, reason: 'missing' };
-  const tsMs = parseQnTimestampMs(i.timestamp);
-  if (tsMs === null || Math.abs(i.nowMs - tsMs) > QN_MAX_SKEW_S * 1000)
-    return { ok: false, reason: 'stale' };
+  const pre = precheckQuickNodeHeaders(i);
+  if (pre) return { ok: false, reason: pre };
   const sig = i.signature.trim().toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(sig)) return { ok: false, reason: 'bad_signature' };
   let body: Uint8Array;
   try {
     body = await decompressBody(i.rawBody);
