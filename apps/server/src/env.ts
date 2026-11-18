@@ -68,6 +68,8 @@ export const EnvSchema = z.object({
   JUDGE_AUTHORITY_SECRET_KEY: opt(str),
   APPEAL_AUTHORITY_SECRET_KEY: opt(str),
   TREASURY_SECRET_KEY: opt(str),
+  /** The treasury's address, for the read-only USDC check in /v1/demo/health when its secret is not on the server. */
+  TREASURY_PUBKEY: opt(pubkey),
   /** Custodial demo party keys (scripts/keys.ts demo-a / demo-b), used when LOCK_SIGNER=server. */
   DEMO_A_SECRET_KEY: opt(str),
   DEMO_B_SECRET_KEY: opt(str),
