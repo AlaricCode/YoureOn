@@ -119,7 +119,12 @@ import {
 import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { demoLinkLives, parseDeepLink } from './deepLink';
-import { attemptStartAlert, createJudgeCamSync, deviceRoleRequest } from './judgeCam';
+import {
+  attemptStartAlert,
+  createJudgeCamSync,
+  deviceRoleRequest,
+  rejoinAndRebind,
+} from './judgeCam';
 import { RESUME_LIMIT, resumable } from './resume';
 import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
@@ -336,14 +341,23 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       });
     // Re-join the last room (a convenience; the server's room_members row is the truth). A
     // restored judge cam then re-binds itself to that room on the server, which may hold another
-    // room or none (a demo claim resets the device to 'phone').
-    void cam.then(async (restored) => {
-      const S = await import('expo-secure-store').catch(() => null);
-      const code = linked ?? (await S?.getItemAsync(LAST_ROOM_KEY).catch(() => null)) ?? null;
-      if (code && live && (linked || !appRef.current.room)) await joinRoom(code);
-      if (!live || restored !== 'judge_cam' || !appRef.current.judgeCam) return;
-      void bindJudgeCam(appRef.current.room?.room_id ?? null);
-    });
+    // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
+    // room comes from the join, not from appRef (a render behind right after it).
+    void cam.then((restored) =>
+      rejoinAndRebind({
+        restored,
+        linked,
+        storedCode: async () => {
+          const S = await import('expo-secure-store');
+          return S.getItemAsync(LAST_ROOM_KEY);
+        },
+        currentRoomId: () => appRef.current.room?.room_id ?? null,
+        join: joinRoomId,
+        live: () => live,
+        stillOn: () => camSync.restoredOn,
+        bind: (roomId) => void bindJudgeCam(roomId),
+      }),
+    );
     // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
     void (async () => {
       let open: BetSnapshot[];
@@ -848,6 +862,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   );
 
   async function joinRoom(code: string): Promise<boolean> {
+    return (await joinRoomId(code)) !== null;
+  }
+
+  /** Join by code; the room id, or null when it failed. */
+  async function joinRoomId(code: string): Promise<string | null> {
     try {
       const prev = appRef.current.room;
       const r = await rt.api.joinRoom(code);
@@ -866,9 +885,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       void import('expo-secure-store')
         .then((S) => S.setItemAsync(LAST_ROOM_KEY, r.room.code))
         .catch(() => undefined);
-      return true;
+      return r.room.room_id;
     } catch {
-      return false;
+      return null;
     }
   }
 

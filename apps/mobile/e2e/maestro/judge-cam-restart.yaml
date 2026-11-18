@@ -1,0 +1,58 @@
+# The judge-cam memo (app/judgeCam): a phone in judge-cam mode that is killed and relaunched
+# comes back as the judge cam (the memo is bound to this device and user, and the server's
+# device role is re-sent for the room it rejoins), and the back arrow turns it off for good: a
+# second relaunch opens home, not the camera.
+# Real server writes: PATCH /v1/devices/current (judge_cam, again on relaunch, then phone).
+#   maestro --device <udid> test e2e/maestro/judge-cam-restart.yaml   (signed in, on home)
+appId: dev.youreon.app
+name: judge-cam-restart
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+# A judge cam is bound to a room.
+- runFlow:
+    when:
+      notVisible:
+        id: room-leave
+    commands:
+      - tapOn:
+          id: room-create
+      - extendedWaitUntil:
+          visible:
+            id: room-code-chip
+          timeout: 20000
+- tapOn:
+    id: home-profile
+- tapOn:
+    id: profile-judge-cam
+- extendedWaitUntil:
+    visible: No camera
+    timeout: 10000
+- stopApp
+- launchApp
+# Back as the judge cam, in the same room, without a tap.
+- extendedWaitUntil:
+    visible: No camera
+    timeout: 30000
+- assertNotVisible:
+    id: balance-header
+- takeScreenshot: 34-judge-cam-restored
+- tapOn:
+    id: top-back
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- assertVisible:
+    id: room-code-chip
+- assertNotVisible: No camera
+- takeScreenshot: 35-judge-cam-off-after-restart
