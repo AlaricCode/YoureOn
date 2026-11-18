@@ -22,8 +22,9 @@ import { createPreviewEmbedder } from '../embedder';
 const face = (yawAngle: number, pitchAngle = 0, width = 300): DetectedFace => ({
   yawAngle,
   pitchAngle,
-  bounds: { width, height: width },
+  bounds: { x: 350, y: 300, width, height: width },
   frameWidth: 1000,
+  frameHeight: 1333,
 });
 
 const vec = (seed: number) => {

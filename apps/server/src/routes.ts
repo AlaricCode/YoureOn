@@ -8,6 +8,7 @@ import { authRoutes } from './auth/routes';
 import { healthRoutes } from './health/routes';
 import { realtimeRoutes } from './realtime/routes';
 import { roomsRoutes } from './rooms/routes';
+import { faceRoutes } from './face/routes';
 import { betsRoutes } from './bets/routes';
 import { voiceRoutes } from './voice/routes';
 import { chainRoutes } from './chain/routes';
@@ -25,6 +26,7 @@ export const routeModules: RouteModule[] = [
   authRoutes,
   realtimeRoutes,
   roomsRoutes,
+  faceRoutes,
   betsRoutes,
   voiceRoutes,
   chainRoutes,
