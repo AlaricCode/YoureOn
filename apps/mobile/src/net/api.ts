@@ -25,6 +25,7 @@ import {
   MarketTermsResponse,
   type MarketTermsRequest,
 } from '@youre-on/shared/judge/market-terms';
+import { faceMatchPath, FaceMatchResponse, type FaceMatchRequest } from '@youre-on/shared/face';
 import {
   termsConfirmPath,
   TermsConfirmResponse,
@@ -121,7 +122,22 @@ export function createYoApi(c: ApiClient) {
         schema: RoomPresenceResponse,
       }),
 
-    // §2.5 challenge (pick-from-list path; face match is cut from the live demo)
+    // §2.4 face match (Beat 1): the probe embedding only; a match addresses, never authorizes
+    faceMatch: (roomId: string, req: FaceMatchRequest) =>
+      c.request('POST', faceMatchPath(roomId), { json: req, schema: FaceMatchResponse }),
+    /** §2.5 challenge addressed by a face match: the 60 s ticket from faceMatch(). */
+    createFaceBet: (roomId: string, opponentUserId: string, matchTicket: string) =>
+      c.request('POST', '/v1/bets', {
+        json: {
+          room_id: roomId,
+          opponent_user_id: opponentUserId,
+          challenge_method: 'face',
+          match_ticket: matchTicket,
+        },
+        schema: CreateBetResponse,
+      }),
+
+    // §2.5 challenge (pick-from-list path; also the face_pick_list fallback)
     createBet: (roomId: string, opponentUserId: string, voiceConversationId?: string) =>
       c.request('POST', '/v1/bets', {
         json: {

@@ -1,15 +1,26 @@
-// The face routes the enroll screens call (API-CONTRACT §2.2), behind an interface so the screens
-// run before the server routes exist: `createPreviewFaceApi()` is an in-memory stand-in with the
-// same shapes and error codes; `createServerFaceApi()` is the real one over the signed client.
+// The face routes the enroll screens call (API-CONTRACT §2.2), behind an interface:
+// `createPreviewFaceApi()` is an in-memory stand-in with the same shapes and error codes (the
+// offline preview); `createServerFaceApi()` is the real one over the signed client.
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import {
+  FACE_CONSENT_PATH,
+  FACE_ENROLLMENT_PATH,
+  FaceConsentResponse,
+  FaceEnrollmentResponse,
+  FaceEnrollmentStatusResponse,
+} from '@youre-on/shared/face';
 
 import type { FaceConsent, FaceEnrollmentRequest } from './flow';
-import { FACE_CONSENT_V1_RETENTION, FACE_CONSENT_V1_TEXT } from './consentText';
+import {
+  FACE_CONSENT_V1_RETENTION,
+  FACE_CONSENT_V1_TEXT,
+  FACE_CONSENT_VERSION,
+} from './consentText';
 
 export type FaceStatus = 'none' | 'active' | 'disabled';
 
-/** A failed face request with its API-CONTRACT §1.6 code. */
+/** A failed face request with its API-CONTRACT §1.6 code (or NETWORK / BAD_RESPONSE). */
 export class FaceApiError extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -20,7 +31,7 @@ export class FaceApiError extends Error {
 export interface FaceApi {
   /** `GET /v1/face/consent` */
   getConsent(): Promise<FaceConsent>;
-  /** `GET /v1/me` → `face.status` */
+  /** `GET /v1/face/enrollment` → `status` */
   getStatus(): Promise<FaceStatus>;
   /** `POST /v1/face/enrollment` */
   enroll(req: FaceEnrollmentRequest): Promise<{ status: 'active'; enrolled_at: string }>;
@@ -42,7 +53,7 @@ export function createPreviewFaceApi(opts: { delayMs?: number } = {}): FaceApi &
 } {
   const delay = () => new Promise<void>((r) => setTimeout(r, opts.delayMs ?? 0));
   const consent: FaceConsent = {
-    consent_version: 'face-consent-v1',
+    consent_version: FACE_CONSENT_VERSION,
     text: FACE_CONSENT_V1_TEXT,
     text_sha256: sha256Hex(FACE_CONSENT_V1_TEXT),
     retention_summary: FACE_CONSENT_V1_RETENTION,
@@ -93,7 +104,7 @@ export function createPreviewFaceApi(opts: { delayMs?: number } = {}): FaceApi &
 }
 
 /** The subset of the signed client (../net/signedFetch) the face routes need. */
-interface FaceHttp {
+export interface FaceHttp {
   request(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
@@ -101,33 +112,62 @@ interface FaceHttp {
   ): Promise<unknown>;
 }
 
+interface Parser<T> {
+  safeParse(v: unknown): { success: true; data: T } | { success: false };
+}
+
 /**
  * The real face routes (API-CONTRACT §2.2) over the signed client: GETs carry the bearer,
- * writes are signed. Same interface and error codes as the preview stand-in.
+ * writes are signed. Same interface and error codes as the preview stand-in. The consent is
+ * checked here: the text shown must hash to the `text_sha256` the enrollment echoes back, so
+ * the phone never agrees to a text it did not show.
  */
 export function createServerFaceApi(http: FaceHttp): FaceApi {
-  const call = async <T>(f: () => Promise<unknown>): Promise<T> => {
+  const call = async (f: () => Promise<unknown>): Promise<unknown> => {
     try {
-      return (await f()) as T;
+      return await f();
     } catch (e) {
       const code = (e as { code?: unknown } | null)?.code;
       throw new FaceApiError(typeof code === 'string' ? code : 'NETWORK');
     }
   };
+  const parse = <T>(schema: Parser<T>, v: unknown): T => {
+    const r = schema.safeParse(v);
+    if (!r.success) throw new FaceApiError('BAD_RESPONSE');
+    return r.data;
+  };
   return {
-    getConsent: () => call<FaceConsent>(() => http.request('GET', '/v1/face/consent')),
-    async getStatus() {
-      const me = await call<{ face?: { status?: FaceStatus } }>(() =>
-        http.request('GET', '/v1/me'),
+    async getConsent() {
+      const c = parse(
+        FaceConsentResponse,
+        await call(() => http.request('GET', FACE_CONSENT_PATH)),
       );
-      return me.face?.status ?? 'none';
+      if (sha256Hex(c.text) !== c.text_sha256) throw new FaceApiError('BAD_RESPONSE');
+      return {
+        consent_version: c.consent_version,
+        text: c.text,
+        text_sha256: c.text_sha256,
+        retention_summary: c.retention_summary,
+      };
     },
-    enroll: (req) =>
-      call<{ status: 'active'; enrolled_at: string }>(() =>
-        http.request('POST', '/v1/face/enrollment', { json: req }),
-      ),
-    setStatus: (status) =>
-      call<void>(() => http.request('PATCH', '/v1/face/enrollment', { json: { status } })),
-    remove: () => call<void>(() => http.request('DELETE', '/v1/face/enrollment')),
+    async getStatus() {
+      const s = parse(
+        FaceEnrollmentStatusResponse,
+        await call(() => http.request('GET', FACE_ENROLLMENT_PATH)),
+      );
+      return s.status;
+    },
+    async enroll(req) {
+      return parse(
+        FaceEnrollmentResponse,
+        await call(() => http.request('POST', FACE_ENROLLMENT_PATH, { json: req })),
+      );
+    },
+    async setStatus(status) {
+      await call(() => http.request('PATCH', FACE_ENROLLMENT_PATH, { json: { status } }));
+    },
+    async remove() {
+      await call(() => http.request('DELETE', FACE_ENROLLMENT_PATH));
+    },
   };
 }

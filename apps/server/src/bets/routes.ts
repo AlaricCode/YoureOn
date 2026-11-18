@@ -118,12 +118,11 @@ export const betsRoutes: RouteModule = {
       }
 
       if (body.challenge_method === 'face') {
-        const v = verifyMatchTicket(body.match_ticket, {
-          scanner_user_id: aId,
-          candidate_user_id: bId,
-          room_id: room.id,
-          now_ms: now,
-        });
+        const v = verifyMatchTicket(
+          body.match_ticket,
+          { scanner_user_id: aId, candidate_user_id: bId, room_id: room.id, now_ms: now },
+          deps.env,
+        );
         if (!v.ok) {
           throw new HttpError('VALIDATION_FAILED', 'That face match expired. Scan again.', {
             issues: [{ path: 'match_ticket', message: `match_ticket ${v.reason}` }],
