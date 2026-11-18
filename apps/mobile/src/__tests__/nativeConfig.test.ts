@@ -52,7 +52,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
     'react-native-fast-tflite': '3.0.1',
     '@elevenlabs/react-native': '1.2.38',
     '@livekit/react-native': '2.12.0',
-    '@livekit/react-native-webrtc': '144.2.0',
+    '@livekit/react-native-webrtc': '144.1.2',
     'livekit-client': '2.23.0',
     '@livekit/react-native-expo-plugin': '1.1.0',
     '@config-plugins/react-native-webrtc': '15.0.2',
