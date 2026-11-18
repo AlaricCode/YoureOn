@@ -676,6 +676,82 @@ export const GeminiSettlementRecord = z.strictObject({
 - Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: spike 02: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). Since D10 the build uses expo-video-thumbnails and the shared sampler `packages/shared/src/judge/frames.ts` (12 frames: 4 spread over the clip, 8 in its last ~1.2 s; plus the landing crop); the server labels the frames inside the landing window and the crop in the prompt. `landing_crop` is optional, so 8-frame records from earlier builds still parse, and an absent flag is not part of the JCS bytes. `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (spike 02 estimate).
 - The settlement record is built from the **event details endpoint** (`GET /v1/prediction-markets/events/{eventTicker}`). Confirmed by spike 05: `resolutionSide` shows there ~7.5–8.7 s after expiry, while `recently-settled` lags 26–36 s. `response_sha256` pins the exact body. What an `invalid` contract looks like is still unseen (0 of 173).
 
+### 4.1 ReplayMoment (the slow-mo replay)
+
+`packages/shared/src/replay.ts`, served by `GET /v1/bets/:bet_id/replay` (API-CONTRACT §2.14). What the stage and the phones play after a bet: the **winning moment** from the judge's own evidence frames (today), the real clip at quarter speed (once a clip URL exists), or a **foul** frozen at the moment a detector confirmed (once one is wired). One builder for the server, the stage and the phones.
+
+```ts
+export const REPLAY_SCHEMA_VERSION = 1 as const;
+export const SLOWMO_RATE = 0.25;            // playback speed of real-time material
+export const SLOWMO_DWELL_MIN_MS = 450;     // a frame's on-screen time: clamp(gap_to_next / SLOWMO_RATE, 450, 900)
+export const SLOWMO_DWELL_MAX_MS = 900;
+export const SLOWMO_XFADE_MS = 220;         // the landing crop fades in over SLOWMO_CROP_MS = 700 (the closing zoom)
+export const SLOWMO_INTRO_MS = 500;
+export const SLOWMO_HOLD_MS = 2600;
+export const SLOWMO_ZOOM = { from: 1, to: 1.08, holdTo: 1.14 } as const;   // reduced motion: no zoom, no cross-fades
+
+export const ReplayKind = z.enum(['win', 'foul']);
+export const ReplayHoldSource = z.enum(['judge_cited', 'last_frame', 'detector']);
+export const ReplayFrame = z.strictObject({
+  idx: FrameIndex.nullable(),               // CameraEvidence.frames index (= attempt_frames.idx); null for a detector still
+  t_ms: z.number().int().nonnegative(),     // ms from clip start (the crop carries the last frame's t_ms)
+  landing_crop: z.boolean(),
+  cited: z.boolean(),                       // in the deciding ruling's cited_frames
+  path: z.string().startsWith('/v1/bets/').max(200),   // server-relative GET with the caller's bearer
+  url: z.url().nullable(),                  // signed, short-lived GET once object storage exists; null today; preferred when set
+});
+export const ReplayClip = z.strictObject({
+  url: z.url(), expires_at: IsoUtc, mime: z.enum(['video/mp4', 'video/quicktime']),
+  source_rate: z.number().positive().max(1),   // 1 = real time (played at SLOWMO_RATE); < 1 = already slowed (played at 1x)
+  from_ms, moment_ms, to_ms,                // in THIS file's timeline; from ≤ moment ≤ to
+  overlays_burned: z.boolean(),             // boxes / line / FOUL text drawn into the video: the player adds no overlay text
+});
+export const ReplayFoul = z.strictObject({
+  label: NText(40),                         // display data, e.g. 'Toe 17 cm over'
+  measure_cm: z.number().nonnegative().nullable(),
+  detector: z.string().min(1).max(80),      // e.g. 'sam3/fal@1'
+});
+export const ReplayMoment = z.strictObject({
+  schema_version: z.literal(1),
+  bet_id: BetId,
+  attempt_no: z.number().int().min(1),
+  kind: ReplayKind,
+  winner: Party,                            // the FINAL winner (appeal final_outcome when there was one)
+  moment_ms: z.number().int().nonnegative(),   // ms from the original clip's start (win: the held frame's t_ms)
+  hold_source: ReplayHoldSource,
+  frames: z.array(ReplayFrame).max(24),     // play order, t_ms non-decreasing; the LAST frame is held
+  clip: ReplayClip.nullable(),
+  foul: ReplayFoul.nullable(),              // set iff kind = 'foul'
+  ruling_hash: Hex32,
+  model: z.string().min(1).max(80),         // isCachedRulingModel(model) keeps the stage's "replay ruling" label
+  reason: NText(280).nullable(),            // the judge's reason (data); null for a foul and for an appeal-flipped win
+});
+// refinements: foul set iff kind = 'foul'; a foul holds on 'detector', a win never does;
+// frames or a clip; t_ms never decreases.
+
+export const ReplayWhy = z.enum(['ready', 'not_ruled', 'no_winner', 'no_frames', 'purged']);
+export const ReplayResponse = z.strictObject({ replay: ReplayMoment.nullable(), why: ReplayWhy, final: z.boolean() });
+// why = 'ready' iff replay !== null
+
+/** What a foul detector hands to buildFoulReplay: ONLY a confirmed foul (confidence ≥ 0.7). */
+export const ReplayFoulInput = z.strictObject({
+  moment_ms: z.number().int().nonnegative(),   // original clip timeline (release ± foul)
+  foul: ReplayFoul,
+  frames: z.array(ReplayFrame.omit({ cited: true })).max(8),   // its stills, or attempt frames; [] = the attempt's frames nearest moment_ms
+  clip: ReplayClip.nullable(),              // its render: source_rate 0.25, overlays_burned true
+});
+```
+
+| Function | Rule |
+|---|---|
+| `buildWinReplay({bet_id, evidence, ruling, ruling_hash, final_outcome, attempt_frame_hashes})` | `null` for REDO, a VOID that stayed VOID (a VOID an appeal turned into a win plays, held on the last frame), a non-decisive final outcome, a Gemini settlement. Frames: the non-crop frames in the landing window (`isLandingFrame`), the one lead-in frame before it, the crop, and any cited lead-in frame (time order). Held: the highest cited index, cut there, with at least 3 frames before it when the attempt has them (`judge_cited`). An appeal-flipped outcome, or nothing cited: the crop (else the last frame), `last_frame`. Citations count only when the ruling's `frame_hashes` equal the attempt's. |
+| `buildFoulReplay(base, foul, evidence?)` | `kind: 'foul'`, `hold_source: 'detector'`, `moment_ms` from the detector, no `reason`. An invalid input is `null`. |
+| `slowmoTimeline(m, {reduceMotion})` | `{steps: {key, at_ms, dwell_ms, xfade_ms, scale_from, scale_to}[], hold_at_ms, total_ms}`; a typical 12-frame upload: 0.5 + 0.9 + 7 × 0.6 + 0.45 + 2.6 ≈ 8.65 s. |
+| `clipPlan(clip)` | `{playbackRate: source_rate === 1 ? 0.25 : 1, seekMs: from_ms, freezeAtMs: moment_ms, endMs: to_ms}`. |
+
+- **Precedence:** a confirmed foul beats a win. **Never a fake foul:** the ruling has no structured foul and its free-text `reason` is never parsed; until a detector supplies a confirmed foul, `kind` is always `'win'`.
+- These are live evidence frames, so the stage does **not** badge them "REPLAY" (ARCHITECTURE §7.1); its badges read `SLOW-MO · WINNING MOMENT` / `SLOW-MO · FOUL`.
+
 ---
 
 ## 5. Ruling
@@ -1795,3 +1871,4 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): **§4** `EvidenceFrame.landing_crop` (optional `true`; at most one, last), the `frames` comment (12 + the crop), and `recorded_by` for the two-phone fallback (`recorder:'self'`, API-CONTRACT §2.9). No hash vector changes: the field is absent on every existing record.
 - **2026-11-18 (Beat 5 appeal built).** §7: `AppealVote.outcome` is `voteOutcome` (no 0.8 floor; the 0.6 floor is `countVote`'s), and the built decision timing (all three votes in; the result is unchanged). Shared helpers `voteOutcome`, `appellantsOf`, `PANEL_SEATS`, `PANEL_VOTE_TIMEOUT_MS`; API types `AppealSubmitted`, `DemoAppealRequest`.
 - **2026-11-18 (stage voice, from API-CONTRACT §3.1 / §4.5).** §10.1: the control frames gain `stage.voice` (stage sessions only) and `stage.cue.audio_url?`; the `judge.cue` row says the stage voices `PAID` / the payout `VOIDED` too (not A's phone only). Docs only: the shared `WsServerControlFrame` already had both.
+- **2026-11-18, slow-mo replay (feat/slowmo-replay):** new **§4.1** `ReplayMoment` / `ReplayResponse` / `ReplayFoulInput` and the pure builders (`buildWinReplay`, `buildFoulReplay`, `slowmoTimeline`, `clipPlan`) in `packages/shared/src/replay.ts`. Additive; no existing schema changes.
