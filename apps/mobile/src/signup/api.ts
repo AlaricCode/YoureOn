@@ -1,8 +1,25 @@
-// The sign-up call behind an interface. The real one (TASKS D0-M4) asks the server for a
-// challenge, signs it with the device key and the wallet key, and posts `POST /v1/auth/signup`;
-// that needs the session client, which is not built yet. Until then the screen runs on the
-// in-memory stand-in below, which applies the server's checks that the screen depends on.
+// The sign-up call behind an interface. The real one (TASKS D0-M4, createServerSignupApi) asks
+// the server for a challenge, signs it with the device key and the wallet key, and posts
+// `POST /v1/auth/signup` through ../net/session. The preview runs on the in-memory stand-in,
+// which applies the server's checks that the screen depends on.
 import { MAX_NAME_LENGTH, type SignupFields } from './form';
+
+/** The real sign-up over the session manager; server error codes reach the screen unchanged. */
+export function createServerSignupApi(sessions: {
+  signup(fields: SignupFields): Promise<{ user: { user_id: string; display_name: string } }>;
+}): SignupApi {
+  return {
+    async signup(fields) {
+      try {
+        const s = await sessions.signup(fields);
+        return { user_id: s.user.user_id, display_name: s.user.display_name };
+      } catch (e) {
+        const code = (e as { code?: unknown } | null)?.code;
+        throw new SignupApiError(typeof code === 'string' ? code : 'NETWORK');
+      }
+    },
+  };
+}
 
 export class SignupApiError extends Error {
   constructor(readonly code: string) {

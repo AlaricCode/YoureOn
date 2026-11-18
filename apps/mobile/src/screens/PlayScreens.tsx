@@ -14,6 +14,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { camRetryAction } from '../attempt/retry';
 import {
   canAppeal,
   canConcede,
@@ -58,11 +59,16 @@ export function LiveScreen({
   view,
   phase,
   attemptNo,
+  onStart,
+  startBusy = false,
   tag,
 }: {
   view: BetView;
   phase: LivePhase;
   attemptNo: number;
+  /** A's phone: the "Start" fallback for the judge's request_attempt (API-CONTRACT §2.9). */
+  onStart?: (() => void) | undefined;
+  startBusy?: boolean;
   tag?: string | undefined;
 }) {
   const performerIsMe = view.performerName === view.myName;
@@ -98,6 +104,14 @@ export function LiveScreen({
             </View>
           )}
         </View>
+        {onStart && phase === 'locked' ? (
+          <PrimaryButton
+            testID="live-start"
+            label={t(COPY.live.start)}
+            busy={startBusy}
+            onPress={onStart}
+          />
+        ) : null}
       </Page>
     </Screen>
   );
@@ -107,25 +121,71 @@ export function LiveScreen({
 
 type CamPhase = 'standby' | 'countdown' | 'recording' | 'sending' | 'sent';
 
-/** expo-camera records the clip (FINDINGS §3.3); frame extraction and upload are D3-M1. */
+/** The server's attempt.started for this device: count down to go_at, record at most max_ms. */
+export interface CamArm {
+  /** attempt_no; a new value re-arms the camera. */
+  attemptNo: number;
+  /** go_at on this phone's clock (ms). */
+  goAtMs: number;
+  maxMs: number;
+}
+
+/** What a finished recording hands back: the clip file and how long it ran. */
+export interface Clip {
+  uri: string;
+  durationMs: number;
+  endedAtMs: number;
+}
+
+/** Recording ceiling (TASKS D3-M1 maxDuration 6). */
+const MAX_RECORD_MS = 6000;
+
+/**
+ * expo-camera records the clip (FINDINGS §3.3, codec avc1, maxDuration 6). Without `arm` (the
+ * preview) the operator starts it; with `arm` the server's attempt.started does, counting down
+ * to go_at. `onSend` gets the clip (null when nothing was recorded) and does the frames.
+ */
 export function JudgeCamScreen({
   onBack,
   onSend,
+  arm,
   tag,
 }: {
-  onBack: () => void;
-  /** Called with the clip's file URL, or null when no clip was recorded (preview). */
-  onSend: (clipUrl: string | null) => Promise<void>;
+  onBack?: (() => void) | undefined;
+  onSend: (clip: Clip | null) => Promise<void>;
+  /** undefined = preview (manual start); null = waiting for the server; set = armed. */
+  arm?: CamArm | null;
   tag?: string | undefined;
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<CamPhase>('standby');
   const [count, setCount] = useState(3);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
+  const startedAt = useRef(0);
+  const armedFor = useRef<number | null>(null);
+  /** The last recorded clip of this arm, kept so "Try again" can resend it after a failed upload. */
+  const lastClip = useRef<Clip | null>(null);
+  /** A retake counts down on its own clock (go_at is already past). */
+  const manualCountdown = useRef(false);
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) void requestPermission();
   }, [permission, requestPermission]);
+
+  // Server-armed: count down to go_at (whole seconds, at most 3).
+  useEffect(() => {
+    if (!arm || armedFor.current === arm.attemptNo) return;
+    armedFor.current = arm.attemptNo;
+    lastClip.current = null;
+    manualCountdown.current = false;
+    setFailed(false);
+    setCount(Math.min(3, Math.max(0, Math.ceil((arm.goAtMs - Date.now()) / 1000))));
+    setPhase('countdown');
+  }, [arm]);
 
   useEffect(() => {
     if (phase !== 'countdown') return;
@@ -133,25 +193,75 @@ export function JudgeCamScreen({
       setPhase('recording');
       return;
     }
-    const tm = setTimeout(() => setCount((c) => c - 1), 800);
+    const wait =
+      arm && !manualCountdown.current
+        ? Math.max(0, Math.min(1000, arm.goAtMs - (count - 1) * 1000 - Date.now()))
+        : 800;
+    const tm = setTimeout(() => setCount((c) => c - 1), wait);
     return () => clearTimeout(tm);
-  }, [phase, count]);
+  }, [phase, count, arm]);
 
   const stop = useCallback(async () => {
     if (stopTimer.current) clearTimeout(stopTimer.current);
+    stopTimer.current = null;
     setPhase('sending');
-    await onSend(null);
-    setPhase('sent');
+    let clip: Clip | null = null;
+    try {
+      const pending = recording.current;
+      recording.current = null;
+      if (pending) {
+        cam.current?.stopRecording();
+        const out = await pending;
+        const endedAtMs = Date.now();
+        if (out?.uri) clip = { uri: out.uri, durationMs: endedAtMs - startedAt.current, endedAtMs };
+      }
+      lastClip.current = clip;
+      await onSend(clip);
+      setPhase('sent');
+    } catch {
+      setFailed(true);
+      setPhase('sent');
+    }
   }, [onSend]);
 
-  // Six seconds at most (TASKS D3-M1 maxDuration 6); Stop ends it sooner.
+  // "Try again": resend the same clip, retake it, or back to standby (../attempt/retry).
+  const retry = useCallback(async () => {
+    const action = camRetryAction({ armed: !!arm, hasClip: lastClip.current !== null });
+    setFailed(false);
+    if (action === 'standby') {
+      setPhase('standby');
+      return;
+    }
+    if (action === 'retake') {
+      manualCountdown.current = true;
+      setCount(3);
+      setPhase('countdown');
+      return;
+    }
+    setPhase('sending');
+    try {
+      await onSend(lastClip.current);
+      setPhase('sent');
+    } catch {
+      setFailed(true);
+      setPhase('sent');
+    }
+  }, [arm, onSend]);
+
+  // Start the camera recording on GO; Stop (or max_ms, at most 6 s) ends it.
   useEffect(() => {
     if (phase !== 'recording') return;
-    stopTimer.current = setTimeout(() => void stop(), 6000);
+    const camera = cam.current;
+    if (camera && ready && !recording.current) {
+      startedAt.current = Date.now();
+      recording.current = camera.recordAsync({ codec: 'avc1', maxDuration: MAX_RECORD_MS / 1000 });
+    }
+    const limit = Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS);
+    stopTimer.current = setTimeout(() => void stop(), limit);
     return () => {
       if (stopTimer.current) clearTimeout(stopTimer.current);
     };
-  }, [phase, stop]);
+  }, [phase, stop, ready, arm]);
 
   const bubble =
     phase === 'standby'
@@ -171,12 +281,23 @@ export function JudgeCamScreen({
             {phase === 'sending' ? (
               <DotsLabel text={t(COPY.judgeCam.sending)} variant="title" />
             ) : (
-              <StatusHero mark="check" title={t(COPY.judgeCam.sent)} />
+              <StatusHero
+                mark={failed ? 'cross' : 'check'}
+                title={t(failed ? COPY.ruling.retry : COPY.judgeCam.sent)}
+              />
             )}
           </Stage>
         ) : permission?.granted ? (
           <Stage>
-            <CameraView style={StyleSheet.absoluteFill} facing="back" mode="video" />
+            <CameraView
+              ref={cam}
+              style={StyleSheet.absoluteFill}
+              facing="back"
+              mode="video"
+              mute
+              videoQuality="720p"
+              onCameraReady={() => setReady(true)}
+            />
             <StageBubble prompt={bubble} recording={phase === 'recording'} />
             {phase === 'recording' ? (
               <View style={styles.shutterSlot}>
@@ -193,7 +314,7 @@ export function JudgeCamScreen({
           </Stage>
         )}
         <View style={styles.gapLg} />
-        {phase === 'standby' ? (
+        {phase === 'standby' && arm === undefined ? (
           <PrimaryButton
             testID="cam-start"
             label={t(COPY.judgeCam.start)}
@@ -203,8 +324,12 @@ export function JudgeCamScreen({
               setPhase('countdown');
             }}
           />
-        ) : phase === 'sent' ? (
-          <QuietButton label={t(COPY.judgeCam.start)} onPress={() => setPhase('standby')} />
+        ) : phase === 'sent' && (arm === undefined || failed) ? (
+          <QuietButton
+            testID="cam-retry"
+            label={t(failed && arm ? COPY.ruling.retry : COPY.judgeCam.start)}
+            onPress={() => void retry()}
+          />
         ) : null}
       </Page>
     </Screen>
@@ -232,7 +357,8 @@ export function RulingScreen({
   busy: boolean;
   alert?: string | null;
   onGG: () => void;
-  onAppeal: () => void;
+  /** Omitted when appeals are off (the live panel is cut from the demo): no "I appeal!". */
+  onAppeal?: (() => void) | undefined;
   tag?: string | undefined;
 }) {
   const now = useNow(200);
@@ -264,7 +390,7 @@ export function RulingScreen({
               disabled={!canConcede(result, appealDeadlineMs, now)}
               onPress={onGG}
             />
-            {canAppeal(view, result, appealDeadlineMs, now) ? (
+            {onAppeal && canAppeal(view, result, appealDeadlineMs, now) ? (
               <>
                 <View style={styles.gap} />
                 <QuietButton

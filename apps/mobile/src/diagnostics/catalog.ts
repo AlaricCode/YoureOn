@@ -121,6 +121,13 @@ export const CHECKS = [
     kind: 'auto',
     hint: 'Reads the pubkey item (never creates a wallet), probes getRandomValues, pre-warms noble (D0-M3).',
   },
+  {
+    id: 'jcs-vectors',
+    label: 'JCS + terms hash vectors on Hermes',
+    required: false,
+    kind: 'auto',
+    hint: 'Runs the SCHEMAS §11 vectors (NFC, key order, hashes) and compares to the committed hashes.',
+  },
 ] as const satisfies readonly CheckSpec[];
 
 export type CheckId = (typeof CHECKS)[number]['id'];
