@@ -297,4 +297,18 @@ describe('preview embedder', () => {
     const custom = createPreviewEmbedder(1, () => []);
     expect((await custom.open('file:///x.jpg')).faces).toEqual([]);
   });
+
+  it('takes a detector that loads lazily (the preview imports the face natives on first use)', async () => {
+    const turned = { ...PREVIEW_FACE, yawAngle: 30 };
+    const lazyDetect = (url: string) =>
+      Promise.resolve(url.endsWith('b.jpg') ? [turned] : ([] as const));
+    const e = createPreviewEmbedder(1, lazyDetect);
+    expect((await e.open('file:///a.jpg')).faces).toEqual([]);
+    const s = await e.open('file:///b.jpg');
+    expect(s.faces).toEqual([turned]);
+    expect(s.width).toBe(PREVIEW_FACE.frameWidth);
+    // A detector that cannot load (no ML Kit in the simulator build) fails the capture only.
+    const broken = createPreviewEmbedder(1, () => Promise.reject(new Error('no detector')));
+    await expect(broken.open('file:///a.jpg')).rejects.toThrow('no detector');
+  });
 });

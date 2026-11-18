@@ -1,0 +1,29 @@
+# The reconnect banner on a mid-bet screen (ui/connection, fed by app/socketStatus): with a bet
+# on screen (any of them: the typed-terms form, the terms card, live), stop the server, see
+# "Reconnecting" here; start it again, and the banner goes. Run it in two steps around the server:
+#   (stop the server)   maestro --device <udid> test -e SERVER=down e2e/maestro/reconnect-banner.yaml
+#   (start the server)  maestro --device <udid> test -e SERVER=up e2e/maestro/reconnect-banner.yaml
+# Before the fix only home ever showed the banner.
+appId: dev.youreon.app
+name: reconnect-banner
+---
+- assertNotVisible:
+    id: balance-header
+- runFlow:
+    when:
+      true: ${SERVER == 'down'}
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: reconnect-banner
+          timeout: 30000
+      - takeScreenshot: 80-reconnecting-mid-bet
+- runFlow:
+    when:
+      true: ${SERVER == 'up'}
+    commands:
+      - extendedWaitUntil:
+          notVisible:
+            id: reconnect-banner
+          timeout: 40000
+      - takeScreenshot: 81-reconnected-mid-bet

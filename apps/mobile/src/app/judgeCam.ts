@@ -108,6 +108,8 @@ export interface JudgeCamSync {
   /** Sign-in: read the memo for the current owner (forgets another owner's). */
   restore(raw: string | null): CamRestore;
   readonly phonePending: boolean;
+  /** The last restore() brought the judge cam back and nothing turned it on or off since. */
+  readonly restoredOn: boolean;
   /** Settles once every memo write issued so far is done (tests). */
   flush(): Promise<void>;
 }
@@ -118,6 +120,8 @@ const SUPERSEDED: CamSyncResult = { status: 'superseded' };
 export function createJudgeCamSync(d: JudgeCamSyncDeps): JudgeCamSync {
   /** Bumped by every on/off/restore: an older request's outcome must not undo a newer one. */
   let gen = 0;
+  /** The gen of a restore() that answered 'judge_cam' (any on/off bumps gen past it). */
+  let restoredGen = -1;
   let phonePending = false;
   let phoneInFlight = 0;
   // Memo writes run one after another, in the order they were issued.
@@ -168,6 +172,7 @@ export function createJudgeCamSync(d: JudgeCamSyncDeps): JudgeCamSync {
     restore(raw) {
       gen++;
       const r = camRestore(raw, d.owner());
+      restoredGen = r === 'judge_cam' ? gen : -1;
       phonePending = r === 'send_phone';
       if (r === 'forget') remember(null);
       return r;
@@ -175,8 +180,52 @@ export function createJudgeCamSync(d: JudgeCamSyncDeps): JudgeCamSync {
     get phonePending() {
       return phonePending;
     },
+    get restoredOn() {
+      return restoredGen === gen;
+    },
     flush: () => saving,
   };
+}
+
+// ---- sign-in: back into the last room, then re-bind a restored judge cam ------------------------
+
+export interface RejoinDeps {
+  restored: CamRestore;
+  /** A youreon://room/ link that arrived before sign-in. */
+  linked: string | null;
+  /** The last room's code (SecureStore). */
+  storedCode(): Promise<string | null>;
+  /** The room on screen (the last render's: it lags a dispatch behind). */
+  currentRoomId(): string | null;
+  /** Join by code; the room id, or null when the join failed. */
+  join(code: string): Promise<string | null>;
+  /** The signed-in effect is still mounted. */
+  live(): boolean;
+  /** The restored judge cam has not been turned on or off since (JudgeCamSync.restoredOn). */
+  stillOn(): boolean;
+  /** Bind the judge cam to this room on the server (null: no room, turn it off). */
+  bind(roomId: string | null): void;
+}
+
+/**
+ * At sign-in, after the memo was read: re-join the last room (or a room link's), then re-bind a
+ * restored judge cam to the room this phone is in now. That room comes from the join itself: the
+ * app state lags a render behind, and reading it right after the join found no room, so every
+ * restored judge cam turned itself off ("Join room first") and the memo never brought it back.
+ * Resolves false when a join was tried and failed (the caller tries the rejoin again once the
+ * socket is live: ./resume createLiveRetry).
+ */
+export async function rejoinAndRebind(d: RejoinDeps): Promise<boolean> {
+  const code = d.linked ?? (await d.storedCode().catch(() => null)) ?? null;
+  let roomId = d.currentRoomId();
+  let joined = true;
+  if (code && d.live() && (d.linked || !roomId)) {
+    const id = await d.join(code);
+    joined = id !== null;
+    roomId = id ?? roomId;
+  }
+  if (d.live() && d.restored === 'judge_cam' && d.stillOn()) d.bind(roomId);
+  return joined;
 }
 
 // ---- POST /attempts errors on A's Start ----------------------------------------------------------
