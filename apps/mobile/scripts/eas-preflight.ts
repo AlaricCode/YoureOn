@@ -109,7 +109,7 @@ export function checkNode(version: string, engines = '>=22.4'): Result {
     : fail(`node ${version} is older than ${min}`, 'install Node 22 (.nvmrc) and run npm ci');
 }
 
-export function checkShellEnv(env: NodeJS.ProcessEnv): Result[] {
+export function checkShellEnv(env: Record<string, string | undefined>): Result[] {
   const out: Result[] = [];
   const stray = CONFIG_ENV.filter((k) => env[k] !== undefined && env[k] !== '');
   out.push(
