@@ -421,6 +421,18 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     expect(store.secrets[0]._value).toBe('new');
   });
 
+  it('--rotate-secret is never a no-op (the stored value is write-only); without it a rerun is', async () => {
+    const { http, store } = fakeElevenLabs();
+    await syncAgent(http, { ...OPTS, rotateSecret: true });
+    store.writes.length = 0;
+    const again = await syncAgent(http, { ...OPTS, rotateSecret: true });
+    expect(store.writes).toEqual([`PATCH /v1/convai/secrets/${again.secret_id}`]);
+    store.writes.length = 0;
+    const check = await syncAgent(http, OPTS);
+    expect(store.writes).toEqual([]);
+    expect(check.actions.every((a) => a.action === 'noop')).toBe(true);
+  });
+
   it('refuses to guess when two resources share a name', async () => {
     const { http, store } = fakeElevenLabs();
     await syncAgent(http, OPTS);
