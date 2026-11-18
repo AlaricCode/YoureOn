@@ -504,6 +504,38 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     await lc.idle();
   });
 
+  it('lock window: past expires_at the sweep expires the bet and revokes the nonce', async () => {
+    const betId = await proposedBet();
+    await admin(`/v1/demo/bets/${betId}/confirm`);
+    await lc.idle();
+    const lock = AuthorizeRequest.parse((await get(A, `/v1/bets/${betId}/lock`)).json);
+    expect((await lc.lock.sweep(now())).expired).toEqual([]);
+    advance(296_000); // accept_deadline - 5 s has passed
+    const r = await lc.lock.sweep(now());
+    expect(r.expired).toContain(betId);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'EXPIRED', end_reason: 'accept_timeout' });
+    const [row] = await ctx.deps.db
+      .select()
+      .from(chainTxs)
+      .where(eq(chainTxs.id, lock.lock_request_id));
+    expect(row!.status).toBe('revoked');
+    // A signature after expiry is refused.
+    const msg = new Uint8Array(Buffer.from(lock.message_b64, 'base64'));
+    const late = await signed(A, 'POST', `/v1/bets/${betId}/lock/authorizations`, {
+      bet_id: betId,
+      lock_request_id: lock.lock_request_id,
+      party: 'A',
+      terms_hash: lock.envelope.terms_hash,
+      method: 'faceid_hold',
+      authorized_at: new Date(now()).toISOString(),
+      ms_since_auth_success: 10,
+      message_sha256: lock.message_sha256,
+      party_signature: b58.decode(ed.sign(msg, keyA.secret)),
+    });
+    expect(['LOCK_REVOKED', 'LOCK_EXPIRED']).toContain(late.json!.error.code);
+  });
+
   it('GET /v1/me/balance: wallet USDC from the chain + my stakes in escrow', async () => {
     const r = await get(A, '/v1/me/balance');
     expect(r.status).toBe(200);
