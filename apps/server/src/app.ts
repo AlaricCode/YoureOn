@@ -2,7 +2,7 @@
 // X-Request-Id (echo or mint), deps injection, body-size caps (64 KB JSON default, per-path
 // overrides from RouteModule.bodyLimits), the §1.5 error envelope, and 404 NOT_FOUND.
 import { randomBytes } from 'node:crypto';
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { bodyLimit } from 'hono/body-limit';
 import { HDR } from '@youre-on/shared/api';
@@ -30,8 +30,37 @@ function bodyLimits(modules: readonly RouteModule[]): MiddlewareHandler<AppEnv> 
     if (c.req.method === 'GET' || c.req.method === 'HEAD') return next();
     const path = c.req.path;
     const hit = overrides.find((o) => o.path.test(path));
+    // Hono's bodyLimit reads a body without Content-Length (chunked) into memory before the
+    // route runs. Fine for 64 KB; on a large-limit path (frames 3 MiB, the QuickNode webhook)
+    // it let anyone pin megabytes per request before any auth. Those bodies are capped as the
+    // route reads them instead, i.e. only after its own checks (bearer, webhook headers).
+    if (hit && hit.maxBytes > JSON_BODY_LIMIT && !declaresLength(c.req.raw)) {
+      capWhileRead(c, hit.maxBytes);
+      return next();
+    }
     return limiter(hit?.maxBytes ?? JSON_BODY_LIMIT)(c, next);
   };
+}
+
+/** A Content-Length the parser enforces (Hono's bodyLimit then checks only the header). */
+const declaresLength = (r: Request) =>
+  r.headers.has('content-length') && !r.headers.has('transfer-encoding');
+
+/** Swaps in a body stream that fails with 413 once more than `max` bytes have been read. */
+function capWhileRead(c: Context<AppEnv>, max: number): void {
+  const body = c.req.raw.body;
+  if (!body) return;
+  let size = 0;
+  const capped = body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, ctrl) {
+        size += chunk.byteLength;
+        if (size > max) ctrl.error(new HttpError('PAYLOAD_TOO_LARGE'));
+        else ctrl.enqueue(chunk);
+      },
+    }),
+  );
+  c.req.raw = new Request(c.req.raw, { body: capped, duplex: 'half' } as RequestInit);
 }
 
 export function buildApp(deps: AppDeps, modules: readonly RouteModule[] = defaultModules): App {
