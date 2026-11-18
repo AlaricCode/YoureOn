@@ -23,6 +23,7 @@
     "fund": "tsx scripts/fund.ts",
     "smoke-devnet": "tsx scripts/smoke-devnet.ts",
     "crank": "tsx scripts/crank.ts",
+    "demo-check": "tsx scripts/demo-check.ts",
     "cp1-drive": "tsx scripts/cp1-drive.ts",
     "demo-claim-qr": "tsx scripts/demo-claim-qr.ts",
     "e2e:local": "bash scripts/e2e-local.sh",

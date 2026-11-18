@@ -283,3 +283,37 @@ export function connectWs(url: string): Promise<WsClient> {
     );
   });
 }
+
+/**
+ * A database of our own next to DATABASE_URL's (`<db>_<suffix>`), created and migrated on first
+ * use: for suites that own global tables (nonce_pool) or delete every bet (POST /v1/demo/reset),
+ * since vitest runs test files in parallel against the shared database.
+ */
+export async function ownDatabase(url: string, suffix: string): Promise<string> {
+  const { sql } = await import('drizzle-orm');
+  const { runMigrations } = await import('@youre-on/db');
+  const u = new URL(url);
+  const name = `${u.pathname.replace(/^\//, '')}_${suffix}`;
+  if (!/^[a-z0-9_]{1,63}$/.test(name)) throw new Error(`unsupported database name ${name}`);
+  const admin = createDb({ url, max: 1 });
+  try {
+    const found = await admin.db.execute(
+      sql`SELECT 1 AS ok FROM pg_database WHERE datname = ${name}`,
+    );
+    if (found.length === 0) {
+      try {
+        await admin.db.execute(sql.raw(`CREATE DATABASE ${name}`));
+      } catch (e) {
+        const code =
+          (e as { code?: string; cause?: { code?: string } }).code ??
+          (e as { cause?: { code?: string } }).cause?.code;
+        if (code !== '42P04') throw e; // duplicate_database: a concurrent run made it
+      }
+    }
+  } finally {
+    await admin.close();
+  }
+  u.pathname = `/${name}`;
+  await runMigrations(u.toString());
+  return u.toString();
+}
