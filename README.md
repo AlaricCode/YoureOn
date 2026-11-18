@@ -211,14 +211,16 @@ The program keypair is not in the repo, so a fresh `anchor build` creates a rand
 
 ## ElevenLabs
 
-| Product                   | How we use it                                                                                                                                                                                                                                                | Status                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
-| **Agents Platform**       | The voice judge. One conversation per bet on A's phone over WebRTC (`@elevenlabs/react-native` 1.2.38 + LiveKit), on speakerphone. The agent's LLM (Claude Haiku 5.5, served by ElevenLabs) asks the edge-case questions; TTS model `eleven_v4_turbo`.       | Built; ElevenLabs key pending                |
-| Webhook (server) tools    | `propose_terms` and `confirm_terms` at `/el/tools/:name`, authenticated by a workspace secret sent as `X-YO-Tool-Secret`. `get_market_odds` (Beat 6) has a live handler and is registered with `el-agent --tools=…`.                                         | Built; tested end to end against a fake      |
-| Client tools              | `request_attempt` (arms the judge cam), `show_terms_card`, `cue` (gavel, drumroll, buzzer, cheer on the stage). They run on A's phone.                                                                                                                       | Built                                        |
-| Conversation tokens       | `POST /v1/voice/tokens` mints a token server-side (`GET /v1/convai/conversation/token`), so the API key never reaches a phone. Spend-guarded: it calls out only with `ALLOW_SPEND=true`.                                                                     | Built                                        |
-| Agent as code             | `npm run el-agent` creates or updates the workspace secret, the tools and the private agent, found by name and PATCHed only where they differ (a second run is a no-op). `--check-openapi` validates every body against ElevenLabs' public OpenAPI document. | Built; never run against ElevenLabs (no key) |
-| Scribe STT, Sound Effects | REST clients behind `STT_PROVIDER` / `SFX_PROVIDER` (default mock). Not in the demo path: the hearing they were for is not built, and the stage synthesizes its sounds.                                                                                      | Built, unused in the demo                    |
+| Product                | How we use it                                                                                                                                                                                                                                                                                                        | Status                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| **Agents Platform**    | The voice judge. One conversation per bet on A's phone over WebRTC (`@elevenlabs/react-native` 1.2.38 + LiveKit), on speakerphone. The agent's LLM (Claude Haiku 5.5, served by ElevenLabs) asks the edge-case questions; TTS model `eleven_v4_turbo`.                                                               | Built; ElevenLabs key pending                |
+| Webhook (server) tools | `propose_terms` and `confirm_terms` at `/el/tools/:name`, authenticated by a workspace secret sent as `X-YO-Tool-Secret`. `get_market_odds` (Beat 6) has a live handler and is registered with `el-agent --tools=…`.                                                                                                 | Built; tested end to end against a fake      |
+| Client tools           | `request_attempt` (arms the judge cam), `show_terms_card`, `cue` (gavel, drumroll, buzzer, cheer on the stage). They run on A's phone.                                                                                                                                                                               | Built                                        |
+| Conversation tokens    | `POST /v1/voice/tokens` mints a token server-side (`GET /v1/convai/conversation/token`), so the API key never reaches a phone. Spend-guarded: it calls out only with `ALLOW_SPEND=true`.                                                                                                                             | Built                                        |
+| Agent as code          | `npm run el-agent` creates or updates the workspace secret, the tools and the private agent, found by name and PATCHed only where they differ (a second run is a no-op). `--check-openapi` validates every body against ElevenLabs' public OpenAPI document.                                                         | Built; never run against ElevenLabs (no key) |
+| Text to Speech (stage) | The projector speaks every ruling and payout in the judge's voice and each appeal-panel vote in its own voice (`POST /v1/text-to-speech/{voice_id}`, `eleven_v4_turbo`). The server sends the clip URL in a `stage.voice` frame; with no clip within 800 ms the stage speaks the same line with the browser's voice. | Built; on once the key is set                |
+| Sound Effects          | The stage cues (gavel, drumroll, buzzer, cheer), generated once at boot and played by the projector. `SFX_PROVIDER=auto` (the default) turns them on with the key; without it the stage synthesizes its sounds.                                                                                                      | Built; on once the key is set                |
+| Scribe STT             | REST client behind `STT_PROVIDER` (default mock). Not in the demo path: the hearing it was for is not built.                                                                                                                                                                                                         | Built, unused in the demo                    |
 
 **How a session runs.** A's phone asks for the mic, gets a conversation token from our server and
 starts the session with the bet's dynamic variables. Every tool call is bound to its bet
@@ -234,6 +236,15 @@ the judge never moves money and never authorizes a lock.
 events, which the stage shows as live captions and B's phone shows as subtitles. The `cue` client
 tool goes through `POST /v1/bets/:bet_id/cues` to the stage laptop, because audio played on A's
 phone would stop its mic.
+
+**The judge on the projector.** After each ruling, payout and appeal vote, the server composes
+the line the stage speaks (`packages/shared/src/stage-voice.ts`), generates it with ElevenLabs Text
+to Speech and sends its URL to the room's stage only (`stage.voice`). The stage fetches the clip
+with its bearer (`GET /v1/stage/tts/:clip_id`) and plays it. Clips are cached by
+`sha256(voice, model, text)`, so a repeated line is free. Without the key (or with
+`STAGE_TTS=off`) no frame comes, and after 800 ms the stage speaks the same words with the
+browser's `speechSynthesis`: the ruling is heard in the hall either way. Rulings from the stored
+`CACHED_RULING` verdict are labelled "replay ruling" on screen.
 
 **To switch it on** (needs the key): `npm run el-agent -- --check-openapi`, then set
 `ELEVENLABS_API_KEY`, `ELEVENLABS_TOOL_SECRET` and the printed `ELEVENLABS_AGENT_ID` as Fly
@@ -363,8 +374,10 @@ npm run dev -w @youre-on/stage               # Vite dev server for the stage pag
 cd apps/mobile && npx expo run:ios --device  # local Xcode dev build
 ```
 
-Without keys the server runs on offline mocks (`LLM_PROVIDER`, `STT_PROVIDER`, `SFX_PROVIDER`
-default to `mock`); any `live` mode needs `ALLOW_SPEND=true`. Without `SOLANA_DEVNET_RPC` and
+Without keys the server runs on offline mocks (`LLM_PROVIDER` and `STT_PROVIDER` default to
+`mock`; `SFX_PROVIDER=auto` is the mock until `ELEVENLABS_API_KEY` is set); any `live` mode needs
+`ALLOW_SPEND=true`. The stage's ElevenLabs voice is on exactly when the key and `ALLOW_SPEND=true`
+are set (`STAGE_TTS=off` turns it off). Without `SOLANA_DEVNET_RPC` and
 `FEE_PAYER_SECRET_KEY` there is no chain, and the health report says so. Every env var name is in
 [`.env.example`](.env.example); values never go in git.
 
@@ -385,13 +398,13 @@ npm run e2e:local                            # deploy scripts + smoke against a 
 
 | Suite                         | Command                                   | Count                                                                 |
 | ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
-| Server                        | `npm test -w @youre-on/server`            | 658                                                                   |
+| Server                        | `npm test -w @youre-on/server`            | 729 (with `DATABASE_URL`)                                             |
 | Mobile                        | `npm test -w @youre-on/mobile`            | 827, 1 skipped (the face-model test also skips without the `.tflite`) |
-| Shared                        | `npm test -w @youre-on/shared`            | 259                                                                   |
+| Shared                        | `npm test -w @youre-on/shared`            | 271                                                                   |
 | Database                      | `npm test -w @youre-on/db`                | 26                                                                    |
 | Escrow, TS client (LiteSVM)   | `npm run test:escrow -w @youre-on/shared` | 23, 1 skipped (the E3 mimic test needs `build-mimic.sh`)              |
 | Escrow, Rust matrix (LiteSVM) | `cargo test` in `programs/escrow`         | 167                                                                   |
-| Stage                         | `npm test -w @youre-on/stage`             | TBD (the stage is being merged)                                       |
+| Stage                         | `npm test -w @youre-on/stage`             | 159 (7 need `DATABASE_URL`)                                           |
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint, format, migrations and every workspace's
 tests on Postgres, gitleaks, then `anchor build`, the Codama check, the TS LiteSVM suite and

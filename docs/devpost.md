@@ -177,6 +177,11 @@ secret and bound to its bet. **Client tools** run on the phone: `request_attempt
 cam, `show_terms_card` brings the card forward, `cue` plays a gavel or a cheer on the stage. Server
 results (locked, ruling, paid) are injected back into the conversation so the judge announces them,
 and the phone relays the transcript to the server, which streams it to the stage as live captions.
+On the projector, ElevenLabs **Text to Speech** speaks every ruling and payout in the judge's voice
+and each appeal-panel vote in its own voice (the server generates each line once and streams it to
+the stage), and ElevenLabs **Sound Effects** generates the gavel, drumroll, buzzer and cheer cues
+the stage plays. Without the key the stage says the same lines in the browser's voice, so the
+ruling is always heard.
 The whole agent (secret, tools, agent) is defined as code and created idempotently by
 `npm run el-agent`, checked against ElevenLabs' OpenAPI document. A spoken "accept" is theatre:
 the judge never moves money. **Status:** built and tested end to end against the real webhook
