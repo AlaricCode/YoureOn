@@ -173,11 +173,20 @@ export async function crankOnce(
   rpc: ChainRpc,
   payer: TransactionSigner,
   now: bigint,
-  opts: { dryRun?: boolean; log?: (line: string) => void } = {},
+  opts: {
+    dryRun?: boolean;
+    log?: (line: string) => void;
+    /** Only these Bet PDAs (base58). Empty/undefined = every bet. */
+    only?: ReadonlySet<string>;
+    /** Never these Bet PDAs, e.g. bets a live server still owns. */
+    skip?: ReadonlySet<string>;
+  } = {},
 ): Promise<CrankResult[]> {
   const log = opts.log ?? (() => {});
   const out: CrankResult[] = [];
   for (const live of await fetchAllBets(rpc)) {
+    if (opts.only?.size && !opts.only.has(live.address)) continue;
+    if (opts.skip?.has(live.address)) continue;
     const action = crankActionFor(live.bet, now);
     const base = { address: live.address, status: live.bet.status, action };
     if (!action || opts.dryRun) {
