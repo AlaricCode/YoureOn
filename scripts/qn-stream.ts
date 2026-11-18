@@ -8,7 +8,8 @@
 // One-command activation (once the key exists):
 //   QUICKNODE_API_KEY=... npm run qn-stream -- create --fly-app youre-on
 // which: picks the security token (env QN_STREAM_SECURITY_TOKEN, else the token file, else a new
-// one written there, 0600) -> `fly secrets import` it (only with --fly-app) -> probes the webhook
+// one written there, 0600) -> probes the webhook -> only if the server does not verify it yet
+// (404 / 401) and with --fly-app, `fly secrets import`s it (that restarts the machines) and probes
 // until the server verifies a delivery signed with it -> refuses a duplicate Stream name (unless
 // --replace) -> creates the Stream PAUSED with that token -> checks the token QuickNode returned
 // -> activates it. Without --fly-app it prints the exact `fly secrets import` command and stops
@@ -66,12 +67,13 @@ options
   --url <https base>   webhook host (default ${DEFAULT_BASE_URL}; the path is /webhooks/quicknode)
   --name <name>        Stream name (default: infra/quicknode/stream.json name)
   --token-file <path>  security token file (default ${DEFAULT_TOKEN_FILE})
-  --fly-app <app>      create/resume: set the Fly secret ${TOKEN_ENV} first (fly secrets import)
+  --fly-app <app>      create/resume: if the server does not verify the token yet, set the Fly
+                       secret ${TOKEN_ENV} (fly secrets import; restarts the machines)
   --paused             create: leave the Stream paused
   --replace            create: delete an existing Stream with the same name first
   --quicknode-token    create: let QuickNode generate the token (fallback), then save + verify it
   --skip-probe         create/resume: do not check the webhook first
-  --probe-wait <s>     keep probing up to <s> seconds (default 0; 120 with --fly-app)
+  --probe-wait <s>     keep probing up to <s> seconds (default 0; 120 after setting the secret)
   --dry-run            print the request(s) and send nothing (no API key needed)
   --full               with --dry-run / --json: include filter_function
   --json               print the (redacted) API response
