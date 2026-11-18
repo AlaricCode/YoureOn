@@ -5,6 +5,7 @@ import { hashJcs } from '@youre-on/shared/jcs';
 import { renderSignCard } from '@youre-on/shared/sign-card';
 import { describe, expect, it } from 'vitest';
 
+import { frameTimesMs } from '../../attempt/frames';
 import { applyBetEvent, fromSnapshot } from '../../bets/store';
 import { authorizeLock, checkLockPolicy, concede, sendAttempt, verifiedRuling } from '../actions';
 import { authorizeRequest, BET, ev, ruling, snapshot, envelope } from './fixtures';
@@ -197,6 +198,43 @@ describe('attempt upload', () => {
     expect(evidence.frames).toHaveLength(8);
     expect(uploaded!.frames).toHaveLength(8);
     expect(uploaded!.key).toBe('k-3');
+  });
+
+  it('12 frames + the landing crop: the crop goes last, flagged, its bytes in the body', async () => {
+    let uploaded: readonly Uint8Array[] = [];
+    const crop = new Uint8Array(900).fill(77);
+    const { evidence } = await sendAttempt(
+      {
+        api: {
+          async uploadFrames(_e, frames) {
+            uploaded = frames;
+            return { judging: true, frame_hashes: [] };
+          },
+        },
+        readClip: async () => new Uint8Array(4096).fill(1),
+        extractFrames: async (_u, ms) => {
+          const times = frameTimesMs(ms);
+          return [
+            ...times.map((t_ms, i) => ({ t_ms, jpeg: new Uint8Array(500).fill(i) })),
+            { t_ms: times.at(-1)!, jpeg: crop, landing_crop: true },
+          ];
+        },
+        iso: (ms) => new Date(ms).toISOString(),
+      },
+      {
+        bet_id: BET,
+        attempt_no: 1,
+        recorded_by: 'A',
+        clip: { uri: 'file:///c.mov', durationMs: 5200, endedAtMs: Date.UTC(2026, 10, 21, 18, 7) },
+        idempotencyKey: 'k-4',
+      },
+    );
+    expect(evidence.frames).toHaveLength(13);
+    expect(evidence.frames.filter((f) => f.landing_crop)).toEqual([
+      expect.objectContaining({ index: 12, t_ms: 5120, landing_crop: true }),
+    ]);
+    expect(uploaded).toHaveLength(13);
+    expect(uploaded[12]).toBe(crop);
   });
 });
 
