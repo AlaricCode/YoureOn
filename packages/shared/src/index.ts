@@ -15,3 +15,4 @@ export * from './authorization';
 export * from './bet-state';
 export * from './chain-events';
 export * from './realtime';
+export * from './replay';

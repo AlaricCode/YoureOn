@@ -137,6 +137,11 @@ export class StageVoice {
     private readonly clipWaitMs = CLIP_WAIT_MS,
   ) {}
 
+  /** No line is being said or waited for (the slow-mo replay waits for this; feat/slowmo-replay). */
+  get idle(): boolean {
+    return this.current === null && this.pending.size === 0;
+  }
+
   /** A voiced event arrived: it will be heard, as a clip if one comes in time, else spoken. */
   expect(line: VoiceLine): void {
     if (this.pending.has(line.key)) return;
