@@ -127,6 +127,7 @@ describe('phase rail', () => {
       signers: 3,
       status: 'confirmed' as const,
       onchain: false,
+      onchain_via: null,
       slot: 1,
       error: null,
       sent_at: null,

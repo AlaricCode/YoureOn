@@ -3,7 +3,8 @@
 // file 0600, fingerprints only, redaction), the signed webhook probe against the REAL
 // POST /webhooks/quicknode route (so the token QuickNode signs with is provably the one
 // apps/server/src/chain/quicknode.ts verifies), and the create / resume flows against an
-// in-memory fake of the QuickNode Streams REST API.
+// in-memory fake of the QuickNode Streams REST API; reset-start (PATCH start_range on a paused
+// Stream) and demo-check's env names.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,16 +24,20 @@ import {
   readTokenFile,
   redact,
   req,
+  resetStartPlan,
+  resetStartRange,
   resolveToken,
   resumeStream,
   STREAM_TEMPLATE_PATH,
   streamId,
   streamsOf,
+  tipSlot,
   webhookUrlOf,
   writeTokenFile,
   type FetchLike,
   type StreamIo,
 } from '../../../scripts/lib/quicknode';
+import { evaluateStream, streamEnv } from '../../../scripts/lib/demo-check';
 import { buildApp } from '../src/app';
 import type { App, AppDeps } from '../src/context';
 import { createChainRoutes } from '../src/chain/routes';
@@ -102,6 +107,12 @@ class FakeStreams {
     if (method === 'DELETE') {
       this.streams.delete(id!);
       return json(200, {});
+    }
+    if (method === 'PATCH') {
+      if (s['status'] !== 'paused')
+        return json(400, { message: 'stream must be paused to update' });
+      Object.assign(s, body as Record<string, unknown>);
+      return json(200, s);
     }
     return json(405, {});
   }
@@ -183,6 +194,162 @@ describe('create body, requests and redaction', () => {
     expect(streamsOf([{ id: 'a' }])).toEqual([{ id: 'a' }]);
     expect(streamsOf({ data: [{ id: 'b' }] })).toEqual([{ id: 'b' }]);
     expect(streamsOf(null)).toEqual([]);
+  });
+});
+
+describe('reset-start: a paused Stream starts again at the devnet tip', () => {
+  const ID = '6f9f0b8e-2222-4000-8000-000000000000';
+  const RPC = 'https://rpc.test/secret-path-token';
+  const DEVNET = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+  const setup = (
+    status: 'active' | 'paused',
+    tip: number | null = 431_000_123,
+    genesis = DEVNET,
+  ) => {
+    const fake = new FakeStreams();
+    fake.streams.set(ID, {
+      id: ID,
+      name: 'youre-on-escrow-devnet',
+      status,
+      start_range: 1,
+      end_range: -1,
+    });
+    const rpcCalls: unknown[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      const u = new URL(url);
+      if (u.host === 'api.quicknode.com') return fake.handle(u, init);
+      const body = JSON.parse(String(init.body)) as { method: string };
+      rpcCalls.push(body);
+      if (body.method === 'getGenesisHash')
+        return Response.json({ jsonrpc: '2.0', id: 1, result: genesis });
+      return Response.json(
+        tip === null
+          ? { jsonrpc: '2.0', id: 1, error: { message: 'busy' } }
+          : { jsonrpc: '2.0', id: 1, result: tip },
+      );
+    };
+    const lines: string[] = [];
+    return {
+      fake,
+      fetchImpl,
+      rpcCalls,
+      lines,
+      io: { fetch: fetchImpl, apiKey: API_KEY, log: (l: string) => lines.push(l) },
+    };
+  };
+
+  it('--dry-run plan: GET, the RPC host only, PATCH <tip slot>, next resume; sends nothing', () => {
+    const plan = resetStartPlan(ID, RPC, null);
+    expect(plan).toContain(`GET https://api.quicknode.com/streams/rest/v1/streams/${ID}`);
+    expect(plan).toContain('on rpc.test');
+    expect(plan).not.toContain('secret-path-token');
+    expect(plan).not.toContain(API_KEY);
+    expect(plan).toContain('"start_range": "<tip slot>"');
+    expect(plan.trimEnd().endsWith(`next: npm run qn-stream -- resume ${ID}`)).toBe(true);
+    const fixed = resetStartPlan(ID, RPC, 431_000_123);
+    expect(fixed).not.toContain('rpc.test');
+    expect(fixed).toContain('"start_range": 431000123');
+  });
+
+  it('--dry-run shows the PATCH with start_range only, never the API key', () => {
+    const shown = describeRequest(req.update(ID, { start_range: 431_000_123 }));
+    expect(shown).toMatch(
+      new RegExp(`^PATCH https://api\\.quicknode\\.com/streams/rest/v1/streams/${ID}$`, 'm'),
+    );
+    expect(shown).toContain('x-api-key: <$QUICKNODE_API_KEY>');
+    expect(shown).not.toContain(API_KEY);
+    expect(JSON.parse(shown.slice(shown.indexOf('{')))).toEqual({ start_range: 431_000_123 });
+  });
+
+  it('refuses an active Stream (QuickNode updates paused ones only) and sends no PATCH', async () => {
+    const t = setup('active');
+    await expect(resetStartRange(t.io, ID, 431_000_123)).rejects.toThrow(
+      new RegExp(`${ID} is active: .*npm run qn-stream -- pause ${ID}`),
+    );
+    expect(t.fake.calls.map((c) => c.method)).toEqual(['GET']);
+    expect(t.fake.streams.get(ID)).toMatchObject({ status: 'active', start_range: 1 });
+  });
+
+  it('getSlot -> PATCH start_range on the paused Stream -> still paused; resume then activates it', async () => {
+    const t = setup('paused');
+    const slot = await tipSlot(t.fetchImpl, RPC);
+    expect(slot).toBe(431_000_123);
+    expect(t.rpcCalls).toEqual([
+      { jsonrpc: '2.0', id: 1, method: 'getGenesisHash', params: [] },
+      { jsonrpc: '2.0', id: 1, method: 'getSlot', params: [{ commitment: 'confirmed' }] },
+    ]);
+    const s = await resetStartRange(t.io, ID, slot);
+    expect(s).toMatchObject({ status: 'paused', start_range: 431_000_123, end_range: -1 });
+    expect(t.fake.calls.map((c) => `${c.method} ${c.path.replace(ID, ':id')}`)).toEqual([
+      'GET /streams/rest/v1/streams/:id',
+      'PATCH /streams/rest/v1/streams/:id',
+      'GET /streams/rest/v1/streams/:id',
+    ]);
+    expect(t.fake.calls[1]!.body).toEqual({ start_range: 431_000_123 });
+    expect(t.lines).toEqual(['start_range 1 -> 431000123 (end_range -1 kept)']);
+    const resumed = await resumeStream({ ...t.io, env: {} }, ID, {
+      baseUrl: BASE,
+      tokenFile: join(tmp(), 'none.env'),
+      skipProbe: true,
+    });
+    expect(resumed).toMatchObject({ status: 'active', start_range: 431_000_123 });
+    await expect(resetStartRange(t.io, ID, 0)).rejects.toThrow(/not a slot/);
+  });
+
+  it('tipSlot refuses a non-devnet RPC (localnet / mainnet SOLANA_RPC_URL) before getSlot', async () => {
+    const t = setup('paused', 12_345, 'LocalnetGenesis1111111111111111111111111111');
+    await expect(tipSlot(t.fetchImpl, RPC)).rejects.toThrow(/rpc\.test is not devnet/);
+    expect(t.rpcCalls.map((c) => (c as { method: string }).method)).toEqual(['getGenesisHash']);
+  });
+
+  it('refuses a slot below the current start_range unless --slot (explicit); no PATCH sent', async () => {
+    const t = setup('paused');
+    t.fake.streams.get(ID)!['start_range'] = 431_000_000;
+    await expect(resetStartRange(t.io, ID, 12_345)).rejects.toThrow(/would move it back/);
+    expect(t.fake.calls.map((c) => c.method)).toEqual(['GET']);
+    const s = await resetStartRange(t.io, ID, 12_345, { explicit: true });
+    expect(s).toMatchObject({ start_range: 12_345 });
+    const tip = await resetStartRange(t.io, ID, -1, { explicit: true });
+    expect(tip).toMatchObject({ start_range: -1 });
+    await expect(resetStartRange(t.io, ID, -1)).rejects.toThrow(/not a slot/);
+  });
+
+  it('tipSlot: an RPC error fails loudly and never prints the URL path (QuickNode token)', async () => {
+    const t = setup('paused', null);
+    const err = await tipSlot(t.fetchImpl, RPC).catch((e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('getSlot on rpc.test: busy');
+    expect((err as Error).message).not.toContain('secret-path-token');
+  });
+});
+
+describe('demo-check: the Stream env names match qn-stream', () => {
+  it('QUICKNODE_API_KEY first, QN_API_KEY as the alias; QN_STREAM_ID required', () => {
+    expect(streamEnv({ QUICKNODE_API_KEY: 'k1', QN_STREAM_ID: 's' })).toEqual({
+      apiKey: 'k1',
+      streamId: 's',
+    });
+    expect(streamEnv({ QN_API_KEY: 'k2', QN_STREAM_ID: 's' })).toEqual({
+      apiKey: 'k2',
+      streamId: 's',
+    });
+    expect(
+      streamEnv({ QUICKNODE_API_KEY: 'k1', QN_API_KEY: 'k2', QN_STREAM_ID: 's' })?.apiKey,
+    ).toBe('k1');
+    expect(streamEnv({ QUICKNODE_API_KEY: ' ', QN_API_KEY: 'k2', QN_STREAM_ID: 's' })?.apiKey).toBe(
+      'k2',
+    );
+    expect(streamEnv({ QUICKNODE_API_KEY: 'k1' })).toBeNull();
+    expect(streamEnv({ QN_STREAM_ID: 's' })).toBeNull();
+  });
+
+  it('a paused Stream is NO-GO with the reset-start + resume fix (no dead endpoint)', () => {
+    const c = evaluateStream({ status: 200, body: { status: 'paused' } }, null, 'abc-123');
+    expect(c).toMatchObject({ verdict: 'NO-GO' });
+    expect(c.fix).toBe(
+      'npm run qn-stream -- reset-start abc-123 && npm run qn-stream -- resume abc-123',
+    );
+    expect(evaluateStream(null, null).detail).toMatch(/QUICKNODE_API_KEY \(or QN_API_KEY\)/);
   });
 });
 

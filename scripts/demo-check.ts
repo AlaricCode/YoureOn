@@ -17,7 +17,8 @@
 //            refused), the program is deployed, Config exists and is not paused, the fee payer's
 //            SOL, the nonce-pool accounts (authority = fee payer), demo wallets' USDC, live escrow
 //            bets past a deadline (what the crank would send).
-//   stream   with env QN_API_KEY + QN_STREAM_ID: the QuickNode Stream's status (REST GET).
+//   stream   with env QUICKNODE_API_KEY (alias QN_API_KEY) + QN_STREAM_ID: the QuickNode Stream's
+//            status (REST GET); paused -> fix: npm run qn-stream -- reset-start <id>, then resume.
 //
 // Signs nothing, reads no keypair, sends nothing except --warmup's one POST. Exit 0 = GO (warnings
 // allowed), 1 = NO-GO.
@@ -48,6 +49,7 @@ import {
   evaluateDemoHealth,
   evaluateStream,
   evaluateWarmup,
+  streamEnv,
   formatChecks,
   overall,
   THRESHOLDS,
@@ -59,7 +61,7 @@ import { readPoolNonce } from './lib/nonce';
 const USAGE = `usage: npm run demo-check -- [--server <url>] [--demo-key <token>] [--url <rpc>] [--fee-payer <pubkey>] [--warmup] [--json]
 Read-only GO / NO-GO for the pitch. Defaults: --server https://youre-on.fly.dev,
 --demo-key $DEMO_ADMIN_TOKEN, --url $SOLANA_RPC_URL (chain checks skipped without one),
-Stream status with $QN_API_KEY + $QN_STREAM_ID.
+Stream status with $QUICKNODE_API_KEY (or $QN_API_KEY) + $QN_STREAM_ID.
 --warmup first POSTs /v1/demo/warmup: one paid judge call, getLatestBlockhash, a Gemini poll,
 voice readiness (no bet, no money; one per 10 s).`;
 
@@ -322,16 +324,14 @@ run(async () => {
       detail: 'no --url / SOLANA_RPC_URL: chain checked via the server only',
     });
 
-  const qnKey = process.env['QN_API_KEY'];
-  const qnStream = process.env['QN_STREAM_ID'];
-  const stream =
-    qnKey && qnStream
-      ? await getJson(
-          `https://api.quicknode.com/streams/rest/v1/streams/${encodeURIComponent(qnStream)}`,
-          { 'x-api-key': qnKey, accept: 'application/json' },
-        )
-      : null;
-  checks.push(evaluateStream(stream, h?.stream?.last_delivery_at));
+  const qn = streamEnv(process.env);
+  const stream = qn
+    ? await getJson(
+        `https://api.quicknode.com/streams/rest/v1/streams/${encodeURIComponent(qn.streamId)}`,
+        { 'x-api-key': qn.apiKey, accept: 'application/json' },
+      )
+    : null;
+  checks.push(evaluateStream(stream, h?.stream?.last_delivery_at, qn?.streamId));
 
   if (values.json)
     console.log(
