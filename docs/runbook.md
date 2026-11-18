@@ -157,14 +157,19 @@ REPLAY clips are cached. The ticker header says "via QuickNode Streams" only for
 delivered.
 
 **Press any key once the page is up**: browsers keep audio locked until then, and the judge's voice
-is part of the show. The projector speaks every ruling, payout and appeal vote. The strip's
-`Voice` item says whose voice it is:
+is part of the show. The projector speaks every ruling, payout and appeal vote, except in a bet the
+voice judge is hosting: once A's phone has relayed one judge line for a bet, the judge on A's phone
+announces that bet's ruling and payout, and the projector stays quiet for them (no clip, no browser
+voice). Two judges talking over each other would be noise, and the hall's sound would reach A's
+speakerphone. Nothing to press: the projector follows each bet by itself, and still voices appeal
+votes. The strip's `Voice` item says whose voice it is:
 
 | `Voice`                           | Meaning                                                                                                                                  |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `ElevenLabs`                      | The server voices the stage (`ELEVENLABS_API_KEY` and `ALLOW_SPEND=true` on Fly): each line is an ElevenLabs clip.                       |
 | `ElevenLabs (last line: browser)` | The last clip did not come in time (or failed), so the browser said that line. Check `stage_voice.tts_failed` in `fly logs -a youre-on`. |
 | `browser`                         | No key yet, or `STAGE_TTS=off`: the browser's voice says the same lines, about 0.8 s after each moment.                                  |
+| `… (last line: phone judge)`      | The last line was a ruling or payout of a bet the voice judge hosts: A's phone said it, the projector stayed quiet on purpose.           |
 | `off (V)`                         | Turned off with `V`.                                                                                                                     |
 
 Use the laptop's speakers or the hall's sound, not a phone: A's phone is busy with the voice judge.
@@ -246,7 +251,10 @@ both.
 
 A failed voice session ends cleanly on A's phone, and the negotiate screen offers "Type it
 instead": the typed terms go through the same evaluation, guardrails and terms card. If A's mic
-went silent after an earlier session, force-quit and reopen A's app.
+went silent after an earlier session, force-quit and reopen A's app. If the judge failed before it
+said anything, the projector speaks that bet's ruling and payout. If it had already spoken, the
+projector still leaves them to the phone (it can't tell the session dropped), so read the ruling
+off the stage.
 
 ### Face match fails
 

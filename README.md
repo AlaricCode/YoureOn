@@ -218,7 +218,7 @@ The program keypair is not in the repo, so a fresh `anchor build` creates a rand
 | Client tools           | `request_attempt` (arms the judge cam), `show_terms_card`, `cue` (gavel, drumroll, buzzer, cheer on the stage). They run on A's phone.                                                                                                                                                                               | Built                                        |
 | Conversation tokens    | `POST /v1/voice/tokens` mints a token server-side (`GET /v1/convai/conversation/token`), so the API key never reaches a phone. Spend-guarded: it calls out only with `ALLOW_SPEND=true`.                                                                                                                             | Built                                        |
 | Agent as code          | `npm run el-agent` creates or updates the workspace secret, the tools and the private agent, found by name and PATCHed only where they differ (a second run is a no-op). `--check-openapi` validates every body against ElevenLabs' public OpenAPI document.                                                         | Built; never run against ElevenLabs (no key) |
-| Text to Speech (stage) | The projector speaks every ruling and payout in the judge's voice and each appeal-panel vote in its own voice (`POST /v1/text-to-speech/{voice_id}`, `eleven_v4_turbo`). The server sends the clip URL in a `stage.voice` frame; with no clip within 800 ms the stage speaks the same line with the browser's voice. | Built; on once the key is set                |
+| Text to Speech (stage) | Rulings and payouts in the judge's voice (left to A's phone in a bet its voice judge hosts), each appeal-panel vote in its own voice (`POST /v1/text-to-speech/{voice_id}`, `eleven_v4_turbo`). The clip URL comes in a `stage.voice` frame; with none within 800 ms the stage says the line in the browser's voice. | Built; on once the key is set                |
 | Sound Effects          | The stage cues (gavel, drumroll, buzzer, cheer), generated once at boot and played by the projector. `SFX_PROVIDER=auto` (the default) turns them on with the key; without it the stage synthesizes its sounds.                                                                                                      | Built; on once the key is set                |
 | Scribe STT             | REST client behind `STT_PROVIDER` (default mock). Not in the demo path: the hearing it was for is not built.                                                                                                                                                                                                         | Built, unused in the demo                    |
 
@@ -243,8 +243,11 @@ to Speech and sends its URL to the room's stage only (`stage.voice`). The stage 
 with its bearer (`GET /v1/stage/tts/:clip_id`) and plays it. Clips are cached by
 `sha256(voice, model, text)`, so a repeated line is free. Without the key (or with
 `STAGE_TTS=off`) no frame comes, and after 800 ms the stage speaks the same words with the
-browser's `speechSynthesis`: the ruling is heard in the hall either way. Rulings from the stored
-`CACHED_RULING` verdict are labelled "replay ruling" on screen.
+browser's `speechSynthesis`: the ruling is heard in the hall either way. One judge at a time:
+once A's phone has relayed a `judge.line` for a bet, the voice judge is hosting it and says the
+ruling and payout itself, so for that bet the projector says neither (no clip, no browser voice)
+and voices only the appeal votes. Rulings from the stored `CACHED_RULING` verdict are labelled
+"replay ruling" on screen.
 
 **To switch it on** (needs the key): `npm run el-agent -- --check-openapi`, then set
 `ELEVENLABS_API_KEY`, `ELEVENLABS_TOOL_SECRET` and the printed `ELEVENLABS_AGENT_ID` as Fly
@@ -398,13 +401,13 @@ npm run e2e:local                            # deploy scripts + smoke against a 
 
 | Suite                         | Command                                   | Count                                                                 |
 | ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
-| Server                        | `npm test -w @youre-on/server`            | 729 (with `DATABASE_URL`)                                             |
+| Server                        | `npm test -w @youre-on/server`            | 730 (with `DATABASE_URL`)                                             |
 | Mobile                        | `npm test -w @youre-on/mobile`            | 827, 1 skipped (the face-model test also skips without the `.tflite`) |
-| Shared                        | `npm test -w @youre-on/shared`            | 271                                                                   |
+| Shared                        | `npm test -w @youre-on/shared`            | 273                                                                   |
 | Database                      | `npm test -w @youre-on/db`                | 26                                                                    |
 | Escrow, TS client (LiteSVM)   | `npm run test:escrow -w @youre-on/shared` | 23, 1 skipped (the E3 mimic test needs `build-mimic.sh`)              |
 | Escrow, Rust matrix (LiteSVM) | `cargo test` in `programs/escrow`         | 167                                                                   |
-| Stage                         | `npm test -w @youre-on/stage`             | 159 (7 need `DATABASE_URL`)                                           |
+| Stage                         | `npm test -w @youre-on/stage`             | 163 (8 need `DATABASE_URL`)                                           |
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint, format, migrations and every workspace's
 tests on Postgres, gitleaks, then `anchor build`, the Codama check, the TS LiteSVM suite and
