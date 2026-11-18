@@ -10,9 +10,9 @@
 //   quote. The odds are public market data, so there is no conversation -> bet binding check;
 //   the tool is rate-limited per conversation like the others (§1.7). Replies stay < 300 B.
 //
-// Registered by markets/bet-routes.ts. The ElevenLabs agent calls it once 'get_market_odds' is
-// in packages/shared/src/judge/el-config.ts DEFAULT_WEBHOOK_TOOLS and the agent is re-synced
-// (the persona already describes it when it is registered).
+// Registered by markets/bet-routes.ts. 'get_market_odds' is in packages/shared/src/judge/
+// el-config.ts DEFAULT_WEBHOOK_TOOLS, so scripts/el-agent.ts registers it with the agent (and the
+// persona describes it); an agent synced before that gains it on the next el-agent run.
 import type { Context } from 'hono';
 import { z } from 'zod/v4';
 import { FAIR, type FairRefusal } from '@youre-on/shared/gemini';

@@ -41,6 +41,7 @@ describe('voice readiness', () => {
         tool_urls: [
           'https://youre-on.fly.dev/el/tools/propose_terms',
           'https://youre-on.fly.dev/el/tools/confirm_terms',
+          'https://youre-on.fly.dev/el/tools/get_market_odds',
         ],
         set: {
           ELEVENLABS_API_KEY: true,

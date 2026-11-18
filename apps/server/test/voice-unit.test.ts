@@ -300,6 +300,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       'secret:yo-tool-secret:create',
       'tool:propose_terms:create',
       'tool:confirm_terms:create',
+      'tool:get_market_odds:create',
       'tool:request_attempt:create',
       'tool:show_terms_card:create',
       'tool:cue:create',
@@ -416,6 +417,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         `PATCH /v1/convai/secrets/${r.secret_id}`,
         `PATCH /v1/convai/tools/${r.tool_ids.propose_terms}`,
         `PATCH /v1/convai/tools/${r.tool_ids.confirm_terms}`,
+        `PATCH /v1/convai/tools/${r.tool_ids.get_market_odds}`,
       ].sort(),
     );
     expect(store.secrets[0]._value).toBe('new');
@@ -433,6 +435,40 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     expect(check.actions.every((a) => a.action === 'noop')).toBe(true);
   });
 
+  it('an agent synced before Beat 6 gains get_market_odds: the tool is created, the agent PATCHed', async () => {
+    const { http, store } = fakeElevenLabs();
+    const before = await syncAgent(http, {
+      ...OPTS,
+      webhookTools: ['propose_terms', 'confirm_terms'],
+    });
+    expect(before.tool_ids).not.toHaveProperty('get_market_odds');
+    store.writes.length = 0;
+    const r = await syncAgent(http, OPTS); // the default tool set
+    expect(r.actions.find((a) => a.name === 'get_market_odds')).toMatchObject({ action: 'create' });
+    const agent = r.actions.find((a) => a.resource === 'agent')!;
+    expect(agent.action).toBe('update');
+    expect(agent.changed).toEqual(
+      expect.arrayContaining([
+        'conversation_config.agent.prompt.tool_ids',
+        'conversation_config.agent.prompt.prompt',
+      ]),
+    );
+    expect(store.writes).toEqual([
+      'POST /v1/convai/tools',
+      `PATCH /v1/convai/agents/${before.agent_id}`,
+    ]);
+    const tool = store.tools.find((t) => t.tool_config.name === 'get_market_odds').tool_config;
+    expect(tool.api_schema.url).toBe('https://youre-on.fly.dev/el/tools/get_market_odds');
+    expect(tool.pre_tool_speech).toBe('force');
+    const prompt = store.agents[0].conversation_config.agent.prompt;
+    expect(prompt.tool_ids).toContain(r.tool_ids.get_market_odds);
+    expect(prompt.prompt).toContain('- get_market_odds:');
+    // and the run after that is a no-op
+    store.writes.length = 0;
+    await syncAgent(http, OPTS);
+    expect(store.writes).toEqual([]);
+  });
+
   it('refuses to guess when two resources share a name', async () => {
     const { http, store } = fakeElevenLabs();
     await syncAgent(http, OPTS);
@@ -444,6 +480,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     const plan = dryRunPlan(OPTS);
     expect(plan.map((a) => `${a.method} ${a.path}`)).toEqual([
       'POST /v1/convai/secrets',
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
