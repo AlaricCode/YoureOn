@@ -313,6 +313,21 @@ describe('judge session: [EVENT] cues (§4.5)', () => {
     expect(u.conv.sent()).toEqual([]);
   });
 
+  it('B taps accept after the judge was told to wait: INVITE_ACCEPTED starts a judge turn', async () => {
+    const t = setup();
+    await t.started();
+    t.connected();
+    const line =
+      '[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.';
+    t.s.onCue({ cue: 'INVITE_ACCEPTED', text: line, speak: true });
+    // A user message (a contextual update would not make the judge speak or call the tool).
+    expect(t.conv.sent()).toEqual([['sendUserMessage', line]]);
+    // Our own [EVENT] text coming back as a user transcript is never captioned or relayed.
+    t.s.onMessage({ role: 'user', message: line, event_id: 9 });
+    expect(t.captions).toEqual([]);
+    expect(t.s.canAttempt()).toBe(false);
+  });
+
   it('request_attempt is allowed after LOCKED / REDO, not after ATTEMPT_ARMED (§4.4)', async () => {
     const t = setup();
     await t.started();
