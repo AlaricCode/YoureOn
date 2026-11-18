@@ -48,18 +48,23 @@ export function streamGapsTask(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTa
   };
 }
 
+const hasEnv = <T extends Partial<Pick<AppDeps, 'env'>>>(d: T): d is T & Pick<AppDeps, 'env'> =>
+  d.env !== undefined;
+
 export function createServerKeeper(
   deps: SweepDeps & Pick<AppDeps, 'now' | 'log'> & Partial<Pick<AppDeps, 'env' | 'onRuling'>>,
   opts: Omit<KeeperOptions, 'now' | 'log'> = {},
 ): Keeper {
   const keeper = new Keeper({ now: deps.now, log: deps.log, ...opts });
   keeper.register(draftIdleTask(deps));
-  const env = deps.env;
-  if (env) {
-    for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
+  if (hasEnv(deps)) {
+    // `deps` itself, never a copy: lifecycleOf() keys the lifecycle by this object, so the sweeps
+    // share the routes' LockService / PayoutService (their in-process `confirming` / `finalizing`
+    // guards and finalize timers). A `{ ...deps }` copy got a second lifecycle of its own.
+    for (const t of chainLifecycleTasks(deps)) keeper.register(t);
     // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
     keeper.register(resolveDueTask(deps));
-    keeper.register(streamGapsTask({ ...deps, env }));
+    keeper.register(streamGapsTask(deps));
   }
   return keeper;
 }
