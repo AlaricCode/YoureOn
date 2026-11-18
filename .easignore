@@ -32,6 +32,9 @@ dist
 # The face model: every .tflite stays out except the one the app bundles.
 apps/mobile/assets/models/*.tflite
 !apps/mobile/assets/models/w600k_mbf_float32.tflite
+# gstack browse state and a stray drizzle-kit journal written when it runs from the repo root.
+.gstack/
+/migrations/
 
 # --- /apps/mobile/.gitignore -------------------------------------------------------------------
 # Anchored and without a trailing slash, so the directory itself is skipped too. A leftover local
