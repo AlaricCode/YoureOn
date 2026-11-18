@@ -78,3 +78,5 @@ programs/escrow/.surfpool
 *.aab
 *.xcarchive
 *.dSYM.zip
+# Sample videos (mirrors .gitignore)
+*.mov
