@@ -421,12 +421,12 @@ npm run e2e:local                            # deploy scripts + smoke against a 
 | Suite                         | Command                                   | Count                                                                 |
 | ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
 | Server                        | `npm test -w @youre-on/server`            | 792 (with `DATABASE_URL`)                                             |
-| Mobile                        | `npm test -w @youre-on/mobile`            | 904, 1 skipped (the face-model test also skips without the `.tflite`) |
+| Mobile                        | `npm test -w @youre-on/mobile`            | 954, 1 skipped (the face-model test also skips without the `.tflite`) |
 | Shared                        | `npm test -w @youre-on/shared`            | 295                                                                   |
 | Database                      | `npm test -w @youre-on/db`                | 30                                                                    |
 | Escrow, TS client (LiteSVM)   | `npm run test:escrow -w @youre-on/shared` | 23, 1 skipped (the E3 mimic test needs `build-mimic.sh`)              |
 | Escrow, Rust matrix (LiteSVM) | `cargo test` in `programs/escrow`         | 167                                                                   |
-| Stage                         | `npm test -w @youre-on/stage`             | 164 (8 need `DATABASE_URL`)                                           |
+| Stage                         | `npm test -w @youre-on/stage`             | 169 (8 need `DATABASE_URL`)                                           |
 
 CI (`.github/workflows/ci.yml`) runs typecheck, lint, format, migrations and every workspace's
 tests on Postgres, gitleaks, then `anchor build`, the Codama check, the TS LiteSVM suite and
