@@ -14,7 +14,8 @@
 //   the settlement keeper (markets/settlement.ts).
 //
 // Also wires the relay's snapshots into the settlement service (market.tick per waiting bet),
-// as stage/routes.ts wires them into stage.market.
+// as stage/routes.ts wires them into stage.market, and serves the voice judge's
+// POST /el/tools/get_market_odds (markets/voice-tool.ts).
 import { evaluateProposeTerms } from '@youre-on/shared/judge/reply';
 import {
   marketReadback,
@@ -35,6 +36,7 @@ import { PROPOSABLE_STATES } from '../voice/tools';
 import { maxStakeOf, realWorldEnabled, takeBindingQuote } from './quote';
 import { marketMessage } from './routes';
 import { settlementOf } from './settlement';
+import { getMarketOddsHandler } from './voice-tool';
 
 const isProposable = (state: string) => (PROPOSABLE_STATES as readonly string[]).includes(state);
 
@@ -42,6 +44,8 @@ export const marketBetRoutes: RouteModule = {
   name: 'market-bets',
   register(app, deps) {
     deps.markets?.onSnapshot((snapshot) => settlementOf(deps).onSnapshot(snapshot));
+
+    app.post('/el/tools/get_market_odds', getMarketOddsHandler);
 
     app.post('/v1/bets/:bet_id/terms/market', requireSignedRequest, async (c) => {
       const deps = c.get('deps');
