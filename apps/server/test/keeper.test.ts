@@ -432,7 +432,12 @@ describeDb('keeper wiring (createDeps / startServer)', () => {
 
     const dbHandle = createDb({ url: DB_URL!, max: 2 });
     const { deps } = createDeps({ env: testEnv(), dbHandle, rateLimit: false, keeper: true });
-    expect(deps.keeper?.taskNames).toEqual(['draft-idle', 'lock-sweep', 'finalize-due', 'resolve-due']);
+    expect(deps.keeper?.taskNames).toEqual([
+      'draft-idle',
+      'lock-sweep',
+      'finalize-due',
+      'resolve-due',
+    ]);
     expect(deps.keeper?.isStarted).toBe(false);
     const running = await startServer(deps, {
       port: 0,
