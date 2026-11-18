@@ -17,16 +17,16 @@ name: sim-diagnostics
     timeout: 10000
 - waitForAnimationToEnd
 - tapOn: Run checks
-# The Face ID check prompts. Without Face ID enrolled the gate falls back to the passcode
-# sheet, which takes any passcode in the simulator. With it enrolled (e2e/sim-faceid.sh
-# <udid> enroll), answer the prompt from the host: e2e/sim-faceid.sh <udid> match (or nomatch);
-# unanswered, the check times out after 60 s and the flow goes on.
-- extendedWaitUntil:
-    visible: Run checks|Enter iPhone Passcode.*
-    timeout: 120000
+# The Face ID check prompts. Run this with Face ID NOT enrolled (e2e/sim-faceid.sh <udid>
+# unenroll): the gate then falls back to the passcode sheet, which takes any passcode in the
+# simulator. The sheet is a system view Maestro cannot read, so: still running a few seconds
+# in means the sheet is up; type a passcode blind. (Enrolled instead, answer from the host:
+# e2e/sim-faceid.sh <udid> match; the system sheet would otherwise cover the app.)
+- waitForAnimationToEnd:
+    timeout: 4000
 - runFlow:
     when:
-      visible: Enter iPhone Passcode.*
+      notVisible: Run checks
     commands:
       - takeScreenshot: 20a-passcode-fallback
       - inputText: '1234'
