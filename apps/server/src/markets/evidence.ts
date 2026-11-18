@@ -45,7 +45,8 @@ export async function settlementEvidence(
     .from(geminiMarkets)
     .where(eq(geminiMarkets.instrument_symbol, record.contract.instrumentSymbol))
     .limit(1);
-  // The contract row keeps the body of its latest settling fetch: only this record's own fetch.
+  // The contract's settling body, stored once: every bet on the contract is ruled on those same
+  // bytes (markets/settlement.ts), so it is this record's body whenever the hashes agree.
   const raw = m?.raw && m.sha === record.response_sha256 ? m.raw : null;
   const [resolve] = await deps.db
     .select({ signature: chainTxs.signature })

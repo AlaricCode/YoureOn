@@ -39,7 +39,7 @@ import {
   getMintToCheckedInstruction,
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
-import { betEvents, bets, noncePool, rulings } from '@youre-on/db';
+import { betEvents, bets, geminiMarkets, noncePool, rulings } from '@youre-on/db';
 import { SignRequest } from '@youre-on/shared/api';
 import { AuthorizeRequest } from '@youre-on/shared/authorization';
 import { TOKEN_PROGRAM_ID } from '@youre-on/shared/chain/constants';
@@ -132,6 +132,19 @@ function voided() {
   delete e.contracts[0].resolutionSide;
   delete e.contracts[0].settlementValue;
   return e;
+}
+
+/**
+ * Every test quotes the recorded contract, and a contract settles once (the settlement keeper
+ * rules every later bet on the body the first one stored): retire the contract's row so the
+ * next quote starts a fresh one, as a new 5-minute round would. Bets already quoted keep
+ * pointing at the retired row.
+ */
+async function forgetSettlement(db: Ctx['deps']['db']) {
+  await db
+    .update(geminiMarkets)
+    .set({ instrument_symbol: sql`instrument_symbol || ':retired:' || gen_random_uuid()` })
+    .where(sql`instrument_symbol NOT LIKE '%:retired:%'`);
 }
 
 run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () => {
@@ -237,6 +250,7 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
 
   beforeEach(async () => {
     at(0);
+    await forgetSettlement(ctx.deps.db);
     g.routes.clear();
     g.routes.set(EVENTS_PATH, F.events_0237);
     g.routes.set(eventPath(TICKER), F.event_0240_active);

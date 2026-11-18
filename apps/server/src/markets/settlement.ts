@@ -20,6 +20,11 @@
 //                  columns (the raw body byte for byte), market.settled + ruling.issued +
 //                  judge.cue MARKET_SETTLED / VOIDED, an audit row. After COMMIT: fan-out, then
 //                  deps.onRuling(bet_id, ruling).
+//                  A contract settles once, so its body is stored once: every later bet on the
+//                  same contract rules on THAT body (same bytes, response_sha256, source_url,
+//                  fetched_at) instead of a fetch of its own, and a concurrent check that fetched
+//                  different bytes retries on the stored ones. Each bet's evidence chain
+//                  (GET /v1/bets/:id/settlement) thus keeps its raw body.
 //     sweep()      keeper task 'market-settlement' (the durable backstop): LOCKED gemini bets ->
 //                  AWAITING_MARKET; AWAITING_MARKET bets past expiry are checked (each at most
 //                  every 10 s), and a settlement ruling that never reached RULED (an RPC failure,
@@ -43,13 +48,14 @@
 // Every step is idempotent and safe across two machines (row lock + state re-check + the unique
 // settlement ruling).
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { BetStatus, ESCROW_ERROR__RESOLVE_DEADLINE_PASSED } from '@youre-on/shared/escrow-client';
 import { auditLog, bets, geminiMarkets, rulings, users } from '@youre-on/db';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { expiryLabel } from '@youre-on/shared/judge/market-terms';
 import { sha256Hex } from '@youre-on/shared/primitives';
+import { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import { Ruling } from '@youre-on/shared/ruling';
 import {
   classifyContract,
@@ -68,7 +74,7 @@ import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { fanout, iso, lockBet, readBetAccount, statePayload, type Tx } from '../lock/common';
 import { lifecycleOf } from '../lock/runtime';
 import { loadEnvelope } from '../lock/terms';
-import { cleanDecimal, isoOrNull, toStrike } from './gemini';
+import { cleanDecimal, isoOrNull, RawEvent, toStrike, type RawEventResponse } from './gemini';
 
 /** First settlement check after expiry (spike 05: settled p50 5.66 s, max 8.78 s). */
 export const SETTLE_FIRST_CHECK_MS = 5_000;
@@ -367,25 +373,35 @@ export class SettlementService {
       .limit(1);
     if (existing) return 'settled'; // the sweep re-sends it if it never reached RULED
 
-    const client = deps.markets?.client;
-    if (!client) {
-      deps.log.warn('market.settle_no_feed', { bet_id: betId });
-      return 'pending';
-    }
     // Known to be past resolving already: don't even ask Gemini.
     const known = this.deadlines.get(betId);
     if (known !== undefined && now >= known - RESOLVE_DEADLINE_MARGIN_MS) {
       this.abandon(betId, 'market.settlement_after_deadline', { reason: 'resolve_deadline' });
       return 'skipped';
     }
-    let resp: Awaited<ReturnType<typeof client.getEventRaw>>;
-    try {
-      resp = await client.getEventRaw(market.eventTicker);
-    } catch (err) {
-      deps.log.warn('market.settle_fetch_failed', { bet_id: betId, err });
-      return 'pending';
+    // The contract already settled for another bet: rule on the body stored then.
+    const kept = await this.storedSettlement(market.instrumentSymbol);
+    const stored = kept === 'unusable' ? null : kept;
+    let resp: RawEventResponse;
+    let fetchedAt: number;
+    if (stored) {
+      ({ resp, fetchedAt } = stored);
+    } else {
+      const client = deps.markets?.client;
+      if (!client) {
+        deps.log.warn('market.settle_no_feed', { bet_id: betId });
+        return 'pending';
+      }
+      try {
+        resp = await client.getEventRaw(market.eventTicker);
+      } catch (err) {
+        deps.log.warn('market.settle_fetch_failed', { bet_id: betId, err });
+        return 'pending';
+      }
+      fetchedAt = deps.now();
     }
-    const fetchedAt = deps.now();
+    /** When this bet is ruled (= fetchedAt, unless the body is a stored one). */
+    const ruledAt = stored ? deps.now() : fetchedAt;
     const contract = resp.event.contracts.find(
       (c) => c.instrumentSymbol === market.instrumentSymbol,
     );
@@ -410,7 +426,7 @@ export class SettlementService {
     }
 
     // Gemini settled: rule only if the resolve can still land (else money and words disagree).
-    const late = this.tooLate(await this.chainView(betId), fetchedAt);
+    const late = this.tooLate(await this.chainView(betId), ruledAt);
     if (late) {
       this.abandon(betId, 'market.settlement_after_deadline', {
         reason: late,
@@ -439,7 +455,7 @@ export class SettlementService {
     });
     const ruling = settlementRuling({
       ruling_id: randomUUID(),
-      created_at: iso(fetchedAt),
+      created_at: iso(ruledAt),
       terms: { bet_id: betId, yes_party: terms.yes_party, market },
       terms_hash: final.envelope.terms_hash,
       record,
@@ -458,6 +474,15 @@ export class SettlementService {
         .where(and(eq(rulings.bet_id, betId), eq(rulings.stage, 'settlement')))
         .limit(1);
       if (dup) return null;
+      // One settlement body per contract: a concurrent check of another bet stored different
+      // bytes first -> retry on those (storedSettlement); the same bytes -> nothing to write.
+      const [held] = await tx
+        .select({ sha: geminiMarkets.settlement_response_sha256 })
+        .from(geminiMarkets)
+        .where(eq(geminiMarkets.instrument_symbol, record.contract.instrumentSymbol))
+        .for('update')
+        .limit(1);
+      if (held?.sha && held.sha !== responseSha && kept !== 'unusable') return 'retry' as const;
       await tx.insert(rulings).values({
         id: ruling.ruling_id,
         bet_id: betId,
@@ -476,36 +501,37 @@ export class SettlementService {
         evidence_canonical: evidenceCanonical,
         record_canonical: rulingCanonical,
         ruling_hash: rulingHash,
-        latency_ms: Math.max(0, fetchedAt - expiryMs),
+        latency_ms: Math.max(0, ruledAt - expiryMs),
         created_at: new Date(ruling.created_at),
       });
       const c = record.contract;
-      await tx
-        .update(geminiMarkets)
-        .set({
-          status: c.status,
-          resolution_side: c.resolutionSide,
-          settlement_value: c.settlementValue,
-          resolved_at: c.resolvedAt ? new Date(c.resolvedAt) : null,
-          settlement_raw: lossless ? bodyText : null,
-          settlement_response_sha256: lossless ? responseSha : null,
-          event_raw: lossless ? (JSON.parse(bodyText) as unknown) : null,
-          updated_at: new Date(fetchedAt),
-        })
-        .where(eq(geminiMarkets.instrument_symbol, c.instrumentSymbol));
+      if (!held?.sha)
+        await tx
+          .update(geminiMarkets)
+          .set({
+            status: c.status,
+            resolution_side: c.resolutionSide,
+            settlement_value: c.settlementValue,
+            resolved_at: c.resolvedAt ? new Date(c.resolvedAt) : null,
+            settlement_raw: lossless ? bodyText : null,
+            settlement_response_sha256: lossless ? responseSha : null,
+            event_raw: lossless ? (JSON.parse(bodyText) as unknown) : null,
+            updated_at: new Date(fetchedAt),
+          })
+          .where(eq(geminiMarkets.instrument_symbol, c.instrumentSymbol));
       const names = await partyNames(tx, b);
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'market.settled',
           payload: { record, evidence_hash: ruling.evidence_hash },
-          now: fetchedAt,
+          now: ruledAt,
         }),
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'ruling.issued',
           payload: { ruling, ruling_hash: rulingHash },
-          now: fetchedAt,
+          now: ruledAt,
         }),
         await appendBetEvent(tx, {
           bet_id: betId,
@@ -516,7 +542,7 @@ export class SettlementService {
             names,
             deps.env.APPEAL_WINDOW_S ?? DEFAULT_GG_SECS,
           ),
-          now: fetchedAt,
+          now: ruledAt,
         }),
       ];
       await tx.insert(auditLog).values({
@@ -532,10 +558,15 @@ export class SettlementService {
           gemini_status: c.status,
           resolution_side: c.resolutionSide,
           response_sha256: responseSha,
+          ...(stored ? { stored_body: true } : {}),
         },
       });
       return { b, envs };
     });
+    if (out === 'retry') {
+      deps.log.info('market.settle_body_race', { bet_id: betId, symbol: market.instrumentSymbol });
+      return 'pending';
+    }
     if (!out) return 'settled';
     fanout(deps, out.b, out.envs);
     deps.log.info('market.settled', {
@@ -544,11 +575,61 @@ export class SettlementService {
       side: record.contract.resolutionSide,
       outcome: ruling.outcome,
       ruling_hash: rulingHash,
-      after_expiry_ms: fetchedAt - expiryMs,
+      after_expiry_ms: ruledAt - expiryMs,
+      ...(stored ? { stored_body: true } : {}),
     });
     this.forget(betId);
     await this.sendRuling(betId, ruling);
     return 'settled';
+  }
+
+  /**
+   * The settling response stored with the contract (gemini_markets.settlement_raw, written by the
+   * first bet ruled on it), with the URL and time of that fetch from its record. null when the
+   * contract has no stored body yet; 'unusable' when one is stored but can't be read back (then
+   * this bet rules on a fetch of its own and leaves the stored one in place).
+   */
+  private async storedSettlement(
+    instrumentSymbol: string,
+  ): Promise<{ resp: RawEventResponse; fetchedAt: number } | 'unusable' | null> {
+    const db = this.deps.db;
+    const [m] = await db
+      .select({
+        id: geminiMarkets.id,
+        raw: geminiMarkets.settlement_raw,
+        sha: geminiMarkets.settlement_response_sha256,
+      })
+      .from(geminiMarkets)
+      .where(eq(geminiMarkets.instrument_symbol, instrumentSymbol))
+      .limit(1);
+    if (!m?.raw || !m.sha) return null;
+    const [first] = await db
+      .select({ evidence: rulings.evidence_canonical })
+      .from(rulings)
+      .innerJoin(bets, eq(bets.id, rulings.bet_id))
+      .where(
+        and(
+          eq(rulings.stage, 'settlement'),
+          eq(bets.gemini_market_id, m.id),
+          sql`(${rulings.evidence_canonical})::jsonb ->> 'response_sha256' = ${m.sha}`,
+        ),
+      )
+      // the first bet ruled on these bytes is the one whose fetch stored them
+      .orderBy(asc(rulings.created_at))
+      .limit(1);
+    try {
+      const rec = GeminiSettlementRecord.parse(JSON.parse(first?.evidence ?? 'null'));
+      const bytes = new TextEncoder().encode(m.raw);
+      if (sha256Hex(bytes) !== m.sha) throw new Error('stored body does not hash to its sha');
+      const event = RawEvent.parse(JSON.parse(m.raw));
+      return { resp: { event, url: rec.source_url, bytes }, fetchedAt: Date.parse(rec.fetched_at) };
+    } catch (err) {
+      this.deps.log.warn('market.stored_settlement_unusable', {
+        symbol: instrumentSymbol,
+        err: String(err),
+      });
+      return 'unusable';
+    }
   }
 
   /** deps.onRuling, at most one in flight per bet (a second caller shares it). Never throws. */
