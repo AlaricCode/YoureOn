@@ -167,6 +167,16 @@ describe('eas.json', () => {
     expect(env('preview-typed').EXPO_PUBLIC_VOICE).toBe('off');
   });
 
+  it('answers export compliance in app.json, so eas build never rewrites app.json', () => {
+    // Unanswered, eas build prompts and then writes the EVALUATED ios block (eas.json's
+    // IOS_BUNDLE_ID, the dev client's "You're On Dev") into app.json. HTTPS, WSS, WebRTC
+    // (DTLS-SRTP), Ed25519 signatures and the keychain are all standard/exempt encryption.
+    const infoPlist = appJson.ios.infoPlist as Record<string, unknown>;
+    expect(infoPlist.ITSAppUsesNonExemptEncryption).toBe(false);
+    // and a local version source would have eas-cli write build numbers into app.json
+    expect(eas.cli.appVersionSource).toBe('remote');
+  });
+
   it('never sets APPLE_TEAM_ID (EAS takes it from the credentials)', () => {
     for (const profile of Object.keys(eas.build)) {
       expect(env(profile).APPLE_TEAM_ID, profile).toBeUndefined();
