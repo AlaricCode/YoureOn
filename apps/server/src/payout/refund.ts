@@ -583,7 +583,18 @@ export class RefundService {
     };
     const rt = await this.o.runtime();
     if (!rt) return summary;
-    const live = await listOurBets(rt);
+    let live: LiveBet[] | null;
+    try {
+      live = await listOurBets(rt);
+    } catch (err) {
+      // getProgramAccounts refused or failed (an RPC plan without it, a rate limit): the scan is
+      // skipped, not the keeper pass; /v1/demo/health shows it (escrow.errors).
+      summary.errors.push(`scan: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      if (!this.lastOrphanScan?.errors.length)
+        this.deps.log.warn('refund.orphan_scan_failed', { err });
+      this.lastOrphanScan = summary;
+      return summary;
+    }
     if (!live) {
       this.lastOrphanScan = summary;
       return summary;
