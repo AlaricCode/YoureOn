@@ -221,9 +221,14 @@ export function HomeScreen({
 export function HistoryScreen({
   items,
   onBack,
+  status = 'ready',
+  onRetry,
 }: {
   items: readonly HistoryItem[];
   onBack: () => void;
+  /** The real app loads the list (GET /v1/me/bets); the preview passes it ready. */
+  status?: 'loading' | 'ready' | 'failed';
+  onRetry?: () => void;
 }) {
   const result = {
     won: t(COPY.history.won),
@@ -234,7 +239,15 @@ export function HistoryScreen({
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.history.title)} />
       <Page>
-        {items.length === 0 ? (
+        {status === 'loading' ? (
+          <StatusHero mark="ring" title={t(COPY.app.loading)} />
+        ) : status === 'failed' ? (
+          <>
+            <StatusHero mark="cross" title={t(COPY.app.offline)} />
+            <View style={styles.flex} />
+            <PrimaryButton testID="history-retry" label={t(COPY.app.failed)} onPress={onRetry} />
+          </>
+        ) : items.length === 0 ? (
           <>
             <StatusHero mark="ring" title={t(COPY.history.empty)} />
             <View style={styles.flex} />

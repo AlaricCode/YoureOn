@@ -36,7 +36,7 @@ import { ApiClientError } from '../net/signedFetch';
 import { IncomingScreen, NegotiateScreen, type Caption } from '../screens/ChallengeScreens';
 import { COPY, t } from '../screens/copy';
 import { DemoClaimScreen } from '../screens/DemoClaimScreen';
-import { HomeScreen, ProfileScreen } from '../screens/HomeScreens';
+import { HistoryScreen, HomeScreen, ProfileScreen } from '../screens/HomeScreens';
 import { LockEndedScreen, TermsCardScreen } from '../screens/LockScreens';
 import {
   JudgeCamScreen,
@@ -49,7 +49,7 @@ import {
   type LivePhase,
   type PayoutPhase,
 } from '../screens/PlayScreens';
-import type { PreviewUser } from '../preview/data';
+import type { HistoryItem, PreviewUser } from '../preview/data';
 import { createServerSignupApi } from '../signup/api';
 import { SignupScreen } from '../signup/SignupScreen';
 import { Label, PrimaryButton } from '../ui/kit';
@@ -73,6 +73,7 @@ import {
   type AppEvent,
   type AppState,
 } from './machine';
+import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { deviceRoleRequest } from './judgeCam';
 import { importSafely } from './importSafely';
@@ -154,6 +155,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** Home: why "New room" / "Challenge" failed (clears itself), and the in-flight guards. */
   const [homeNote, setHomeNote] = useState<string | null>(null);
   const [creatingRoom, setCreatingRoom] = useState(false);
+  /** Bet history (GET /v1/me/bets?status=settled), loaded each time the screen opens. */
+  const [history, setHistory] = useState<{
+    status: 'loading' | 'ready' | 'failed';
+    items: readonly HistoryItem[];
+  }>({ status: 'loading', items: [] });
   const challenging = useRef(false);
   const [alert, setAlert] = useState<string | null>(null);
   const [bootFailed, setBootFailed] = useState(false);
@@ -452,6 +458,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     };
   }, [rt, needDeadline, betId]);
 
+  const loadHistory = useCallback(() => {
+    setHistory((h) => ({ status: 'loading', items: h.items }));
+    rt.api.myBets('settled', HISTORY_LIMIT).then(
+      (r) => setHistory({ status: 'ready', items: historyFrom(r.items) }),
+      () => setHistory((h) => ({ status: 'failed', items: h.items })),
+    );
+  }, [rt]);
+  const historyOpen = app.overlay === 'history';
+  useEffect(() => {
+    if (historyOpen) loadHistory();
+  }, [historyOpen, loadHistory]);
+
   useEffect(() => {
     if (!homeNote) return;
     const tm = setTimeout(() => setHomeNote(null), HOME_NOTE_MS);
@@ -726,7 +744,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                   challenging.current = false;
                 });
             }}
-            onHistory={() => undefined}
+            onHistory={() => dispatch({ type: 'overlay', overlay: 'history' })}
             onProfile={() => dispatch({ type: 'overlay', overlay: 'profile' })}
             onTitleLongPress={onOperator}
           />
@@ -738,9 +756,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             faceOn={false}
             onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
             onFace={() => undefined}
-            onHistory={() => undefined}
+            onHistory={() => dispatch({ type: 'overlay', overlay: 'history' })}
             onJudgeCam={() => setJudgeCam(!app.judgeCam)}
             onDemo={() => dispatch({ type: 'overlay', overlay: 'demoClaim' })}
+          />
+        );
+      case 'history':
+        return (
+          <HistoryScreen
+            items={history.items}
+            status={history.status}
+            onRetry={loadHistory}
+            onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
           />
         );
       case 'incoming':
