@@ -24,7 +24,7 @@
 // `confirmed`; the same values BetResolved carries). The stub projector writes none of them, and
 // the finalize sweep needs appeal_deadline in Postgres. onchain_pending / pending_sig keep the
 // lock's values (see lock/service.ts header).
-import { and, desc, eq, inArray, lte } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import {
   createNoopSigner,
   getBase58Decoder,
@@ -117,6 +117,8 @@ export const FINALIZE_DELAY_MS = 1_000;
 export const CONCEDE_REBUILD_MS = 20_000;
 /** A recent blockhash lives ~60 s on devnet; the sign request stops a bit earlier. */
 export const SIGN_REQUEST_TTL_MS = 50_000;
+/** CONCEDED / FINALIZED this long with no payout in flight counts as stranded. */
+export const STRANDED_GRACE_MS = 30_000;
 
 const b58enc = getBase58Encoder();
 const b58dec = getBase58Decoder();
@@ -169,6 +171,15 @@ export class PayoutService {
   stop(): void {
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+  }
+
+  /** Drops the finalize timers of bets that no longer exist (POST /v1/demo/reset). */
+  forget(betIds: readonly string[]): void {
+    for (const id of betIds) {
+      const t = this.timers.get(id);
+      if (t) clearTimeout(t);
+      this.timers.delete(id);
+    }
   }
 
   // ---- resolve ----------------------------------------------------------------------------
@@ -569,6 +580,11 @@ export class PayoutService {
       out.push(...(await this.reconcile(rt, nowMs)));
     } catch (err) {
       this.deps.log.warn('payout.reconcile_failed', { err });
+    }
+    try {
+      await this.reconcileStranded(rt, nowMs);
+    } catch (err) {
+      this.deps.log.warn('payout.reconcile_stranded_failed', { err });
     }
     const due = await this.deps.db
       .select({ id: bets.id })
@@ -1150,6 +1166,58 @@ export class PayoutService {
       if (!onchain && (await this.recoverPayout(rt, row.bet_id))) paid.push(row.bet_id);
     }
     return paid;
+  }
+
+  /**
+   * CONCEDED / FINALIZED with no payout row in flight (a crash between two writes, a row retired
+   * by hand): nothing would ever move the bet again. The chain decides: the PDA closed -> settle
+   * from the payout row that landed (PAID / VOIDED); still Resolved -> back to RULED, so
+   * finalize-due (or the loser's GG) pays it out.
+   */
+  async reconcileStranded(rt: ChainRuntime, nowMs: number): Promise<string[]> {
+    const rows = await this.deps.db
+      .select({ id: bets.id, state: bets.state, at: bets.updated_at })
+      .from(bets)
+      .where(
+        and(
+          inArray(bets.state, ['CONCEDED', 'FINALIZED']),
+          lte(bets.updated_at, new Date(nowMs - STRANDED_GRACE_MS)),
+          sql`NOT EXISTS (SELECT 1 FROM ${chainTxs} t WHERE t.bet_id = ${bets.id}
+                AND t.kind IN ('concede','finalize') AND t.status IN ('built','signed','sent'))`,
+        ),
+      )
+      .limit(10);
+    const fixed: string[] = [];
+    for (const b of rows) {
+      const onchain = await readBetAccount(rt, b.id);
+      if (!onchain) {
+        if (await this.recoverPayout(rt, b.id)) fixed.push(b.id);
+        continue;
+      }
+      if (onchain.status !== BetStatus.Resolved) continue;
+      const out = await this.deps.db.transaction(async (tx) => {
+        const cur = await lockBet(tx, b.id);
+        if (!cur || (cur.state !== 'CONCEDED' && cur.state !== 'FINALIZED')) return null;
+        const [row] = await tx
+          .update(bets)
+          .set({ state: 'RULED' })
+          .where(eq(bets.id, b.id))
+          .returning();
+        const e = await appendBetEvent(tx, {
+          bet_id: b.id,
+          type: 'bet.state',
+          payload: statePayload(row!, cur.state, 'payout_lost'),
+          now: this.deps.now(),
+        });
+        return { cur, e };
+      });
+      if (!out) continue;
+      fanout(this.deps, out.cur, [out.e]);
+      this.deps.log.warn('payout.stranded_reverted', { bet_id: b.id, from: out.cur.state });
+      if (onchain.appealDeadline) this.armFinalize(b.id, Number(onchain.appealDeadline) * 1000);
+      fixed.push(b.id);
+    }
+    return fixed;
   }
 
   /** RULED but the PDA is closed: find the payout row that landed and settle from it. */

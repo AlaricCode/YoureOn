@@ -4,6 +4,8 @@
 // register here.
 import type { AppDeps } from '../context';
 import { lifecycleOf } from '../lock/runtime';
+import { HEALTH_LOG_MS, logChainHealth } from '../chain/health';
+import { bootReconcile } from '../chain/reconcile';
 import { ORPHAN_SWEEP_MS, REFUND_SWEEP_MS } from '../payout/refund';
 import { resolveDueTask } from '../payout/resolve-due';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
@@ -53,10 +55,33 @@ export function createServerKeeper(
   opts: Omit<KeeperOptions, 'now' | 'log'> = {},
 ): Keeper {
   const keeper = new Keeper({ now: deps.now, log: deps.log, ...opts });
+  if (!deps.env) {
+    keeper.register(draftIdleTask(deps));
+    return keeper;
+  }
+  // Always the SAME deps object, never a spread copy: lifecycleOf() keys the chain lifecycle by
+  // object identity, and a copy got a second Lock/Payout/RefundService (own in-flight sets,
+  // finalize timers, RPC client and stats) that the routes and /v1/demo/health never saw.
+  // server.ts sets deps.keeper / deps.markets / deps.onRuling on this object after this returns.
+  const chain = deps as typeof deps &
+    Pick<AppDeps, 'env'> &
+    Partial<Pick<AppDeps, 'keeper' | 'markets'>>;
+  // The first pass after boot reconciles everything a restart can leave half-done (once).
+  keeper.register({
+    name: 'boot-reconcile',
+    everyMs: Number.POSITIVE_INFINITY,
+    timeoutMs: 120_000,
+    run: (now) => bootReconcile(chain, now),
+  });
   keeper.register(draftIdleTask(deps));
-  const env = deps.env;
-  if (env) for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
+  for (const t of chainLifecycleTasks(chain)) keeper.register(t);
   // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
-  if (env) keeper.register(resolveDueTask(deps));
+  keeper.register(resolveDueTask(chain));
+  // Every 10 min: one chain.unhealthy line when anything needs a human (boot logs it always).
+  keeper.register({
+    name: 'chain-health',
+    everyMs: HEALTH_LOG_MS,
+    run: () => logChainHealth(chain),
+  });
   return keeper;
 }
