@@ -420,9 +420,9 @@ npm run e2e:local                            # deploy scripts + smoke against a 
 
 | Suite                         | Command                                   | Count                                                                 |
 | ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
-| Server                        | `npm test -w @youre-on/server`            | 779 (with `DATABASE_URL`)                                             |
+| Server                        | `npm test -w @youre-on/server`            | 792 (with `DATABASE_URL`)                                             |
 | Mobile                        | `npm test -w @youre-on/mobile`            | 904, 1 skipped (the face-model test also skips without the `.tflite`) |
-| Shared                        | `npm test -w @youre-on/shared`            | 288                                                                   |
+| Shared                        | `npm test -w @youre-on/shared`            | 295                                                                   |
 | Database                      | `npm test -w @youre-on/db`                | 30                                                                    |
 | Escrow, TS client (LiteSVM)   | `npm run test:escrow -w @youre-on/shared` | 23, 1 skipped (the E3 mimic test needs `build-mimic.sh`)              |
 | Escrow, Rust matrix (LiteSVM) | `cargo test` in `programs/escrow`         | 167                                                                   |
