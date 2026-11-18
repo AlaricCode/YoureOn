@@ -170,6 +170,21 @@ export type RealtimeEventOf<T extends RealtimeEventType> = Extract<RealtimeEvent
 export type RealtimePayload<T extends RealtimeEventType> = RealtimeEventOf<T>['payload'];
 
 /**
+ * API-CONTRACT §2.14 GET /v1/bets/:bet_id/events?after=<seq>&limit=<1..200> (betEventsPath in
+ * ./api): the REST resync the client calls when a gap stays open 2 s (§3.3), and on cold start
+ * to rebuild a bet from its log. `events` are the bet_events envelopes with seq > after, oldest
+ * first, at most `limit` of them, exactly as the socket replays them. `last_seq` is the bet's
+ * newest seq when the page was read (as BetSnapshot.last_seq and the WS `subscribed` frame):
+ * while the page's last seq is below it, more follow; ask again with after = that seq.
+ * Defined here rather than in ./api, which must not import this module.
+ */
+export const BetEventsResponse = z.object({
+  events: z.array(RealtimeEvent),
+  last_seq: z.number().int().nonnegative(),
+});
+export type BetEventsResponse = z.infer<typeof BetEventsResponse>;
+
+/**
  * Client-side tolerant parse (§10.1 "Unknown types"): returns { ok: false } for unknown types or
  * invalid events, so the caller can drop them with a log line instead of throwing.
  */

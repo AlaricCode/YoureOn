@@ -6,7 +6,7 @@ import { resolveSession } from '../auth/sessions';
 import type { AuthContext } from '../context';
 import type { BetEnvelope, HubAccess } from './hub';
 
-/** Max envelopes per replay; beyond this the client falls back to REST resync (§2.14). */
+/** Max envelopes per socket replay; beyond this the client falls back to REST resync (§2.14). */
 export const REPLAY_LIMIT = 1000;
 
 export function dbHubAccess(db: Db, now: () => number = Date.now): HubAccess {
@@ -55,13 +55,15 @@ export function dbHubAccess(db: Db, now: () => number = Date.now): HubAccess {
       return !!m;
     },
 
-    async replay(betId, afterSeq) {
+    // The events first, then the head: a row committed in between only raises last_seq, so
+    // last_seq is never below the last returned seq (the client then asks again).
+    async replay(betId, afterSeq, limit = REPLAY_LIMIT) {
       const rows = await db
         .select({ envelope: betEvents.envelope })
         .from(betEvents)
         .where(and(eq(betEvents.bet_id, betId), gt(betEvents.seq, afterSeq)))
         .orderBy(asc(betEvents.seq))
-        .limit(REPLAY_LIMIT);
+        .limit(limit);
       const [b] = await db
         .select({ last_seq: bets.last_seq })
         .from(bets)

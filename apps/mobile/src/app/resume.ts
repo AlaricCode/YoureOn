@@ -1,8 +1,10 @@
 // Back into an open bet after the app restarts (a crash, a swipe-away, a reinstall): before this
 // a restarted phone came back to home and the bet was stranded until the server expired it
 // (B's invite, A's terms; after the lock, the ruling, GG and payout screens). On sign-in the
-// app asks GET /v1/me/bets?status=active, rebuilds each bet (BetHub.restore), follows it on the
-// socket and opens the newest. Pure TS: tested in node.
+// app asks GET /v1/me/bets?status=active, rebuilds each bet (BetHub.restore: the snapshot plus
+// its event log from GET /v1/bets/:id/events, so B's invite answer, the lock request and the
+// authorizations come back too), follows it on the socket and opens the newest. Pure TS: tested
+// in node.
 import { BetSnapshot } from '@youre-on/shared/api';
 import { isTerminalBetState } from '@youre-on/shared/bet-state';
 
