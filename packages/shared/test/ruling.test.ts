@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   AppealResult,
   AppealVote,
+  appellantsOf,
   countVote,
   decideAppeal,
+  PANEL_SEATS,
+  PANEL_VOTE_TIMEOUT_MS,
+  voteOutcome,
   hashJcs,
   HearingRuling,
   HearingTurn,
@@ -211,6 +215,33 @@ describe('Appeals (§7)', () => {
         flipped: false,
       });
   });
+  it('voteOutcome: the voter picks a side with no 0.8 floor (countVote applies 0.6)', () => {
+    // The §7 example: a 0.71 openai vote counts. toOutcome (the first ruling) would say REDO.
+    expect(toOutcome({ claim_result: 'MET', confidence: 0.71 }, 'A')).toBe('REDO');
+    expect(voteOutcome({ claim_result: 'MET' }, 'A')).toBe('A_WINS');
+    expect(voteOutcome({ claim_result: 'NOT_MET' }, 'A')).toBe('B_WINS');
+    expect(voteOutcome({ claim_result: 'MET' }, 'B')).toBe('B_WINS');
+    expect(voteOutcome({ claim_result: 'UNCLEAR' }, 'B')).toBe('REDO');
+    expect(
+      countVote({
+        status: 'ok',
+        outcome: voteOutcome({ claim_result: 'MET' }, 'A'),
+        confidence: 0.71,
+      }),
+    ).toBe('A_WINS');
+    expect(PANEL_SEATS).toEqual(['anthropic', 'openai', 'google']);
+    expect(PANEL_VOTE_TIMEOUT_MS).toBe(8_000);
+  });
+
+  it('appellantsOf: the loser of a decisive outcome, either party of a void (§5.3)', () => {
+    expect(appellantsOf('A_WINS')).toBe('B');
+    expect(appellantsOf('party_b')).toBe('A');
+    expect(appellantsOf('PartyA')).toBe('B');
+    expect(appellantsOf('VOID')).toBe('either');
+    expect(appellantsOf('refund')).toBe('either');
+    expect(appellantsOf('REDO')).toBeNull();
+  });
+
   it('a VOID original becomes a win only with a majority', () => {
     expect(decideAppeal('VOID', tally(1, 1, 1)).final_outcome).toBe('VOID');
     expect(decideAppeal('VOID', tally(0, 2, 1))).toMatchObject({
