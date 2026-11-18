@@ -255,6 +255,59 @@ describe('session + signed client against the fake server', () => {
     expect(w.server.calls.some((c) => c.path === '/v1/auth/session')).toBe(true);
   });
 
+  it('AUTH_REQUIRED on a stored token the server forgot: re-login once, resend the same key', async () => {
+    const { mgr } = await w.init();
+    const first = await mgr.signup(fields);
+    w.server.reseed(); // sessions gone, device still registered
+    const key = '66666666-6666-4666-8666-666666666666';
+    const r = await w.api.request('POST', '/v1/rooms', {
+      json: {},
+      idempotencyKey: key,
+      schema: Echo,
+    });
+    expect(r.ok).toBe(true);
+    expect(mgr.current()!.token).not.toBe(first.token);
+    const writes = w.server.calls.filter((c) => c.path === '/v1/rooms');
+    expect(writes.map((c) => c.headers[HDR.idempotencyKey])).toEqual([key, key]);
+    // GETs (bearer only) recover the same way.
+    w.server.reseed();
+    await w.api.request('GET', '/v1/me/balance');
+    expect(w.server.calls.filter((c) => c.path === '/v1/auth/session')).toHaveLength(2);
+  });
+
+  it('a reseeded DB (device unknown): the stored session is cleared and the app signs out', async () => {
+    const { mgr } = await w.init();
+    await mgr.signup(fields);
+    const seen: (string | null)[] = [];
+    mgr.onChange((s) => seen.push(s?.token ?? null));
+    w.server.reseed({ devices: true });
+    const e = (await w.api
+      .request('POST', '/v1/rooms', { json: {} })
+      .catch((x: unknown) => x)) as ApiClientError;
+    expect(e).toBeInstanceOf(ApiClientError);
+    expect(e.code).toBe('AUTH_REQUIRED');
+    expect(mgr.current()).toBeNull();
+    expect(seen).toEqual([null]);
+    expect(w.platform.items.has(SESSION_KEY)).toBe(false);
+    // Only one refresh attempt, then the error: no loop.
+    expect(w.server.calls.filter((c) => c.path === '/v1/rooms')).toHaveLength(1);
+    // Next boot goes to signup.
+    expect(await mgr.restore()).toBeNull();
+  });
+
+  it('parallel 401s share one silent re-login', async () => {
+    const { mgr } = await w.init();
+    await mgr.signup(fields);
+    w.server.reseed();
+    const before = w.server.calls.filter((c) => c.path === '/v1/auth/session').length;
+    await Promise.all([
+      w.api.request('GET', '/v1/me/balance'),
+      w.api.request('GET', '/v1/me/bets'),
+      w.api.request('POST', '/v1/rooms', { json: {} }),
+    ]);
+    expect(w.server.calls.filter((c) => c.path === '/v1/auth/session').length - before).toBe(1);
+  });
+
   it('surfaces §1.5 errors as ApiClientError with the code', async () => {
     const { mgr } = await w.init();
     await mgr.signup(fields);
