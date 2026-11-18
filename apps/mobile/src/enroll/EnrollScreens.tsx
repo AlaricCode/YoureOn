@@ -42,12 +42,16 @@ const STEPS: readonly Step[] = ['consent', 'face'];
 export function FaceEnrollFlow({
   api,
   embedder,
+  now,
   onDone,
   onSkip,
   onExit,
 }: {
   api: FaceApi;
   embedder: FaceEmbedder;
+  /** The server-corrected clock (ms; rt.clock.now) for consent_at and passed_at: the server
+   *  refuses either one more than 60 s ahead of its own time. */
+  now: () => number;
   /** Face saved and Done tapped. */
   onDone: () => void;
   /** "Skip for now" on the consent step. */
@@ -128,7 +132,7 @@ export function FaceEnrollFlow({
                 testID="enroll-consent"
                 label={ENROLL_COPY.consentCheck}
                 checked={checked}
-                onToggle={saved ? undefined : () => setConsentAt(checked ? null : new Date())}
+                onToggle={saved ? undefined : () => setConsentAt(checked ? null : new Date(now()))}
               />
             </>
           )}
@@ -153,6 +157,7 @@ export function FaceEnrollFlow({
               embedder={embedder}
               consent={consent}
               consentAt={consentAt}
+              now={now}
               saved={saved}
               onSaved={() => setSaved(true)}
               onAlert={setAlert}
