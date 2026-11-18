@@ -15,6 +15,7 @@ export type Route =
   | 'demoClaim'
   | 'home'
   | 'profile'
+  | 'history'
   | 'incoming'
   | 'negotiate'
   | 'terms'
@@ -35,8 +36,8 @@ export interface AppState {
   auth: 'booting' | 'signedOut' | 'signedIn';
   me: UserRef | null;
   deviceId: string | null;
-  /** A screen opened over home (profile, demo claim). */
-  overlay: 'none' | 'profile' | 'demoClaim';
+  /** A screen opened over home (profile, bet history, demo claim). */
+  overlay: 'none' | 'profile' | 'history' | 'demoClaim';
   room: RoomInfo | null;
   members: readonly RoomMember[];
   activeBetId: string | null;
@@ -165,6 +166,7 @@ export function selectRoute(app: AppState, bet: BetModel | null | undefined): Ro
   if (app.auth === 'booting') return 'boot';
   if (app.auth === 'signedOut') return app.overlay === 'demoClaim' ? 'demoClaim' : 'signup';
   if (app.overlay === 'profile') return 'profile';
+  if (app.overlay === 'history') return 'history';
   if (app.overlay === 'demoClaim') return 'demoClaim';
   if (app.activeBetId && bet) return routeForBet(app, bet);
   if (app.judgeCam) return 'judgeCam';
