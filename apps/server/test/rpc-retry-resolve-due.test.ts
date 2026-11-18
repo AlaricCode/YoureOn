@@ -14,6 +14,8 @@ import { isRetriableRpcError, withRpcRetry } from '../src/chain/tx';
 import { buildRuling } from '../src/judge/ruling';
 import { resolveDue, RESOLVE_GRACE_MS, type ResolveDueDeps } from '../src/payout/resolve-due';
 import { sha256Hex } from '../src/crypto';
+import { createDb } from '@youre-on/db';
+import { DB_URL, describeDb } from './helpers';
 
 const http = (statusCode: number) =>
   new SolanaError(SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR, {
@@ -158,5 +160,24 @@ describe('resolveDue (keeper sweep)', () => {
 
   it('exposes a grace period longer than the in-process call', () => {
     expect(RESOLVE_GRACE_MS).toBeGreaterThanOrEqual(10_000);
+  });
+});
+
+// The unit tests above fake db.execute; this one runs the real query on Postgres, the gap that let
+// a Date parameter crash the sweep on the live server.
+describeDb('resolveDue (real Postgres)', () => {
+  it('runs its query and hands every row a ruling for the same bet', async () => {
+    const handle = createDb({ url: DB_URL! });
+    try {
+      const onRuling = vi.fn().mockResolvedValue(undefined);
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const deps = { db: handle.db, log, onRuling } as unknown as ResolveDueDeps;
+      const n = await resolveDue(deps, Date.now());
+      expect(n).toBe(onRuling.mock.calls.length);
+      for (const [betId, r] of onRuling.mock.calls) expect(r.bet_id).toBe(betId);
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      await handle.close();
+    }
   });
 });
