@@ -14,8 +14,9 @@ import {
   compileTransaction,
   createKeyPairSignerFromBytes,
   createKeyPairSignerFromPrivateKeyBytes,
-  createSolanaRpc,
   createAddressWithSeed,
+  createDefaultRpcTransport,
+  createSolanaRpcFromTransport,
   createTransactionMessage,
   getBase58Encoder,
   getBase64EncodedWireTransaction,
@@ -23,16 +24,19 @@ import {
   getI64Decoder,
   getSignatureFromTransaction,
   getTransactionEncoder,
+  isSolanaError,
   partiallySignTransaction,
   pipe,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
+  SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   type Address,
   type Base64EncodedWireTransaction,
   type Blockhash,
   type Instruction,
   type KeyPairSigner,
   type Rpc,
+  type RpcTransport,
   type Signature,
   type SolanaRpcApi,
   type Transaction,
@@ -152,10 +156,50 @@ function preflightDetails(e: unknown): { err: unknown; logs: string[] } | null {
   return null;
 }
 
+/** HTTP statuses worth retrying: rate limits (devnet public RPC, QuickNode plan caps) and 5xx. */
+export function isRetriableRpcError(e: unknown): boolean {
+  if (!isSolanaError(e, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)) return false;
+  const status = e.context.statusCode;
+  return status === 429 || status >= 500;
+}
+
+export interface RetryOptions {
+  /** Total tries per request (default 6: about 0.25 + 0.5 + 1 + 2 + 4 s of backoff). */
+  attempts?: number;
+  baseMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Wraps an RPC transport so a 429 / 5xx is retried with exponential backoff and jitter. Safe for
+ * every call the server makes: reads are idempotent, and sendTransaction re-sends the same signed
+ * bytes (same signature), so a retry can never double-spend.
+ */
+export function withRpcRetry(inner: RpcTransport, o: RetryOptions = {}): RpcTransport {
+  const attempts = o.attempts ?? 6;
+  const baseMs = o.baseMs ?? 250;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  return (async (config: Parameters<RpcTransport>[0]) => {
+    for (let i = 0; ; i++) {
+      try {
+        return await inner(config);
+      } catch (e) {
+        if (i >= attempts - 1 || !isRetriableRpcError(e)) throw e;
+        await sleep(baseMs * 2 ** i + Math.floor(Math.random() * baseMs));
+      }
+    }
+  }) as RpcTransport;
+}
+
+/** createSolanaRpc with the retrying transport. */
+export function createRetryingSolanaRpc(url: string, o?: RetryOptions): Rpc<SolanaRpcApi> {
+  return createSolanaRpcFromTransport(withRpcRetry(createDefaultRpcTransport({ url }), o));
+}
+
 /** The real client over a kit RPC (QuickNode devnet in production, a local validator in e2e). */
 export function rpcChainClient(
   url: string,
-  rpc: Rpc<SolanaRpcApi> = createSolanaRpc(url),
+  rpc: Rpc<SolanaRpcApi> = createRetryingSolanaRpc(url),
 ): ChainClient {
   let cluster: Promise<'devnet' | 'localnet'> | null = null;
   return {
