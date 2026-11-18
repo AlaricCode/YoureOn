@@ -135,7 +135,12 @@ describeDb(
       const url = await ownDatabase(DB_URL!, 'gemini');
       ctx = await startTestServer({
         now,
-        env: { DEMO_MODE: 'true', DATABASE_URL: url, DEMO_ADMIN_TOKEN: 'demo-admin-closer' },
+        env: {
+          DEMO_MODE: 'true',
+          DATABASE_URL: url,
+          DEMO_ADMIN_TOKEN: 'demo-admin-closer',
+          ELEVENLABS_TOOL_SECRET: 'tool-secret-closer',
+        },
       });
       await ctx.deps.db.execute(sql`TRUNCATE gemini_markets, market_snapshots CASCADE`);
       // The payout seam: record the ruling and move the bet on, as resolve -> RULED would.
@@ -726,6 +731,63 @@ describeDb(
         next_window_start: '2026-11-18T02:40:00.000Z',
         awaiting_market: 1,
       });
+    });
+
+    it('the voice judge’s get_market_odds: a preview at Gemini’s odds, refusals spoken, secret required', async () => {
+      const tool = (body: unknown, secret = 'tool-secret-closer') =>
+        postJson(ctx.base, '/el/tools/get_market_odds', body, { 'X-YO-Tool-Secret': secret });
+      const ids = { conversation_id: 'conv_1', bet_id: 'b' };
+      const ok = await tool({
+        ...ids,
+        asset: 'BTC',
+        horizon: '5m',
+        a_side: 'YES',
+        amount_usd: '5',
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.json).toEqual({
+        ok: true,
+        odds: '61/39',
+        a: '$6.10',
+        b: '$3.90',
+        line: '$64,389.60',
+        ends: '02:40 UTC',
+        ends_in_s: 170,
+        lock_within_s: 50,
+        say: 'Gemini prices it 61/39: $6.10 against $3.90.',
+      });
+      expect(new TextEncoder().encode(JSON.stringify(ok.json)).length).toBeLessThan(300);
+      // A on NO: A puts up 39 %
+      const no = await tool({ ...ids, a_side: 'NO', amount_usd: '5' });
+      expect(no.json).toMatchObject({ ok: true, odds: '39/61', a: '$3.90', b: '$6.10' });
+      // over the cap at these odds; not dollars; too late; bad secret
+      expect((await tool({ ...ids, a_side: 'YES', amount_usd: '20' })).json).toMatchObject({
+        ok: false,
+        fix: 'STAKE_ABOVE_MAX',
+      });
+      expect((await tool({ ...ids, a_side: 'YES', amount_usd: 'lots' })).json).toMatchObject({
+        ok: false,
+        fix: 'AMBIGUOUS',
+      });
+      clock.t = Date.parse('2026-11-18T02:38:30.000Z');
+      await markets.refresh();
+      const late = await tool({ ...ids, a_side: 'YES', amount_usd: '5' });
+      expect(late.json).toEqual({
+        ok: false,
+        fix: 'TOO_CLOSE_TO_EXPIRY',
+        say: 'Too late for this round. The next one opens at 02:40 UTC.',
+      });
+      expect((await tool({ ...ids, a_side: 'YES', amount_usd: '5' }, 'wrong')).status).toBe(401);
+      const saved = ctx.deps.markets;
+      ctx.deps.markets = undefined;
+      try {
+        expect((await tool({ ...ids, a_side: 'YES', amount_usd: '5' })).json).toMatchObject({
+          ok: false,
+          fix: 'MARKET_NOT_OPEN',
+        });
+      } finally {
+        ctx.deps.markets = saved;
+      }
     });
 
     it('a bet that left AWAITING_MARKET (e.g. RULED) is skipped and forgotten', async () => {
