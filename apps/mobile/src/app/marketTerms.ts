@@ -55,6 +55,8 @@ export interface MarketQuoteView {
   expiryMs: number | null;
   /** The last moment Gemini prices this contract (expiry − 120 s). */
   lockableUntilMs: number | null;
+  /** When Gemini can't price it: the next 5-minute round's start, if known (server clock). */
+  nextWindowMs: number | null;
 }
 
 export interface MarketState {
@@ -193,9 +195,19 @@ const refusalOf = (e: unknown): string => {
 
 const pctOf = (price: string) => Math.round(Number(price) * 100);
 
+/** Refusals that the next round fixes: the panel counts down to it. */
+const WAIT_FOR_NEXT: ReadonlySet<string> = new Set([
+  'MARKET_NOT_OPEN',
+  'TOO_CLOSE_TO_EXPIRY',
+  'STRIKE_PENDING',
+  'NO_TWO_SIDED_QUOTE',
+  'PRICE_OUT_OF_RANGE',
+  'SPREAD_TOO_WIDE',
+]);
+
 /** One preview for `side` / `stakeUsd`. Never throws (a refusal is a view with ok: false). */
 export async function fetchMarketQuote(
-  d: { api: Pick<YoApi, 'marketQuote'> },
+  d: { api: Pick<YoApi, 'marketQuote'> & Partial<Pick<YoApi, 'marketCurrent'>> },
   i: { side: MarketCall; stakeUsd: number },
 ): Promise<MarketQuoteView> {
   try {
@@ -214,8 +226,15 @@ export async function fetchMarketQuote(
       priceUsd: s.indexPrice === null ? null : formatPrice(s.indexPrice),
       expiryMs,
       lockableUntilMs: expiryMs - MIN_TTE_MS,
+      nextWindowMs: null,
     };
   } catch (e) {
+    const reason = e instanceof ApiClientError ? e.details?.reason : undefined;
+    let nextWindowMs: number | null = null;
+    if (typeof reason === 'string' && WAIT_FOR_NEXT.has(reason) && d.api.marketCurrent) {
+      const cur = await d.api.marketCurrent().catch(() => null);
+      nextWindowMs = cur?.next_window_start ? Date.parse(cur.next_window_start) : null;
+    }
     return {
       ok: false,
       refusal: refusalOf(e),
@@ -227,6 +246,7 @@ export async function fetchMarketQuote(
       priceUsd: null,
       expiryMs: null,
       lockableUntilMs: null,
+      nextWindowMs,
     };
   }
 }

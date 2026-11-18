@@ -94,6 +94,12 @@ export const MarketQuoteResponse = z.object({
 });
 export type MarketQuoteResponse = z.infer<typeof MarketQuoteResponse>;
 
+/** §2.13 GET /v1/markets/btc5m/current (the fields the phone reads). */
+export const MarketCurrentResponse = z.object({
+  lockable: z.boolean(),
+  next_window_start: IsoUtc.nullable(),
+});
+
 const bet = (id: string) => `/v1/bets/${encodeURIComponent(id)}`;
 
 export function createYoApi(c: ApiClient) {
@@ -164,6 +170,8 @@ export function createYoApi(c: ApiClient) {
         `/v1/markets/btc5m/quote?amount=${encodeURIComponent(amountMicro)}&a_side=${aSide}`,
         { schema: MarketQuoteResponse },
       ),
+    marketCurrent: () =>
+      c.request('GET', '/v1/markets/btc5m/current', { schema: MarketCurrentResponse }),
     proposeMarketTerms: (betId: string, body: MarketTermsRequest) =>
       c.request('POST', marketTermsPath(betId), { json: body, schema: MarketTermsResponse }),
 

@@ -439,6 +439,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
                 split: `${formatUsd(a.toString())} vs ${formatUsd(b.toString())}`,
                 lockableUntilMs: expiry - 120_000,
                 replay: false,
+                nextWindowMs: null,
               },
               sending: false,
               confirming: false,

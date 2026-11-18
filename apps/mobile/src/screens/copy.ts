@@ -151,6 +151,7 @@ export const COPY = {
     gemini: ['Gemini', 'label'],
     settled: ['Gemini settled', 'label'],
     replay: ['Replay', 'label'],
+    nextRound: ['Next round', 'label'],
   },
   history: {
     title: ['History', 'label'],

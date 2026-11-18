@@ -218,6 +218,8 @@ export interface MarketTermsPanel {
     lockableUntilMs: number | null;
     /** The server's REPLAY feed (a recorded Gemini round): shown as such. */
     replay: boolean;
+    /** Refused: when the next round opens (local clock), if known. */
+    nextWindowMs: number | null;
   } | null;
   sending: boolean;
   confirming: boolean;
@@ -536,7 +538,15 @@ function MarketPanel({
                 />
               </>
             ) : (
-              <DataText muted>{q.refusal ?? t(COPY.app.failed)}</DataText>
+              <>
+                <DataText muted>{q.refusal ?? t(COPY.app.failed)}</DataText>
+                {q.nextWindowMs !== null && q.nextWindowMs > now ? (
+                  <InfoRow
+                    label={t(COPY.market.nextRound)}
+                    value={countdownLabel(q.nextWindowMs - now)}
+                  />
+                ) : null}
+              </>
             )}
           </Card>
           {market.note ? <DataText muted>{market.note}</DataText> : null}

@@ -865,6 +865,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                               ? null
                               : market.quote.lockableUntilMs - rt.clock.offsetMs,
                           replay: isReplayTicker(market.quote.eventTicker ?? ''),
+                          nextWindowMs:
+                            market.quote.nextWindowMs === null
+                              ? null
+                              : market.quote.nextWindowMs - rt.clock.offsetMs,
                         }
                       : null,
                     sending: market.phase === 'sending',
