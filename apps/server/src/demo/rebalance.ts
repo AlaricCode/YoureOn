@@ -26,6 +26,7 @@ import {
   confirmSent,
   PreflightError,
   TxFailedError,
+  txFate,
   wireOf,
   type ChainRuntime,
   type SendOptions,
@@ -82,17 +83,13 @@ async function assertNoneInFlight(deps: Deps, rt: ChainRuntime) {
     if (d?.signature) prev = { signature: d.signature, lvbh: d.lvbh ? BigInt(d.lvbh) : null };
   }
   if (!prev) return;
-  const st = await rt.client.signatureStatus(prev.signature, { searchHistory: true });
-  if (st) {
-    if (st.err || st.confirmationStatus !== 'processed') {
-      lastSent.delete(rt.client); // settled one way or the other
-      return;
-    }
-  } else if (prev.lvbh !== null && (await rt.client.blockHeight()) > prev.lvbh) {
-    if ((await rt.client.signatureStatus(prev.signature, { searchHistory: true })) === null) {
-      lastSent.delete(rt.client); // known dead
-      return;
-    }
+  // Without an lvbh (never for ours) a 5-min-old audit row is past any blockhash lifetime.
+  const { fate } = await txFate(rt.client, prev.signature, prev.lvbh, {
+    sentAtMs: deps.now() - REBALANCE_LOOKBACK_MS - 1,
+  });
+  if (fate !== 'pending') {
+    lastSent.delete(rt.client); // landed, failed or known dead: a new one is safe
+    return;
   }
   throw new HttpError(
     'INVALID_STATE',
@@ -105,10 +102,27 @@ async function assertNoneInFlight(deps: Deps, rt: ChainRuntime) {
 }
 
 /** Moves USDC between demo-a and demo-b until they hold the same amount (± 1 micro-unit). */
-export async function rebalanceDemoWallets(
+/** Rebalances of one chain client run one at a time (the check above is check-then-set). */
+const queues = new WeakMap<object, Promise<unknown>>();
+
+export function rebalanceDemoWallets(
   deps: Deps,
   rt: ChainRuntime,
   o: { send?: SendOptions; requestId?: string } = {},
+): Promise<RebalanceResult> {
+  const prev = queues.get(rt.client) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => rebalanceOnce(deps, rt, o));
+  queues.set(
+    rt.client,
+    run.catch(() => {}),
+  );
+  return run;
+}
+
+async function rebalanceOnce(
+  deps: Deps,
+  rt: ChainRuntime,
+  o: { send?: SendOptions; requestId?: string },
 ): Promise<RebalanceResult> {
   const { demoA, demoB, feePayer } = rt.keys;
   if (!demoA || !demoB)

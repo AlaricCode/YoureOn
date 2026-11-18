@@ -739,6 +739,33 @@ run('money path hardening over LiteSVM', () => {
     }
   });
 
+  it('concurrent orphan sweeps send one exit per Bet, never two', async () => {
+    const betId = await lockedBet();
+    await ctx.deps.db.delete(bets).where(eq(bets.id, betId));
+    advance(RESOLVE_WINDOW_MS + 1_000);
+    const [s1, s2] = await Promise.all([
+      lc.refund.sweepOrphans(now()),
+      lc.refund.sweepOrphans(now()),
+    ]);
+    const sent = [...s1.sent, ...s2.sent].filter((x) => x.bet_id === betId);
+    expect(sent).toHaveLength(1);
+    expect(await onchainBet(betId)).toBeNull();
+    const audit = await ctx.deps.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.bet_id, betId), eq(auditLog.action, 'chain.orphan_exit')));
+    expect(audit).toHaveLength(1);
+  });
+
+  it('concurrent rebalances run one at a time: one moves, the other finds them balanced', async () => {
+    await mint(signerA, 9n * USDC);
+    const [r1, r2] = await Promise.all([admin('/v1/demo/rebalance'), admin('/v1/demo/rebalance')]);
+    const statuses = [r1.json!.status, r2.json!.status].sort();
+    expect(statuses).toEqual(['balanced', 'moved']);
+    const [a, b] = [await usdc(signerA), await usdc(signerB)];
+    expect(a > b ? a - b : b - a).toBeLessThanOrEqual(1n); // the poorer side gets the odd unit
+  });
+
   it('rebalance refuses while a demo bet is locking', async () => {
     install('phones');
     try {

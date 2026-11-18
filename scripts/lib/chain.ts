@@ -4,10 +4,12 @@
 // Safety rails (hard rules for these scripts):
 //   - mainnet-beta is refused outright (detected by genesis hash, not by URL);
 //   - an RPC URL is only ever printed as scheme://host, because QuickNode URLs embed a token;
-//   - every RPC request is time-boxed and retried on 429 / 5xx / timeouts / socket errors, with
-//     the server's transport (apps/server/src/chain/tx.ts withRpcRetry): the public devnet RPC
-//     answers 429 under any real load, and a 429 on the confirm poll after a send made the crank /
-//     smoke report "FAILED" for txs that had landed. Re-sending the same signed bytes is safe.
+//   - every RPC request is time-boxed (30 s per attempt, 120 s in all) and retried on 429 / 5xx /
+//     timeouts / socket errors, with the server's transport (apps/server/src/chain/tx.ts
+//     withRpcRetry): the public devnet RPC answers 429 under any real load, and a 429 on the
+//     confirm poll after a send made the crank / smoke report "FAILED" for txs that had landed.
+//     Re-sending the same signed bytes is safe; sendAndConfirm checks a rejected first send's
+//     signature before failing (the rejection may be its own retry of a tx that landed).
 import {
   address,
   appendTransactionMessageInstructions,
@@ -83,7 +85,9 @@ export function redactUrl(url: string): string {
 
 /** Connects, identifies the cluster by genesis hash and refuses mainnet. */
 export async function connect(url: string): Promise<Chain> {
-  const rpc = createRetryingSolanaRpc(url);
+  // Longer than the server's (scripts are operator-driven: a slow getProgramAccounts over every
+  // Bet must finish rather than time out on a struggling RPC).
+  const rpc = createRetryingSolanaRpc(url, { timeoutMs: 30_000, budgetMs: 120_000 });
   const label = redactUrl(url);
   let genesis: string;
   try {
@@ -313,9 +317,26 @@ export async function sendAndConfirm(
   const lastValid = (tx as { lifetimeConstraint?: { lastValidBlockHeight?: bigint } })
     .lifetimeConstraint?.lastValidBlockHeight;
   const t0 = performance.now();
-  await rpc
-    .sendTransaction(wire, { encoding: 'base64', preflightCommitment: 'processed', maxRetries: 0n })
-    .send();
+  try {
+    await rpc
+      .sendTransaction(wire, {
+        encoding: 'base64',
+        preflightCommitment: 'processed',
+        maxRetries: 0n,
+      })
+      .send();
+  } catch (err) {
+    // The transport re-sends a send whose first try timed out; if the node had it, the retry's
+    // preflight fails (AlreadyProcessed, or a nonce it advanced itself). Only a signature the
+    // chain does not know is a real rejection.
+    const known = await rpc
+      .getSignatureStatuses([signature], { searchTransactionHistory: true })
+      .send()
+      .then((r) => r.value[0] ?? null)
+      .catch(() => null);
+    if (!known) throw err;
+    console.log('  (the first send landed; its retry was rejected as a duplicate)');
+  }
   const sendMs = performance.now() - t0;
   let processedMs: number | undefined;
   let lastSend = performance.now();
