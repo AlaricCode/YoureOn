@@ -9,6 +9,7 @@ import { and, asc, desc, eq, inArray, lt, lte, sql } from 'drizzle-orm';
 import { address, type Address } from '@solana/kit';
 import { bets, chainEvents, chainTxs, noncePool } from '@youre-on/db';
 import type { BetState } from '@youre-on/shared/bet-state';
+import { findConfigPda, getConfigDecoder, type Config } from '@youre-on/shared/escrow-client';
 import { formatUsd } from '@youre-on/shared/money';
 import type { AppDeps } from '../context';
 import type { KeeperStatus } from '../keeper/keeper';
@@ -75,6 +76,17 @@ export interface ChainHealthReport {
     demo_a: WalletHealth | null;
     demo_b: WalletHealth | null;
   };
+  /** The escrow Config account (null: chain off or unreadable). */
+  config: {
+    address: string;
+    paused: boolean;
+    judge_authority: string;
+    appeal_authority: string;
+    appeal_window_secs: number;
+    resolve_deadline_secs: number;
+    max_stake: string;
+    mint_allowed: boolean;
+  } | null;
   rpc_stats: RpcStatsSnapshot | null;
   keeper: KeeperStatus | null;
   inflight: { sent_txs: number; oldest_sent_at: string | null; stuck: StuckTx[] };
@@ -107,6 +119,14 @@ async function settle<T>(p: Promise<T>): Promise<{ ok: true; v: T } | { ok: fals
   } catch (e) {
     return { ok: false, err: rpcErrorText(e) };
   }
+}
+
+/** The escrow Config account, or null when it does not exist. */
+async function readConfig(rt: ChainRuntime): Promise<(Config & { address: Address }) | null> {
+  const [pda] = await findConfigPda({ programAddress: rt.programId });
+  const acc = await rt.client.getAccount(pda);
+  if (!acc || acc.owner !== rt.programId) return null;
+  return { ...getConfigDecoder().decode(acc.data), address: pda };
 }
 
 async function walletOf(rt: ChainRuntime, owner: Address): Promise<WalletHealth> {
@@ -232,6 +252,7 @@ export async function chainHealth(
   let rpcMs: number | null = null;
   let rpcError: string | null = null;
   let balances: ChainHealthReport['balances'] = { treasury: null, demo_a: null, demo_b: null };
+  let config: ChainHealthReport['config'] = null;
   if (!rt) {
     warn(
       'chain_not_configured',
@@ -243,14 +264,45 @@ export async function chainHealth(
     const treasuryAddr =
       rt.keys.treasury?.address ??
       (deps.env.TREASURY_PUBKEY ? address(deps.env.TREASURY_PUBKEY) : null);
-    const [fee, treasury, a, b] = await Promise.all([
+    const [fee, treasury, a, b, cfg] = await Promise.all([
       settle(rt.client.lamports(rt.keys.feePayer.address)),
       treasuryAddr ? walletOf(rt, treasuryAddr) : Promise.resolve(null),
       rt.keys.demoA ? walletOf(rt, rt.keys.demoA.address) : Promise.resolve(null),
       rt.keys.demoB ? walletOf(rt, rt.keys.demoB.address) : Promise.resolve(null),
+      settle(readConfig(rt)),
     ]);
     rpcMs = Math.round(performance.now() - t1);
     balances = { treasury, demo_a: a, demo_b: b };
+    // The escrow Config: each of these makes every lock (or every ruling) fail onchain.
+    if (cfg.ok && cfg.v) {
+      const c = cfg.v;
+      config = {
+        address: c.address,
+        paused: c.paused,
+        judge_authority: c.judgeAuthority,
+        appeal_authority: c.appealAuthority,
+        appeal_window_secs: c.appealWindowSecs,
+        resolve_deadline_secs: c.resolveDeadlineSecs,
+        max_stake: c.maxStake.toString(),
+        mint_allowed: c.allowedMints.includes(rt.mint),
+      };
+      if (c.paused)
+        warn('escrow_paused', 'critical', 'The escrow Config is paused: every lock is refused.');
+      if (!config.mint_allowed)
+        warn(
+          'mint_not_allowed',
+          'critical',
+          `USDC mint ${rt.mint} is not in Config.allowed_mints.`,
+        );
+      if (rt.keys.judge && rt.keys.judge.address !== c.judgeAuthority)
+        warn(
+          'judge_key_mismatch',
+          'critical',
+          `JUDGE_AUTHORITY_SECRET_KEY is ${rt.keys.judge.address}, Config.judge_authority is ${c.judgeAuthority}: every resolve fails (NotJudge).`,
+        );
+    } else if (cfg.ok) {
+      warn('config_missing', 'critical', 'No escrow Config account: run npm run init-config.');
+    }
     if (fee.ok) {
       feePayerSol = Number(fee.v) / 1e9;
       if (fee.v < HEALTH.feePayerCriticalLamports)
@@ -412,6 +464,7 @@ export async function chainHealth(
     rpc_error: rpcError,
     db_ms: dbMs,
     balances,
+    config,
     rpc_stats: rpcStats,
     keeper,
     inflight: {

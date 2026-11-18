@@ -900,6 +900,34 @@ run('money path hardening over LiteSVM', () => {
     }
   });
 
+  it('health reads the escrow Config: a server judge key that is not Config.judge_authority is critical', async () => {
+    const h0 = (await get(null, '/v1/demo/health', { 'X-YO-Demo-Key': ADMIN })).json!;
+    expect(h0.config).toMatchObject({
+      paused: false,
+      mint_allowed: true,
+      judge_authority: svm.judge.address,
+      appeal_window_secs: 10,
+    });
+    expect(h0.warnings.map((w: any) => w.code)).not.toContain('judge_key_mismatch');
+    installLifecycle(
+      ctx.deps,
+      createLifecycle(ctx.deps, {
+        runtime: async () => ({ ...rt, keys: { ...rt.keys, judge: signerA } }),
+        signer: 'server',
+        timers: false,
+      }),
+    );
+    try {
+      const h = (await get(null, '/v1/demo/health', { 'X-YO-Demo-Key': ADMIN })).json!;
+      expect(h.warnings).toContainEqual(
+        expect.objectContaining({ code: 'judge_key_mismatch', level: 'critical' }),
+      );
+      expect(h.ok).toBe(false);
+    } finally {
+      install('server');
+    }
+  });
+
   it('health: low fee payer, few free nonces and a stuck sent tx are flagged', async () => {
     const poor: ChainClient = { ...rt.client, lamports: async () => 50_000_000n }; // 0.05 SOL
     const betId = await lockedBet();
