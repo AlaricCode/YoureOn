@@ -10,7 +10,7 @@
 import type { FaceMatchRequest, FaceMatchResponse } from '@youre-on/shared/face';
 
 import type { FaceEmbedder, FaceStill } from '../enroll/embedder';
-import { plainEmbedding } from '../enroll/flow';
+import { plainEmbedding, type DetectedFace } from '../enroll/flow';
 import { FACE_MODEL } from '../face/model';
 import { eyeDistance, pickProbeFace } from '../face/pipeline';
 
@@ -141,16 +141,7 @@ export async function runScan(deps: ScanDeps, photoUrl: string): Promise<ScanOut
     const pick = pickProbeFace(still.faces, still);
     if (!pick.ok) return miss(pick.problem);
     const embedding = await still.embed(pick.face);
-    const eyes = eyeDistance(pick.face.landmarks);
-    req = {
-      probe: plainEmbedding(embedding),
-      model: { name: FACE_MODEL.name, version: FACE_MODEL.version, dim: FACE_MODEL.dim },
-      capture: {
-        captured_at: new Date(deps.now()).toISOString(),
-        ...(eyes !== null ? { eye_distance_px: Math.round(eyes) } : {}),
-        yaw_deg: Math.round(pick.face.yawAngle),
-      },
-    };
+    req = buildFaceMatchRequest(embedding, pick.face, deps.now());
     embedding.fill(0);
   } catch {
     return miss('failed');
@@ -165,17 +156,47 @@ export async function runScan(deps: ScanDeps, photoUrl: string): Promise<ScanOut
   }
   const m = res.match;
   if (!m) return miss('no_match');
+  return { kind: 'found', match: scanMatchOf(m) };
+}
+
+/** `tap` (the shutter; the server's 30/min bucket) or `live` (the live rivalry scan, 60/min). */
+export type FaceMatchMode = 'tap' | 'live';
+
+/**
+ * The face-match body for one embedded face. Callers zero `embedding` once this returns (the
+ * request holds its own base64 copy). `mode` is sent only when given: absent means 'tap', so
+ * the tap scan's body is unchanged and an older server (which drops unknown keys) still parses
+ * a live one.
+ */
+export function buildFaceMatchRequest(
+  embedding: Float32Array,
+  face: Pick<DetectedFace, 'yawAngle' | 'landmarks'>,
+  nowMs: number,
+  mode?: FaceMatchMode,
+): FaceMatchRequest & { readonly mode?: FaceMatchMode } {
+  const eyes = eyeDistance(face.landmarks);
   return {
-    kind: 'found',
-    match: {
-      user: { user_id: m.user.user_id, display_name: m.user.display_name },
-      ticket: m.match_ticket,
-      expiresAtMs: Date.parse(m.ticket_expires_at),
-      headToHead: {
-        wins: m.head_to_head.wins,
-        losses: m.head_to_head.losses,
-        net: m.head_to_head.net,
-      },
+    probe: plainEmbedding(embedding),
+    model: { name: FACE_MODEL.name, version: FACE_MODEL.version, dim: FACE_MODEL.dim },
+    capture: {
+      captured_at: new Date(nowMs).toISOString(),
+      ...(eyes !== null ? { eye_distance_px: Math.round(eyes) } : {}),
+      yaw_deg: Math.round(face.yawAngle),
+    },
+    ...(mode !== undefined ? { mode } : {}),
+  };
+}
+
+/** A server match -> what the screens keep (the ticket, its expiry, the head-to-head). */
+export function scanMatchOf(m: NonNullable<FaceMatchResponse['match']>): ScanMatch {
+  return {
+    user: { user_id: m.user.user_id, display_name: m.user.display_name },
+    ticket: m.match_ticket,
+    expiresAtMs: Date.parse(m.ticket_expires_at),
+    headToHead: {
+      wins: m.head_to_head.wins,
+      losses: m.head_to_head.losses,
+      net: m.head_to_head.net,
     },
   };
 }
