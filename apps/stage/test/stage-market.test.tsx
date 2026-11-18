@@ -7,7 +7,8 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { hashJcs } from '@youre-on/shared/jcs';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
-import { BetCard, MarketPanel, StageView, verifyEvidence } from '../src/App';
+import { sha256Hex } from '@youre-on/shared/primitives';
+import { BetCard, MarketPanel, StageView, verifiedChain, verifyEvidence } from '../src/App';
 import { fetchSettlement } from '../src/connection';
 import { previewMarketState } from '../src/preview-market';
 import { applyFrame, initialTicker, type TickerAction, type TickerState } from '../src/ticker';
@@ -294,11 +295,39 @@ describe('Beat 6 on the stage', () => {
     const evidence = await fetchSettlement('https://h.dev', 'yo_s_t', BET, f);
     expect(calls).toEqual([`https://h.dev/v1/bets/${BET}/settlement`]);
     const v = verifyEvidence(bet, evidence);
-    expect(v).toEqual({ ok: true, onchain: true, failed: [] });
+    // no raw body came back: the body link was not checked, so it is not claimed
+    expect(v).toEqual({ ok: true, body: false, onchain: true, failed: [] });
     const now = Date.parse('2026-11-18T02:40:10.000Z');
     const shown = html(<MarketPanel bet={bet} tick={null} now={now} verification={v} />);
-    expect(shown).toContain('✓ verified: Gemini');
-    expect(shown).toContain('record → on-chain evidence');
+    expect(shown).toContain('✓ verified: record → on-chain evidence');
+    expect(shown).not.toContain('Gemini&#x27;s response');
+    // with Gemini's bytes (hashing to the record's response_sha256) the whole chain is shown
+    const raw = '{"ticker":"BTC05M2611180240"}';
+    const recRaw = { ...rec, response_sha256: sha256Hex(raw) };
+    const rulingRaw = { ...ruling, evidence_hash: hashJcs(recRaw) };
+    const full = verifyEvidence(bet, {
+      ...evidence,
+      record: recRaw as typeof evidence.record,
+      evidence_hash: hashJcs(recRaw),
+      ruling: rulingRaw as typeof evidence.ruling,
+      ruling_hash: hashJcs(rulingRaw),
+      raw_body: raw,
+      onchain: {
+        evidence_hash: hashJcs(recRaw),
+        ruling_hash: hashJcs(rulingRaw),
+        resolve_signature: null,
+      },
+    })!;
+    expect(full).toEqual({ ok: true, body: true, onchain: true, failed: [] });
+    expect(verifiedChain(full)).toBe("Gemini's response → record → on-chain evidence");
+    expect(verifiedChain({ body: true, onchain: false })).toBe(
+      "Gemini's response → record → ruling",
+    );
+    // a body that is not the record's: a mismatch, not a silent omission
+    expect(verifyEvidence(bet, { ...evidence, raw_body: raw })).toMatchObject({
+      ok: false,
+      failed: ['body matches record'],
+    });
     // the stage never trusts the server's `ok`: a tampered ruling fails its own check
     const forged = { ...evidence, ruling: { ...evidence.ruling, outcome: 'A_WINS' as const } };
     const bad = verifyEvidence(bet, forged)!;
@@ -310,6 +339,7 @@ describe('Beat 6 on the stage', () => {
     // before the resolve: the record and ruling check out, the chain part is pending
     expect(verifyEvidence(bet, { ...evidence, onchain: null })).toEqual({
       ok: true,
+      body: false,
       onchain: false,
       failed: [],
     });

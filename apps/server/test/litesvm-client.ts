@@ -38,6 +38,8 @@ export function rpcErr(f: FailedTransactionMetadata): unknown {
 export function liteSvmClient(svm: LiteSVM): ChainClient & { sent: string[] } {
   const statuses = new Map<string, SigStatus>();
   const sent: string[] = [];
+  /** Landed txs by signature (an RPC's getTransaction; LiteSVM keeps only their metadata). */
+  const landed = new Map<string, Uint8Array>();
   const decode = (wire: Base64EncodedWireTransaction) =>
     getTransactionDecoder().decode(getBase64Encoder().encode(wire));
   return {
@@ -84,6 +86,7 @@ export function liteSvmClient(svm: LiteSVM): ChainClient & { sent: string[] } {
         return;
       }
       sent.push(sig);
+      landed.set(sig, new Uint8Array(getBase64Encoder().encode(wire)));
       statuses.set(sig, { err: null, confirmationStatus: 'confirmed', slot: svm.getClock().slot });
       // A new "slot": a durable nonce advanced in this tx may be advanced again (Agave refuses a
       // second advance under the same blockhash, NonceBlockhashNotExpired).
@@ -115,5 +118,6 @@ export function liteSvmClient(svm: LiteSVM): ChainClient & { sent: string[] } {
       return a.exists ? getTokenDecoder().decode(a.data).amount : 0n;
     },
     lamports: async (a) => svm.getBalance(a) ?? 0n,
+    transactionBytes: async (sig) => landed.get(sig) ?? null,
   };
 }
