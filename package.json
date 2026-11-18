@@ -25,7 +25,8 @@
     "crank": "tsx scripts/crank.ts",
     "cp1-drive": "tsx scripts/cp1-drive.ts",
     "demo-claim-qr": "tsx scripts/demo-claim-qr.ts",
-    "e2e:local": "bash scripts/e2e-local.sh"
+    "e2e:local": "bash scripts/e2e-local.sh",
+    "judge-eval": "tsx scripts/judge-eval.ts"
   },
   "devDependencies": {
     "@codama/nodes-from-anchor": "1.5.6",
