@@ -586,23 +586,21 @@ export class PayoutService {
       const loser: Party = outcome === 'PartyA' ? 'B' : 'A';
       this.o.inflight.run('payout.sign_request', async () => {
         const fresh = await this.bet(betId);
-        const reqs: SignRequest[] = [await this.buildConcede(rt, fresh, loser)];
+        const push = async (request: SignRequest) => {
+          const env = await this.deps.db.transaction((tx) =>
+            appendBetEvent(tx, {
+              bet_id: betId,
+              type: 'tx.sign_request',
+              payload: { request },
+              now: this.deps.now(),
+            }),
+          );
+          fanout(this.deps, fresh, [env]);
+        };
+        // The GG prompt first, never held up by the appeal build (one more simulate).
+        await push(await this.buildConcede(rt, fresh, loser));
         const appeal = await this.o.appealRequest?.(rt, fresh, loser);
-        if (appeal) reqs.push(appeal);
-        const envs = await this.deps.db.transaction(async (tx) => {
-          const out: BetEventEnvelope[] = [];
-          for (const request of reqs)
-            out.push(
-              await appendBetEvent(tx, {
-                bet_id: betId,
-                type: 'tx.sign_request',
-                payload: { request },
-                now: this.deps.now(),
-              }),
-            );
-          return out;
-        });
-        fanout(this.deps, fresh, envs);
+        if (appeal) await push(appeal);
       });
     }
     this.armFinalize(betId, appealDeadline * 1000 + FINALIZE_DELAY_MS);
