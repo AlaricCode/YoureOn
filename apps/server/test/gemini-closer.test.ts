@@ -1252,6 +1252,25 @@ describeDb(
       });
     });
 
+    it('a Bet account that cannot be read (RPC down) does not block the settlement', async () => {
+      const { betId } = await lockedBet('UP');
+      const log = recordingLog();
+      const s = new SettlementService(
+        { ...ctx.deps, log },
+        {
+          timers: false,
+          chain: async () => {
+            throw new Error('rpc 503');
+          },
+        },
+      );
+      g.routes.set(eventPath(TICKER), F.event_0240_settled);
+      clock.t = T0240 + 6_000;
+      expect(await s.check(betId)).toBe('settled');
+      expect(ruled.map((r) => r.betId)).toEqual([betId]);
+      expect(linesOf(log, 'market.chain_read_failed', 'warn')).toHaveLength(1);
+    });
+
     it('a resend never overlaps a send still in flight (slow devnet confirm): one resolve', async () => {
       const { betId } = await lockedBet('UP');
       let release!: () => void;

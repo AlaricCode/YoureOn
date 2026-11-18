@@ -272,7 +272,11 @@ export class SettlementService {
   private async chainView(betId: string): Promise<BetChainView> {
     const cached = this.deadlines.get(betId);
     if (cached !== undefined) return { kind: 'locked', resolveDeadlineMs: cached };
-    const v = await (this.o.chain ?? ((id: string) => readBetChainView(this.deps, id)))(betId);
+    const read = this.o.chain ?? ((id: string) => readBetChainView(this.deps, id));
+    const v = await read(betId).catch((err: unknown): BetChainView => {
+      this.deps.log.warn('market.chain_read_failed', { bet_id: betId, err: String(err) });
+      return { kind: 'unknown' };
+    });
     if (v.kind === 'locked') this.deadlines.set(betId, v.resolveDeadlineMs);
     return v;
   }
