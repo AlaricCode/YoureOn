@@ -561,6 +561,27 @@ run('money path hardening over LiteSVM', () => {
     expect(await usdc(signerB)).toBe(bBefore + USDC); // B's stake back + A's
   });
 
+  it('orphan scan without getProgramAccounts support: skipped (no keeper error), flagged in health', async () => {
+    const noGpa: ChainClient = {
+      ...rt.client,
+      programAccounts: async () => {
+        throw new Error('HTTP 403: method getProgramAccounts not allowed on this plan');
+      },
+    };
+    install('server', { client: noGpa });
+    try {
+      const s = await lc.refund.sweepOrphans(now());
+      expect(s.live).toBeNull();
+      expect(s.errors[0]).toMatch(/getProgramAccounts not allowed/);
+      const h = (await get(null, '/v1/demo/health', { 'X-YO-Demo-Key': ADMIN })).json!;
+      expect(h.warnings).toContainEqual(
+        expect.objectContaining({ code: 'orphan_scan_errors', level: 'warn' }),
+      );
+    } finally {
+      install('server');
+    }
+  });
+
   // ---- demo reset, rebalance ---------------------------------------------------------------
 
   it('demo reset: escrow returned, pair freed, nonces free, sessions untouched', async () => {

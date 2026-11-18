@@ -379,6 +379,12 @@ export async function chainHealth(
       `${stuck_bets.length} bet(s) past a deadline or pending for > 2 min.`,
     );
   const escrow = lc.refund.lastOrphanScan;
+  if (escrow?.errors.length)
+    warn(
+      'orphan_scan_errors',
+      'warn',
+      `Orphan escrow sweep: ${escrow.errors[0]} (getProgramAccounts on this RPC?).`,
+    );
   if (escrow?.orphans.length)
     warn(
       'orphan_escrow',

@@ -2,13 +2,13 @@
 // pair between rehearsals, without stranding a cent.
 //
 //   1. The keeper pauses (no sweep races the deletes) and resumes at the end.
-//   2. Escrow first: every live Bet our fee payer created whose row is non-seed (or already gone)
+//   2. Every leased nonce is advanced first (a lock still in flight can no longer land), then
+//      escrow: every live Bet our fee payer created whose row is non-seed (or already gone)
 //      gets its money back (RefundService.voidForReset): a Locked one gets resolve(Refund) by the
 //      judge key, a due one its exit now, an Open one cancel_open_bet. A Resolved / Refund one is
 //      finalized by the orphan sweep right after its appeal window (armOrphanSweep), or by the
 //      keeper's 60 s orphan sweep; a decisive ruling stands (the winner is paid).
-//   3. Every leased nonce is advanced (stored lock signatures become useless) and the pool is
-//      re-synced from chain: every account that exists is free again.
+//   3. The pool is re-synced from chain: every account that exists is free again.
 //   4. Non-seed bets are deleted (chain_txs, terms versions, events, voice sessions cascade), which
 //      frees pair_busy and the 3-open-bets cap. Users, devices, api_sessions (the phones stay
 //      signed in), rooms, face_enrollments and seed bets are untouched.
@@ -17,16 +17,15 @@
 import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { auditLog, bets, noncePool } from '@youre-on/db';
-import { BetStatus } from '@youre-on/shared/escrow-client';
+import { BetStatus, findBetPda } from '@youre-on/shared/escrow-client';
+import { betIdToBytes } from '@youre-on/shared/primitives';
 import type { AppDeps } from '../context';
 import { listOurBets, type LiveBet } from '../chain/exits';
+import { readBetAccount } from '../lock/common';
 import { lifecycleOf } from '../lock/runtime';
 import { syncNoncePool } from '../lock/service';
-import { readBetAccount } from '../lock/common';
-import { rebalanceDemoWallets, type RebalanceResult } from './rebalance';
 import { FINALIZE_DELAY_MS } from '../payout/service';
-import { findBetPda } from '@youre-on/shared/escrow-client';
-import { betIdToBytes } from '@youre-on/shared/primitives';
+import { rebalanceDemoWallets, type RebalanceResult } from './rebalance';
 
 export const DemoResetRequest = z.object({
   /** Even out demo-a / demo-b after the reset (default false). */
@@ -97,7 +96,27 @@ export async function resetDemo(
   try {
     const rt = await lc.runtime();
 
-    // 2. escrow
+    // 2a. revoke every leased nonce first (best effort): stored lock signatures become useless,
+    //     and once these advances and every in-flight confirm settle, no lock can land
+    //     anymore, so the escrow scan below sees every Bet there will ever be.
+    if (rt) {
+      const leased = await deps.db
+        .select()
+        .from(noncePool)
+        .where(inArray(noncePool.status, ['leased']));
+      for (const n of leased) {
+        if (!n.leased_bet_id) continue;
+        await lc.lock
+          .revokeNonce(rt, n, n.leased_bet_id)
+          .then(() => result.nonces_revoked++)
+          .catch((err: unknown) =>
+            deps.log.warn('demo.reset_revoke_failed', { seed_index: n.seed_index, err }),
+          );
+      }
+    }
+    await lc.idle();
+
+    // 2b. escrow
     let settleAtMs: number | null = null;
     if (rt) {
       const live = await liveBetsToVoid(deps, rt).catch((err: unknown) => {
@@ -134,25 +153,7 @@ export async function resetDemo(
       }
     }
 
-    // 3a. revoke every leased nonce (best effort): stored lock signatures become useless.
-    if (rt) {
-      const leased = await deps.db
-        .select()
-        .from(noncePool)
-        .where(inArray(noncePool.status, ['leased']));
-      for (const n of leased) {
-        if (!n.leased_bet_id) continue;
-        await lc.lock
-          .revokeNonce(rt, n, n.leased_bet_id)
-          .then(() => result.nonces_revoked++)
-          .catch((err: unknown) =>
-            deps.log.warn('demo.reset_revoke_failed', { seed_index: n.seed_index, err }),
-          );
-      }
-    }
-    await lc.idle();
-
-    // 3b. drop the pool's references to bets / txs about to be deleted.
+    // 3a. drop the pool's references to bets / txs about to be deleted.
     await deps.db
       .update(noncePool)
       .set({
@@ -173,7 +174,7 @@ export async function resetDemo(
     result.deleted_bets = deleted.length;
     lc.payout.forget(deleted.map((d) => d.id));
 
-    // 3c. re-read the pool from chain: every account that is fine is free again.
+    // 3b. re-read the pool from chain: every account that is fine is free again.
     if (rt) {
       await deps.db
         .update(noncePool)
