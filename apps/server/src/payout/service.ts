@@ -24,7 +24,6 @@
 // lock's values (see lock/service.ts header).
 import { and, desc, eq, inArray, lte } from 'drizzle-orm';
 import {
-  address,
   createNoopSigner,
   getBase58Decoder,
   getBase58Encoder,
