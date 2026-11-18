@@ -19,6 +19,13 @@ import {
   type PartyDecline,
 } from '@youre-on/shared/authorization';
 import type { CameraEvidence } from '@youre-on/shared/evidence';
+import {
+  termsConfirmPath,
+  TermsConfirmResponse,
+  typedTermsPath,
+  TypedTermsResponse,
+  type TypedTermsRequest,
+} from '@youre-on/shared/judge/typed-terms';
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
 import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
@@ -118,6 +125,17 @@ export function createYoApi(c: ApiClient) {
       });
       return { events, last_seq: r.last_seq };
     },
+
+    // typed terms (Beat 2 without the voice judge; party A only)
+    proposeTypedTerms: (betId: string, body: TypedTermsRequest) =>
+      c.request('POST', typedTermsPath(betId), { json: body, schema: TypedTermsResponse }),
+    /** Pin `idempotencyKey` per (bet, terms_hash): a resend is the same confirm. */
+    confirmTerms: (betId: string, termsHash: string, idempotencyKey: string) =>
+      c.request('POST', termsConfirmPath(betId), {
+        json: { terms_hash: termsHash },
+        schema: TermsConfirmResponse,
+        idempotencyKey,
+      }),
 
     // §2.8 lock
     getLock: (betId: string) =>
