@@ -1,383 +1,91 @@
-// Stage view (TASKS D1-J5; ARCHITECTURE §8.2): the laptop on the projector, readable from 5 m.
-// Connect with STAGE_KEY (POST /v1/stage/session) or a pasted stage token, then one WebSocket
-// for the room: the focused bet's card (parties, terms + terms code, Face ID per party, the lock
-// tx with its signer count, the ruling + cited frame + appeal countdown, the payout), the chain
-// ticker with devnet Explorer links, and the Gemini BTC 5-minute odds widget.
-// Keys 1-6 play the pre-recorded beat clips (public/replay/beat{n}.mp4) full screen, labelled
-// REPLAY; Esc closes.
-import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from 'react';
-import { formatUsd } from '@youre-on/shared/money';
+// Stage view (TASKS D1-J5, D2-J3, D3-J4, D5-J1; ARCHITECTURE §8.2): the laptop on the projector.
+// Served by the API server at /stage (apps/server/src/stage/static.ts), so it talks to its own
+// origin: POST /v1/stage/session (STAGE_KEY + room code -> stage token), then one /v1/ws socket
+// for the room. Opening
+//
+//   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
+//
+// connects with no typing (config.ts); ?preview plays a sample bet with no server (preview.ts).
+// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, H help.
 import {
-  applyFrame,
-  explorerTx,
-  initialTicker,
-  type BetView,
-  type TickerEvent,
-  type TickerState,
-} from './ticker';
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type FormEvent,
+} from 'react';
+import { WS_CLOSE } from '@youre-on/shared/api';
+import { applyFrame, initialTicker, type BetView } from './ticker';
 import {
   fetchBetSnapshot,
   fetchMarket,
-  fetchStageToken,
+  openStageSession,
   StageConnection,
   wsUrlFor,
   type StageConfig,
 } from './connection';
-import { marketView, type MarketView } from './market';
-import { previewState } from './preview';
+import {
+  CONFIG_KEY,
+  isUuid,
+  loadSession,
+  parseLaunch,
+  readJson,
+  resolveServer,
+  scrubbedHref,
+  SESSION_KEY,
+  writeJson,
+  type LaunchParams,
+  type SavedSession,
+} from './config';
+import { fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
+import { PREVIEW_HEALTH, previewAt } from './preview';
+import {
+  initialReplays,
+  preloadReplays,
+  replaySrc,
+  REPLAY_BEATS,
+  type ReplayStatus,
+} from './replays';
+import {
+  featuredTx,
+  HelpOverlay,
+  PaidMoment,
+  QrOverlay,
+  ReplayOverlay,
+  StageView,
+  Ticker,
+} from './view';
 
-const STORE_KEY = 'yo-stage-config';
-export const REPLAY_BEATS = [1, 2, 3, 4, 5, 6] as const;
+export {
+  BetCard,
+  OddsWidget,
+  PaidMoment,
+  QrCode,
+  ReplayOverlay,
+  StageView,
+  Ticker,
+  HealthStrip,
+  PhaseRail,
+} from './view';
+export { clock, shortSig } from './format';
+export { REPLAY_BEATS } from './replays';
 
-function loadConfig(): StageConfig {
-  try {
-    const raw = globalThis.localStorage?.getItem(STORE_KEY);
-    if (raw) return { serverUrl: '', roomId: '', ...(JSON.parse(raw) as Partial<StageConfig>) };
-  } catch {
-    // storage unavailable: start empty
-  }
-  return { serverUrl: 'http://localhost:8080', roomId: '' };
+/** How long the PAID moment stays up, and how fresh a payout must be to trigger it. */
+export const PAID_MOMENT_MS = 7_000;
+export const PAID_FRESH_MS = 20_000;
+
+interface FormState extends StageConfig {
+  demoKey?: string;
 }
 
-// ---- small formatting helpers ------------------------------------------------------------
-
-export const shortSig = (s: string) => (s.length > 12 ? `${s.slice(0, 4)}…${s.slice(-4)}` : s);
-export function clock(ms: number): string {
-  const s = Math.max(0, Math.ceil(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-}
-const usd = (micro: string) => {
-  try {
-    return formatUsd(micro);
-  } catch {
-    return micro;
-  }
-};
-const usdPrice = (s: string | null) =>
-  s === null
-    ? '—'
-    : `$${Number(s).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const METHOD: Record<string, string> = { faceid_hold: 'Face ID', passcode_hold: 'Passcode' };
-
-function ExplorerLink({ sig, label }: { sig: string; label?: string }) {
-  return (
-    <a className="explorer" href={explorerTx(sig)} target="_blank" rel="noreferrer">
-      {label ?? shortSig(sig)} ↗
-    </a>
-  );
-}
-
-// ---- the chain ticker ----------------------------------------------------------------------
-
-const TICKER_TYPES = /^(chain\.|tx\.|terms\.authorized|ruling\.issued|bet\.state)/;
-
-export function Ticker({ state }: { state: TickerState }) {
-  const rows = state.events.filter((e) => TICKER_TYPES.test(e.type));
-  return (
-    <section aria-label="ticker" className="ticker">
-      <h2>On-chain</h2>
-      {state.errors.length > 0 && (
-        <ul className="errors">
-          {state.errors.slice(-3).map((e, i) => (
-            <li key={i}>{e}</li>
-          ))}
-        </ul>
-      )}
-      {rows.length === 0 ? (
-        <p className="muted">No events yet.</p>
-      ) : (
-        <ol className="events">
-          {[...rows]
-            .reverse()
-            .slice(0, 12)
-            .map((e) => (
-              <TickerRow key={`${e.bet_id}:${e.seq}`} e={e} />
-            ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-function TickerRow({ e }: { e: TickerEvent }) {
-  return (
-    <li className={e.source === 'chain' ? 'chain' : 'server'}>
-      <code>{e.type}</code> <span className="muted">#{e.seq}</span>{' '}
-      {e.explorer && (
-        <a className="explorer" href={e.explorer} target="_blank" rel="noreferrer">
-          Explorer ↗
-        </a>
-      )}
-    </li>
-  );
-}
-
-// ---- the bet card --------------------------------------------------------------------------
-
-function partyAuth(b: BetView, p: 'A' | 'B') {
-  if (b.declined === p) return <span className="bad">declined</span>;
-  const a = b.auth[p];
-  if (a) return <span className="good">✓ {METHOD[a.method] ?? a.method}</span>;
-  if (b.envelope) return <span className="muted">waiting…</span>;
-  return <span className="muted">—</span>;
-}
-
-function outcomeLine(b: BetView): string {
-  const r = b.ruling!;
-  if (r.outcome === 'A_WINS') return `${b.names.A ?? 'A'} wins`;
-  if (r.outcome === 'B_WINS') return `${b.names.B ?? 'B'} wins`;
-  if (r.outcome === 'REDO') return 'Redo';
-  return `Void${r.void_reason ? ` · ${r.void_reason.replace('_', ' ')}` : ''} · refund`;
-}
-
-export function BetCard({ bet, now }: { bet: BetView; now: number }) {
-  const t = bet.envelope?.terms ?? null;
-  const cited = bet.ruling?.cited_frames[0];
-  const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
-  const appealLeft = bet.appeal_deadline !== null ? bet.appeal_deadline * 1000 - now : null;
-  return (
-    <section className="card" aria-label="bet">
-      <div className="parties">
-        <span className="name">{bet.names.A ?? '…'}</span>
-        <span className="vs">vs</span>
-        <span className="name">{bet.names.B ?? '…'}</span>
-        {bet.state && <span className="pill">{bet.state.replace(/_/g, ' ')}</span>}
-      </div>
-
-      {t ? (
-        <div className="terms">
-          <p className="claim">“{t.claim}”</p>
-          <div className="terms-row">
-            <span>
-              {t.party_a.display_name} {usd(t.stakes.a)} · {t.party_b.display_name}{' '}
-              {usd(t.stakes.b)}
-            </span>
-            {t.market && (
-              <span className="muted">
-                Gemini {t.market.side === 'YES' ? 'Up' : 'Down'} @ {t.market.priceAtLock}
-              </span>
-            )}
-            <span className="code" aria-label="terms code">
-              {bet.terms_code}
-            </span>
-          </div>
-        </div>
-      ) : (
-        <p className="muted big">Negotiating terms…</p>
-      )}
-
-      <div className="grid2">
-        <div>
-          <h3>{bet.names.A ?? 'A'}</h3>
-          {partyAuth(bet, 'A')}
-        </div>
-        <div>
-          <h3>{bet.names.B ?? 'B'}</h3>
-          {partyAuth(bet, 'B')}
-        </div>
-      </div>
-
-      {bet.lock && (
-        <div className="lock">
-          <span className="label">LOCK</span>
-          <span>{`${bet.lock.kind === 'atomic_lock' ? '1 tx' : bet.lock.kind} · ${bet.lock.signers} signatures`}</span>
-          <ExplorerLink sig={bet.lock.signature} />
-          <span className={bet.lock.status === 'failed' ? 'bad' : 'good'}>
-            {bet.lock.status === 'failed'
-              ? `failed${bet.lock.error ? `: ${bet.lock.error}` : ''}`
-              : bet.lock.onchain
-                ? '✓ on-chain'
-                : bet.lock.status === 'confirmed'
-                  ? '✓ confirmed'
-                  : 'sending…'}
-          </span>
-        </div>
-      )}
-
-      {bet.ruling && (
-        <div className="ruling">
-          <div className="verdict">{outcomeLine(bet)}</div>
-          <p className="reason">{bet.ruling.reason}</p>
-          <div className="ruling-meta">
-            {citedUrl && (
-              <figure>
-                <img src={citedUrl} alt={`cited frame ${cited}`} />
-                <figcaption>frame {cited}</figcaption>
-              </figure>
-            )}
-            {appealLeft !== null && !bet.payout && (
-              <span className={appealLeft > 0 ? 'countdown' : 'muted'}>
-                {appealLeft > 0 ? `Appeal window ${clock(appealLeft)}` : 'Appeal window closed'}
-              </span>
-            )}
-            {bet.appealed && !bet.payout && <span className="countdown">Appealed</span>}
-          </div>
-        </div>
-      )}
-
-      {bet.payout && (
-        <div className="payout">
-          <span className="label">PAID</span>
-          <span>
-            {bet.names.A ?? 'A'} {usd(bet.payout.to_a)} · {bet.names.B ?? 'B'}{' '}
-            {usd(bet.payout.to_b)}
-          </span>
-          <span className="muted">{bet.payout.event}</span>
-          {bet.payout.signature && <ExplorerLink sig={bet.payout.signature} />}
-        </div>
-      )}
-      {bet.last_judge_line && <p className="judge">Judge: {bet.last_judge_line}</p>}
-    </section>
-  );
-}
-
-// ---- the Gemini odds widget ----------------------------------------------------------------
-
-function Sparkline({ points, strike }: { points: number[]; strike: number | null }) {
-  if (points.length < 2) return null;
-  const all = strike !== null ? [...points, strike] : points;
-  const lo = Math.min(...all);
-  const hi = Math.max(...all);
-  const span = hi - lo || 1;
-  const y = (v: number) => 100 - ((v - lo) / span) * 100;
-  const d = points.map((p, i) => `${(i / (points.length - 1)) * 300},${y(p)}`).join(' ');
-  return (
-    <svg className="spark" viewBox="0 -4 300 108" preserveAspectRatio="none" aria-hidden="true">
-      {strike !== null && <line x1="0" x2="300" y1={y(strike)} y2={y(strike)} className="strike" />}
-      <polyline points={d} fill="none" />
-    </svg>
-  );
-}
-
-export function OddsWidget({ view }: { view: MarketView | null }) {
-  if (!view)
-    return (
-      <section className="odds" aria-label="odds">
-        <h2>BTC 5-min · Gemini</h2>
-        <p className="muted">Waiting for the market…</p>
-      </section>
-    );
-  return (
-    <section className="odds" aria-label="odds">
-      <h2>BTC 5-min · Gemini</h2>
-      <div className="odds-grid">
-        <div>
-          <span className="label">LINE</span>
-          <span className="num">{view.strike ? usdPrice(view.strike) : 'pending'}</span>
-        </div>
-        <div>
-          <span className="label">BTC</span>
-          <span className={`num ${view.direction}`}>{usdPrice(view.price)}</span>
-        </div>
-        <div>
-          <span className="label">CLOSES</span>
-          <span className="num">{clock(view.msLeft)}</span>
-        </div>
-        <div>
-          <span className="label">UP</span>
-          <span className="num">{view.upPct !== null ? `${view.upPct}%` : '—'}</span>
-        </div>
-      </div>
-      <Sparkline points={view.history} strike={view.strike ? Number(view.strike) : null} />
-      <div className="split">
-        {view.split.ok ? (
-          <>
-            <span className="good">
-              Up {usd(view.split.up)} · Down {usd(view.split.down)}
-            </span>
-            <span className="muted">
-              of {usd(view.split.pot)} pot{view.split.fromTerms ? ' · locked' : ' · fair stakes'}
-            </span>
-          </>
-        ) : (
-          <span className="muted">{view.split.reason.replace(/_/g, ' ').toLowerCase()}</span>
-        )}
-      </div>
-    </section>
-  );
-}
-
-// ---- replay overlay ------------------------------------------------------------------------
-
-export function ReplayOverlay({ beat, onClose }: { beat: number; onClose: () => void }) {
-  const [missing, setMissing] = useState(false);
-  useEffect(() => {
-    if (!missing) return;
-    const t = setTimeout(onClose, 2500);
-    return () => clearTimeout(t);
-  }, [missing, onClose]);
-  return (
-    <div className="replay" role="dialog" aria-label={`replay beat ${beat}`} onClick={onClose}>
-      <span className="replay-badge">REPLAY · beat {beat}</span>
-      {missing ? (
-        <p className="big muted">No clip at replay/beat{beat}.mp4</p>
-      ) : (
-        <video
-          src={`/replay/beat${beat}.mp4`}
-          autoPlay
-          playsInline
-          onEnded={onClose}
-          onError={() => setMissing(true)}
-        />
-      )}
-    </div>
-  );
-}
-
-// ---- the whole stage -----------------------------------------------------------------------
-
-export function StageView({
-  state,
-  now,
-  onDisconnect,
-  preview = false,
-}: {
-  state: TickerState;
-  now: number;
-  onDisconnect?: () => void;
-  preview?: boolean;
-}) {
-  const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
-  const mv = useMemo(
-    () => (state.market ? marketView(state.market, state.marketHistory, now, bet) : null),
-    [state.market, state.marketHistory, now, bet],
-  );
-  return (
-    <div className="stage">
-      <header>
-        <h1>You&apos;re On</h1>
-        {preview && <span className="replay-badge inline">PREVIEW · sample data</span>}
-        <span className={`dot ${state.status}`} aria-label={`connection ${state.status}`} />
-        <span className="muted">
-          {state.status}
-          {state.presence
-            ? ` · ${state.presence.online}/${state.presence.members} in the room`
-            : ''}
-          {state.lastCue ? ` · ${state.lastCue.kind}` : ''}
-        </span>
-        {onDisconnect && (
-          <button type="button" className="ghost" onClick={onDisconnect}>
-            disconnect
-          </button>
-        )}
-      </header>
-      <main className="layout">
-        <div className="left">
-          {bet ? (
-            <BetCard bet={bet} now={now} />
-          ) : (
-            <section className="card">
-              <p className="big muted">Waiting for a challenge…</p>
-            </section>
-          )}
-        </div>
-        <aside className="right">
-          <OddsWidget view={mv} />
-          <Ticker state={state} />
-        </aside>
-      </main>
-    </div>
-  );
+interface Live {
+  token: string;
+  serverUrl: string;
+  roomId: string;
+  roomLabel: string;
+  demoKey: string | null;
 }
 
 function useNow(offsetMs: number | null, everyMs = 250): number {
@@ -389,43 +97,291 @@ function useNow(offsetMs: number | null, everyMs = 250): number {
   return t + (offsetMs ?? 0);
 }
 
+const origin = () => {
+  try {
+    return globalThis.location?.origin ?? 'http://localhost:8080';
+  } catch {
+    return 'http://localhost:8080';
+  }
+};
+
+function readLaunch(): LaunchParams {
+  try {
+    return parseLaunch(globalThis.location?.search ?? '', globalThis.location?.hash ?? '');
+  } catch {
+    return parseLaunch('', '');
+  }
+}
+
+function initialForm(l: LaunchParams): FormState {
+  const saved = readJson<Partial<FormState>>('local', CONFIG_KEY) ?? {};
+  return {
+    serverUrl: l.server ?? saved.serverUrl ?? '',
+    roomId: l.room ?? saved.roomId ?? '',
+    betId: l.bet ?? saved.betId ?? '',
+    stageKey: l.key ?? '',
+    token: l.token ?? '',
+    demoKey: l.demo ?? '',
+  };
+}
+
+/** The PAID moment: true for PAID_MOMENT_MS after a fresh payout of the focused bet appears. */
+function usePaidMoment(bet: BetView | null, now: number): boolean {
+  const [shown, setShown] = useState<string | null>(null);
+  const seen = useRef(new Set<string>());
+  const key = bet?.paid_at ? `${bet.bet_id}:${bet.paid_at}` : null;
+  useEffect(() => {
+    if (!key || seen.current.has(key)) return;
+    seen.current.add(key);
+    if (now - Date.parse(bet!.paid_at!) > PAID_FRESH_MS) return; // an old payout (cold start)
+    setShown(key);
+    const t = setTimeout(() => setShown((s) => (s === key ? null : s)), PAID_MOMENT_MS);
+    return () => clearTimeout(t);
+    // deps: once per payout key, not on every clock tick
+  }, [key]);
+  return shown !== null && shown === key;
+}
+
+function useReplays(enabled: boolean): ReplayStatus {
+  const [s, setS] = useState<ReplayStatus>(initialReplays);
+  useEffect(() => {
+    if (!enabled || typeof fetch !== 'function' || typeof URL.createObjectURL !== 'function')
+      return;
+    let cancelled = false;
+    const urls: string[] = [];
+    // after the page settles, so the bundle and the socket go first
+    const t = setTimeout(() => {
+      void preloadReplays({
+        fetch: (u) => fetch(u),
+        createObjectURL: (b) => {
+          const u = URL.createObjectURL(b);
+          urls.push(u);
+          return u;
+        },
+        cancelled: () => cancelled,
+        onChange: (beat, state, url) =>
+          setS((prev) => ({
+            clips: { ...prev.clips, [beat]: state },
+            urls: url ? { ...prev.urls, [beat]: url } : prev.urls,
+          })),
+      });
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, [enabled]);
+  return s;
+}
+
+function useDemoHealth(live: Live | null) {
+  const [health, setHealth] = useState<DemoHealth | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!live?.demoKey) {
+      setHealth(null);
+      setError(null);
+      return;
+    }
+    let stop = false;
+    const poll = () =>
+      fetchDemoHealth(live.serverUrl, live.demoKey!).then(
+        (h) => {
+          if (stop) return;
+          setHealth(h);
+          setError(null);
+        },
+        (err: unknown) => !stop && setError(err instanceof Error ? err.message : String(err)),
+      );
+    void poll();
+    const i = setInterval(poll, HEALTH_POLL_MS);
+    return () => {
+      stop = true;
+      clearInterval(i);
+    };
+  }, [live]);
+  return { health, error };
+}
+
+function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen();
+  } catch {
+    // fullscreen not allowed (iframe / old browser)
+  }
+}
+
 export function App() {
-  const [cfg, setCfg] = useState<StageConfig>(loadConfig);
+  const [launch] = useState(readLaunch);
+  const [form, setForm] = useState<FormState>(() => initialForm(launch));
   const [state, dispatch] = useReducer(applyFrame, initialTicker);
-  const [replay, setReplay] = useState<number | null>(null);
-  const [live, setLive] = useState<{ token: string; serverUrl: string } | null>(null);
+  const [overlay, setOverlay] = useState<
+    { kind: 'replay'; beat: number } | { kind: 'qr' | 'help' } | null
+  >(null);
+  const [live, setLive] = useState<Live | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const conn = useRef<StageConnection | null>(null);
   const seeded = useRef(new Set<string>());
   const now = useNow(state.clockOffsetMs);
-  const [preview] = useState(() => {
-    try {
-      return new URLSearchParams(globalThis.location?.search ?? '').has('preview')
-        ? Date.now()
-        : null;
-    } catch {
-      return null;
-    }
-  });
-  const previewSlot = preview === null ? 0 : Math.floor(now / 2000);
+  const replays = useReplays(!launch.noPreload);
+  const { health, error: healthError } = useDemoHealth(live);
+  const [previewStart] = useState(() => Date.now());
+
   const pv = useMemo(
-    () => (preview === null ? null : previewState(preview, previewSlot * 2000)),
-    [preview, previewSlot],
+    () => (launch.preview === null ? null : previewAt(previewStart, now, launch.preview || null)),
+    [launch.preview, previewStart, now],
   );
+  const shown = pv ? pv.state : state;
+  const shownNow = pv ? pv.now : now;
+  const focus = shown.focusBetId ? (shown.bets[shown.focusBetId] ?? null) : null;
+  const paidMoment = usePaidMoment(focus, shownNow);
+
+  // Secrets never stay in the address bar (or the browser history) on a projector.
+  useEffect(() => {
+    try {
+      const clean = scrubbedHref(globalThis.location.href);
+      if (clean) globalThis.history.replaceState(null, '', clean);
+    } catch {
+      // not a browser
+    }
+  }, []);
 
   useEffect(() => () => conn.current?.stop(), []);
 
-  // Keys 1-6: full-screen replay clips; Esc closes.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (e.key === 'Escape') setReplay(null);
-      const n = Number(e.key);
-      if (Number.isInteger(n) && n >= 1 && n <= 6) setReplay(n);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+  const disconnect = useCallback(() => {
+    conn.current?.stop();
+    conn.current = null;
+    seeded.current = new Set();
+    setLive(null);
+    writeJson('session', SESSION_KEY, null);
   }, []);
+
+  const start = useCallback(
+    (s: {
+      serverUrl: string;
+      token: string;
+      roomId: string;
+      roomLabel: string;
+      betId: string | null;
+      demoKey: string | null;
+    }) => {
+      conn.current?.stop();
+      seeded.current = new Set();
+      const serverUrl = resolveServer(s.serverUrl, origin());
+      conn.current = new StageConnection({
+        wsUrl: wsUrlFor(serverUrl),
+        token: s.token,
+        roomId: s.roomId,
+        onAction: dispatch,
+        subs: s.betId ? [{ bet_id: s.betId, after_seq: 0 }] : [],
+      });
+      conn.current.start();
+      setLive({
+        token: s.token,
+        serverUrl,
+        roomId: s.roomId,
+        roomLabel: s.roomLabel,
+        demoKey: s.demoKey,
+      });
+      fetchMarket(serverUrl, s.token).then(
+        (snapshot) => dispatch({ kind: 'market', snapshot, receivedAt: Date.now() }),
+        () => undefined, // the feed may be off; stage.market frames fill it later
+      );
+      if (s.betId) {
+        seeded.current.add(s.betId);
+        fetchBetSnapshot(serverUrl, s.token, s.betId).then(
+          (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
+          (err: unknown) => dispatch({ kind: 'error', message: String(err) }),
+        );
+      }
+    },
+    [],
+  );
+
+  const connect = useCallback(
+    async (f: FormState) => {
+      setConnectError(null);
+      setBusy(true);
+      const serverUrl = resolveServer(f.serverUrl, origin());
+      const room = f.roomId.trim();
+      const betId = f.betId?.trim() || null;
+      const demoKey = f.demoKey?.trim() || null;
+      writeJson('local', CONFIG_KEY, {
+        serverUrl: f.serverUrl.trim(),
+        roomId: room,
+        betId: betId ?? '',
+      });
+      try {
+        if (!room) throw new Error('Enter the room code from phone A.');
+        dispatch({ kind: 'status', status: 'authorizing' });
+        let token = f.token?.trim() ?? '';
+        let roomId = room;
+        let expiresAt: string | null = null;
+        if (!token) {
+          if (!f.stageKey?.trim()) throw new Error('Enter the stage key.');
+          const s = await openStageSession({
+            serverUrl,
+            roomId: room,
+            stageKey: f.stageKey.trim(),
+          });
+          token = s.token;
+          roomId = s.room_id;
+          expiresAt = s.expires_at;
+        } else if (!isUuid(room)) {
+          throw new Error('With a pasted stage token, give the room id (uuid), not its code.');
+        }
+        const saved: SavedSession = {
+          serverUrl: f.serverUrl.trim(),
+          roomId,
+          token,
+          demoKey,
+          betId,
+          expiresAt,
+        };
+        writeJson('session', SESSION_KEY, { ...saved, roomLabel: room });
+        start({ serverUrl: f.serverUrl, token, roomId, roomLabel: room, betId, demoKey });
+      } catch (err) {
+        dispatch({ kind: 'status', status: 'closed' });
+        setConnectError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [start],
+  );
+
+  // Launch: a key / token in the URL connects at once; else a saved session of this tab resumes.
+  const launched = useRef(false);
+  useEffect(() => {
+    if (launched.current || launch.preview !== null) return;
+    launched.current = true;
+    if (launch.key || launch.token) {
+      void connect(initialForm(launch));
+      return;
+    }
+    const s = loadSession(Date.now()) as (SavedSession & { roomLabel?: string }) | null;
+    if (s)
+      start({
+        serverUrl: s.serverUrl,
+        token: s.token,
+        roomId: s.roomId,
+        roomLabel: s.roomLabel ?? s.roomId,
+        betId: s.betId,
+        demoKey: s.demoKey,
+      });
+  }, [connect, launch, start]);
+
+  // A rejected token / wrong room is final: back to the form with the reason.
+  useEffect(() => {
+    if (!live) return;
+    if (state.closeCode === WS_CLOSE.UNAUTHORIZED || state.closeCode === WS_CLOSE.FORBIDDEN) {
+      setConnectError(state.errors.at(-1) ?? `closed ${state.closeCode}`);
+      disconnect();
+    }
+  }, [state.closeCode, state.errors, live, disconnect]);
 
   // Every bet seen for the first time: subscribe from seq 0 (replays what happened before the
   // stage connected; duplicates are dropped by (bet_id, seq)) and seed its card from
@@ -436,7 +392,7 @@ export function App() {
     for (const id of betIds ? betIds.split(',') : []) {
       if (seeded.current.has(id)) continue;
       seeded.current.add(id);
-      conn.current?.subscribe(id, 0); // replay from the start: the ticker shows the history
+      conn.current?.subscribe(id, 0);
       fetchBetSnapshot(live.serverUrl, live.token, id).then(
         (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
         (err: unknown) => dispatch({ kind: 'error', message: String(err) }),
@@ -449,89 +405,113 @@ export function App() {
     for (const [id, seq] of Object.entries(state.lastSeq)) conn.current?.noteSeq(id, seq);
   }, [state.lastSeq]);
 
-  async function connect(e: FormEvent) {
-    e.preventDefault();
-    conn.current?.stop();
-    seeded.current = new Set();
-    try {
-      globalThis.localStorage?.setItem(
-        STORE_KEY,
-        JSON.stringify({ serverUrl: cfg.serverUrl, roomId: cfg.roomId, betId: cfg.betId }),
-      );
-    } catch {
-      // ignore
-    }
-    try {
-      dispatch({ kind: 'status', status: 'authorizing' });
-      const token = cfg.token || (await fetchStageToken(cfg));
-      const betId = cfg.betId?.trim();
-      conn.current = new StageConnection({
-        wsUrl: wsUrlFor(cfg.serverUrl),
-        token,
-        roomId: cfg.roomId,
-        onAction: dispatch,
-        subs: betId ? [{ bet_id: betId, after_seq: 0 }] : [],
-      });
-      conn.current.start();
-      setLive({ token, serverUrl: cfg.serverUrl });
-      fetchMarket(cfg.serverUrl, token).then(
-        (snapshot) => dispatch({ kind: 'market', snapshot, receivedAt: Date.now() }),
-        () => undefined, // the feed may be off; stage.market frames fill it later
-      );
-      if (betId) {
-        seeded.current.add(betId);
-        fetchBetSnapshot(cfg.serverUrl, token, betId).then(
-          (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
-          (err: unknown) => dispatch({ kind: 'error', message: String(err) }),
-        );
-      }
-    } catch (err) {
-      dispatch({ kind: 'status', status: 'closed' });
-      dispatch({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
-    }
-  }
+  // Stage cues (gavel, drumroll, …): a flash on the projector.
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!shown.cueCount || !shown.lastCue) return;
+    setFlash(shown.lastCue.kind);
+    const t = setTimeout(() => setFlash(null), 900);
+    return () => clearTimeout(t);
+  }, [shown.cueCount, shown.lastCue]);
 
-  const field = (k: keyof StageConfig, label: string, type = 'text') => (
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === 'escape') setOverlay(null);
+      else if (k === 'f') toggleFullscreen();
+      else if (k === 'q') setOverlay((o) => (o?.kind === 'qr' ? null : { kind: 'qr' }));
+      else if (k === 'h' || k === '?')
+        setOverlay((o) => (o?.kind === 'help' ? null : { kind: 'help' }));
+      else {
+        const n = Number(e.key);
+        if ((REPLAY_BEATS as readonly number[]).includes(n))
+          setOverlay({ kind: 'replay', beat: n });
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const field = (
+    k: keyof FormState,
+    label: string,
+    opts: { type?: string; placeholder?: string } = {},
+  ) => (
     <label>
       <span>{label}</span>
       <input
-        type={type}
-        value={cfg[k] ?? ''}
-        onChange={(ev) => setCfg({ ...cfg, [k]: ev.target.value })}
+        type={opts.type ?? 'text'}
+        value={form[k] ?? ''}
+        placeholder={opts.placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(ev) => setForm({ ...form, [k]: ev.target.value })}
       />
     </label>
   );
 
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    void connect(form);
+  };
+
   return (
     <>
-      {pv ? (
-        <StageView state={pv} now={now} preview />
-      ) : live ? (
+      {pv || live ? (
         <StageView
-          state={state}
-          now={now}
-          onDisconnect={() => {
-            conn.current?.stop();
-            conn.current = null;
-            setLive(null);
-          }}
+          state={shown}
+          now={shownNow}
+          preview={pv ? launch.preview : null}
+          onDisconnect={live ? disconnect : undefined}
+          health={pv ? PREVIEW_HEALTH : health}
+          healthError={pv ? null : healthError}
+          showHealth={pv ? true : !!live?.demoKey}
+          replays={replays}
+          roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
         />
       ) : (
         <div className="stage connect">
-          <h1>You&apos;re On</h1>
-          <form onSubmit={connect}>
-            {field('serverUrl', 'Server')}
-            {field('roomId', 'Room id')}
-            {field('stageKey', 'Stage key', 'password')}
-            {field('token', 'or stage token', 'password')}
-            {field('betId', 'Bet id (optional)')}
-            <button type="submit">Connect</button>
+          <h1>
+            You&apos;re <span className="on">On</span> <span className="muted">· stage</span>
+          </h1>
+          <form onSubmit={onSubmit}>
+            {field('roomId', 'Room code (on phone A) or room id', { placeholder: 'ABC234' })}
+            {field('stageKey', 'Stage key', { type: 'password' })}
+            <details>
+              <summary>More</summary>
+              {field('serverUrl', 'Server', { placeholder: `this server (${origin()})` })}
+              {field('token', 'or a stage token', { type: 'password' })}
+              {field('betId', 'Bet id (optional)')}
+              {field('demoKey', 'Demo admin key (health strip)', { type: 'password' })}
+            </details>
+            <button type="submit" disabled={busy}>
+              {busy ? 'Connecting…' : 'Connect'}
+            </button>
+            {connectError && <p className="bad">{connectError}</p>}
           </form>
-          <p className="muted">Keys 1–6 play the REPLAY clips · Esc closes</p>
+          <p className="muted small">
+            Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}
+            <a href="?preview">open the preview</a>
+          </p>
           <Ticker state={state} />
         </div>
       )}
-      {replay !== null && <ReplayOverlay beat={replay} onClose={() => setReplay(null)} />}
+      {paidMoment && focus?.payout && <PaidMoment bet={focus} />}
+      {flash && <div className={`flash ${flash}`} aria-hidden="true" />}
+      {overlay?.kind === 'replay' && (
+        <ReplayOverlay
+          key={overlay.beat}
+          beat={overlay.beat}
+          src={replaySrc(replays, overlay.beat)}
+          onClose={() => setOverlay(null)}
+        />
+      )}
+      {overlay?.kind === 'qr' && (
+        <QrOverlay tx={focus ? featuredTx(focus) : null} onClose={() => setOverlay(null)} />
+      )}
+      {overlay?.kind === 'help' && <HelpOverlay onClose={() => setOverlay(null)} />}
     </>
   );
 }

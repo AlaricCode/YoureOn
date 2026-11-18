@@ -49,6 +49,9 @@ export interface LockView {
   onchain: boolean;
   slot: number | null;
   error: string | null;
+  /** Event ts of tx.submitted and of the first chain event (the Streams lag between them). */
+  sent_at: string | null;
+  onchain_at: string | null;
 }
 
 export interface RulingView {
@@ -60,6 +63,34 @@ export interface RulingView {
   stage: string;
   void_reason: string | null;
   ruling_hash: string;
+  /** The attempt it rules on (attempt-stage rulings only). */
+  attempt_no: number | null;
+  redo_reason: string | null;
+}
+
+export interface VoteView {
+  seat: number;
+  provider: string;
+  model: string;
+  status: string;
+  outcome: string;
+  confidence: number;
+  reason: string;
+  counted_as: string;
+}
+
+export interface AppealResultView {
+  final_outcome: string;
+  flipped: boolean;
+  decided_by: string;
+  tally: { A_WINS: number; B_WINS: number; ABSTAIN: number };
+}
+
+export interface HearingView {
+  hearing_id: string;
+  /** The turn whose clock is running. */
+  open: { party: PartyKey; closes_at: string } | null;
+  turns: Array<{ party: PartyKey; transcript: string }>;
 }
 
 export interface PayoutView {
@@ -73,6 +104,12 @@ export interface BetView {
   bet_id: string;
   state: string | null;
   names: { A: string | null; B: string | null };
+  /** Opt-in profile photos (UserRef / TermsPresentation); initials when null. */
+  avatars: Record<PartyKey, string | null>;
+  /** From the REST snapshot: maps room presence onto the parties. */
+  user_ids: Record<PartyKey, string | null>;
+  /** B's answer to the challenge (bet.invite_answered). */
+  invite: 'accepted' | 'declined' | null;
   envelope: TermsEnvelope | null;
   terms_code: string | null;
   auth: Record<PartyKey, { method: string; at: string } | null>;
@@ -81,11 +118,20 @@ export interface BetView {
   declined: PartyKey | null;
   lock: LockView | null;
   attempt_no: number | null;
+  performer: PartyKey | null;
   frame_urls: string[];
   ruling: RulingView | null;
+  /** BetResolved.ts: when the appeal window opened (unix s). */
+  resolved_at: number | null;
   appeal_deadline: number | null;
   appealed: boolean;
+  hearing: HearingView | null;
+  /** Appeal panel votes by seat (0-2), as they stream in. */
+  votes: VoteView[];
+  appeal_result: AppealResultView | null;
   payout: PayoutView | null;
+  /** Event ts of the money-moved event (the PAID moment fires only for a fresh one). */
+  paid_at: string | null;
   closed: boolean;
   last_judge_line: string | null;
   last_cue: string | null;
@@ -101,8 +147,16 @@ export interface TickerState {
   closeCode: number | null;
   events: TickerEvent[];
   lastSeq: Record<string, number>;
-  presence: { room_id: string; online: number; members: number } | null;
+  presence: {
+    room_id: string;
+    online: number;
+    members: number;
+    /** user_id -> online, for the per-party "offline" badge. */
+    online_by_user?: Record<string, boolean>;
+  } | null;
   lastCue: { bet_id: string; kind: string } | null;
+  /** Increments with every stage.cue (the page flashes / plays the cue on each). */
+  cueCount: number;
   marketTicks: number;
   market: GeminiMarketSnapshot | null;
   marketHistory: Array<{ t: number; price: number }>;
@@ -125,6 +179,7 @@ export const initialTicker: TickerState = {
   lastSeq: {},
   presence: null,
   lastCue: null,
+  cueCount: 0,
   marketTicks: 0,
   market: null,
   marketHistory: [],
@@ -178,6 +233,9 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     bet_id,
     state: null,
     names: { A: null, B: null },
+    avatars: { A: null, B: null },
+    user_ids: { A: null, B: null },
+    invite: null,
     envelope: null,
     terms_code: null,
     auth: { A: null, B: null },
@@ -185,11 +243,17 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     declined: null,
     lock: null,
     attempt_no: null,
+    performer: null,
     frame_urls: [],
     ruling: null,
+    resolved_at: null,
     appeal_deadline: null,
     appealed: false,
+    hearing: null,
+    votes: [],
+    appeal_result: null,
     payout: null,
+    paid_at: null,
     closed: false,
     last_judge_line: null,
     last_cue: null,
@@ -206,6 +270,10 @@ function withEnvelope(b: BetView, env: TermsEnvelope): BetView {
     names: {
       A: env.terms.party_a.display_name,
       B: env.terms.party_b.display_name,
+    },
+    avatars: {
+      A: env.presentation.party_a_avatar_url ?? b.avatars.A,
+      B: env.presentation.party_b_avatar_url ?? b.avatars.B,
     },
   };
 }
@@ -230,7 +298,13 @@ function rulingView(r: {
     stage: typeof r.ruling.stage === 'string' ? r.ruling.stage : 'hearing',
     void_reason: r.ruling.void_reason ?? null,
     ruling_hash: r.ruling_hash,
+    attempt_no: typeof r.ruling.attempt_no === 'number' ? r.ruling.attempt_no : null,
+    redo_reason: typeof r.ruling.redo_reason === 'string' ? r.ruling.redo_reason : null,
   };
+}
+
+function hearingOf(v: BetView, hearing_id: string): HearingView {
+  return v.hearing?.hearing_id === hearing_id ? v.hearing : { hearing_id, open: null, turns: [] };
 }
 
 /** Folds one event into its bet's view. */
@@ -241,6 +315,8 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
       return { ...v, names: { ...v.names, A: v.names.A ?? e.payload.challenger.display_name } };
     case 'bet.state':
       return { ...v, state: e.payload.state };
+    case 'bet.invite_answered':
+      return { ...v, invite: e.payload.answer };
     case 'terms.proposed':
       return withEnvelope(v, e.payload.envelope);
     case 'terms.authorize_request':
@@ -280,13 +356,15 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
           onchain: prev?.onchain ?? false,
           slot: e.type === 'tx.confirmed' ? e.payload.slot : (prev?.slot ?? null),
           error: e.type === 'tx.failed' ? e.payload.error : null,
+          sent_at: e.type === 'tx.submitted' ? (prev?.sent_at ?? e.ts) : (prev?.sent_at ?? null),
+          onchain_at: prev?.onchain_at ?? null,
         },
       };
     }
     case 'chain.BetCreated':
     case 'chain.BetAccepted': {
       const lock: LockView = v.lock
-        ? { ...v.lock, onchain: true, status: 'confirmed' }
+        ? { ...v.lock, onchain: true, status: 'confirmed', onchain_at: v.lock.onchain_at ?? e.ts }
         : {
             kind: 'atomic_lock',
             signature: e.payload.signature,
@@ -295,11 +373,18 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
             onchain: true,
             slot: e.payload.slot,
             error: null,
+            sent_at: null,
+            onchain_at: e.ts,
           };
       return { ...v, lock };
     }
     case 'attempt.started':
-      return { ...v, attempt_no: e.payload.attempt_no, frame_urls: [] };
+      return {
+        ...v,
+        attempt_no: e.payload.attempt_no,
+        performer: e.payload.performer,
+        frame_urls: [],
+      };
     case 'attempt.evidence':
       return { ...v, frame_urls: e.payload.frame_urls };
     case 'ruling.issued':
@@ -307,6 +392,7 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
     case 'chain.BetResolved':
       return {
         ...v,
+        resolved_at: e.payload.ts,
         appeal_deadline: e.payload.appeal_deadline,
         txs: { ...v.txs, resolve: e.payload.signature },
       };
@@ -317,8 +403,55 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
         appeal_deadline: null,
         txs: { ...v.txs, appeal: e.payload.signature },
       };
-    case 'appeal.result':
-      return v;
+    case 'hearing.opened':
+      return { ...v, hearing: { hearing_id: e.payload.hearing_id, open: null, turns: [] } };
+    case 'hearing.turn_open':
+      return {
+        ...v,
+        hearing: {
+          ...hearingOf(v, e.payload.hearing_id),
+          open: { party: e.payload.party, closes_at: e.payload.closes_at },
+        },
+      };
+    case 'hearing.turn': {
+      const h = hearingOf(v, e.payload.turn.hearing_id);
+      const turn = { party: e.payload.turn.party, transcript: e.payload.turn.transcript };
+      return {
+        ...v,
+        hearing: {
+          ...h,
+          open: h.open?.party === turn.party ? null : h.open,
+          turns: [...h.turns.filter((t) => t.party !== turn.party), turn],
+        },
+      };
+    }
+    case 'appeal.vote': {
+      const x = e.payload.vote;
+      const vote: VoteView = {
+        seat: x.seat,
+        provider: x.provider,
+        model: x.model,
+        status: x.status,
+        outcome: x.outcome,
+        confidence: x.confidence,
+        reason: x.reason,
+        counted_as: x.counted_as,
+      };
+      const votes = [...v.votes.filter((o) => o.seat !== vote.seat), vote];
+      return { ...v, votes: votes.sort((a, b) => a.seat - b.seat) };
+    }
+    case 'appeal.result': {
+      const r = e.payload.result;
+      return {
+        ...v,
+        appeal_result: {
+          final_outcome: r.final_outcome,
+          flipped: r.flipped,
+          decided_by: r.decided_by,
+          tally: r.tally,
+        },
+      };
+    }
     // The program emits no BetPaid: money moves in these five, then BetClosed.
     case 'chain.BetFinalized':
     case 'chain.BetConceded':
@@ -334,6 +467,7 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
           event: e.type.slice('chain.'.length),
           signature: e.payload.signature,
         },
+        paid_at: v.paid_at ?? e.ts,
         txs: { ...v.txs, payout: e.payload.signature },
       };
     case 'chain.BetClosed':
@@ -353,10 +487,15 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
     ...b,
     state: snap.state,
     names: { A: snap.party_a.display_name, B: snap.party_b.display_name },
+    avatars: {
+      A: snap.party_a.avatar_url ?? b.avatars.A,
+      B: snap.party_b.avatar_url ?? b.avatars.B,
+    },
+    user_ids: { A: snap.party_a.user_id, B: snap.party_b.user_id },
     attempt_no: snap.attempt_no ?? b.attempt_no,
     updated_at: Math.max(b.updated_at, at),
   };
-  if (snap.envelope) v = { ...withEnvelope(v, snap.envelope), names: v.names };
+  if (snap.envelope) v = { ...withEnvelope(v, snap.envelope), names: v.names, avatars: v.avatars };
   const auth = (p: PartyKey) => {
     const a = snap.authorizations[p];
     return a ? { method: a.method, at: a.authorized_at } : v.auth[p];
@@ -376,6 +515,8 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
       onchain: snap.chain_ack === 'stream',
       slot: null,
       error: null,
+      sent_at: null,
+      onchain_at: null,
     };
   if (snap.payout && !v.payout)
     v.payout = {
@@ -481,10 +622,17 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
             room_id: frame.room_id,
             members: frame.members.length,
             online: frame.members.filter((m) => m.online).length,
+            online_by_user: Object.fromEntries(
+              frame.members.map((m) => [m.user.user_id, m.online]),
+            ),
           },
         };
       case 'stage.cue':
-        return { ...s, lastCue: { bet_id: frame.bet_id, kind: frame.kind } };
+        return {
+          ...s,
+          lastCue: { bet_id: frame.bet_id, kind: frame.kind },
+          cueCount: s.cueCount + 1,
+        };
       case 'stage.market':
         return { ...withMarket(s, frame.snapshot, a.receivedAt), marketTicks: s.marketTicks + 1 };
       case 'subscribed':

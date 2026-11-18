@@ -32,16 +32,23 @@ const frame = (raw: unknown): TickerAction => ({
 describe('stage page', () => {
   it('renders the connect form and an empty ticker', () => {
     const html = renderToString(<App />);
-    expect(html).toContain('You&#x27;re On');
+    expect(html).toContain('You&#x27;re <span class="on">On</span>');
+    expect(html).toContain('Room code');
+    expect(html).toContain('Stage key');
     expect(html).toContain('Connect');
+    expect(html).toContain('href="?preview"');
     expect(html).toContain('No events yet.');
   });
 
   it('renders events newest first with Explorer links', () => {
     let s = applyFrame(initialTicker, frame(txEvent(1)));
-    s = applyFrame(s, frame(txEvent(2)));
+    s = applyFrame(
+      s,
+      frame({ ...txEvent(2), type: 'tx.confirmed', payload: { ...txEvent(2).payload, slot: 7 } }),
+    );
     const html = renderToString(<Ticker state={s} />);
-    expect(html.indexOf('#<!-- -->2')).toBeLessThan(html.indexOf('#<!-- -->1'));
+    expect(html.indexOf('Lock tx confirmed')).toBeGreaterThan(-1);
+    expect(html.indexOf('Lock tx confirmed')).toBeLessThan(html.indexOf('Lock tx sent'));
     expect(html).toContain(explorerTx(SIG).replace(/&/g, '&amp;'));
   });
 });
@@ -89,7 +96,8 @@ describe('ticker reducer', () => {
     s = applyFrame(s, frame({ op: 'subscribed', bet_id: BET, last_seq: 9, replayed: 9 }));
     expect(s.lastSeq[BET]).toBe(9);
     s = applyFrame(s, frame({ op: 'room.presence', room_id: BET, members: [] }));
-    expect(s.presence).toEqual({ room_id: BET, members: 0, online: 0 });
+    expect(s.presence).toMatchObject({ room_id: BET, members: 0, online: 0 });
+    expect(s.cueCount).toBe(1);
   });
 
   it('findSignature looks one level down', () => {

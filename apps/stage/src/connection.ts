@@ -1,6 +1,6 @@
 // Stage WebSocket client (API-CONTRACT §1.3 stage auth, §3.1–§3.3):
-//   1. POST /v1/stage/session {stage_key, room_id} -> a stage token (scope `stage`, read-only
-//      fan-out for one room). The page also accepts a pasted token.
+//   1. POST /v1/stage/session {stage_key, room_id | room_code} -> a stage token (scope `stage`,
+//      read-only fan-out for one room) and the room's uuid. The page also accepts a pasted token.
 //   2. wss://<host>/v1/ws, first frame `hello {token}` (never the token in the URL), then
 //      `subscribe_room {room_id}`: presence frames, stage.* and every bet in the room.
 //   3. `pong {t}` to every `ping`; dead after 45 s of silence; reconnect with 0.25→5 s backoff
@@ -20,8 +20,9 @@ import type { TickerAction } from './ticker';
 export const STAGE_SESSION_PATH = '/v1/stage/session';
 
 export interface StageConfig {
-  /** https://<app>.fly.dev (or http://localhost:8080 in dev). */
+  /** The API origin; the page that the server itself serves uses its own origin. */
   serverUrl: string;
+  /** The room's uuid, or its 6-char code (exchanged with the stage key for the uuid). */
   roomId: string;
   /** Either a ready stage token or the STAGE_KEY to exchange for one. */
   token?: string;
@@ -82,25 +83,59 @@ export function wsUrlFor(serverUrl: string): string {
   return u.toString();
 }
 
-/** §1.3: exchange STAGE_KEY for a stage token. The response shape is not pinned in the spec; `token` is read. */
-export async function fetchStageToken(
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface StageSession {
+  token: string;
+  /** The room's uuid (what subscribe_room needs), also when a code was given. */
+  room_id: string;
+  expires_at: string | null;
+  scopes: string[];
+}
+
+/**
+ * §1.3: exchange STAGE_KEY for a stage token. A uuid goes as `room_id`; anything else is a room
+ * code (or its youreon://room/ QR payload) and goes as `room_code`.
+ */
+export async function openStageSession(
   cfg: Pick<StageConfig, 'serverUrl' | 'roomId' | 'stageKey'>,
   doFetch: typeof fetch = fetch,
-): Promise<string> {
+): Promise<StageSession> {
+  const room = cfg.roomId.trim();
   const res = await doFetch(new URL(STAGE_SESSION_PATH, cfg.serverUrl).toString(), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ stage_key: cfg.stageKey, room_id: cfg.roomId }),
+    body: JSON.stringify(
+      UUID_RE.test(room)
+        ? { stage_key: cfg.stageKey, room_id: room }
+        : { stage_key: cfg.stageKey, room_code: room },
+    ),
   });
   const body = (await res.json().catch(() => null)) as {
     token?: unknown;
+    room_id?: unknown;
+    expires_at?: unknown;
+    scopes?: unknown;
     error?: { code?: string };
   } | null;
   if (!res.ok || typeof body?.token !== 'string')
     throw new Error(
       `stage session failed: HTTP ${res.status}${body?.error?.code ? ` ${body.error.code}` : ''}`,
     );
-  return body.token;
+  return {
+    token: body.token,
+    room_id: typeof body.room_id === 'string' ? body.room_id : room,
+    expires_at: typeof body.expires_at === 'string' ? body.expires_at : null,
+    scopes: Array.isArray(body.scopes) ? body.scopes.map(String) : [],
+  };
+}
+
+/** openStageSession's token only. */
+export async function fetchStageToken(
+  cfg: Pick<StageConfig, 'serverUrl' | 'roomId' | 'stageKey'>,
+  doFetch: typeof fetch = fetch,
+): Promise<string> {
+  return (await openStageSession(cfg, doFetch)).token;
 }
 
 /** Minimal WebSocket surface (the browser's, or a fake in tests). */
