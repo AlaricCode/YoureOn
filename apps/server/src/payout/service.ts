@@ -24,7 +24,7 @@
 // `confirmed`; the same values BetResolved carries). The stub projector writes none of them, and
 // the finalize sweep needs appeal_deadline in Postgres. onchain_pending / pending_sig keep the
 // lock's values (see lock/service.ts header).
-import { and, desc, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
 import {
   createNoopSigner,
   getBase58Decoder,
@@ -473,6 +473,13 @@ export class PayoutService {
    * The confirmed resolve -> RULED (reason carries appeal_deadline), then the loser's GG prompt
    * and the finalize fast path. No state change when the bet is no longer resolvable (e.g. a
    * concurrent adopt already ruled it).
+   *
+   * The chain may get there first: the projector's chain-wins rule (the Stream, or rpc_poll a few
+   * seconds after the send) moves the bet to RULED with this ruling before our own confirm
+   * returns (a slow confirm, a confirm timeout + adopt, RPC 429 retries). Then the state write and
+   * bet.state are skipped (the projector pushed them), but the side effects still belong to this
+   * confirm: tx.confirmed, the GG prompt and the finalize timer. They run once: only the call that
+   * moves this resolve's chain_txs row to 'confirmed' does them.
    */
   private async markRuled(
     rt: ChainRuntime,
@@ -491,19 +498,36 @@ export class PayoutService {
     already = false,
   ): Promise<RuledResult> {
     const { outcome, appealDeadline } = r;
+    const txConfirmed = (tx: Tx) =>
+      appendBetEvent(tx, {
+        bet_id: betId,
+        type: 'tx.confirmed',
+        payload: { kind: 'resolve', signature, slot: Number(landed.slot ?? 0n) },
+        now: this.deps.now(),
+      });
     const out = await this.deps.db.transaction(async (tx) => {
       const b = await lockBet(tx, betId);
       if (!b) return null;
-      if (rowId)
-        await tx
-          .update(chainTxs)
-          .set({
-            status: 'confirmed',
-            rpc_processed_at: new Date(landed.processedAt),
-            rpc_confirmed_at: new Date(landed.confirmedAt),
-          })
-          .where(eq(chainTxs.id, rowId));
-      if (!RESOLVABLE_STATES.includes(b.state)) return { b, envs: [], moved: false };
+      // under the bet lock: true for exactly one confirm of this row
+      const firstConfirm = rowId
+        ? (
+            await tx
+              .update(chainTxs)
+              .set({
+                status: 'confirmed',
+                rpc_processed_at: new Date(landed.processedAt),
+                rpc_confirmed_at: new Date(landed.confirmedAt),
+              })
+              .where(and(eq(chainTxs.id, rowId), ne(chainTxs.status, 'confirmed')))
+              .returning({ id: chainTxs.id })
+          ).length > 0
+        : false;
+      if (!RESOLVABLE_STATES.includes(b.state)) {
+        const chainRuled = b.state === 'RULED' && b.ruling_hash === r.rulingHash;
+        if (!chainRuled || !firstConfirm) return { b, envs: [], moved: false };
+        this.deps.log.info('payout.ruled_by_chain_first', { bet_id: betId, signature });
+        return { b, envs: signature ? [await txConfirmed(tx)] : [], moved: true };
+      }
       const [row] = await tx
         .update(bets)
         .set({
@@ -538,16 +562,7 @@ export class PayoutService {
           ),
           now: this.deps.now(),
         }),
-        ...(signature
-          ? [
-              await appendBetEvent(tx, {
-                bet_id: betId,
-                type: 'tx.confirmed',
-                payload: { kind: 'resolve', signature, slot: Number(landed.slot ?? 0n) },
-                now: this.deps.now(),
-              }),
-            ]
-          : []),
+        ...(signature ? [await txConfirmed(tx)] : []),
       ];
       return { b, envs, moved: true };
     });

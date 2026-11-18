@@ -11,10 +11,17 @@
 //   - there is no slot (getBlock objects carry none): order by blockHeight, then txIndex, then
 //     (outerIx, innerIx), then delivery order;
 //   - undecodable-but-attributed events are still stored (with apply_error) for the audit trail.
+import { getBase58Encoder } from '@solana/kit';
 import { z } from 'zod/v4';
 import { ChainEvents, chainEventDedupKey, Signature, type ChainEventName } from '@youre-on/shared';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
-import { base64ToBytes, decodeEventBytes, DecodeError, eventNameOf } from './decoder';
+import {
+  base64ToBytes,
+  decodeEventBytes,
+  DecodeError,
+  EVENT_IX_TAG_LE,
+  eventNameOf,
+} from './decoder';
 
 /** Envelope version the filter emits (`v`). */
 export const STREAM_PAYLOAD_VERSION = 1;
@@ -61,7 +68,8 @@ export interface ParsedChainEvent {
   signature: string;
   outer_ix: number;
   inner_ix: number;
-  slot: null;
+  /** NULL from Streams (getBlock objects carry none); set by rpc_poll. */
+  slot: number | null;
   block_height: number | null;
   tx_index: number | null;
   /** unix seconds, or null. */
@@ -227,5 +235,75 @@ export function parseStreamDelivery(body: unknown): StreamBatch {
         : h(a.ev.tx_index) - h(b.ev.tx_index) || a.seq - b.seq),
   );
   batch.events = ordered.map((x) => x.ev);
+  return batch;
+}
+
+// ---- rpc_poll (DATA-MODEL §8.3 "Gaps": the reconciler's getTransaction copy) -----------------
+
+/** One confirmed transaction as getTransaction (encoding json) returns it, normalized. */
+export interface RpcTransaction {
+  signature: string;
+  slot: number | null;
+  /** The block's height (getBlock), when the client could get it: attribution orders by it. */
+  blockHeight?: number | null;
+  /** unix seconds, or null. */
+  blockTime: number | null;
+  /** meta.err (null = success). */
+  err: unknown;
+  /** Static keys, then meta.loadedAddresses.writable, then .readonly (the runtime's index order). */
+  accountKeys: readonly string[];
+  innerInstructions: readonly {
+    index: number;
+    instructions: readonly { programIdIndex: number; accounts: readonly number[]; data: string }[];
+  }[];
+}
+
+const b58 = getBase58Encoder();
+
+/**
+ * The rpc_poll twin of infra/quicknode/filter.js (ESCROW §7.1 rules 1-5) over one getTransaction
+ * result: drop a failed tx; take INNER instructions of ESCROW_ID whose first account is the
+ * event-authority PDA and whose data starts with the Anchor event tag; never top-level ones. The
+ * events then go through the same envelope parser as a Stream delivery, so a row has the same
+ * dedup key (signature, outer_ix, inner_ix) and payload whichever source stores it first. `slot`
+ * is set, block_height when the client fetched it; tx_index stays null (a later Stream copy
+ * backfills both, ingest.ts).
+ */
+export function eventsFromRpcTransaction(tx: RpcTransaction, eventAuthority: string): StreamBatch {
+  if (tx.err !== null && tx.err !== undefined) return parseStreamDelivery(null);
+  const events: { outerIx: number; innerIx: number; eventBase64: string }[] = [];
+  for (const g of tx.innerInstructions)
+    g.instructions.forEach((ix, innerIx) => {
+      if (tx.accountKeys[ix.programIdIndex] !== ESCROW_ID) return;
+      const first = ix.accounts[0];
+      if (first === undefined || tx.accountKeys[first] !== eventAuthority) return;
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(b58.encode(ix.data));
+      } catch {
+        return;
+      }
+      if (bytes.length < 16 || !EVENT_IX_TAG_LE.every((b, i) => bytes[i] === b)) return;
+      events.push({
+        outerIx: g.index,
+        innerIx,
+        eventBase64: Buffer.from(bytes.subarray(8)).toString('base64'),
+      });
+    });
+  if (events.length === 0) return parseStreamDelivery(null);
+  const batch = parseStreamDelivery({
+    v: STREAM_PAYLOAD_VERSION,
+    programId: ESCROW_ID,
+    txs: [
+      {
+        signature: tx.signature,
+        blockHeight: tx.blockHeight ?? null,
+        blockTime: tx.blockTime,
+        txIndex: null,
+        events,
+      },
+    ],
+  });
+  for (const e of batch.events) e.slot = tx.slot;
   return batch;
 }
