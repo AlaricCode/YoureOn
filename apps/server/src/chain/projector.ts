@@ -77,7 +77,11 @@ export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export const APPLY_ERROR = {
   /** Parked: no bets row for the bet_id (re-folded when a later copy arrives). */
   unknownBet: 'unknown_bet',
-  /** Parked: the bet has no BetCreated under a server-sent lock signature yet (re-folded later). */
+  /**
+   * Parked: the bet has no BetCreated under a server-sent lock signature yet, or the chain order
+   * that decides attribution is unknown (a NULL block height: rpc_poll could not read the block).
+   * Re-folded later: the bet's next event, a duplicate copy, or the reconciler's height backfill.
+   */
   notOurs: 'not_ours',
   /** Final: outside our instance of the bet_id (foreign BetCreated, before our lock, after our close). */
   notOursLock: 'not_ours_lock',
@@ -286,6 +290,15 @@ const byChainPosition = (a: AttributionRow, b: AttributionRow) =>
 const decoded = (r: AttributionRow) =>
   r.apply_error === null || ATTRIBUTION_VERDICTS.has(r.apply_error);
 
+/** true / false, or null when a chain order it depends on is unknown (three-valued logic). */
+type Tri = boolean | null;
+/** chainOrder(...) === want, null when the order is unknown. */
+const orderIs = (o: -1 | 0 | 1 | null, want: -1 | 1): Tri => (o === null ? null : o === want);
+const allOf = (xs: readonly Tri[]): Tri =>
+  xs.includes(false) ? false : xs.includes(null) ? null : true;
+const anyOf = (xs: readonly Tri[]): Tri =>
+  xs.includes(true) ? true : xs.includes(null) ? null : false;
+
 /**
  * Binds a bet's events to OUR instance of its bet_id (ESCROW §5.1 / §7.1, TM-E5, TM-I1).
  *
@@ -295,12 +308,18 @@ const decoded = (r: AttributionRow) =>
  * independent bet: its BetCreated and everything at or after it is not ours. Rows whose chain
  * position is unknown are accepted only when they are unambiguous: the server sent the signature,
  * or no other instance (foreign BetCreated) and no BetClosed is on record for the bet_id.
+ *
+ * The verdict is true (ours), false (not ours: final), or null: contested, and an order that
+ * decides it is unknown (e.g. our lock came through rpc_poll without a block height, and someone
+ * else's finalize + close arrives through the Stream). null must never become a final verdict:
+ * the projector parks the row as refoldable until the order is known (reconciler.ts backfills
+ * the height).
  */
 export function attributeEvents(
   all: readonly AttributionRow[],
   lock: AttributionRow,
   serverSigs: ReadonlySet<string>,
-): (row: AttributionRow) => boolean {
+): (row: AttributionRow) => boolean | null {
   const rows = all.filter(decoded);
   const foreign = rows.filter(
     (r) => r.event_name === 'BetCreated' && r.signature !== lock.signature,
@@ -328,16 +347,22 @@ export function attributeEvents(
     }
     if (serverSigs.has(e.signature)) return true;
     if (!contested) return true;
-    // Contested: every relation that matters must be known and inside our window.
-    return (
-      chainOrder(e, lock) === 1 &&
-      (!ourClose || chainOrder(e, ourClose) === -1) &&
-      foreign.every((f) => {
-        const fl = chainOrder(f, lock);
-        return fl === -1 || chainOrder(e, f) === -1;
-      }) &&
-      closes.every((c) => c === ourClose || chainOrder(c, lock) === -1 || chainOrder(e, c) === -1)
-    );
+    // Contested: every relation that matters must be known and inside our window; one that is
+    // known to fail rules the row out, one that is unknown leaves the verdict open (null).
+    return allOf([
+      orderIs(chainOrder(e, lock), 1),
+      ourClose ? orderIs(chainOrder(e, ourClose), -1) : true,
+      // each other instance started before our lock, or comes after this row
+      ...foreign.map((f) =>
+        anyOf([orderIs(chainOrder(f, lock), -1), orderIs(chainOrder(e, f), -1)]),
+      ),
+      // each other close is before our lock, or after this row
+      ...closes.map((c) =>
+        c === ourClose
+          ? true
+          : anyOf([orderIs(chainOrder(c, lock), -1), orderIs(chainOrder(e, c), -1)]),
+      ),
+    ]);
   };
 }
 
@@ -539,12 +564,18 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
   const events: FoldEvent[] = [];
   const pending: { row: ChainEventRow; event: FoldEvent }[] = [];
   const notOurs: bigint[] = [];
+  const orderUnknown: bigint[] = [];
   const invalid: bigint[] = [];
   for (const r of all) {
     if (!isChainEventName(r.event_name)) continue;
     const isNew = candidate(r);
     if (!isNew && !applied(r)) continue; // a final verdict or a decode failure
-    if (isNew && !ours(r)) {
+    const verdict = isNew ? ours(r) : true;
+    if (verdict === null) {
+      orderUnknown.push(r.id); // contested and unordered: parked, decided once the order is known
+      continue;
+    }
+    if (!verdict) {
       notOurs.push(r.id); // a squat, or a new bet after close_bet: logged, never pushed
       continue;
     }
@@ -557,6 +588,9 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
     if (isNew) pending.push({ row: r, event: ev });
   }
   await setError(tx, notOurs, APPLY_ERROR.notOursLock);
+  await setError(tx, orderUnknown, APPLY_ERROR.notOurs);
+  if (orderUnknown.length)
+    log.warn('chain.attribution_order_unknown', { bet_id: bet.id, events: orderUnknown.length });
   await setError(tx, invalid, APPLY_ERROR.payloadInvalid);
   if (pending.length === 0) return [];
 

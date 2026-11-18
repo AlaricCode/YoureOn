@@ -328,6 +328,111 @@ describeDb('StreamGapReconciler over Postgres', () => {
     expect([calls, r3.stopped]).toEqual([3, null]);
   });
 
+  it('a lock rpc_poll stored without a block height: a crank payout parks (order unknown), the height backfill applies it', async () => {
+    const f = betFacts();
+    const L = lifecycle(f);
+    await mkBetRow(h.db, f, { partyA: A, partyB: B, state: 'RULED' });
+    const lockSig = randomSig();
+    await mkLockTx(h.db, f.bet_id, lockSig, 'confirmed');
+    // the Stream was paused at lock time, and getBlock failed during rpc_poll: no height
+    chain.set(
+      lockSig,
+      landed(
+        lockSig,
+        [
+          { outer: 3, name: 'BetCreated', payload: L.created() },
+          { outer: 4, name: 'BetAccepted', payload: L.accepted() },
+        ],
+        null,
+      ),
+    );
+    const t0 = Date.now() + 6_000;
+    await new StreamGapReconciler().run(deps, rt, t0);
+    expect((await eventsOfBet(h.db, f.bet_id)).map((e) => [e.slot, e.block_height])).toEqual([
+      [9_000_000, null],
+      [9_000_000, null],
+    ]);
+    // our resolve, then someone else's permissionless finalize + close, through the Stream
+    const resolveSig = randomSig();
+    await mkServerTx(h.db, f.bet_id, 'resolve', resolveSig);
+    const crank = randomSig();
+    const streamed = parseStreamDelivery(
+      delivery([
+        {
+          signature: resolveSig,
+          blockHeight: 820_100,
+          events: [{ outerIx: 1, name: 'BetResolved', payload: L.resolved('PartyA') }],
+        },
+        {
+          signature: crank,
+          blockHeight: 820_200,
+          events: [
+            { outerIx: 2, name: 'BetFinalized', payload: L.finalized('PartyA') },
+            { outerIx: 3, name: 'BetClosed', payload: L.closed('Settled') },
+          ],
+        },
+      ]),
+    ).events;
+    await ingestChainEvents(deps, createChainProjector(), streamed, { deliveryId: null });
+    const errorOf = async () =>
+      Object.fromEntries(
+        (await eventsOfBet(h.db, f.bet_id)).map((e) => [e.event_name, e.apply_error]),
+      );
+    // the crank's own BetClosed contests the bet and the lock has no position: parked, not final
+    expect(await errorOf()).toMatchObject({
+      BetResolved: null, // server-sent: ours whatever its position
+      BetFinalized: 'not_ours',
+      BetClosed: 'not_ours',
+    });
+    expect((await betRow(h.db, f.bet_id)).state).toBe('RULED');
+
+    // a client without blockHeightAt: nothing to do; a block with no height: left parked
+    const asks: number[] = [];
+    let height: number | null = null;
+    const withBlocks = {
+      client: {
+        transaction: rt.client.transaction,
+        blockHeightAt: async (slot: number) => {
+          asks.push(slot);
+          return height;
+        },
+      },
+    } as unknown as ChainRuntime;
+    const gaps = new StreamGapReconciler();
+    expect((await gaps.run(deps, rt, t0 + 1_000)).heights).toBe(0);
+    expect((await gaps.run(deps, withBlocks, t0 + 1_000)).heights).toBe(0);
+    expect(asks).toEqual([9_000_000]);
+    expect(await errorOf()).toMatchObject({ BetFinalized: 'not_ours', BetClosed: 'not_ours' });
+    // (that slot is backed off for good; a fresh reconciler, e.g. after a restart, asks again)
+    await gaps.run(deps, withBlocks, t0 + 2_000);
+    expect(asks).toEqual([9_000_000]);
+
+    // the block answers now: the height lands on every row of the slot, the bet re-folds
+    height = 819_000;
+    const r = await new StreamGapReconciler().run(deps, withBlocks, t0 + 3_000);
+    expect(r).toMatchObject({ heights: 1, stopped: null });
+    expect(r.published).toBeGreaterThanOrEqual(3); // chain.BetFinalized, chain.BetClosed, bet.state
+    expect((await eventsOfBet(h.db, f.bet_id)).every((e) => e.apply_error === null)).toBe(true);
+    expect(
+      (await eventsOfBet(h.db, f.bet_id))
+        .filter((e) => e.signature === lockSig)
+        .map((e) => e.block_height),
+    ).toEqual([819_000, 819_000]);
+    expect(await betRow(h.db, f.bet_id)).toMatchObject({
+      state: 'PAID',
+      onchain_status: 'settled',
+      payout_sig: crank,
+      close_sig: crank,
+    });
+    expect((await logOf(h.db, f.bet_id)).map((e) => e.type)).toEqual(
+      expect.arrayContaining(['chain.BetFinalized', 'chain.BetClosed', 'bet.state']),
+    );
+    // nothing parked any more: no further getBlock calls
+    asks.length = 0;
+    await new StreamGapReconciler().run(deps, withBlocks, t0 + 4_000);
+    expect(asks).toEqual([]);
+  });
+
   it('without a chain runtime the gap-fill pass is skipped (the retry pass still runs)', async () => {
     const r = await new StreamGapReconciler().run(deps, null, Date.now() + 6_000);
     expect(r).toMatchObject({ polled: 0, ingested: 0, missing: 0 });

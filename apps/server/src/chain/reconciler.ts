@@ -35,7 +35,15 @@
 // Oldest first: each tx is its own delivery, and the projector fans a delivery out in arrival
 // order, so polling in send order keeps the chain.* events of one bet in chain order.
 //
-// Second pass, retryRejected: bets whose projection is parked ('projection_rejected' /
+// Second pass, fillHeights: getTransaction has no block height, so rpc_poll asks getBlock for it,
+// best effort. A row left without one (getBlock failed) cannot be ordered against Stream rows
+// (which carry a height but no slot), and a contested bet (someone else's finalize + close came
+// through the Stream) parks such events as 'not_ours' (projector attributeEvents: order unknown).
+// For bets with parked rows, the heights of their slot-only rows are fetched again (blockHeightAt,
+// same budget, HEIGHT_BATCH slots per tick, per-slot backoff) and the bets re-folded, so a payout
+// of ours is never dropped for want of a block height.
+//
+// Third pass, retryRejected: bets whose projection is parked ('projection_rejected' /
 // 'projector_failed': a CHECK, trigger or projector bug refused the bets write) are re-folded
 // every REFOLD_RETRY_MS for REFOLD_MAX_AGE_MS, so a fix by hand or a redeploy completes them even
 // when no later event will ever arrive. A retry that is still rejected only logs (the first
@@ -44,6 +52,7 @@ import {
   and,
   asc,
   eq,
+  exists,
   gte,
   inArray,
   isNotNull,
@@ -54,7 +63,8 @@ import {
   notInArray,
   sql,
 } from 'drizzle-orm';
-import { chainEvents, chainTxs } from '@youre-on/db';
+import { alias } from 'drizzle-orm/pg-core';
+import { bets, chainEvents, chainTxs } from '@youre-on/db';
 import { STREAM_FALLBACK_MS } from '@youre-on/shared/constants';
 import type { AppDeps } from '../context';
 import type { Env } from '../env';
@@ -92,6 +102,10 @@ export const REFOLD_MAX_AGE_MS = 24 * 60 * 60_000;
 const BACKOFF_MAX_MS = 60_000;
 /** Bets re-folded per tick by retryRejected. */
 const REFOLD_BATCH = 5;
+/** getBlock calls per tick by fillHeights. */
+export const HEIGHT_BATCH = 3;
+const HEIGHT_BACKOFF_MS = 30_000;
+const HEIGHT_BACKOFF_MAX_MS = 10 * 60_000;
 
 export interface ReconcileResult {
   polled: number;
@@ -100,6 +114,8 @@ export interface ReconcileResult {
   published: number;
   /** getTransaction found nothing yet (still in flight, or never landed). */
   missing: number;
+  /** Slots whose block height was backfilled (fillHeights). */
+  heights: number;
   /** Bets whose parked projection was retried. */
   refolded: number;
   /** Why polling stopped early: the time budget ran out, or the RPC throttled (429 / 5xx). */
@@ -121,9 +137,15 @@ export interface StreamGapOptions {
 }
 
 type Deps = Pick<AppDeps, 'db' | 'hub' | 'now' | 'log'>;
+/** One pass's wall-clock budget for RPC calls. */
+interface Budget {
+  clock: () => number;
+  until: number;
+}
 
 export class StreamGapReconciler {
   private readonly backoff = new Map<string, { at: number; delay: number }>();
+  private readonly slotBackoff = new Map<number, { at: number; delay: number }>();
   private readonly refoldAt = new Map<string, number>();
   private authority: Promise<string> | null = null;
   private readonly projector: ChainProjector;
@@ -143,29 +165,37 @@ export class StreamGapReconciler {
     this.backoff.set(sig, { at: nowMs + delay, delay });
   }
 
-  /** One pass: gap-fill from getTransaction, then retry parked projections. */
+  /** One pass: gap-fill from getTransaction, backfill block heights, retry parked projections. */
   async run(deps: Deps, rt: ChainRuntime | null, nowMs: number): Promise<ReconcileResult> {
     const out: ReconcileResult = {
       polled: 0,
       ingested: 0,
       published: 0,
       missing: 0,
+      heights: 0,
       refolded: 0,
       stopped: null,
     };
-    await this.fillGaps(deps, rt, nowMs, out);
+    const clock = this.o.clock ?? (() => performance.now());
+    const budget = { clock, until: clock() + (this.o.budgetMs ?? RPC_POLL_BUDGET_MS) };
+    await this.fillGaps(deps, rt, nowMs, out, budget);
+    if (!out.stopped) await this.fillHeights(deps, rt, nowMs, out, budget);
     out.refolded = await this.retryRejected(deps, nowMs);
     return out;
   }
 
-  private async fillGaps(deps: Deps, rt: ChainRuntime | null, nowMs: number, out: ReconcileResult) {
+  private async fillGaps(
+    deps: Deps,
+    rt: ChainRuntime | null,
+    nowMs: number,
+    out: ReconcileResult,
+    { clock, until }: Budget,
+  ) {
     const client = rt?.client;
     if (!client?.transaction) return;
     const fallback = this.o.fallbackMs ?? STREAM_FALLBACK_MS;
     const maxAge = this.o.maxAgeMs ?? RPC_POLL_MAX_AGE_MS;
     const batch = this.o.batch ?? RPC_POLL_BATCH;
-    const clock = this.o.clock ?? (() => performance.now());
-    const until = clock() + (this.o.budgetMs ?? RPC_POLL_BUDGET_MS);
     for (const [sig, b] of this.backoff) if (b.at < nowMs - maxAge) this.backoff.delete(sig);
     const waiting = [...this.backoff].filter(([, b]) => b.at > nowMs).map(([sig]) => sig);
 
@@ -250,6 +280,110 @@ export class StreamGapReconciler {
         }
       }
     }
+  }
+
+  /**
+   * Block heights rpc_poll could not read, for bets with parked ('not_ours') rows: getBlock again,
+   * store the height on every row of that slot, re-fold the bets' parked rows (see the header).
+   */
+  private async fillHeights(
+    deps: Deps,
+    rt: ChainRuntime | null,
+    nowMs: number,
+    out: ReconcileResult,
+    { clock, until }: Budget,
+  ) {
+    const client = rt?.client;
+    if (!client?.blockHeightAt) return;
+    const maxAge = this.o.refoldMaxAgeMs ?? REFOLD_MAX_AGE_MS;
+    for (const [slot, b] of this.slotBackoff)
+      if (b.at < nowMs - maxAge) this.slotBackoff.delete(slot);
+    const waiting = [...this.slotBackoff].filter(([, b]) => b.at > nowMs).map(([slot]) => slot);
+    const parked = alias(chainEvents, 'parked');
+    const rows = await deps.db
+      .selectDistinct({ slot: chainEvents.slot })
+      .from(chainEvents)
+      .where(
+        and(
+          isNotNull(chainEvents.slot),
+          isNull(chainEvents.block_height),
+          gte(chainEvents.received_at, new Date(nowMs - maxAge)),
+          waiting.length ? notInArray(chainEvents.slot, waiting) : undefined,
+          exists(
+            deps.db
+              .select({ one: sql`1` })
+              .from(parked)
+              .where(
+                and(
+                  eq(parked.bet_id, chainEvents.bet_id),
+                  eq(parked.apply_error, APPLY_ERROR.notOurs),
+                ),
+              ),
+          ),
+        ),
+      )
+      .limit(HEIGHT_BATCH);
+    for (const { slot } of rows) {
+      const s = slot!;
+      if (clock() >= until) {
+        out.stopped = 'budget';
+        break;
+      }
+      let height: number | null;
+      try {
+        height = await client.blockHeightAt(s);
+      } catch (err) {
+        this.deferSlot(s, nowMs, HEIGHT_BACKOFF_MAX_MS);
+        deps.log.warn('chain.block_height_failed', { slot: s, err });
+        if (isRetriableRpcError(err)) {
+          out.stopped = 'rpc_throttled';
+          break;
+        }
+        continue;
+      }
+      if (height === null) {
+        // the RPC knows no height for that block: asking again soon will not change that
+        this.slotBackoff.set(s, { at: nowMs + maxAge, delay: maxAge });
+        continue;
+      }
+      try {
+        const fan = await deps.db.transaction(async (tx) => {
+          const owners = await tx
+            .selectDistinct({ bet_id: chainEvents.bet_id })
+            .from(chainEvents)
+            .where(and(eq(chainEvents.slot, s), isNotNull(chainEvents.bet_id)));
+          const betIds = owners.map((o) => o.bet_id!).sort();
+          // the projector's lock order (bets, then their chain_events rows)
+          if (betIds.length)
+            await tx
+              .select({ id: bets.id })
+              .from(bets)
+              .where(inArray(bets.id, betIds))
+              .orderBy(asc(bets.id))
+              .for('update');
+          await tx
+            .update(chainEvents)
+            .set({ block_height: height })
+            .where(and(eq(chainEvents.slot, s), isNull(chainEvents.block_height)));
+          return refoldParkedInTx(tx, this.projector, betIds, nowMs, deps.log);
+        });
+        publishFanout(deps, fan);
+        this.slotBackoff.delete(s);
+        out.heights++;
+        out.published += fan.length;
+        deps.log.warn('chain.block_height_backfilled', { slot: s, published: fan.length });
+      } catch (err) {
+        if (isTransientDbError(err)) throw err;
+        this.deferSlot(s, nowMs, HEIGHT_BACKOFF_MAX_MS);
+        deps.log.error('chain.block_height_backfill_failed', { alert: true, slot: s, err });
+      }
+    }
+  }
+
+  private deferSlot(slot: number, nowMs: number, max: number) {
+    const prev = this.slotBackoff.get(slot);
+    const delay = Math.min(prev ? prev.delay * 2 : HEIGHT_BACKOFF_MS, max);
+    this.slotBackoff.set(slot, { at: nowMs + delay, delay });
   }
 
   /** Re-folds bets whose projection is parked as rejected / failed (see the header). */
