@@ -3,6 +3,8 @@
 // treats a failed status poll as "unknown" (never as a failed tx). No network, no DB.
 import {
   generateKeyPairSigner,
+  getSolanaErrorFromJsonRpcError,
+  getSolanaErrorFromTransactionError,
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   SolanaError,
   type Base64EncodedWireTransaction,
@@ -14,6 +16,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildBlockhashTx,
   confirmSent,
+  customErrorCode,
+  isBlockhashNotFound,
   instrumentChainClient,
   isNetworkError,
   isRetriableRpcError,
@@ -22,6 +26,7 @@ import {
   rpcErrorText,
   RpcStats,
   rpcChainClient,
+  rpcErrFromSolanaError,
   RpcTimeoutError,
   SendFateUnknownError,
   TxFailedError,
@@ -476,5 +481,78 @@ describe('budget and re-broadcast', () => {
       lastValidBlockHeight: 100n,
     }).catch(() => {});
     expect(sends.filter((s) => s).length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('preflight errors exactly as kit builds them from a real RPC response', () => {
+  // kit's RPC layer throws getSolanaErrorFromJsonRpcError(response.error) for a -32002: the
+  // simulation `err` is NOT in the context but in `cause`, as a typed SolanaError.
+  const rpcError = (err: unknown) =>
+    getSolanaErrorFromJsonRpcError({
+      code: -32002,
+      message: 'Transaction simulation failed',
+      data: { err, logs: ['Program log: x'], accounts: null, unitsConsumed: 0n },
+    });
+  const fakeRpc = (sendErr: unknown, status: unknown = null) =>
+    ({
+      sendTransaction: () => ({
+        send: async () => {
+          throw sendErr;
+        },
+      }),
+      getSignatureStatuses: () => ({ send: async () => ({ value: [status] }) }),
+    }) as unknown as Rpc<SolanaRpcApi>;
+  const wire = async () => {
+    const fp = await generateKeyPairSigner();
+    const ix = {
+      programAddress: 'ComputeBudget111111111111111111111111111111' as never,
+      data: new Uint8Array([1]),
+    };
+    return wireOf(
+      (await buildBlockhashTx(fake(), fp.address, [ix], { signers: [fp], label: 't' })).tx,
+    );
+  };
+
+  it('an SPL InsufficientFunds (Custom 1) comes back as {InstructionError: [ix, {Custom: 1}]}', async () => {
+    const e = await rpcChainClient(
+      'http://127.0.0.1:1',
+      fakeRpc(rpcError({ InstructionError: [3, { Custom: 1 }] })),
+    )
+      .send(await wire(), false)
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(PreflightError);
+    expect((e as PreflightError).err).toEqual({ InstructionError: [3, { Custom: 1 }] });
+    expect(customErrorCode((e as PreflightError).err)).toBe(1); // the lock's insufficient_funds
+    expect((e as PreflightError).logs).toEqual(['Program log: x']);
+  });
+
+  it('AlreadyProcessed is recognized through the cause (our own landed tx)', async () => {
+    await expect(
+      rpcChainClient('http://127.0.0.1:1', fakeRpc(rpcError('AlreadyProcessed'))).send(
+        await wire(),
+        false,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('BlockhashNotFound is recognized (isBlockhashNotFound -> the resolve rebuild)', async () => {
+    const e = await rpcChainClient('http://127.0.0.1:1', fakeRpc(rpcError('BlockhashNotFound')))
+      .send(await wire(), false)
+      .catch((x: unknown) => x);
+    expect((e as PreflightError).err).toBe('BlockhashNotFound');
+    expect(isBlockhashNotFound(e)).toBe(true);
+  });
+
+  it('rpcErrFromSolanaError maps instruction / transaction errors and ignores others', () => {
+    expect(
+      rpcErrFromSolanaError(
+        getSolanaErrorFromTransactionError({ InstructionError: [0, { Custom: 6027 }] }),
+      ),
+    ).toEqual({ InstructionError: [0, { Custom: 6027 }] });
+    expect(
+      rpcErrFromSolanaError(getSolanaErrorFromTransactionError('InsufficientFundsForFee')),
+    ).toBe('TransactionError(7050005)');
+    expect(rpcErrFromSolanaError(new Error('x'))).toBeNull();
+    expect(rpcErrFromSolanaError(null)).toBeNull();
   });
 });

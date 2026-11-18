@@ -30,7 +30,10 @@ import {
   pipe,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
+  SOLANA_ERROR__INSTRUCTION_ERROR__CUSTOM,
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
+  SOLANA_ERROR__TRANSACTION_ERROR__ALREADY_PROCESSED,
+  SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND,
   type Address,
   type Base58EncodedBytes,
   type Base64EncodedWireTransaction,
@@ -213,8 +216,36 @@ function preflightDetails(e: unknown): { err: unknown; logs: string[] } | null {
   for (let cur: unknown = e, depth = 0; cur && depth < 5; depth++) {
     const ctx = (cur as { context?: { logs?: unknown; err?: unknown; __code?: number } }).context;
     if (ctx && (Array.isArray(ctx.logs) || ctx.err !== undefined))
-      return { err: ctx.err ?? null, logs: Array.isArray(ctx.logs) ? (ctx.logs as string[]) : [] };
+      return {
+        // kit moves the simulation's `err` out of the context into `cause` (a typed SolanaError):
+        // rebuild the RPC shape, or PreflightError.err is always null on a real RPC.
+        err: ctx.err ?? rpcErrFromSolanaError((cur as { cause?: unknown }).cause),
+        logs: Array.isArray(ctx.logs) ? (ctx.logs as string[]) : [],
+      };
     cur = (cur as { cause?: unknown }).cause;
+  }
+  return null;
+}
+
+/**
+ * A kit transaction / instruction error (the `cause` of a preflight failure) back to the RPC JSON
+ * shape the rest of the server reads: `{InstructionError: [ix, {Custom: n}]}` (customErrorCode,
+ * the lock's failureReason), 'AlreadyProcessed', 'BlockhashNotFound', ... Null when it is not one.
+ */
+export function rpcErrFromSolanaError(e: unknown): unknown {
+  const ctx = (e as { context?: Record<string, unknown> } | null)?.context;
+  const code = ctx?.['__code'];
+  if (!ctx || typeof code !== 'number') return null;
+  if (code >= 4_615_000 && code < 4_616_000) {
+    const index = Number(ctx['index'] ?? 0);
+    if (code === SOLANA_ERROR__INSTRUCTION_ERROR__CUSTOM)
+      return { InstructionError: [index, { Custom: Number(ctx['code']) }] };
+    return { InstructionError: [index, String(ctx['errorName'] ?? `InstructionError(${code})`)] };
+  }
+  if (code >= 7_050_000 && code < 7_051_000) {
+    if (code === SOLANA_ERROR__TRANSACTION_ERROR__ALREADY_PROCESSED) return 'AlreadyProcessed';
+    if (code === SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND) return 'BlockhashNotFound';
+    return String(ctx['errorName'] ?? `TransactionError(${code})`);
   }
   return null;
 }
