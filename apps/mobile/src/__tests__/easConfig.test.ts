@@ -20,7 +20,11 @@ const readJson = (rel: string) => JSON.parse(read(rel)) as Record<string, unknow
 
 type ExpoConfig = {
   name: string;
+  version: string;
   ios: { bundleIdentifier: string; appleTeamId?: string; infoPlist: Record<string, string> };
+  extra?: { eas?: { projectId?: string } };
+  runtimeVersion?: unknown;
+  updates?: Record<string, unknown>;
 };
 const { applyEnv } = createRequire(import.meta.url)('../../app.config.js') as {
   applyEnv: (config: ExpoConfig, env: Record<string, string | undefined>) => ExpoConfig;
@@ -69,6 +73,37 @@ describe('app.config.js env overrides', () => {
   });
 });
 
+describe('app.config.js EAS Update', () => {
+  it('ships expo-updates for SDK 58 as a runtime dependency (EAS ignores a devDependency)', () => {
+    const pkg = readJson('apps/mobile/package.json') as {
+      dependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    expect(pkg.dependencies['expo-updates']).toMatch(/^~58\./);
+    expect(pkg.devDependencies['expo-updates']).toBeUndefined();
+  });
+
+  it('keeps expo-updates off until the project is linked (free-team builds, CI)', () => {
+    const c = applyEnv(appJson, {});
+    expect(appJson.extra?.eas?.projectId).toBeUndefined();
+    expect(c.updates).toEqual({ enabled: false });
+    expect(c.runtimeVersion).toEqual({ policy: 'appVersion' });
+  });
+
+  it('derives the update URL from the project id `eas init` writes', () => {
+    const linked = { ...appJson, extra: { eas: { projectId: '0000-abcd' } } };
+    const c = applyEnv(linked, {});
+    expect(c.updates).toEqual({
+      enabled: true,
+      url: 'https://u.expo.dev/0000-abcd',
+      checkAutomatically: 'ON_LOAD',
+      fallbackToCacheTimeout: 0,
+    });
+    // an update only reaches binaries of the same expo.version
+    expect(c.runtimeVersion).toEqual({ policy: 'appVersion' });
+  });
+});
+
 describe('eas.json', () => {
   const eas = readJson('apps/mobile/eas.json') as {
     cli: Record<string, unknown>;
@@ -112,6 +147,19 @@ describe('eas.json', () => {
       expect(env(profile).EXPO_PUBLIC_BUILD).toBe(profile);
     },
   );
+
+  it('gives every profile its own EAS Update channel (EXPO_PUBLIC_* are baked into updates)', () => {
+    const channels = Object.entries(eas.build)
+      .filter(([name]) => name !== 'base')
+      .map(([name, p]) => [name, p.channel]);
+    expect(Object.fromEntries(channels)).toEqual({
+      development: 'development',
+      preview: 'preview',
+      'preview-typed': 'preview-typed',
+      pitch: 'pitch',
+      production: 'production',
+    });
+  });
 
   it('sets EXPO_PUBLIC_VOICE explicitly per profile (eas.json env beats EAS env vars)', () => {
     expect(env('preview').EXPO_PUBLIC_VOICE).toBe('on');
@@ -279,6 +327,10 @@ describe('evaluated iOS config (expo config --type introspect, preview env)', ()
   it('has no APNs entitlement, so neither a free team nor EAS needs Push Notifications', () => {
     expect(exp.ios?.entitlements?.['aps-environment']).toBeUndefined();
     expect(exp.ios?.infoPlist.UIBackgroundModes ?? []).not.toContain('remote-notification');
+  });
+
+  it('keeps EAS Update off while app.json has no EAS project', () => {
+    expect((exp as { updates?: unknown }).updates).toEqual({ enabled: false });
   });
 
   it('carries the EAS bundle ID and the team EAS injects', () => {

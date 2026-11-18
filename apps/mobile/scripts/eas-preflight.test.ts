@@ -246,6 +246,7 @@ describe('eas.json checks', () => {
 
   const device: Profile = {
     distribution: 'internal',
+    channel: 'preview',
     env: {
       IOS_BUNDLE_ID: 'dev.youreon.app.eas',
       EXPO_PUBLIC_API_URL: 'https://youre-on.fly.dev',
@@ -254,7 +255,18 @@ describe('eas.json checks', () => {
   };
 
   it('accepts release, internal, https profiles for the phones', () => {
-    expect(statuses(checkProfiles({ preview: device, pitch: device }))).toEqual(['pass', 'pass']);
+    expect(
+      statuses(checkProfiles({ preview: device, pitch: { ...device, channel: 'pitch' } })),
+    ).toEqual(['pass', 'pass']);
+  });
+
+  it('needs one EAS Update channel per phone profile (EXPO_PUBLIC_* are baked into updates)', () => {
+    expect(failures(checkProfiles({ preview: { ...device, channel: undefined } }))[0]).toContain(
+      'no EAS Update channel',
+    );
+    const shared = failures(checkProfiles({ preview: device, 'preview-typed': device }));
+    expect(shared).toHaveLength(2);
+    expect(shared[0]).toContain('shares channel "preview" with preview-typed');
   });
 
   it('rejects a phone profile that needs Metro, a laptop URL, the store, or an unknown voice flag', () => {
@@ -299,30 +311,44 @@ describe('checkAppConfig', () => {
   const exp = {
     version: '1.0.0',
     ios: { bundleIdentifier: 'dev.youreon.app.eas', entitlements: {} },
+    runtimeVersion: { policy: 'appVersion' },
+    updates: { enabled: false },
   };
+  const linked = {
+    ...exp,
+    extra: { eas: { projectId: 'p1' } },
+    owner: 'o',
+    updates: { enabled: true, url: 'https://u.expo.dev/p1' },
+  };
+  const expected = { IOS_BUNDLE_ID: 'dev.youreon.app.eas' };
 
-  it('passes a matching bundle ID without APNs, and says when the project is not linked', () => {
-    const rs = checkAppConfig({
-      profile: 'preview',
-      expected: { IOS_BUNDLE_ID: 'dev.youreon.app.eas' },
-      exp,
-    });
-    expect(statuses(rs)).toEqual(['pass', 'pass', 'info']);
+  it('passes a matching bundle ID without APNs; updates stay off until the project is linked', () => {
+    const rs = checkAppConfig({ profile: 'preview', expected, exp });
+    expect(statuses(rs)).toEqual(['pass', 'pass', 'info', 'info']);
     expect(rs[2]?.detail).toContain('eas init');
+  });
+
+  it('passes a linked project whose update URL is derived from its id', () => {
+    const rs = checkAppConfig({ profile: 'preview', expected, exp: linked });
+    expect(statuses(rs)).toEqual(['pass', 'pass', 'pass', 'pass']);
+    expect(rs[3]?.detail).toContain('https://u.expo.dev/p1');
+  });
+
+  it('fails a wrong update URL, updates without a project, or another runtime policy', () => {
+    const bad = (e: Record<string, unknown>) =>
+      failures(checkAppConfig({ profile: 'preview', expected, exp: { ...linked, ...e } }));
+    expect(bad({ updates: { enabled: true, url: 'https://u.expo.dev/other' } })).toHaveLength(1);
+    expect(bad({ extra: {}, updates: { enabled: true } })).toHaveLength(1);
+    expect(bad({ runtimeVersion: { policy: 'fingerprint' } })).toHaveLength(1);
   });
 
   it('fails a bundle ID that differs from eas.json, warns on aps-environment', () => {
     const rs = checkAppConfig({
       profile: 'preview',
       expected: { IOS_BUNDLE_ID: 'other.id' },
-      exp: {
-        ...exp,
-        ios: { ...exp.ios, entitlements: { 'aps-environment': 'development' } },
-        extra: { eas: { projectId: 'p' } },
-        owner: 'o',
-      },
+      exp: { ...linked, ios: { ...exp.ios, entitlements: { 'aps-environment': 'development' } } },
     });
-    expect(statuses(rs)).toEqual(['fail', 'warn', 'pass']);
+    expect(statuses(rs)).toEqual(['fail', 'warn', 'pass', 'pass']);
   });
 });
 

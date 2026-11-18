@@ -1,5 +1,7 @@
-// Expo reads app.json first and passes it here as `config`. This file only applies optional,
-// env-driven iOS overrides, so app.json stays the one committed source of truth:
+// Expo reads app.json first and passes it here as `config`. This file only derives values, so
+// app.json stays the one committed source of truth.
+//
+// 1. Optional, env-driven iOS overrides:
 //
 //   IOS_BUNDLE_ID     bundle ID. A bundle ID belongs to exactly one Apple team.
 //   APPLE_TEAM_ID     10-character Apple team ID (Xcode DEVELOPMENT_TEAM). EAS Build sets it itself
@@ -15,6 +17,15 @@
 // credentials, so nothing here needs editing. Unset, app.json's values are used (the lead's free
 // team, dev.youreon.app). The bundle ID is not part of any wire contract: the server, the device
 // policy and the keychain never read it.
+//
+// 2. EAS Update (over-the-air JS, scripts/eas-update.sh). It switches on by itself once the project
+// is linked to EAS: `eas init` writes extra.eas.projectId into app.json, and the update URL is
+// derived from it. Unlinked builds (free-team builds, CI) keep expo-updates disabled: they run the
+// embedded JS and never call the network for updates. runtimeVersion follows expo.version
+// ("appVersion"), so an update only reaches binaries of the same version: bump expo.version in
+// app.json whenever native code or config changes, and rebuild.
+
+const UPDATES_HOST = 'https://u.expo.dev';
 
 /** Returns `config` with the env overrides applied. Pure, so tests can pass their own env. */
 function applyEnv(config, env) {
@@ -35,7 +46,24 @@ function applyEnv(config, env) {
   if (displayName !== undefined) {
     ios.infoPlist = { ...config.ios.infoPlist, CFBundleDisplayName: displayName };
   }
-  return { ...config, ios };
+  return withUpdates({ ...config, ios });
+}
+
+/** EAS Update settings, on only when the project is linked (extra.eas.projectId). */
+function withUpdates(config) {
+  const projectId = config.extra && config.extra.eas && config.extra.eas.projectId;
+  const updates = projectId
+    ? {
+        ...config.updates,
+        enabled: true,
+        url: `${UPDATES_HOST}/${projectId}`,
+        // Check on every cold start without delaying it: a new update downloads in the
+        // background and runs from the next cold start (force-quit, reopen).
+        checkAutomatically: 'ON_LOAD',
+        fallbackToCacheTimeout: 0,
+      }
+    : { ...config.updates, enabled: false };
+  return { ...config, runtimeVersion: { policy: 'appVersion' }, updates };
 }
 
 module.exports = ({ config }) => applyEnv(config, process.env);
