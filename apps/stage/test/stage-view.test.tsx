@@ -483,7 +483,7 @@ describe('odds widget', () => {
       price: '64379.76',
       direction: 'down',
       msLeft: 169_000,
-      upPct: 60, // (54 + 67) / 2, truncated for display
+      upPct: 61, // (54 + 67) / 2 = 60.5, half-up as fairStakes prices it (the bet locks 0.61)
       split: { ok: true, up: '6100000', down: '3900000', pot: '10000000', fromTerms: false },
     });
     const html = renderToString(<OddsWidget view={v} />);

@@ -209,14 +209,20 @@ describe('spec rows pinned by this review', () => {
     expect(HearingTurn.safeParse({ ...turn, duration_ms: 12_001 }).success).toBe(false);
     expect(HearingTurn.safeParse({ ...turn, turn_index: 2 }).success).toBe(false);
   });
-  it('§10.1: the 32 spec types + 4 API-CONTRACT §3.4 extensions; source is chain iff type starts with chain.', () => {
+  it('§10.1: the 32 spec types + 4 API-CONTRACT §3.4 extensions + market.settled (Beat 6); source is chain iff type starts with chain.', () => {
     const opts = RealtimeEvent.options.map((o) => ({
       type: o.shape.type.value,
       source: o.shape.source.value,
     }));
-    expect(opts).toHaveLength(36);
-    expect(new Set(opts.map((o) => o.type)).size).toBe(36);
-    for (const t of ['bet.invite_answered', 'tx.sign_request', 'judge.cue', 'hearing.turn_open']) {
+    expect(opts).toHaveLength(37);
+    expect(new Set(opts.map((o) => o.type)).size).toBe(37);
+    for (const t of [
+      'bet.invite_answered',
+      'tx.sign_request',
+      'judge.cue',
+      'hearing.turn_open',
+      'market.settled',
+    ]) {
       expect(opts.map((o) => o.type)).toContain(t);
     }
     for (const o of opts) expect(o.source).toBe(o.type.startsWith('chain.') ? 'chain' : 'server');

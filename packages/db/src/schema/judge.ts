@@ -189,6 +189,8 @@ export const rulings = pgTable(
     uniqueIndex('rulings_appeal_uq')
       .on(t.appeal_id)
       .where(sql`appeal_id IS NOT NULL`),
+    // One Gemini settlement ruling per bet (migration 0007): the settlement keeper is idempotent.
+    uniqueIndex('rulings_settlement_uq').on(t.bet_id).where(sql.raw(`stage = 'settlement'`)),
     uniqueIndex('rulings_bet_onchain_ix_uq')
       .on(t.bet_id, t.onchain_ix)
       .where(sql`onchain_ix IS NOT NULL`),

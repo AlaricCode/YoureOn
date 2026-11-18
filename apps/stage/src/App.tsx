@@ -2,11 +2,21 @@
 // Connect with STAGE_KEY (POST /v1/stage/session) or a pasted stage token, then one WebSocket
 // for the room: the focused bet's card (parties, terms + terms code, Face ID per party, the lock
 // tx with its signer count, the ruling + cited frame + appeal countdown, the payout), the chain
-// ticker with devnet Explorer links, and the Gemini BTC 5-minute odds widget.
+// ticker with devnet Explorer links, and the Gemini BTC 5-minute odds widget. A Gemini bet
+// (Beat 6) gets the live market panel: who holds Up / Down at what stake, the line, BTC live,
+// who is ahead, the countdown to the contract's expiry, then Gemini's settled result.
 // Keys 1-6 play the pre-recorded beat clips (public/replay/beat{n}.mp4) full screen, labelled
 // REPLAY; Esc closes.
 import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from 'react';
+import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { formatUsd } from '@youre-on/shared/money';
+import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { sha256Hex } from '@youre-on/shared/primitives';
+import {
+  formatPrice,
+  verifySettlement,
+  type SettlementEvidence,
+} from '@youre-on/shared/settlement';
 import {
   applyFrame,
   explorerTx,
@@ -18,6 +28,7 @@ import {
 import {
   fetchBetSnapshot,
   fetchMarket,
+  fetchSettlement,
   fetchStageToken,
   StageConnection,
   wsUrlFor,
@@ -25,9 +36,20 @@ import {
 } from './connection';
 import { marketView, type MarketView } from './market';
 import { previewState } from './preview';
+import { previewMarketState } from './preview-market';
 
 const STORE_KEY = 'yo-stage-config';
 export const REPLAY_BEATS = [1, 2, 3, 4, 5, 6] as const;
+/** States in which a bet's resolve has landed (its evidence hashes are on chain). */
+const RULED_OR_LATER = new Set([
+  'RULED',
+  'CONCEDED',
+  'FINALIZED',
+  'APPEALED',
+  'APPEAL_RESOLVED',
+  'PAID',
+  'VOIDED',
+]);
 
 function loadConfig(): StageConfig {
   try {
@@ -130,7 +152,176 @@ function outcomeLine(b: BetView): string {
   return `Void${r.void_reason ? ` · ${r.void_reason.replace('_', ' ')}` : ''} · refund`;
 }
 
-export function BetCard({ bet, now }: { bet: BetView; now: number }) {
+/** Beat 6 on the projector: the live market bet, then Gemini's settled result. */
+/** The stage's own re-check of a Gemini bet's evidence chain (verifySettlement). */
+export interface Verification {
+  ok: boolean;
+  /** Gemini's raw response body was part of it (it hashed to the record's response_sha256). */
+  body: boolean;
+  /** The on-chain hashes were part of it (the resolve landed; read from the chain). */
+  onchain: boolean;
+  failed: string[];
+}
+
+/** "Gemini's response → record → on-chain evidence": only the links that were checked. */
+export function verifiedChain(v: Pick<Verification, 'body' | 'onchain'>): string {
+  return [v.body && "Gemini's response", 'record', v.onchain ? 'on-chain evidence' : 'ruling']
+    .filter(Boolean)
+    .join(' → ');
+}
+
+/** Re-runs the shared verifySettlement over GET /v1/bets/:id/settlement (never trusts its `ok`). */
+export function verifyEvidence(bet: BetView, ev: SettlementEvidence): Verification | null {
+  const t = bet.envelope?.terms;
+  if (!t?.market) return null;
+  const v = verifySettlement({
+    record: ev.record,
+    evidence_hash: ev.evidence_hash,
+    ruling: ev.ruling,
+    ruling_hash: ev.ruling_hash,
+    terms: { yes_party: t.yes_party, market: t.market },
+    body_sha256: ev.raw_body === null ? null : sha256Hex(ev.raw_body),
+    onchain: ev.onchain,
+  });
+  return {
+    ok: v.ok,
+    body: v.checks.body_matches_record === true,
+    onchain: v.checks.onchain_evidence === true && v.checks.onchain_ruling === true,
+    failed: Object.entries(v.checks)
+      .filter(([, good]) => !good)
+      .map(([k]) => k.replace(/_/g, ' ')),
+  };
+}
+
+export function MarketPanel({
+  bet,
+  tick,
+  now,
+  verification = null,
+}: {
+  bet: BetView;
+  /** The latest snapshot of THIS bet's contract (market.tick, or the relay's if it matches). */
+  tick: GeminiMarketSnapshot | null;
+  now: number;
+  verification?: Verification | null;
+}) {
+  const t = bet.envelope?.terms;
+  const m = t?.market;
+  if (!t || !m) return null;
+  const aUp = m.side === 'YES';
+  const up = aUp ? t.party_a.display_name : t.party_b.display_name;
+  const down = aUp ? t.party_b.display_name : t.party_a.display_name;
+  const upStake = aUp ? t.stakes.a : t.stakes.b;
+  const downStake = aUp ? t.stakes.b : t.stakes.a;
+  const pot = (BigInt(t.stakes.a) + BigInt(t.stakes.b)).toString();
+  const left = Date.parse(m.expiry) - now;
+  const s = bet.settlement?.record;
+  const live = tick && tick.eventTicker === m.eventTicker ? tick.indexPrice : null;
+  const line = m.strike.value;
+  const ahead = live !== null && line !== null ? (Number(live) >= Number(line) ? up : down) : null;
+  const pct = Math.round(Number(m.priceAtLock) * 100);
+  return (
+    <div className="market" aria-label="market bet">
+      <div className="market-head">
+        <span className="label">BTC 5-MIN · GEMINI</span>
+        {isReplayTicker(m.eventTicker) && (
+          <span className="replay-badge inline">REPLAY · recorded Gemini round</span>
+        )}
+        <span className="muted">
+          Up {pct}% · locked at Gemini {m.priceSource === 'mid' ? 'mid' : 'last trade'}
+        </span>
+      </div>
+      <div className="market-sides">
+        <span className={s?.contract.resolutionSide === 'yes' ? 'good' : undefined}>
+          ▲ {up} Up {usd(upStake)}
+        </span>
+        <span className={s?.contract.resolutionSide === 'no' ? 'good' : undefined}>
+          ▼ {down} Down {usd(downStake)}
+        </span>
+        <span className="muted">pot {usd(pot)}</span>
+      </div>
+      <div className="odds-grid">
+        <div>
+          <span className="label">LINE</span>
+          <span className="num">{line === null ? 'pending' : formatPrice(line)}</span>
+        </div>
+        <div>
+          <span className="label">{s ? 'SETTLED' : 'BTC'}</span>
+          <span
+            className={`num ${
+              s
+                ? s.contract.resolutionSide === 'yes'
+                  ? 'up'
+                  : 'down'
+                : live !== null && line !== null
+                  ? Number(live) >= Number(line)
+                    ? 'up'
+                    : 'down'
+                  : ''
+            }`}
+          >
+            {s
+              ? s.contract.settlementValue === null
+                ? '—'
+                : formatPrice(s.contract.settlementValue)
+              : live === null
+                ? '—'
+                : formatPrice(live)}
+          </span>
+        </div>
+        <div>
+          <span className="label">{left > 0 ? 'SETTLES IN' : 'EXPIRED'}</span>
+          <span className="num">{left > 0 ? clock(left) : m.expiry.slice(11, 16)}</span>
+        </div>
+      </div>
+      {s ? (
+        <>
+          <p className="market-result">
+            {s.contract.status === 'invalid' ? (
+              <span className="bad">Gemini voided the contract · both stakes back</span>
+            ) : (
+              <span className="good">
+                Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
+                {s.contract.resolutionSide === 'yes' ? up : down} wins
+              </span>
+            )}
+          </p>
+          <p className="muted market-evidence">
+            evidence <code>{bet.settlement!.evidence_hash.slice(0, 8)}</code> ·{' '}
+            <a className="explorer" href={s.source_url} target="_blank" rel="noreferrer">
+              Gemini ↗
+            </a>
+          </p>
+          {verification && (
+            <p className={`market-evidence ${verification.ok ? 'good' : 'bad'}`}>
+              {verification.ok
+                ? `✓ verified: ${verifiedChain(verification)}`
+                : `✗ evidence mismatch: ${verification.failed.join(', ')}`}
+            </p>
+          )}
+        </>
+      ) : left > 0 ? (
+        ahead && <p className="muted">{ahead} is ahead</p>
+      ) : (
+        <p className="countdown">Waiting for Gemini to settle…</p>
+      )}
+    </div>
+  );
+}
+
+export function BetCard({
+  bet,
+  now,
+  tick = null,
+  verification = null,
+}: {
+  bet: BetView;
+  now: number;
+  /** Gemini bets: the latest snapshot of the bet's contract. */
+  tick?: GeminiMarketSnapshot | null;
+  /** Gemini bets: the stage's re-check of the evidence chain, once ruled. */
+  verification?: Verification | null;
+}) {
   const t = bet.envelope?.terms ?? null;
   const cited = bet.ruling?.cited_frames[0];
   const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
@@ -165,6 +356,8 @@ export function BetCard({ bet, now }: { bet: BetView; now: number }) {
       ) : (
         <p className="muted big">Negotiating terms…</p>
       )}
+
+      {t?.market && <MarketPanel bet={bet} tick={tick} now={now} verification={verification} />}
 
       <div className="grid2">
         <div>
@@ -260,6 +453,9 @@ export function OddsWidget({ view }: { view: MarketView | null }) {
   return (
     <section className="odds" aria-label="odds">
       <h2>BTC 5-min · Gemini</h2>
+      {isReplayTicker(view.eventTicker) && (
+        <span className="replay-badge inline">REPLAY · recorded Gemini round</span>
+      )}
       <div className="odds-grid">
         <div>
           <span className="label">LINE</span>
@@ -331,11 +527,14 @@ export function StageView({
   now,
   onDisconnect,
   preview = false,
+  verifications = {},
 }: {
   state: TickerState;
   now: number;
   onDisconnect?: () => void;
   preview?: boolean;
+  /** Gemini bets' evidence re-checks, by bet id. */
+  verifications?: Readonly<Record<string, Verification>>;
 }) {
   const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
   const mv = useMemo(
@@ -364,7 +563,17 @@ export function StageView({
       <main className="layout">
         <div className="left">
           {bet ? (
-            <BetCard bet={bet} now={now} />
+            <BetCard
+              bet={bet}
+              now={now}
+              verification={verifications[bet.bet_id] ?? null}
+              tick={
+                state.betTicks[bet.bet_id] ??
+                (state.market?.eventTicker === bet.envelope?.terms.market?.eventTicker
+                  ? state.market
+                  : null)
+              }
+            />
           ) : (
             <section className="card">
               <p className="big muted">Waiting for a challenge…</p>
@@ -395,6 +604,8 @@ export function App() {
   const [replay, setReplay] = useState<number | null>(null);
   const [live, setLive] = useState<{ token: string; serverUrl: string } | null>(null);
   const conn = useRef<StageConnection | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const seeded = useRef(new Set<string>());
   const now = useNow(state.clockOffsetMs);
   const [preview] = useState(() => {
@@ -406,13 +617,59 @@ export function App() {
       return null;
     }
   });
+  // ?preview=market: the Beat 6 sample (a Gemini bet through its clock to Gemini's result).
+  const [previewKind] = useState(() => {
+    try {
+      return new URLSearchParams(globalThis.location?.search ?? '').get('preview');
+    } catch {
+      return null;
+    }
+  });
   const previewSlot = preview === null ? 0 : Math.floor(now / 2000);
   const pv = useMemo(
-    () => (preview === null ? null : previewState(preview, previewSlot * 2000)),
-    [preview, previewSlot],
+    () =>
+      preview === null
+        ? null
+        : previewKind === 'market'
+          ? previewMarketState(preview, previewSlot * 2000)
+          : previewState(preview, previewSlot * 2000),
+    [preview, previewKind, previewSlot],
   );
 
   useEffect(() => () => conn.current?.stop(), []);
+
+  // Beat 6: once a Gemini bet is ruled (the resolve landed), fetch its evidence chain and re-check
+  // it here (verifyEvidence), so the projector shows Gemini's bytes tied to the on-chain hashes.
+  const [verifications, setVerifications] = useState<Record<string, Verification>>({});
+  const asked = useRef(new Set<string>());
+  const ruledGemini = Object.values(state.bets)
+    .filter(
+      (b) =>
+        b.settlement !== null &&
+        b.envelope?.terms.market &&
+        b.state !== null &&
+        RULED_OR_LATER.has(b.state),
+    )
+    .map((b) => b.bet_id)
+    .join(',');
+  useEffect(() => {
+    if (!live || !ruledGemini) return;
+    for (const id of ruledGemini.split(',')) {
+      if (asked.current.has(id)) continue;
+      asked.current.add(id);
+      fetchSettlement(live.serverUrl, live.token, id).then(
+        (ev) => {
+          const bet = stateRef.current.bets[id];
+          const v = bet ? verifyEvidence(bet, ev) : null;
+          if (v) setVerifications((m) => ({ ...m, [id]: v }));
+        },
+        (err: unknown) => {
+          asked.current.delete(id); // retry on the next change
+          dispatch({ kind: 'error', message: `settlement ${id}: ${String(err)}` });
+        },
+      );
+    }
+  }, [ruledGemini, live]);
 
   // Keys 1-6: full-screen replay clips; Esc closes.
   useEffect(() => {
@@ -510,6 +767,7 @@ export function App() {
         <StageView
           state={state}
           now={now}
+          verifications={verifications}
           onDisconnect={() => {
             conn.current?.stop();
             conn.current = null;

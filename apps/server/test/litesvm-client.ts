@@ -82,6 +82,8 @@ export function liteSvmClient(
   const sent: string[] = [];
   const seen = new Set<Address>();
   const landed = new Map<string, RpcTransaction>();
+  /** Landed wire bytes by signature (an RPC's getTransaction base64; LiteSVM keeps only metadata). */
+  const landedWire = new Map<string, Uint8Array>();
   const decode = (wire: Base64EncodedWireTransaction) =>
     getTransactionDecoder().decode(getBase64Encoder().encode(wire));
   return {
@@ -131,6 +133,7 @@ export function liteSvmClient(
       sent.push(sig);
       for (const a of getCompiledTransactionMessageDecoder().decode(tx.messageBytes).staticAccounts)
         seen.add(a);
+      landedWire.set(sig, new Uint8Array(getBase64Encoder().encode(wire)));
       statuses.set(sig, { err: null, confirmationStatus: 'confirmed', slot: svm.getClock().slot });
       landed.set(sig, rpcTransactionOf(tx, r, svm.getClock()));
       // A new "slot": a durable nonce advanced in this tx may be advanced again (Agave refuses a
@@ -185,5 +188,6 @@ export function liteSvmClient(
       return out;
     },
     transaction: async (sig) => landed.get(sig) ?? null,
+    transactionBytes: async (sig) => landedWire.get(sig) ?? null,
   };
 }

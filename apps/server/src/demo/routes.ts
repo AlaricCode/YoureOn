@@ -36,7 +36,7 @@ import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/
 import { Pubkey, Uuid } from '@youre-on/shared/primitives';
 import { chainHealth } from '../chain/health';
 import { bootReconcile } from '../chain/reconcile';
-import type { AppEnv, RouteModule } from '../context';
+import type { AppDeps, AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody, readJsonBody } from '../http/body';
 import { betIdParam } from '../lock/routes';
@@ -48,6 +48,8 @@ import { toolSecretOk } from '../voice/tool-auth';
 import { claimTokensOf, demoPartyKey } from './claim-tokens';
 import { rebalanceDemoWallets } from './rebalance';
 import { DemoResetRequest, resetDemo } from './reset';
+import { realWorldEnabled } from '../markets/quote';
+import { settlementOf } from '../markets/settlement';
 
 export const DEMO_KEY_HEADER = 'X-YO-Demo-Key';
 
@@ -84,14 +86,43 @@ export const requireDemo: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/** Beat 6: the Gemini relay and the settlement keeper, for the pre-show check. */
+function geminiHealth(deps: AppDeps) {
+  const m = deps.markets;
+  const cur = m?.current(deps.now());
+  return {
+    feed: !!m,
+    real_world_enabled: realWorldEnabled(deps),
+    last_ok_at: m?.lastOkAt ? new Date(m.lastOkAt).toISOString() : null,
+    last_error: m?.lastError ?? null,
+    failures: m?.failures ?? 0,
+    feed_mode: m?.feed ?? null,
+    rollovers: m?.rollovers ?? 0,
+    current: cur?.market
+      ? {
+          event_ticker: cur.market.eventTicker,
+          expiry: cur.market.expiry,
+          strike: cur.market.strike.value,
+          lockable: cur.lockable,
+          lockable_until: cur.lockable_until,
+          refusal: cur.refusal,
+        }
+      : null,
+    next_window_start: cur?.next_window_start ?? null,
+    awaiting_market: settlementOf(deps).followed.length,
+  };
+}
+
 export const demoRoutes: RouteModule = {
   name: 'demo',
   register(app) {
     app.get('/v1/demo/health', requireDemo, async (c) => {
       // src/chain/health.ts: balances, nonce pool, RPC p50 / p95, keeper, stuck txs / bets,
-      // orphan escrow, Stream, Gemini relay, and `warnings` (+ `ok`: no critical warning).
+      // orphan escrow, Stream, and `warnings` (+ `ok`: no critical warning); plus the Beat 6
+      // Gemini relay and settlement keeper.
+      const deps = c.get('deps');
       c.header('Cache-Control', 'no-store');
-      return c.json(await chainHealth(c.get('deps')), 200);
+      return c.json({ ...(await chainHealth(deps)), gemini: geminiHealth(deps) }, 200);
     });
 
     app.post('/v1/demo/reset', requireDemo, async (c) => {

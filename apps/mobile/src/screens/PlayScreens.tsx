@@ -342,6 +342,7 @@ export function RulingScreen({
   view,
   result,
   reason,
+  judgeLabel,
   appealDeadlineMs,
   busy,
   alert,
@@ -352,6 +353,8 @@ export function RulingScreen({
   view: BetView;
   result: MyResult;
   reason: string;
+  /** Who ruled: "Judge" (default), "Gemini" for a market bet (Beat 6). */
+  judgeLabel?: string | undefined;
   /** BetResolved.appeal_deadline (10 s window). */
   appealDeadlineMs: number;
   busy: boolean;
@@ -371,7 +374,7 @@ export function RulingScreen({
         <StatusHero mark={mark} title={RESULT_TITLE[result]} detail={view.claim} />
         <Card>
           <Label variant="small" style={styles.cardLabel}>
-            {t(COPY.ruling.judge)}
+            {judgeLabel ?? t(COPY.ruling.judge)}
           </Label>
           <DataText>{reason}</DataText>
         </Card>
@@ -640,6 +643,7 @@ export function MarketScreen({
   strikeUsd,
   side,
   expiryMs,
+  replay = false,
   tag,
 }: {
   view: BetView;
@@ -648,6 +652,8 @@ export function MarketScreen({
   /** "Up" or "Down": my side. */
   side: string;
   expiryMs: number;
+  /** A REPLAY-feed bet (a recorded Gemini round): labelled. */
+  replay?: boolean;
   tag?: string | undefined;
 }) {
   const now = useNow(500);
@@ -655,6 +661,7 @@ export function MarketScreen({
     <Screen>
       <TopBar title={t(COPY.market.title)} tag={tag} />
       <Page>
+        {replay ? <Chip label={t(COPY.market.replay)} /> : null}
         <DataText variant="labelStrong">{view.claim}</DataText>
         <View style={styles.priceBlock}>
           <Label variant="small">{t(COPY.market.price)}</Label>

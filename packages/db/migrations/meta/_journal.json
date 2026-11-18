@@ -43,6 +43,13 @@
       "when": 1795000000000,
       "tag": "0005_judge_pipeline",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795200000000,
+      "tag": "0007_gemini_markets",
+      "breakpoints": true
     }
   ]
 }
