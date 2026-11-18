@@ -248,9 +248,11 @@ function toggleFullscreen() {
 }
 
 /** The connect form's REPLAY line: how many clips are in memory yet. */
-function ReplayLine({ replays, off }: { replays: ReplayStatus; off: boolean }) {
+export function ReplayLine({ replays, off }: { replays: ReplayStatus; off: boolean }) {
   const p = replayProgress(replays);
   if (off) return <p className="muted small">REPLAY clips: not preloaded (?nopreload)</p>;
+  if (p.state === 'done' && p.present === 0)
+    return <p className="warn small">REPLAY clips: none on this server (replay/beat1-6.mp4)</p>;
   return (
     <p className={`small ${p.state === 'done' && p.ready === p.present ? 'good' : 'muted'}`}>
       REPLAY clips: {p.ready}/{p.present} in memory

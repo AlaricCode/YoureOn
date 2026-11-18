@@ -15,6 +15,7 @@ import {
   type ReplayStatus,
 } from '../src/replays';
 import { emptyBet, type BetView } from '../src/ticker';
+import { ReplayLine } from '../src/App';
 import { HealthStrip } from '../src/view';
 
 const START = Date.parse('2026-11-20T15:00:00.000Z');
@@ -177,5 +178,23 @@ describe('progress on screen', () => {
     expect(strip(all)).toContain('5/5 cached');
     expect(strip(all)).toContain('hi ok');
     expect(replayProgress(initialReplays()).state).toBe('idle');
+  });
+
+  it('the connect form says how many clips are in memory (and when there are none)', () => {
+    const line = (s: ReplayStatus, off = false) =>
+      renderToString(<ReplayLine replays={s} off={off} />).replace(/<!-- -->/g, '');
+    expect(line(status({ 1: 'ready', 2: 'loading' }))).toContain('1/6 in memory · downloading…');
+    const none = status({
+      1: 'missing',
+      2: 'missing',
+      3: 'missing',
+      4: 'missing',
+      5: 'missing',
+      6: 'missing',
+    });
+    expect(line(none)).toContain('none on this server');
+    expect(line(initialReplays(), true)).toContain('not preloaded');
+    const all = status({ 1: 'ready', 2: 'ready', 3: 'ready', 4: 'ready', 5: 'ready', 6: 'ready' });
+    expect(line(all)).toContain('class="small good"');
   });
 });
