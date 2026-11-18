@@ -1277,13 +1277,12 @@ export class AppealService {
       if (err instanceof SimulationError) {
         const code = customErrorCode(err.err);
         this.deps.log.warn('appeal.resolve_refused', { bet_id: betId, code, err: err.message });
-        // Past appeal_resolve_deadline: the timeout-refund keeper returns both stakes.
-        if (
+        // Past appeal_resolve_deadline (or no longer Appealed): the timeout-refund keeper (or the
+        // chain) owns it, so the sweep looks again only after a long pause, not every tick.
+        const final =
           code === ESCROW_ERROR__APPEAL_RESOLVE_DEADLINE_PASSED ||
-          code === ESCROW_ERROR__INVALID_STATUS
-        )
-          return;
-        this.retryAt.set(betId, this.deps.now() + RESOLVE_APPEAL_RETRY_MS);
+          code === ESCROW_ERROR__INVALID_STATUS;
+        this.retryAt.set(betId, this.deps.now() + (final ? 60_000 : RESOLVE_APPEAL_RETRY_MS));
         return;
       }
       throw err;
