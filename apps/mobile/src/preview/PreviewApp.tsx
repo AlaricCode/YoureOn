@@ -39,6 +39,7 @@ import {
   PayoutScreen,
   RedoScreen,
   RulingScreen,
+  type CamArm,
   type LivePhase,
   type PayoutPhase,
   type TurnState,
@@ -80,13 +81,14 @@ type Route =
   | 'terms'
   | 'lockEnded'
   | 'live'
+  | 'liveSelf'
+  | 'selfCam'
   | 'judgeCam'
   | 'ruling'
   | 'redo'
   | 'payout'
   | 'hearing'
   | 'appeal'
-  | 'marketPanel'
   | 'market'
   | 'history'
   | 'profile'
@@ -125,6 +127,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [draftShown, setDraftShown] = useState(false);
   const [livePhase, setLivePhase] = useState<LivePhase>('locked');
   const [attemptNo, setAttemptNo] = useState(1);
+  /** Two phones, no judge cam: this (the non-performer's) phone's Start, then its own camera. */
+  const [startBusy, setStartBusy] = useState(false);
+  const [selfArm, setSelfArm] = useState<CamArm | null>(null);
   /** The first bet of a session is a clean win; later ones take the dispute path. */
   const betsPlayed = useRef(0);
   const lockRef = useRef(lock);
@@ -521,6 +526,40 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         );
       case 'live':
         return <LiveScreen view={view} phase={livePhase} attemptNo={attemptNo} />;
+      case 'liveSelf':
+        // The two-phone fallback: no judge cam in the room, so the non-performer's phone has
+        // Start, and the server names it the recorder (attempt.started -> its own camera).
+        return (
+          <LiveScreen
+            view={view}
+            phase={livePhase}
+            attemptNo={attemptNo}
+            startBusy={startBusy}
+            onStart={() => {
+              setStartBusy(true);
+              later(600, () => {
+                setStartBusy(false);
+                setSelfArm({ attemptNo: 1, goAtMs: Date.now() + 3000, maxMs: 6000 });
+                go('selfCam');
+              });
+            }}
+          />
+        );
+      case 'selfCam':
+        // No back arrow: filming this attempt is not a mode to leave (DemoApp's judgeCam route).
+        return (
+          <JudgeCamScreen
+            arm={selfArm}
+            onSend={async () => {
+              await new Promise((r) => setTimeout(r, 1200));
+              later(900, () => {
+                setLivePhase('judging');
+                go('live');
+                later(2500, () => openRuling('A_WINS', 'A'));
+              });
+            }}
+          />
+        );
       case 'judgeCam':
         return (
           <JudgeCamScreen
@@ -681,6 +720,11 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       }
       case 'live':
         return startLive(false);
+      case 'liveSelf':
+        setLivePhase('locked');
+        setAttemptNo(1);
+        setStartBusy(false);
+        return go('liveSelf');
       case 'rulingWon':
         return openRuling('A_WINS', 'A');
       case 'rulingLost':
@@ -747,6 +791,7 @@ type MenuKey =
   | 'endFailed'
   | 'endChanged'
   | 'live'
+  | 'liveSelf'
   | 'judgeCam'
   | 'rulingWon'
   | 'rulingLost'
@@ -812,6 +857,7 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     section: 'Beat 4: attempt and payout',
     items: [
       ['live', '17  Locked, filming, judging'],
+      ['liveSelf', '17b  Two phones: this phone films'],
       ['judgeCam', '18  Judge cam'],
       ['rulingWon', '19  Ruling, winner'],
       ['rulingLost', '20  Ruling, loser (GG, appeal)'],
