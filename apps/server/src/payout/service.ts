@@ -59,6 +59,7 @@ import { hashJcs } from '@youre-on/shared/jcs';
 import { formatUsd } from '@youre-on/shared/money';
 import { betIdToBytes, type Party } from '@youre-on/shared/primitives';
 import { payout, Ruling, toOnchainOutcome, type OnchainOutcome } from '@youre-on/shared/ruling';
+import { renderSignCard } from '@youre-on/shared/sign-card';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
 import type { BetState } from '@youre-on/shared/bet-state';
 import { judgeCue } from '../bets/cues';
@@ -95,7 +96,7 @@ import {
   type LifecycleDeps,
   type Tx,
 } from '../lock/common';
-import { displayCode, loadEnvelope } from '../lock/terms';
+import { loadEnvelope } from '../lock/terms';
 import { txFromStored } from '../lock/service';
 
 /** A ruling the judge slice hands over: SCHEMAS Ruling (attempt / settlement) or HearingRuling. */
@@ -131,6 +132,8 @@ const ONCHAIN: Record<
   Refund: { enum: Outcome.Refund, pg: 'refund' },
 };
 const FROM_PG = { party_a: 'PartyA', party_b: 'PartyB', split: 'Split', refund: 'Refund' } as const;
+/** bets.outcome -> the SCHEMAS Ruling outcome a concede is for (decisive outcomes only). */
+const RULING_OUTCOME = { party_a: 'A_WINS', party_b: 'B_WINS' } as const;
 
 export interface PayoutServiceOptions {
   deps: LifecycleDeps;
@@ -676,9 +679,6 @@ export class PayoutService {
       staticAccounts: Address[];
       lifetimeToken: string;
     };
-    const names = await this.names(bet);
-    const winner: Party = loser === 'A' ? 'B' : 'A';
-    const pot = formatUsd(((bet.stake_a ?? 0n) + (bet.stake_b ?? 0n)).toString());
     const appealEnd =
       bet.appeal_deadline?.getTime() ?? row.built_at.getTime() + SIGN_REQUEST_TTL_MS;
     const validUntil = Math.min(
@@ -700,17 +700,20 @@ export class PayoutService {
         valid_until: iso(validUntil),
       },
       envelope,
-      card: {
-        title: `GG: pay ${names[winner]}`,
-        prompt_message: `Pay ${names[winner]} ${pot}`,
-        hold_label: 'GG',
-        stakes_line: `${formatUsd((bet.stake_a ?? 0n).toString())} each`,
-        pot_line: `${pot} pot`,
-        odds_display: null,
-        terms_code: displayCode(envelope.terms_hash),
-        countdown_ends_at: iso(appealEnd),
+      // The phone refuses to sign unless this equals its own rendering (device policy G2), so
+      // both sides call the one shared renderer, from the binding Terms.
+      card: renderSignCard({
+        kind: 'concede',
+        terms: envelope.terms,
+        terms_hash: envelope.terms_hash,
+        me: loser,
+        appeal_deadline: Math.floor(appealEnd / 1000),
+      }),
+      // T2: the outcome as the phone verified it in ruling.issued (Ruling naming, not onchain).
+      ruling_ref: {
+        ruling_hash: bet.ruling_hash!,
+        outcome: RULING_OUTCOME[bet.outcome as 'party_a'],
       },
-      ruling_ref: { ruling_hash: bet.ruling_hash!, outcome: FROM_PG[bet.outcome as 'party_a'] },
       issued_at: iso(this.deps.now()),
     };
   }
