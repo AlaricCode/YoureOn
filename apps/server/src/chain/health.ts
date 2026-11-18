@@ -260,18 +260,22 @@ export async function chainHealth(
       'SOLANA_DEVNET_RPC or FEE_PAYER_SECRET_KEY is not set: no lock or payout can run.',
     );
   } else {
-    const t1 = performance.now();
     const treasuryAddr =
       rt.keys.treasury?.address ??
       (deps.env.TREASURY_PUBKEY ? address(deps.env.TREASURY_PUBKEY) : null);
     const [fee, treasury, a, b, cfg] = await Promise.all([
-      settle(rt.client.lamports(rt.keys.feePayer.address)),
+      (async () => {
+        // rpc_ms: the fee payer balance probe alone (one getBalance round trip).
+        const t1 = performance.now();
+        const r = await settle(rt.client.lamports(rt.keys.feePayer.address));
+        rpcMs = Math.round(performance.now() - t1);
+        return r;
+      })(),
       treasuryAddr ? walletOf(rt, treasuryAddr) : Promise.resolve(null),
       rt.keys.demoA ? walletOf(rt, rt.keys.demoA.address) : Promise.resolve(null),
       rt.keys.demoB ? walletOf(rt, rt.keys.demoB.address) : Promise.resolve(null),
       settle(readConfig(rt)),
     ]);
-    rpcMs = Math.round(performance.now() - t1);
     balances = { treasury, demo_a: a, demo_b: b };
     // The escrow Config: each of these makes every lock (or every ruling) fail onchain.
     if (cfg.ok && cfg.v) {
@@ -302,6 +306,8 @@ export async function chainHealth(
         );
     } else if (cfg.ok) {
       warn('config_missing', 'critical', 'No escrow Config account: run npm run init-config.');
+    } else {
+      warn('config_unreadable', 'warn', `Could not read the escrow Config: ${cfg.err}`);
     }
     if (fee.ok) {
       feePayerSol = Number(fee.v) / 1e9;

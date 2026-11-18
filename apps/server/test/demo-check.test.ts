@@ -139,6 +139,9 @@ describe('demo-check: /v1/demo/health', () => {
     expect(byId(paused)['chain.config']).toBe('NO-GO');
     const wrong = evaluateDemoHealth(ok({ ...healthy, judge: 'J2', config }), NOW);
     expect(byId(wrong)['chain.config']).toBe('NO-GO');
+    // No judge key on the server: not a "mismatch" (judge_key_missing says what is wrong).
+    const none = evaluateDemoHealth(ok({ ...healthy, judge: null, config }), NOW);
+    expect(none.find((c) => c.id === 'chain.config')!.detail).toContain('judge key missing');
   });
 
   it('the build the server reports is printed (which image answers)', () => {

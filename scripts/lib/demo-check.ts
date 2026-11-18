@@ -191,7 +191,7 @@ export function evaluateDemoHealth(
           ? 'NO-GO'
           : 'GO',
       detail: `${h.config.paused ? 'PAUSED' : 'live'}, appeal window ${h.config.appeal_window_secs} s, judge ${
-        h.judge === h.config.judge_authority ? 'matches' : 'MISMATCH'
+        !h.judge ? 'key missing' : h.judge === h.config.judge_authority ? 'matches' : 'MISMATCH'
       }, mint ${h.config.mint_allowed ? 'allowed' : 'NOT allowed'}`,
     });
   else if (h.config === null)
@@ -350,6 +350,10 @@ export function evaluateDemoHealth(
     'orphan_escrow',
     'chain_not_configured',
     'fee_payer_not_pinned',
+    // shown as chain.config
+    'escrow_paused',
+    'mint_not_allowed',
+    'judge_key_mismatch',
   ]);
   for (const w of h.warnings ?? [])
     if (!covered.has(w.code))

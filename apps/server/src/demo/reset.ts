@@ -198,19 +198,23 @@ export async function resetDemo(
         error: String((err as Error)?.message ?? err).slice(0, 160),
       }));
     };
-    // Rebalance only once the Resolved rehearsal bets are paid out: the devnet clock can trail
-    // ours (finalize then answers AppealWindowOpen), so re-sweep a few times before giving up.
-    const resolvedIds = new Set(
-      result.escrow.pending.filter((p) => p.status === 'Resolved').map((p) => p.bet_id),
-    );
+    // Rebalance only once the Resolved rehearsal bets are paid out (their Bet PDAs closed): the
+    // devnet clock can trail ours (finalize then answers AppealWindowOpen), so re-sweep a few
+    // times; if they are still in escrow after that, skip the rebalance rather than even the
+    // wallets on pre-payout balances.
+    const resolvedIds = result.escrow.pending
+      .filter((p) => p.status === 'Resolved')
+      .map((p) => p.bet_id);
     const settleThenRebalance = async () => {
-      for (let i = 0; i < RESET_SETTLE_TRIES; i++) {
-        const scan = lc.refund.lastOrphanScan;
-        const sent = new Set(scan?.sent.map((x) => x.bet_id));
-        const left = (scan?.orphans ?? []).filter(
-          (x) => resolvedIds.has(x.bet_id) && !sent.has(x.bet_id),
-        );
-        if (!left.length) break;
+      if (!rt) return;
+      for (let i = 0; ; i++) {
+        const open: string[] = [];
+        for (const id of resolvedIds) if (await readBetAccount(rt, id)) open.push(id);
+        if (!open.length) break;
+        if (i >= RESET_SETTLE_TRIES) {
+          deps.log.warn('demo.reset_rebalance_skipped', { reason: 'escrow_pending', bets: open });
+          return;
+        }
         await new Promise((r) => setTimeout(r, RESET_SETTLE_RETRY_MS));
         await lc.refund.sweepOrphans(deps.now());
       }
