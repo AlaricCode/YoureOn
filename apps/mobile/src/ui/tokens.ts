@@ -236,6 +236,10 @@ export const haptics = {
     { haptic: { kind: 'impact', style: 'heavy' }, atMs: 0 },
     { haptic: { kind: 'impact', style: 'heavy' }, atMs: 120 },
   ],
+  /** The ruling lands (RulingScreen, both phones): one firm tap before the words. */
+  ruled: once({ kind: 'impact', style: 'medium' }),
+  /** "Run it back": a light tick, it is a retry, not a result. */
+  redo: once({ kind: 'selection' }),
   /** The winner's payout at `processed`. */
   payout: once({ kind: 'notification', type: 'success' }),
   /** A policy rejection, failed lock, or reverted payout. */

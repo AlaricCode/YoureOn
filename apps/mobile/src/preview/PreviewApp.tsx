@@ -46,6 +46,7 @@ import {
 } from '../screens/PlayScreens';
 import { createPreviewSignupApi } from '../signup/api';
 import { SignupScreen } from '../signup/SignupScreen';
+import { SplashView } from '../ui/brand';
 import { Label } from '../ui/kit';
 import { ListRow, Screen, Section, TopBar } from '../ui/parts';
 import { palette, radius, space } from '../ui/tokens';
@@ -66,6 +67,8 @@ import {
 
 type Route =
   | 'menu'
+  | 'launch'
+  | 'launchFailed'
   | 'signup'
   | 'enroll'
   | 'faceSettings'
@@ -307,6 +310,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
     switch (route) {
       case 'menu':
         return <Menu onClose={onClose} open={openFromMenu} />;
+      case 'launch':
+        return <SplashView />;
+      case 'launchFailed':
+        return <SplashView failed onRetry={() => go('launch')} />;
       case 'signup':
         return (
           <SignupScreen
@@ -620,6 +627,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
     setMarket(key === 'market' || key === 'termsMarket' || key === 'marketPanel');
     setMe('A');
     switch (key) {
+      case 'launch':
+      case 'launchFailed':
+        return go(key);
       case 'signup':
       case 'home':
       case 'scan':
@@ -711,6 +721,8 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
 // ---------------------------------------------------------------------------------------
 
 type MenuKey =
+  | 'launch'
+  | 'launchFailed'
   | 'signup'
   | 'enroll'
   | 'faceSettings'
@@ -745,6 +757,13 @@ type MenuKey =
 
 /** The screen index, by beat. "Full run" entries play on into the next screens. */
 const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] = [
+  {
+    section: 'Launch',
+    items: [
+      ['launch', '0  App launch'],
+      ['launchFailed', '0b  App launch, offline'],
+    ],
+  },
   {
     section: 'Sign up',
     items: [

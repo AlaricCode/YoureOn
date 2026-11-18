@@ -60,6 +60,15 @@
       ],
       "expo-asset",
       ["expo-notifications", { "enableRemoteNotifications": false }],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#0B0B0C"
+        }
+      ],
       "@livekit/react-native-expo-plugin",
       [
         "@config-plugins/react-native-webrtc",

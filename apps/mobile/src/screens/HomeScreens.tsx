@@ -22,7 +22,6 @@ import {
   ListRow,
   OperatorHold,
   Page,
-  ReconnectBanner,
   Screen,
   Section,
   StatusHero,
@@ -88,8 +87,7 @@ export function HomeScreen({
   };
 
   return (
-    <Screen>
-      <ReconnectBanner visible={offline} />
+    <Screen offline={offline}>
       <View style={styles.head}>
         <OperatorHold style={styles.flex} onHold={onTitleLongPress}>
           <BalanceHeader cents={balanceCents} pending={pending} inBetsUsd={inBetsUsd} />

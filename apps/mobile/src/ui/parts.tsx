@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useReconnecting } from './connection';
 import { ChevronLeft, Label, Tick } from './kit';
 import { color, hold, motion, palette, payout, radius, space, type } from './tokens';
 
@@ -23,9 +24,13 @@ import { color, hold, motion, palette, payout, radius, space, type } from './tok
 // Frame
 // ---------------------------------------------------------------------------------------
 
-/** A full screen on the app background, padded by the safe-area insets. */
-export function Screen({ children }: { children: ReactNode }) {
+/**
+ * A full screen on the app background, padded by the safe-area insets. The reconnect banner sits
+ * at its top whenever the realtime connection is coming back (./connection), or when `offline`.
+ */
+export function Screen({ children, offline = false }: { children: ReactNode; offline?: boolean }) {
   const i = useSafeAreaInsets();
+  const reconnecting = useReconnecting();
   return (
     <View
       style={[
@@ -33,6 +38,7 @@ export function Screen({ children }: { children: ReactNode }) {
         { paddingTop: i.top, paddingBottom: i.bottom, paddingLeft: i.left, paddingRight: i.right },
       ]}
     >
+      <ReconnectBanner visible={offline || reconnecting} />
       {children}
     </View>
   );
@@ -328,21 +334,40 @@ export function BalanceHeader({
   cents,
   pending = false,
   inBetsUsd,
+  delta,
 }: {
   cents: number;
   pending?: boolean;
   inBetsUsd?: string | null;
+  /** "+$5" beside the number at a payout; fades in over `payout.revealMs`. */
+  delta?: string | null;
 }) {
   const shown = useCountUp(cents);
+  const reveal = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(reveal, {
+      toValue: delta ? 1 : 0,
+      duration: payout.revealMs,
+      easing: Easing.bezier(...motion.easing),
+      useNativeDriver: true,
+    }).start();
+  }, [delta, reveal]);
   return (
     <View style={styles.balance} testID="balance-header">
       <Label variant="small">Balance</Label>
-      <Text
-        style={[type.display, { color: pending ? payout.pendingColor : payout.settledColor }]}
-        accessibilityLabel={centsToUsd(cents)}
-      >
-        {centsToUsd(shown)}
-      </Text>
+      <View style={styles.balanceRow}>
+        <Text
+          style={[type.display, { color: pending ? payout.pendingColor : payout.settledColor }]}
+          accessibilityLabel={centsToUsd(cents)}
+        >
+          {centsToUsd(shown)}
+        </Text>
+        {delta ? (
+          <Animated.Text style={[type.heading, styles.delta, { opacity: reveal }]}>
+            {delta}
+          </Animated.Text>
+        ) : null}
+      </View>
       {inBetsUsd ? (
         <View style={styles.inBets}>
           <Label variant="small">In bets</Label>
@@ -489,6 +514,94 @@ export function HoldToConfirm({
 }
 
 // ---------------------------------------------------------------------------------------
+// Motion (tokens.motion: functional, <= 200 ms per step, ease-out, no springs)
+// ---------------------------------------------------------------------------------------
+
+const easeOut = Easing.bezier(...motion.easing);
+
+/** Fades and scales its child in on mount (0.92 → 1 over one standard transition). */
+export function Appear({
+  children,
+  delayMs = 0,
+  style,
+}: {
+  children: ReactNode;
+  delayMs?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const k = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(k, {
+      toValue: 1,
+      duration: motion.fastMs,
+      delay: delayMs,
+      easing: easeOut,
+      useNativeDriver: true,
+    }).start();
+  }, [k, delayMs]);
+  const scale = k.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+  return (
+    <Animated.View style={[style, { opacity: k, transform: [{ scale }] }]}>
+      {children}
+    </Animated.View>
+  );
+}
+
+/**
+ * Two quick beats (scale 1 → 1.12 → 1, twice): the on-screen double haptic for LOCKED, for when
+ * the camera or mic has silenced haptics (ARCHITECTURE §7.1 Beat 3).
+ */
+function useDoublePulse(on: boolean): Animated.Value {
+  const v = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!on) return;
+    const beat = [
+      Animated.timing(v, { toValue: 1.12, duration: 110, easing: easeOut, useNativeDriver: true }),
+      Animated.timing(v, { toValue: 1, duration: 110, easing: easeOut, useNativeDriver: true }),
+    ];
+    Animated.sequence([
+      Animated.delay(motion.fastMs),
+      ...beat,
+      Animated.delay(20),
+      ...beat,
+    ]).start();
+  }, [on, v]);
+  return v;
+}
+
+// ---------------------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------------------
+
+/** A thin bar that drains as a window closes (the 10 s appeal window, the accept window). */
+export function CountdownBar({ fraction }: { fraction: number }) {
+  const f = Math.max(0, Math.min(1, fraction));
+  return (
+    <View style={styles.barTrack} accessibilityElementsHidden importantForAccessibility="no">
+      <View style={[styles.barFill, { width: `${f * 100}%` }]} />
+    </View>
+  );
+}
+
+/** One dot per allowed attempt: done ones filled, the current one ringed in the accent. */
+export function AttemptDots({ current, total }: { current: number; total: number }) {
+  return (
+    <View style={styles.dotsTrack} accessible accessibilityLabel={`${current} / ${total}`}>
+      {Array.from({ length: total }, (_, i) => (
+        <View
+          key={i}
+          style={[
+            styles.attemptDot,
+            i + 1 < current && styles.attemptDone,
+            i + 1 === current && styles.attemptNow,
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------------------
 
@@ -530,44 +643,78 @@ export function StatusBadge({
   );
 }
 
-/** A centred moment: badge, title, and an optional line of data under it. */
+/**
+ * A centred moment: badge, title, and an optional line of data under it. The badge scales in and
+ * the words follow one beat later; `pulse` adds the LOCKED double beat.
+ */
 export function StatusHero({
   mark,
   title,
   detail,
   titleRole = 'label',
+  pulse = false,
 }: {
   mark?: 'check' | 'cross' | 'ring';
   title: string;
   detail?: string | undefined;
   /** 'contract' titles ("Declined. Nothing moved.") are full sentences by spec. */
   titleRole?: 'label' | 'contract';
+  pulse?: boolean;
 }) {
+  const beat = useDoublePulse(pulse);
   return (
-    <View style={styles.hero}>
-      {mark ? <StatusBadge mark={mark} /> : null}
-      <Text
-        style={[type.title, styles.heroTitle, titleRole === 'contract' && styles.center]}
-        numberOfLines={titleRole === 'contract' ? 2 : 1}
-      >
-        {title}
-      </Text>
-      {detail ? (
-        <DataText variant="label" muted style={styles.center}>
-          {detail}
-        </DataText>
+    <View style={styles.hero} accessibilityLiveRegion="polite">
+      {mark ? (
+        <Appear>
+          <Animated.View style={{ transform: [{ scale: beat }] }}>
+            <StatusBadge mark={mark} />
+          </Animated.View>
+        </Appear>
       ) : null}
+      <Appear delayMs={mark ? 60 : 0} style={styles.heroWords}>
+        <Text
+          style={[type.title, styles.heroTitle, titleRole === 'contract' && styles.center]}
+          numberOfLines={titleRole === 'contract' ? 2 : 1}
+        >
+          {title}
+        </Text>
+        {detail ? (
+          <DataText variant="label" muted style={styles.center}>
+            {detail}
+          </DataText>
+        ) : null}
+      </Appear>
     </View>
   );
 }
 
 /** Thin bar at the top while the realtime connection is down (TASKS D5-M2). */
 export function ReconnectBanner({ visible }: { visible: boolean }) {
-  if (!visible) return null;
+  const k = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const [mounted, setMounted] = useState(visible);
+  useEffect(() => {
+    if (visible) setMounted(true);
+    Animated.timing(k, {
+      toValue: visible ? 1 : 0,
+      duration: motion.fastMs,
+      easing: Easing.bezier(...motion.easing),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished && !visible) setMounted(false);
+    });
+  }, [visible, k]);
+  if (!mounted) return null;
+  const height = k.interpolate({ inputRange: [0, 1], outputRange: [0, space.x4] });
   return (
-    <View style={styles.banner} testID="reconnect-banner">
+    <Animated.View
+      style={[styles.banner, { height, opacity: k }]}
+      testID="reconnect-banner"
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+    >
+      <View style={styles.bannerDot} />
       <DotsLabel text="Reconnecting" variant="small" />
-    </View>
+    </Animated.View>
   );
 }
 
@@ -650,11 +797,35 @@ const styles = StyleSheet.create({
     backgroundColor: palette.accent,
   },
   hero: { alignItems: 'center', gap: space.x2, paddingVertical: space.x3 },
+  heroWords: { alignItems: 'center', gap: space.x1 },
+  balanceRow: { flexDirection: 'row', alignItems: 'baseline', gap: space.x1 },
+  delta: { color: palette.accent },
+  barTrack: {
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: palette.hairline,
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  barFill: { height: 3, backgroundColor: palette.accent },
+  dotsTrack: { flexDirection: 'row', justifyContent: 'center', gap: space.x1 },
+  attemptDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: palette.hairline,
+  },
+  attemptDone: { backgroundColor: palette.textSecondary, borderColor: palette.textSecondary },
+  attemptNow: { borderColor: palette.accent, backgroundColor: palette.accent },
   heroTitle: { marginTop: space.x1 },
   banner: {
-    height: space.x4,
+    flexDirection: 'row',
+    gap: space.x1,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: palette.surface,
+    overflow: 'hidden',
   },
+  bannerDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: palette.textSecondary },
 });

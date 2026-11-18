@@ -8,6 +8,7 @@ import { authRoutes } from './auth/routes';
 import { healthRoutes } from './health/routes';
 import { realtimeRoutes } from './realtime/routes';
 import { roomsRoutes } from './rooms/routes';
+import { faceRoutes } from './face/routes';
 import { betsRoutes } from './bets/routes';
 import { voiceRoutes } from './voice/routes';
 import { chainRoutes } from './chain/routes';
@@ -21,13 +22,13 @@ import { stageRoutes } from './stage/routes';
 import { stageStaticRoutes } from './stage/static';
 import { marketsRoutes } from './markets/routes';
 import { marketBetRoutes } from './markets/bet-routes';
-import { faceRoutes } from './face/routes';
 
 export const routeModules: RouteModule[] = [
   healthRoutes,
   authRoutes,
   realtimeRoutes,
   roomsRoutes,
+  faceRoutes,
   betsRoutes,
   voiceRoutes,
   chainRoutes,
@@ -41,7 +42,6 @@ export const routeModules: RouteModule[] = [
   stageRoutes,
   marketsRoutes,
   marketBetRoutes,
-  faceRoutes,
   // GET / and /stage/*: the built projector page (apps/stage/dist), same-origin with the API.
   stageStaticRoutes,
 ];
