@@ -111,6 +111,7 @@ export interface DemoHealth {
   escrow?: { live: number | null; orphans: unknown[] } | null;
   stream?: { last_delivery_at: string | null; events_last_hour: number };
   markets?: { last_ok_at: string | null; last_error: string | null } | null;
+  build?: { image: string | null; machine: string | null; region: string | null };
 }
 
 /** GET /v1/demo/health -> one check per money-path item, plus the server's own warnings. */
@@ -157,6 +158,12 @@ export function evaluateDemoHealth(
           fix: 'fly secrets set SOLANA_DEVNET_RPC=... FEE_PAYER_SECRET_KEY=...',
         },
   );
+  if (h.build?.image)
+    add({
+      id: 'server.build',
+      verdict: 'GO',
+      detail: `${h.build.image} on ${h.build.machine ?? '?'} (${h.build.region ?? '?'})`,
+    });
   if (!h.chain_configured) return out;
 
   if (h.lock_signer === 'phones' && h.fee_payer_pinned === false)

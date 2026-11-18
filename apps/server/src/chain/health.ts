@@ -82,6 +82,8 @@ export interface ChainHealthReport {
   escrow: OrphanSummary | null;
   stream: { last_delivery_at: string | null; events_last_hour: number };
   markets: { last_ok_at: string | null; last_error: string | null } | null;
+  /** Which build answers (Fly sets these at runtime; null locally). */
+  build: { image: string | null; machine: string | null; region: string | null };
 }
 
 export interface StuckTx {
@@ -431,6 +433,11 @@ export async function chainHealth(
     markets: deps.markets
       ? { last_ok_at: iso(deps.markets.lastOkAt), last_error: deps.markets.lastError }
       : null,
+    build: {
+      image: process.env['FLY_IMAGE_REF'] ?? null,
+      machine: process.env['FLY_MACHINE_ID'] ?? null,
+      region: process.env['FLY_REGION'] ?? null,
+    },
   };
 }
 

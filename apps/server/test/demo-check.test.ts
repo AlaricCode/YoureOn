@@ -122,6 +122,15 @@ describe('demo-check: /v1/demo/health', () => {
     expect(off[0]!.verdict).toBe('NO-GO');
   });
 
+  it('the build the server reports is printed (which image answers)', () => {
+    const build = { image: 'registry.fly.io/youre-on:dep-1', machine: 'm1', region: 'dfw' };
+    const cs = evaluateDemoHealth(ok({ ...healthy, build }), NOW);
+    expect(cs.find((c) => c.id === 'server.build')).toMatchObject({
+      verdict: 'GO',
+      detail: 'registry.fly.io/youre-on:dep-1 on m1 (dfw)',
+    });
+  });
+
   it('phones + an unpinned fee payer is NO-GO (every lock is refused on device)', () => {
     const cs = evaluateDemoHealth(
       ok({ ...healthy, lock_signer: 'phones', fee_payer_pinned: false }),

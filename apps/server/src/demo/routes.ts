@@ -9,6 +9,8 @@
 //                                        nonce pool re-synced (src/demo/reset.ts). Sessions, users,
 //                                        rooms and face_enrollments are untouched.
 //   POST /v1/demo/rebalance              demo-a / demo-b USDC evened out, fee payer pays (rebalance.ts).
+//   POST /v1/demo/sweep                  every money sweep now (lock / payout / resolve-due / refund
+//                                        / orphan escrow, chain/reconcile.ts) + the health report.
 //   POST /v1/demo/bets/:bet_id/terms     inject fixture terms through the SAME sink as propose_terms
 //                                        (no voice_conversation_id needed). Body: optional
 //                                        propose_terms args (the LLM projection) overriding the fixture.
@@ -33,6 +35,7 @@ import { MAX_STAKE } from '@youre-on/shared/constants';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import { Pubkey, Uuid } from '@youre-on/shared/primitives';
 import { chainHealth } from '../chain/health';
+import { bootReconcile } from '../chain/reconcile';
 import type { AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody, readJsonBody } from '../http/body';
@@ -99,6 +102,16 @@ export const demoRoutes: RouteModule = {
         requestId: c.get('requestId'),
       });
       return c.json({ ok: true, ...result }, 200);
+    });
+
+    // Every money sweep, now (before a beat, or to see the orphan refunds go out): the same
+    // idempotent passes the keeper runs, plus the orphan scan, then the health report.
+    app.post('/v1/demo/sweep', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const report = await bootReconcile(deps, deps.now());
+      const orphans = await lifecycleOf(deps).refund.sweepOrphans(deps.now());
+      await lifecycleOf(deps).idle();
+      return c.json({ ok: true, reconcile: report, orphans, health: await chainHealth(deps) }, 200);
     });
 
     app.post('/v1/demo/rebalance', requireDemo, async (c) => {

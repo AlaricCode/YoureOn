@@ -919,6 +919,21 @@ run('money path hardening over LiteSVM', () => {
     await admin('/v1/demo/reset');
   });
 
+  it('POST /v1/demo/sweep runs every money sweep now and returns them with the health report', async () => {
+    const betId = await lockedBet();
+    await ctx.deps.db.delete(bets).where(eq(bets.id, betId)); // an orphan...
+    advance(RESOLVE_WINDOW_MS + 1_000); // ...past its deadline
+    expect((await postJson(ctx.base, '/v1/demo/sweep', {})).status).toBe(404); // no admin key
+    const r = await admin('/v1/demo/sweep');
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ ok: true, reconcile: { chain_configured: true } });
+    expect(r.json!.orphans.sent).toContainEqual(
+      expect.objectContaining({ bet_id: betId, action: 'timeout_refund' }),
+    );
+    expect(r.json!.health).toMatchObject({ chain_configured: true, nonce_pool: { size: 3 } });
+    expect(await onchainBet(betId)).toBeNull();
+  });
+
   it('the keeper drives the SAME lifecycle the routes use (never one per deps copy)', async () => {
     const keeper = createServerKeeper(ctx.deps, { intervalMs: 60_000 });
     const calls: string[] = [];
