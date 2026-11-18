@@ -8,14 +8,15 @@
 //     bet records gemini_market_id, a_position, odds_*, quoted_at, pricing_snapshot_id).
 //     -> 200 MarketTermsResponse
 //     -> 409 MARKET_UNAVAILABLE {reason: FairRefusal} when Gemini can't price it; 409
-//        INVALID_STATE after the freeze; 400 VALIDATION_FAILED for a bad amount.
+//        INVALID_STATE after the freeze; 422 VALIDATION_FAILED for a bad side or amount.
 //   Then the normal POST /v1/bets/:bet_id/terms/confirm (a quote older than 30 s is re-quoted
 //   and answered 409 TERMS_HASH_MISMATCH {reason: 'requoted'}), the lock, AWAITING_MARKET, and
 //   the settlement keeper (markets/settlement.ts).
 //
 // Also wires the relay's snapshots into the settlement service (market.tick per waiting bet),
 // as stage/routes.ts wires them into stage.market, and serves the voice judge's
-// POST /el/tools/get_market_odds (markets/voice-tool.ts).
+// POST /el/tools/get_market_odds (markets/voice-tool.ts) and the demo switch
+// POST /v1/demo/gemini {feed: live|replay} (markets/replay.ts; DEMO_MODE + admin key).
 import { z } from 'zod/v4';
 import { evaluateProposeTerms } from '@youre-on/shared/judge/reply';
 import {
