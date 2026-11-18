@@ -824,6 +824,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             <FaceEnrollFlow
               api={faceApi}
               embedder={embedder}
+              now={() => rt.clock.now()}
               onDone={() => {
                 refreshFace();
                 leaveEnroll();

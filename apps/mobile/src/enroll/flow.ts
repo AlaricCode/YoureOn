@@ -263,6 +263,27 @@ export function buildEnrollmentRequest(args: {
   };
 }
 
+/**
+ * The finished series as the POST /v1/face/enrollment body: the shots averaged, `passed_at` now.
+ * `now` is the server-corrected clock (rt.clock.now on the phone), and `consentAt` must come from
+ * it too: the server refuses either time more than REQUEST_CLOCK_SKEW_MS (60 s) ahead of its own,
+ * so on a phone whose clock runs fast, Date.now here would fail every enrollment with "Consent
+ * needed" while every signed request (already on the corrected clock) still works.
+ */
+export function seriesEnrollmentRequest(args: {
+  consent: FaceConsent;
+  consentAt: Date;
+  shots: readonly Shot[];
+  now: () => number;
+}): FaceEnrollmentRequest {
+  return buildEnrollmentRequest({
+    consent: args.consent,
+    consentAt: args.consentAt,
+    passedAt: new Date(args.now()),
+    embedding: plainEmbedding(averageEmbedding(args.shots)),
+  });
+}
+
 /** Server error codes on face routes → the red line on the face step (API-CONTRACT §1.6). */
 export function enrollErrorLabel(code: string): string {
   switch (code) {

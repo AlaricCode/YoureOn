@@ -14,16 +14,14 @@ import { motion, palette, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi } from './api';
 import type { FaceEmbedder, FaceStill } from './embedder';
 import {
-  averageEmbedding,
-  buildEnrollmentRequest,
   checkSeries,
   checkShot,
   enrollErrorLabel,
   makePrompts,
-  plainEmbedding,
   problemLabel,
   PROMPT_LABEL,
   SERIES_PROBLEM_LABEL,
+  seriesEnrollmentRequest,
   SHOTS,
   type FaceConsent,
   type Shot,
@@ -39,6 +37,7 @@ export function FaceCapturePanel({
   embedder,
   consent,
   consentAt,
+  now,
   saved,
   onSaved,
   onAlert,
@@ -46,7 +45,10 @@ export function FaceCapturePanel({
   api: FaceApi;
   embedder: FaceEmbedder;
   consent: FaceConsent;
+  /** When "I consent" was ticked, on the `now` clock. */
   consentAt: Date;
+  /** The server-corrected clock (ms) for `passed_at` (see seriesEnrollmentRequest). */
+  now: () => number;
   saved: boolean;
   onSaved: () => void;
   /** The red line under the step (owned by the step so it sits above the main button). */
@@ -167,14 +169,7 @@ export function FaceCapturePanel({
       }
       setShots(next);
       setChecking(true);
-      await api.enroll(
-        buildEnrollmentRequest({
-          consent,
-          consentAt,
-          passedAt: new Date(),
-          embedding: plainEmbedding(averageEmbedding(next)),
-        }),
-      );
+      await api.enroll(seriesEnrollmentRequest({ consent, consentAt, shots: next, now }));
       onSaved();
     } catch (e) {
       restart(e instanceof FaceApiError ? enrollErrorLabel(e.code) : 'Try again');
@@ -199,6 +194,7 @@ export function FaceCapturePanel({
     api,
     consent,
     consentAt,
+    now,
     onSaved,
     onAlert,
     restart,

@@ -314,6 +314,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
           <FaceEnrollFlow
             api={faceApi}
             embedder={embedder}
+            now={Date.now}
             onDone={() => {
               setFaceOn(true);
               setInRoom(false);
