@@ -38,6 +38,7 @@ export function HomeScreen({
   onChallenge,
   onHistory,
   onProfile,
+  onTitleLongPress,
 }: {
   name: string;
   balanceCents: number;
@@ -51,10 +52,13 @@ export function HomeScreen({
   onJoin: (code: string) => Promise<boolean>;
   onCreate: () => void;
   onLeave: () => void;
-  onScan: () => void;
+  /** Omitted when face scan is off: the "Scan a face" button is hidden. */
+  onScan?: (() => void) | undefined;
   onChallenge: (user: PreviewUser) => void;
   onHistory: () => void;
   onProfile: () => void;
+  /** Hidden operator gesture (diagnostics / preview). */
+  onTitleLongPress?: (() => void) | undefined;
 }) {
   const [code, setCode] = useState('');
   const [alert, setAlert] = useState<string | null>(null);
@@ -72,9 +76,14 @@ export function HomeScreen({
     <Screen>
       <ReconnectBanner visible={offline} />
       <View style={styles.head}>
-        <View style={styles.flex}>
+        <Pressable
+          style={styles.flex}
+          onLongPress={onTitleLongPress}
+          delayLongPress={1200}
+          accessible={false}
+        >
           <BalanceHeader cents={balanceCents} pending={pending} inBetsUsd={inBetsUsd} />
-        </View>
+        </Pressable>
         <Pressable
           testID="home-profile"
           accessibilityRole="button"
@@ -122,7 +131,9 @@ export function HomeScreen({
                 ))
               )}
             </ScrollView>
-            <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
+            {onScan ? (
+              <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
+            ) : null}
             <View style={styles.row}>
               <View style={styles.flex}>
                 <QuietButton label={t(COPY.home.history)} onPress={onHistory} />

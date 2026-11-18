@@ -1,7 +1,6 @@
 // The face routes the enroll screens call (API-CONTRACT §2.2), behind an interface so the screens
 // run before the server routes exist: `createPreviewFaceApi()` is an in-memory stand-in with the
-// same shapes and error codes. The HTTP client lands with the session and request-signing layer
-// (D0-M4); it implements this same interface.
+// same shapes and error codes; `createServerFaceApi()` is the real one over the signed client.
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 
@@ -90,5 +89,45 @@ export function createPreviewFaceApi(opts: { delayMs?: number } = {}): FaceApi &
       last = null;
       status = 'none';
     },
+  };
+}
+
+/** The subset of the signed client (../net/signedFetch) the face routes need. */
+interface FaceHttp {
+  request(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    opts?: { json?: unknown },
+  ): Promise<unknown>;
+}
+
+/**
+ * The real face routes (API-CONTRACT §2.2) over the signed client: GETs carry the bearer,
+ * writes are signed. Same interface and error codes as the preview stand-in.
+ */
+export function createServerFaceApi(http: FaceHttp): FaceApi {
+  const call = async <T>(f: () => Promise<unknown>): Promise<T> => {
+    try {
+      return (await f()) as T;
+    } catch (e) {
+      const code = (e as { code?: unknown } | null)?.code;
+      throw new FaceApiError(typeof code === 'string' ? code : 'NETWORK');
+    }
+  };
+  return {
+    getConsent: () => call<FaceConsent>(() => http.request('GET', '/v1/face/consent')),
+    async getStatus() {
+      const me = await call<{ face?: { status?: FaceStatus } }>(() =>
+        http.request('GET', '/v1/me'),
+      );
+      return me.face?.status ?? 'none';
+    },
+    enroll: (req) =>
+      call<{ status: 'active'; enrolled_at: string }>(() =>
+        http.request('POST', '/v1/face/enrollment', { json: req }),
+      ),
+    setStatus: (status) =>
+      call<void>(() => http.request('PATCH', '/v1/face/enrollment', { json: { status } })),
+    remove: () => call<void>(() => http.request('DELETE', '/v1/face/enrollment')),
   };
 }

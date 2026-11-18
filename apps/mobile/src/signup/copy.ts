@@ -8,4 +8,5 @@ export const SIGNUP_COPY = {
   ageCheck: "I'm 18+",
   continue: 'Continue',
   previewTag: 'Preview',
+  demo: 'Demo account',
 } as const;
