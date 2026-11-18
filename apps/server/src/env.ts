@@ -43,6 +43,11 @@ export const EnvSchema = z.object({
   /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
   SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
+  /**
+   * SCHEMAS §2.2: real_world (Gemini BTC 5-minute) bets on our escrow are a devnet demo
+   * exception. Unset = follow DEMO_MODE. They also need the market relay (MARKETS_FEED).
+   */
+  ALLOW_P2P_REAL_WORLD: opt(boolStr),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
   // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)

@@ -16,6 +16,11 @@
 //             a_/b_authorized_device_at = NULL (no device: that NULL marks a custodial row), and an
 //             audit_log 'lock.custodial_signed' row per party.
 //
+// Gemini bets (Beat 6): the lock's accept_deadline is unix(Terms.market.quotedAt) + 60 s (SCHEMAS
+// §8.3; the phones' device policy L3 checks exactly this), so a quote too old to lock is EXPIRED
+// (quote_expired) before a nonce is leased; at landing the bet goes LOCKED -> AWAITING_MARKET in
+// the same transaction (markets/settlement.ts) and the settlement keeper takes over.
+//
 // Projector compatibility (chain/projector.ts betsColumnLockSignatures): at the lock's own RPC
 // `confirmed` the bet gets onchain_pending='locked' + pending_sig=<lock signature> (bets_pending_pair).
 // Later server txs (resolve, payout) do NOT overwrite them, so the stub projector keeps attributing
@@ -79,7 +84,8 @@ import {
   type LifecycleDeps,
   type Tx,
 } from './common';
-import { acceptDeadlineFor, loadEnvelope } from './terms';
+import { enterAwaitingMarket, settlementOf } from '../markets/settlement';
+import { acceptDeadlineFor, loadEnvelope, quoteAcceptDeadline } from './terms';
 
 type LockRow = typeof chainTxs.$inferSelect;
 type NonceRow = typeof noncePool.$inferSelect;
@@ -91,6 +97,11 @@ const sigString = (b: Uint8Array) => b58dec.decode(b);
 
 /** SPL Token InsufficientFunds (a party's ATA is short). */
 const TOKEN_INSUFFICIENT_FUNDS = 1;
+/**
+ * A gemini lock is only built with at least this long to sign and land it before expires_at
+ * (accept_deadline - 5 s); otherwise the quote is EXPIRED (quote_expired) without a lease.
+ */
+export const MIN_LOCK_WINDOW_SECS = 5;
 
 export interface LockServiceOptions {
   deps: LifecycleDeps;
@@ -150,6 +161,10 @@ export class LockService {
       await this.ensurePool(rt);
       const built = await this.build(rt, betId);
       if (!built) return;
+      if ('quoteExpired' in built) {
+        await this.expire(betId, null, this.deps.now());
+        return;
+      }
       if (this.o.signer === 'server') await this.custodialSign(rt, betId, built.lockId);
     } catch (err) {
       const reason =
@@ -173,7 +188,10 @@ export class LockService {
     return syncNoncePool(this.deps, rt);
   }
 
-  private async build(rt: ChainRuntime, betId: string): Promise<{ lockId: string } | null> {
+  private async build(
+    rt: ChainRuntime,
+    betId: string,
+  ): Promise<{ lockId: string } | { quoteExpired: true } | null> {
     const now = this.deps.now();
     const out = await this.deps.db.transaction(async (tx) => {
       const bet = await lockBet(tx, betId);
@@ -194,6 +212,15 @@ export class LockService {
       if (!final || final.envelope.terms_hash !== bet.terms_hash)
         throw new HttpError('TERMS_NOT_FINAL');
       const terms = final.envelope.terms;
+      // Gemini: the quote's TTL is the lock window (SCHEMAS §8.3); skill: build time + 300 s.
+      const acceptDeadline = terms.market
+        ? quoteAcceptDeadline(terms.market.quotedAt)
+        : acceptDeadlineFor(now);
+      if (
+        terms.market &&
+        acceptDeadline - LOCK_SUBMIT_MARGIN_SECS < Math.floor(now / 1000) + MIN_LOCK_WINDOW_SECS
+      )
+        return { quoteExpired: true as const };
 
       // 1. lease the least-recently-advanced free nonce (DATA-MODEL §5.20 "Allocate").
       const [nonce] = await tx
@@ -217,7 +244,6 @@ export class LockService {
         });
 
       // 2. build + simulate (sigVerify off) + rebuild with the CU margin; the bytes are final.
-      const acceptDeadline = acceptDeadlineFor(now);
       const parties = {
         s: rt.keys.feePayer,
         a: createNoopSigner(address(terms.party_a.pubkey)),
@@ -307,6 +333,10 @@ export class LockService {
       return { bet, envs, lockId: row!.id };
     });
     if (!out) return null;
+    if ('quoteExpired' in out) {
+      this.deps.log.warn('lock.quote_expired', { bet_id: betId });
+      return out;
+    }
     fanout(this.deps, out.bet, out.envs);
     this.deps.log.info('lock.built', { bet_id: betId, lock_request_id: out.lockId });
     return { lockId: out.lockId };
@@ -723,7 +753,8 @@ export class LockService {
       // terminal row move when onchain_status is locked or later in the same UPDATE, so this
       // path writes it (the landed atomic lock is exactly that status).
       const revived =
-        (bet.state === 'EXPIRED' && bet.end_reason === 'accept_timeout') ||
+        (bet.state === 'EXPIRED' &&
+          (bet.end_reason === 'accept_timeout' || bet.end_reason === 'quote_expired')) ||
         (bet.state === 'CANCELLED' && bet.end_reason === 'lock_failed');
       if (bet.state !== 'AWAITING_LOCK' && !revived) return { bet, envs: [] as BetEventEnvelope[] };
       if (revived)
@@ -749,6 +780,7 @@ export class LockService {
       const pot = formatUsd(((bet.stake_a ?? 0n) + (bet.stake_b ?? 0n)).toString());
       const final = await loadEnvelope(tx, betId, { finalOnly: true });
       const performer = final?.envelope.terms.performer;
+      const market = final?.envelope.terms.market ?? null;
       const pending = {
         kind: 'atomic_lock' as const,
         signature,
@@ -781,14 +813,20 @@ export class LockService {
               ...(performer ? { performer: names[performer] } : {}),
               tx: 1,
             },
-            'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.',
+            market
+              ? `Announce both stakes are locked in one transaction at Gemini's odds, and that Gemini settles it at ${market.expiry.slice(11, 16)} UTC.`
+              : 'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.',
           ),
           now,
         }),
       ];
-      return { bet, envs };
+      // Gemini (Beat 6): straight on to AWAITING_MARKET in this same commit.
+      if (market && final)
+        envs.push(...(await enterAwaitingMarket(tx, betId, final.envelope.terms, now)));
+      return { bet, envs, terms: market && final ? final.envelope.terms : null };
     });
     if (out) fanout(this.deps, out.bet, out.envs);
+    if (out?.terms) settlementOf(this.deps).follow(betId, out.terms);
     this.deps.log.info('lock.confirmed', {
       bet_id: betId,
       signature,
@@ -1231,35 +1269,40 @@ export class LockService {
     return 'unknown';
   }
 
-  /** built/signed (or sent, fate unknown) at expires_at -> EXPIRED (accept_timeout). */
-  private async expire(betId: string, lockId: string, nowMs: number): Promise<boolean> {
+  /**
+   * built/signed (or sent, fate unknown) at expires_at -> EXPIRED (accept_timeout; gemini:
+   * quote_expired, SCHEMAS §8.3). `lockId` null: a gemini quote too old to build a lock for.
+   */
+  private async expire(betId: string, lockId: string | null, nowMs: number): Promise<boolean> {
     const out = await this.deps.db.transaction(async (tx) => {
       const bet = await lockBet(tx, betId);
       if (!bet || !['AWAITING_AUTHORIZATIONS', 'AWAITING_LOCK'].includes(bet.state)) return null;
+      const reason = bet.evidence_source === 'gemini' ? 'quote_expired' : 'accept_timeout';
       const [moved] = await tx
         .update(bets)
-        .set({ state: 'EXPIRED', end_reason: 'accept_timeout' })
+        .set({ state: 'EXPIRED', end_reason: reason })
         .where(eq(bets.id, betId))
         .returning();
-      await tx
-        .update(chainTxs)
-        .set({ err: 'expired' })
-        .where(
-          and(
-            eq(chainTxs.id, lockId),
-            or(
-              eq(chainTxs.status, 'built'),
-              eq(chainTxs.status, 'signed'),
-              eq(chainTxs.status, 'sent'),
+      if (lockId)
+        await tx
+          .update(chainTxs)
+          .set({ err: 'expired' })
+          .where(
+            and(
+              eq(chainTxs.id, lockId),
+              or(
+                eq(chainTxs.status, 'built'),
+                eq(chainTxs.status, 'signed'),
+                eq(chainTxs.status, 'sent'),
+              ),
+              isNull(chainTxs.err),
             ),
-            isNull(chainTxs.err),
-          ),
-        );
+          );
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(moved!, bet.state, 'accept_timeout'),
+          payload: statePayload(moved!, bet.state, reason),
           now: nowMs,
         }),
         await appendBetEvent(tx, {
@@ -1267,8 +1310,10 @@ export class LockService {
           type: 'judge.cue',
           payload: judgeCue(
             'EXPIRED',
-            { reason: 'accept_timeout' },
-            'Say the lock window closed before both locked in. Nothing moved.',
+            { reason },
+            reason === 'quote_expired'
+              ? "Say Gemini's quote ran out before both locked in. Nothing moved; ask for a fresh quote."
+              : 'Say the lock window closed before both locked in. Nothing moved.',
           ),
           now: nowMs,
         }),

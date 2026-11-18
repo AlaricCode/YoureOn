@@ -45,7 +45,7 @@ export const TYPED_TERMS_BUCKET: BucketSpec = { limit: 12, windowMs: 60_000 };
 const isProposable = (state: string) => (PROPOSABLE_STATES as readonly string[]).includes(state);
 
 /** Loads the bet and checks the caller is party A; takes the route's rate-limit token. */
-async function partyABet(c: Context<AppEnv>): Promise<{ bet: BetRow; userId: string }> {
+export async function partyABet(c: Context<AppEnv>): Promise<{ bet: BetRow; userId: string }> {
   const deps = c.get('deps');
   const me = appAuth(c);
   const betId = betIdParam(c.req.param('bet_id') ?? '');
@@ -166,6 +166,16 @@ export const termsRoutes: RouteModule = {
         actor: 'user',
         actorUserId: userId,
       });
+      // Gemini bets: a quote too old to lock was re-quoted (new terms: review them again).
+      if (r.fix === 'REQUOTED')
+        throw new HttpError('TERMS_HASH_MISMATCH', "Gemini's odds moved. Review the new split.", {
+          terms_hash: r.terms_hash,
+          reason: 'requoted',
+        });
+      if (r.fix === 'QUOTE_STALE')
+        throw new HttpError('MARKET_UNAVAILABLE', "Gemini can't price this round anymore.", {
+          reason: 'QUOTE_STALE',
+        });
       if (!r.ok || typeof r.code !== 'string')
         throw new HttpError('INVALID_STATE', 'There are no terms to lock in yet.', {
           state: (await readBet(deps.db, bet.id))?.state ?? null,

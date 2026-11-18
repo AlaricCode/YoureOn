@@ -99,6 +99,16 @@ export class MarketService {
     return this.snap;
   }
 
+  /** The REST client (the settlement keeper fetches a bet's own event with it). */
+  get client(): GeminiClient {
+    return this.o.client;
+  }
+
+  /** The relay's current contract, if it is `eventTicker` (raw fields the snapshot drops). */
+  contractOf(eventTicker: string): { event: RawEvent; contract: RawContract } | null {
+    return this.cur && this.cur.event.ticker === eventTicker ? this.cur : null;
+  }
+
   get isStarted(): boolean {
     return this.started;
   }

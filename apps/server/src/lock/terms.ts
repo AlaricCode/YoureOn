@@ -9,11 +9,24 @@
 //   confirmTerms()       freeze: the latest version becomes is_final, -> AWAITING_AUTHORIZATIONS
 //                        (the bets_guard trigger freezes the binding fields from here). The
 //                        caller then starts the LockService.
+//
+// Gemini (real_world) bets (Beat 6): the binding quote is taken when the terms are composed
+// (markets/quote.ts takeBindingQuote, before the row lock: it may refetch Gemini), copied into
+// Terms.market, and stored with the bet (gemini_markets, market_snapshots); a quote Gemini
+// can't give is a terms.draft issue (NO_MARKET / MARKET_UNFAIR / stake). At confirm, a quote
+// older than MARKET_CONFIRM_MAX_AGE_MS is re-quoted as a new version instead of freezing
+// (the lock's accept_deadline is unix(quotedAt) + 60 s, so an old quote could never land).
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { auditLog, bets, betTermsVersions } from '@youre-on/db';
-import { ACCEPT_WINDOW_SKILL_SECS } from '@youre-on/shared/constants';
+import { ACCEPT_WINDOW_SKILL_SECS, QUOTE_TTL_SECS } from '@youre-on/shared/constants';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
 import { formatUsd } from '@youre-on/shared/money';
+import {
+  marketClaim,
+  MARKET_CONFIRM_MAX_AGE_MS,
+  marketReadback,
+  oddsDisplay,
+} from '@youre-on/shared/judge/market-terms';
 import { readbackSay, type ProposeEvaluation } from '@youre-on/shared/judge/reply';
 import type { GuardrailRefusal, TermsDraft, TermsProposal } from '@youre-on/shared/negotiation';
 import {
@@ -24,7 +37,17 @@ import {
   type TermsPresentation,
 } from '@youre-on/shared/terms';
 import type { BetState } from '@youre-on/shared/bet-state';
+import type { AppDeps } from '../context';
 import { judgeCue } from '../bets/cues';
+import {
+  isTemplateClaim,
+  MARKET_DEADLINE_AFTER_EXPIRY_MS,
+  persistQuote,
+  refusalIssue,
+  requoteProposal,
+  takeBindingQuote,
+  type BindingQuote,
+} from '../markets/quote';
 import { loadUserRefs, type BetRow } from '../bets/snapshot';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { fanout, iso, lockBet, statePayload, type LifecycleDeps, type Tx } from './common';
@@ -41,14 +64,22 @@ export interface ComposeInput {
   proposal: TermsProposal;
   cluster: 'devnet' | 'localnet';
   nowMs: number;
+  /** real_world: the binding quote (Terms.market, stakes, deadline = expiry + 10 min). */
+  quote?: BindingQuote | undefined;
+  /** real_world: write the claim from the quoted contract (the server's template). */
+  templateClaim?: boolean | undefined;
 }
 
 /** Proposal + server-owned fields -> strictly parsed Terms, its JCS string and terms_hash. */
 export function composeTerms(i: ComposeInput) {
   const p = i.proposal;
+  const q = i.quote;
   const minutes = p.deadline_minutes ?? DEFAULT_DEADLINE_MINUTES;
-  // Whole-second UTC, rounded to the nearest whole minute (SCHEMAS §2.2).
-  const deadline = Math.round((i.nowMs + minutes * 60_000) / 60_000) * 60_000;
+  // Whole-second UTC, rounded to the nearest whole minute (SCHEMAS §2.2); market bets end at
+  // the contract's expiry + 10 min (whole seconds, as the expiry is).
+  const deadline = q
+    ? Date.parse(q.ref.expiry) + MARKET_DEADLINE_AFTER_EXPIRY_MS
+    : Math.round((i.nowMs + minutes * 60_000) / 60_000) * 60_000;
   return computeTermsHash({
     schema_version: 1,
     bet_id: i.bet.id,
@@ -56,7 +87,7 @@ export function composeTerms(i: ComposeInput) {
     party_a: i.a,
     party_b: i.b,
     type: p.type,
-    claim: p.claim,
+    claim: q && i.templateClaim ? marketClaim(q.ref.expiry) : p.claim,
     performer: p.performer,
     yes_party: p.yes_party,
     attempts: p.attempts,
@@ -64,8 +95,8 @@ export function composeTerms(i: ComposeInput) {
     failure_criteria: p.failure_criteria,
     edge_cases: p.edge_cases,
     evidence_source: p.evidence_source,
-    market: null,
-    stakes: { a: p.amount, b: p.amount, currency: 'USDC' },
+    market: q ? q.ref : null,
+    stakes: q ? q.stakes : { a: p.amount, b: p.amount, currency: 'USDC' },
     deadline: new Date(deadline).toISOString(),
     created_at: new Date(i.nowMs).toISOString(),
   });
@@ -95,6 +126,15 @@ export function titleOf(claim: string): string {
 }
 
 export function presentationOf(t: Terms): TermsPresentation {
+  if (t.market)
+    return {
+      title: titleOf(`Bitcoin ${t.market.side === 'YES' ? 'Up' : 'Down'} in 5 minutes`),
+      readback: marketReadback(t, 400),
+      stakes_display: `${formatUsd(t.stakes.a)} vs ${formatUsd(t.stakes.b)}`.slice(0, 40),
+      odds_display: oddsDisplay(t.stakes.a, t.stakes.b),
+      party_a_avatar_url: null,
+      party_b_avatar_url: null,
+    };
   return {
     title: titleOf(t.claim),
     readback: readbackSay(proposalOf(t)).slice(0, 400),
@@ -141,17 +181,26 @@ export async function loadEnvelope(
 }
 
 export type PersistResult =
-  | { kind: 'proposed'; envelope: TermsEnvelope; version: number }
+  | {
+      kind: 'proposed';
+      envelope: TermsEnvelope;
+      version: number;
+      /** real_world: the binding quote's snapshot row and hash. */
+      quote?: { snapshot_id: string; snapshot_sha256: string };
+    }
   | { kind: 'draft' }
   | { kind: 'refused' }
   | { kind: 'skipped'; reason: string };
+
+/** persistEvaluation's deps: the lifecycle bag, plus the Gemini relay for real_world terms. */
+export type TermsDeps = LifecycleDeps & Partial<Pick<AppDeps, 'markets'>>;
 
 /**
  * The real ProposalSink body (voice/tools.ts `termsSink`, and POST /v1/demo/bets/:id/terms).
  * One transaction; events fan out after COMMIT.
  */
 export async function persistEvaluation(
-  deps: LifecycleDeps,
+  deps: TermsDeps,
   betId: string,
   evaluation: ProposeEvaluation,
   o: {
@@ -160,9 +209,31 @@ export async function persistEvaluation(
     rev?: number;
     /** bet_terms_versions.drafted_by: 'party_a' for typed terms (terms/routes.ts). */
     draftedBy?: 'judge' | 'party_a' | 'party_b';
+    /** real_world: a binding quote already taken (POST …/terms/market); else taken here. */
+    quote?: BindingQuote;
+    /** real_world: the claim is the server's template for the quoted contract. */
+    templateClaim?: boolean;
   } = {},
 ): Promise<PersistResult> {
   if (evaluation.kind === 'invalid') return { kind: 'skipped', reason: 'invalid' };
+  // real_world: the binding quote, before the row lock (it may refetch Gemini, <= 2 s).
+  let quote = o.quote;
+  if (
+    !quote &&
+    evaluation.kind === 'proposal' &&
+    evaluation.missing.length === 0 &&
+    evaluation.proposal.type === 'real_world'
+  ) {
+    const side = evaluation.proposal.market_query?.a_side;
+    const q = side
+      ? await takeBindingQuote(deps, { amount: evaluation.proposal.amount, side })
+      : ({ ok: false, reason: 'MARKET_NOT_OPEN' } as const);
+    if (q.ok) quote = q.quote;
+    else {
+      deps.log.info('terms.market_refused', { bet_id: betId, reason: q.reason });
+      evaluation = { kind: 'issue', issue: refusalIssue(q.reason), proposal: evaluation.proposal };
+    }
+  }
   const now = deps.now();
   const out = await deps.db.transaction(async (tx) => {
     const bet = await lockBet(tx, betId);
@@ -223,6 +294,8 @@ export async function persistEvaluation(
         proposal: evaluation.proposal,
         cluster: deps.env.SOLANA_CLUSTER,
         nowMs: now,
+        quote,
+        templateClaim: o.templateClaim,
       });
     } catch (err) {
       deps.log.warn('terms.compose_failed', { bet_id: betId, err });
@@ -248,6 +321,8 @@ export async function persistEvaluation(
       terms_hash: composed.terms_hash,
       presentation: presentationOf(composed.terms),
     };
+    const market = composed.terms.market;
+    const stored = quote && market ? await persistQuote(tx, quote) : null;
     const [row] = await tx
       .update(bets)
       .set({
@@ -260,6 +335,13 @@ export async function persistEvaluation(
         // DATA-MODEL §5.6: the wallet snapshot = Terms.party_a/b.pubkey (bets_wallet_snapshot).
         party_a_wallet: composed.terms.party_a.pubkey,
         party_b_wallet: composed.terms.party_b.pubkey,
+        // DATA-MODEL §5.16: Terms.market -> columns (null again if a skill bet replaces it).
+        gemini_market_id: stored?.marketId ?? null,
+        pricing_snapshot_id: stored?.snapshotId ?? null,
+        a_position: market ? (market.side === 'YES' ? 'yes' : 'no') : null,
+        odds_p: market ? market.priceAtLock : null,
+        odds_source: market ? market.priceSource : null,
+        quoted_at: market ? new Date(market.quotedAt) : null,
       })
       .where(and(eq(bets.id, betId), eq(bets.version, bet.version)))
       .returning();
@@ -281,11 +363,10 @@ export async function persistEvaluation(
           now,
         }),
       );
-    return {
-      res: { kind: 'proposed', envelope, version: nextVersion } as PersistResult,
-      bet,
-      envs,
-    };
+    const res: PersistResult = { kind: 'proposed', envelope, version: nextVersion };
+    if (stored && quote)
+      res.quote = { snapshot_id: stored.snapshotId.toString(), snapshot_sha256: quote.sha256 };
+    return { res, bet, envs };
   });
   if (out.bet) fanout(deps, out.bet, out.envs);
   return out.res;
@@ -338,11 +419,47 @@ async function cancelRefused(
 
 export type ConfirmResult =
   | { ok: true; code: string; envelope: TermsEnvelope; already: boolean }
-  | { ok: false; fix: 'NOT_PROPOSED' | 'NOT_FOUND' | 'FROZEN'; state?: BetState };
+  | { ok: false; fix: 'NOT_PROPOSED' | 'NOT_FOUND' | 'FROZEN'; state?: BetState }
+  /** A market bet's quote was too old to lock: re-quoted as a new version (not frozen). */
+  | { ok: false; fix: 'REQUOTED'; envelope: TermsEnvelope }
+  /** ...and Gemini could not re-quote it (the terms.draft carries the issue). */
+  | { ok: false; fix: 'QUOTE_STALE'; reason: string };
+
+/**
+ * A market bet whose quote is older than MARKET_CONFIRM_MAX_AGE_MS is re-quoted (same side and
+ * even-money amount) instead of frozen. null = fresh enough (or not a market bet).
+ */
+async function requoteIfStale(
+  deps: TermsDeps,
+  betId: string,
+  o: { requestId?: string },
+): Promise<ConfirmResult | null> {
+  const [bet] = await deps.db.select().from(bets).where(eq(bets.id, betId)).limit(1);
+  if (!bet || bet.state !== 'TERMS_PROPOSED' || bet.evidence_source !== 'gemini') return null;
+  const latest = await loadEnvelope(deps.db, betId);
+  const t = latest?.envelope.terms;
+  if (!latest || !t?.market || latest.envelope.terms_hash !== bet.terms_hash) return null;
+  const age = deps.now() - Date.parse(t.market.quotedAt);
+  if (age <= MARKET_CONFIRM_MAX_AGE_MS) return null;
+  deps.log.info('terms.requote', { bet_id: betId, age_ms: age });
+  const r = await persistEvaluation(
+    deps,
+    betId,
+    { kind: 'proposal', proposal: requoteProposal(t), missing: [] },
+    {
+      ...(o.requestId !== undefined ? { requestId: o.requestId } : {}),
+      source: 'requote',
+      draftedBy: 'judge',
+      templateClaim: isTemplateClaim(t),
+    },
+  );
+  if (r.kind === 'proposed') return { ok: false, fix: 'REQUOTED', envelope: r.envelope };
+  return { ok: false, fix: 'QUOTE_STALE', reason: r.kind === 'skipped' ? r.reason : r.kind };
+}
 
 /** confirm_terms step 2: freeze -> AWAITING_AUTHORIZATIONS. The caller starts the lock. */
 export async function confirmTerms(
-  deps: LifecycleDeps,
+  deps: TermsDeps,
   betId: string,
   o: {
     heard?: string;
@@ -351,6 +468,8 @@ export async function confirmTerms(
     actorUserId?: string;
   } = {},
 ): Promise<ConfirmResult> {
+  const requoted = await requoteIfStale(deps, betId, o);
+  if (requoted) return requoted;
   const now = deps.now();
   const out = await deps.db.transaction(async (tx) => {
     const bet = await lockBet(tx, betId);
@@ -425,3 +544,7 @@ export async function confirmTerms(
 /** The skill accept_deadline argument for a lock built at `nowMs` (SCHEMAS §9.3). */
 export const acceptDeadlineFor = (nowMs: number): number =>
   Math.floor(nowMs / 1000) + ACCEPT_WINDOW_SKILL_SECS;
+
+/** The gemini accept_deadline argument: unix(quotedAt) + 60 s (SCHEMAS §8.3, device policy L3). */
+export const quoteAcceptDeadline = (quotedAt: string): number =>
+  Math.floor(Date.parse(quotedAt) / 1000) + QUOTE_TTL_SECS;
