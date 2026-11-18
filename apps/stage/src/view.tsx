@@ -978,18 +978,39 @@ export function OddsWidget({
 
 // ---- health strip ---------------------------------------------------------------------------
 
+/**
+ * The status strip along the bottom: the room and who is online, then (with a demo key) the
+ * demo health, the REPLAY clips cached, the socket, the sound hint and disconnect.
+ */
 export function HealthStrip({
   health,
   error,
   replays,
   status,
+  room = null,
+  online = null,
+  sound = null,
+  onDisconnect,
 }: {
   health: DemoHealth | null;
   error: string | null;
   replays: ReplayStatus | null;
   status: string;
+  room?: string | null;
+  online?: { online: number; members: number } | null;
+  sound?: 'locked' | 'on' | 'off' | null;
+  onDisconnect?: () => void;
 }) {
-  const items: HealthItem[] = health ? healthItems(health) : [];
+  const items: HealthItem[] = [];
+  if (room) items.push({ key: 'room', label: 'Room', value: room, level: 'idle' });
+  if (online)
+    items.push({
+      key: 'online',
+      label: 'Online',
+      value: `${online.online}/${online.members}`,
+      level: online.online === online.members ? 'ok' : 'warn',
+    });
+  if (health) items.push(...healthItems(health));
   if (error) items.unshift({ key: 'err', label: 'Health', value: error, level: 'bad' });
   if (replays) {
     const present = presentCount(replays);
@@ -1002,13 +1023,25 @@ export function HealthStrip({
     });
   }
   items.push({ key: 'ws', label: 'WS', value: status, level: status === 'open' ? 'ok' : 'warn' });
+  if (sound && sound !== 'on')
+    items.push({
+      key: 'sound',
+      label: 'Sound',
+      value: sound === 'off' ? 'off (M)' : 'press any key',
+      level: 'idle',
+    });
   return (
-    <footer className="health" aria-label="demo health">
+    <footer className="health" aria-label="status">
       {items.map((i) => (
         <span key={i.key} className={`hi ${i.level}`}>
           <span className="label">{i.label}</span> {i.value}
         </span>
       ))}
+      {onDisconnect && (
+        <button type="button" className="ghost" onClick={onDisconnect}>
+          disconnect
+        </button>
+      )}
     </footer>
   );
 }
@@ -1061,20 +1094,6 @@ export function StageView({
               {live ? 'LIVE' : state.status.toUpperCase()}
             </span>
           )}
-          <span className="muted small">
-            {roomLabel ? `room ${roomLabel}` : ''}
-            {state.presence ? ` · ${state.presence.online}/${state.presence.members} online` : ''}
-          </span>
-          {sound && sound !== 'on' && (
-            <span className="sound muted small">
-              {sound === 'off' ? 'sound off · M' : 'press a key for sound'}
-            </span>
-          )}
-          {onDisconnect && (
-            <button type="button" className="ghost" onClick={onDisconnect}>
-              disconnect
-            </button>
-          )}
         </div>
       </header>
       <main className="layout">
@@ -1098,9 +1117,16 @@ export function StageView({
           <Ticker state={state} />
         </aside>
       </main>
-      {showHealth && (
-        <HealthStrip health={health} error={healthError} replays={replays} status={state.status} />
-      )}
+      <HealthStrip
+        health={showHealth ? health : null}
+        error={showHealth ? healthError : null}
+        replays={replays}
+        status={state.status}
+        room={roomLabel}
+        online={state.presence}
+        sound={sound}
+        onDisconnect={onDisconnect}
+      />
     </div>
   );
 }

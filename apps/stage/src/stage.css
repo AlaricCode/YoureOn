@@ -157,6 +157,7 @@ code,
   padding: 0;
   list-style: none;
   min-width: 0;
+  overflow: hidden;
 }
 .rail .step {
   display: flex;
@@ -881,6 +882,7 @@ code,
 .health {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.4em 1.4em;
   font-size: 0.68em;
   padding: 0.45em 0.9em;
@@ -911,6 +913,9 @@ code,
 }
 .hi.bad {
   color: var(--bad);
+}
+.health .ghost {
+  margin-left: auto;
 }
 .hi .label {
   font-size: 0.85em;
