@@ -44,7 +44,7 @@ describe('statsOf', () => {
     expect(statsOf({ wins: 1, losses: 1, net: '0' })).toMatchObject({
       total: 2,
       rival: false,
-      netDisplay: '$0',
+      netDisplay: '$0.00', // ui/money: one result format (visual-refresh signedUsd)
       pushes: 0,
     });
   });
