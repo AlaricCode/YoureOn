@@ -108,6 +108,7 @@ import {
   fetchMarketQuote,
   initialMarket,
   MARKET_STAKES_USD,
+  marketCardOf,
   marketReducer,
   QUOTE_POLL_MS,
   shouldPoll,
@@ -142,6 +143,7 @@ import {
   initialTyped,
   submitTypedTerms,
   TYPED_STAKES_USD,
+  typedCardOf,
   typedReducer,
   waitingForAccept,
   type TypedStakeUsd,
@@ -543,13 +545,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     (bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id)));
   useEffect(() => {
     if (!negotiating || !bet) return;
-    typedDispatch({ type: 'init', bet_id: bet.bet_id, bName: opponentName, typed: typedForced });
+    // After a restart mid-bet the card is already on screen: start the form on it (./typedTerms).
+    typedDispatch({
+      type: 'init',
+      bet_id: bet.bet_id,
+      bName: opponentName,
+      typed: typedForced,
+      shown: typedCardOf(bet.envelope),
+    });
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
 
   // ---- Bet on Bitcoin (A only, Beat 6): reset per bet; poll Gemini's odds while it is open ----
   useEffect(() => {
     if (!negotiating || !bet || !MARKET_ENABLED) return;
-    marketDispatch({ type: 'init', bet_id: bet.bet_id });
+    marketDispatch({ type: 'init', bet_id: bet.bet_id, shown: marketCardOf(bet.envelope) });
   }, [negotiating, bet?.bet_id]);
   const polling = negotiating && market.bet_id === bet?.bet_id && shouldPoll(market);
   useEffect(() => {

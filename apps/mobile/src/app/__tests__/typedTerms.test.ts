@@ -13,11 +13,13 @@ import {
   initialTyped,
   submitTypedTerms,
   TYPED_STAKES_USD,
+  typedCardOf,
   typedReducer,
   waitingForAccept,
   type TypedEvent,
   type TypedState,
 } from '../typedTerms';
+import { btcCloser } from '../../preview/data';
 import { BET, envelope, ev, snapshot } from './fixtures';
 
 const HASH = 'ab'.repeat(32);
@@ -120,6 +122,70 @@ describe('typed terms reducer', () => {
 
   it('offers the four stakes', () => {
     expect([...TYPED_STAKES_USD]).toEqual([1, 5, 10, 20]);
+  });
+});
+
+describe('restart mid-bet: the form adopts the card already on screen', () => {
+  // Seen on the simulator: A sent "$5 each", B accepted, A's app restarted. The bet came back
+  // with the $5 card, but the form under it said $1 and "Send terms" (no "Lock it in"): the only
+  // way on was to propose again, at the wrong stake.
+  const env = envelope(); // the $5-each bottle flip
+  const restored = (typed = true) =>
+    run(initialTyped, {
+      type: 'init',
+      bet_id: BET,
+      bName: 'Jake',
+      typed,
+      shown: typedCardOf(env),
+    });
+
+  it('the card on screen: its claim and stake, and "Lock it in" once B has accepted', () => {
+    expect(typedCardOf(env)).toEqual({
+      terms_hash: env.terms_hash,
+      claim: env.terms.claim,
+      stakeUsd: 5,
+    });
+    const s = restored();
+    expect(s).toMatchObject({
+      bet_id: BET,
+      mode: 'typed',
+      phase: 'sent',
+      claim: env.terms.claim,
+      stakeUsd: 5,
+      proposedHash: env.terms_hash,
+    });
+    expect(canConfirm(s, env.terms_hash, 'accepted')).toBe(true);
+    expect(waitingForAccept(s, env.terms_hash, null)).toBe(true);
+    expect(canSubmit(s)).toBe(false);
+    // A newer card (another proposal) needs a fresh look, as before.
+    expect(canConfirm(s, HASH, 'accepted')).toBe(false);
+    // Editing it makes a new proposal.
+    const edited = run(s, { type: 'stake', usd: 10 });
+    expect(edited.phase).toBe('editing');
+    expect(canConfirm(edited, env.terms_hash, 'accepted')).toBe(false);
+    expect(canSubmit(edited)).toBe(true);
+  });
+
+  it('only the typed form adopts it, and only when it opens on a bet', () => {
+    expect(restored(false)).toMatchObject({ mode: 'voice', phase: 'editing', proposedHash: null });
+    // A form already open on this bet keeps what it has (a re-init never resets it).
+    const open = typedOn();
+    expect(
+      run(open, { type: 'init', bet_id: BET, bName: 'Jake', typed: true, shown: typedCardOf(env) }),
+    ).toBe(open);
+  });
+
+  it('typedCardOf: nothing for no card, a market card, uneven or unoffered stakes', () => {
+    expect(typedCardOf(null)).toBeNull();
+    const btc = btcCloser('Logan');
+    expect(typedCardOf({ terms: btc.terms, terms_hash: btc.termsHash })).toBeNull();
+    const stakes = (a: string, b: string) => ({
+      ...env,
+      terms: { ...env.terms, stakes: { a, b, currency: 'USDC' as const } },
+    });
+    expect(typedCardOf(stakes('5000000', '1000000'))).toBeNull();
+    expect(typedCardOf(stakes('3000000', '3000000'))).toBeNull();
+    expect(typedCardOf(stakes('1000000', '1000000'))?.stakeUsd).toBe(1);
   });
 });
 
