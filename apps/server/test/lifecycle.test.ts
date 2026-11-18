@@ -491,6 +491,8 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
         challenge_method: 'list',
       });
       const betId = bet.json!.bet.bet_id as string;
+      // B answers the challenge first: the custodial lock signs for B only after B said yes.
+      expect((await signed(B, 'POST', `/v1/bets/${betId}/invite/accept`, {})).status).toBe(200);
       const p = await signed(
         A,
         'POST',

@@ -10,8 +10,11 @@
 //     {terms_hash} must be the bet's current terms (409 TERMS_HASH_MISMATCH otherwise), then the
 //     confirm_terms step (voice/tools.ts confirmAndLock): freeze -> AWAITING_AUTHORIZATIONS ->
 //     LockService.start in the background. A repeat after the freeze answers the same code.
+//     B must have accepted the invite first (409 INVALID_STATE {reason: 'invite_pending'}):
+//     with LOCK_SIGNER=server the lock is custodial, so B's accept is B's only consent here.
 //
-// Only A sets terms, as only A's phone hosts the judge (D6); B consents with the lock hold.
+// Only A sets terms, as only A's phone hosts the judge (D6); B consents with the invite accept
+// (and, with LOCK_SIGNER=phones, the lock hold).
 // Both routes share a per-(bet, user) bucket on top of the session bucket (API-CONTRACT §1.7).
 import type { Context } from 'hono';
 import { isTerminalBetState } from '@youre-on/shared/bet-state';
@@ -31,6 +34,7 @@ import type { BucketSpec } from '../http/rate-limit';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import type { BetRow } from '../bets/snapshot';
 import { readBet } from '../lock/common';
+import { priorAnswers } from '../bets/routes';
 import { betIdParam } from '../lock/routes';
 import { displayCode, persistEvaluation } from '../lock/terms';
 import { confirmAndLock, PROPOSABLE_STATES } from '../voice/tools';
@@ -147,6 +151,14 @@ export const termsRoutes: RouteModule = {
       if (bet.terms_hash !== body.terms_hash)
         throw new HttpError('TERMS_HASH_MISMATCH', 'The terms changed. Review them again.', {
           terms_hash: bet.terms_hash,
+        });
+      // B said yes to the challenge. Typing terms before that is fine; freezing them (and, with
+      // LOCK_SIGNER=server, signing B's stake) is not. A decline cancels the bet, so it fails the
+      // state check above, and confirmAndLock re-checks TERMS_PROPOSED under the row lock.
+      if (!frozen && !(await priorAnswers(deps.db, bet.id)).has('accepted'))
+        throw new HttpError('INVALID_STATE', 'Waiting for them to accept.', {
+          state: bet.state,
+          reason: 'invite_pending',
         });
       const r = await confirmAndLock(deps, bet.id, {
         heard: 'typed',

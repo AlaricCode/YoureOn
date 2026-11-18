@@ -391,8 +391,11 @@ export const betsRoutes: RouteModule = {
 
 type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
 
-/** B's earlier invite answers for this bet, from the bet_events log. */
-async function priorAnswers(tx: Tx, betId: string): Promise<Set<'accepted' | 'declined'>> {
+/** B's earlier invite answers for this bet, from the bet_events log (also terms/routes.ts). */
+export async function priorAnswers(
+  tx: Tx | AppDeps['db'],
+  betId: string,
+): Promise<Set<'accepted' | 'declined'>> {
   const rows = await tx
     .select({ envelope: betEvents.envelope })
     .from(betEvents)
