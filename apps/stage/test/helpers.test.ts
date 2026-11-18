@@ -19,6 +19,7 @@ import {
   loadSession,
   parseLaunch,
   resolveServer,
+  roomLabelOf,
   scrubbedHref,
   SESSION_KEY,
   writeJson,
@@ -276,6 +277,10 @@ describe('launch params', () => {
     expect(resolveServer(' https://other.dev/ ', 'https://x')).toBe('https://other.dev');
     expect(isUuid(BET)).toBe(true);
     expect(isUuid('ABC234')).toBe(false);
+    expect(roomLabelOf(' stg234 ')).toBe('STG234');
+    expect(roomLabelOf('youreon://room/ABC234')).toBe('ABC234');
+    expect(roomLabelOf(BET)).toBe('7f3c2a9e');
+    expect(roomLabelOf('whatever')).toBe('whatever');
   });
 
   it('a saved session survives a reload of the tab until its token expires', () => {

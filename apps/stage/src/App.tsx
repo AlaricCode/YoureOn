@@ -29,6 +29,7 @@ import {
 import {
   CONFIG_KEY,
   isUuid,
+  roomLabelOf,
   loadSession,
   parseLaunch,
   readJson,
@@ -334,8 +335,9 @@ export function App() {
           betId,
           expiresAt,
         };
-        writeJson('session', SESSION_KEY, { ...saved, roomLabel: room });
-        start({ serverUrl: f.serverUrl, token, roomId, roomLabel: room, betId, demoKey });
+        const roomLabel = roomLabelOf(room);
+        writeJson('session', SESSION_KEY, { ...saved, roomLabel });
+        start({ serverUrl: f.serverUrl, token, roomId, roomLabel, betId, demoKey });
       } catch (err) {
         dispatch({ kind: 'status', status: 'closed' });
         setConnectError(err instanceof Error ? err.message : String(err));
@@ -361,7 +363,7 @@ export function App() {
         serverUrl: s.serverUrl,
         token: s.token,
         roomId: s.roomId,
-        roomLabel: s.roomLabel ?? s.roomId,
+        roomLabel: s.roomLabel ?? roomLabelOf(s.roomId),
         betId: s.betId,
         demoKey: s.demoKey,
       });

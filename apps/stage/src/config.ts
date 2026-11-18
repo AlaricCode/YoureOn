@@ -8,6 +8,7 @@
 // token), demo (DEMO_ADMIN_TOKEN, enables the health strip). Secrets are read once, then removed
 // from the address bar; the session (stage token, room, demo key) is kept in sessionStorage so a
 // reload of the same tab reconnects without the URL.
+import { parseRoomCode } from '@youre-on/shared/api';
 
 export interface LaunchParams {
   /** null: live. '' : the looping sample sequence. Otherwise a step name to freeze on. */
@@ -75,6 +76,13 @@ export function resolveServer(serverUrl: string | null | undefined, origin: stri
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID_RE.test(s.trim());
+
+/** The header's room label: the canonical code (upper case), or a uuid's first block. */
+export function roomLabelOf(room: string): string {
+  const r = room.trim();
+  if (isUuid(r)) return r.slice(0, 8);
+  return parseRoomCode(r) ?? r;
+}
 
 // ---- storage --------------------------------------------------------------------------------
 
