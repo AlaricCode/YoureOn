@@ -92,6 +92,7 @@ export const COPY = {
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
     start: ['Start', 'label'],
+    noJudgeCam: ['No judge cam', 'error'],
   },
   judgeCam: {
     title: ['Judge cam', 'label'],

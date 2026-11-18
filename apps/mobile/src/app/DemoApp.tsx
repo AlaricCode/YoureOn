@@ -76,7 +76,7 @@ import {
 import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { parseDeepLink } from './deepLink';
-import { deviceRoleRequest } from './judgeCam';
+import { attemptStartAlert, createJudgeCamSync, deviceRoleRequest } from './judgeCam';
 import { RESUME_LIMIT, resumable } from './resume';
 import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
@@ -93,7 +93,10 @@ import {
 } from './typedTerms';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
-/** This phone is the room's judge cam (the server keeps the role across an app restart too). */
+/**
+ * This phone's judge-cam memo (./judgeCam): bound to this device and user, it brings a judge cam
+ * back after a restart, or re-sends a turn-off the server never confirmed.
+ */
 const JUDGE_CAM_KEY = 'youreon.judgecam.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
@@ -194,6 +197,25 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     rt.api.balance().then(setBalance, () => undefined);
   }, [rt]);
 
+  /** This phone's role on the server, and the memo that brings it back (./judgeCam). */
+  const camSync = useMemo(
+    () =>
+      createJudgeCamSync({
+        setRole: (role, roomId) => rt.api.setDeviceRole(role, roomId),
+        save: async (raw) => {
+          const S = await import('expo-secure-store');
+          await (raw === null
+            ? S.deleteItemAsync(JUDGE_CAM_KEY)
+            : S.setItemAsync(JUDGE_CAM_KEY, raw));
+        },
+        owner: () => {
+          const a = appRef.current;
+          return a.me && a.deviceId ? { device_id: a.deviceId, user_id: a.me.user_id } : null;
+        },
+      }),
+    [rt],
+  );
+
   // ---- boot / session ---------------------------------------------------------------------
   const boot = useCallback(() => {
     setBootFailed(false);
@@ -218,15 +240,30 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     rt.wallet.getPublicKey().then(setWalletKey, () => setWalletKey(null));
     refreshBalance();
     let live = true;
-    // Re-join the last room (a convenience; the server's room_members row is the truth), and
-    // come back as the judge cam if this phone was one.
-    void import('expo-secure-store').then(async (SecureStore) => {
-      const linked = pendingRoom.current;
-      pendingRoom.current = null;
-      const code = linked ?? (await SecureStore.getItemAsync(LAST_ROOM_KEY).catch(() => null));
-      if (code && (linked || !appRef.current.room)) void joinRoom(code);
-      const cam = await SecureStore.getItemAsync(JUDGE_CAM_KEY).catch(() => null);
-      if (live && cam === '1') dispatch({ type: 'judge_cam', on: true });
+    const linked = pendingRoom.current;
+    pendingRoom.current = null;
+    // The judge-cam role first (./judgeCam). The memo is this device's AND this user's, so a demo
+    // claim as someone else never comes back as a judge cam. The resume below waits for it, so a
+    // judge-cam phone never shows A's negotiate or terms screen before it switches.
+    const cam = import('expo-secure-store')
+      .then((S) => S.getItemAsync(JUDGE_CAM_KEY))
+      .catch(() => null)
+      .then((raw) => {
+        if (!live) return 'none' as const;
+        const restored = camSync.restore(raw);
+        if (restored === 'judge_cam') dispatch({ type: 'judge_cam', on: true });
+        if (restored === 'send_phone') void camSync.off();
+        return restored;
+      });
+    // Re-join the last room (a convenience; the server's room_members row is the truth). A
+    // restored judge cam then re-binds itself to that room on the server, which may hold another
+    // room or none (a demo claim resets the device to 'phone').
+    void cam.then(async (restored) => {
+      const S = await import('expo-secure-store').catch(() => null);
+      const code = linked ?? (await S?.getItemAsync(LAST_ROOM_KEY).catch(() => null)) ?? null;
+      if (code && live && (linked || !appRef.current.room)) await joinRoom(code);
+      if (!live || restored !== 'judge_cam' || !appRef.current.judgeCam) return;
+      void bindJudgeCam(appRef.current.room?.room_id ?? null);
     });
     // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
     void (async () => {
@@ -241,6 +278,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         if (!rt.hub.has(snap.bet_id)) await rt.hub.restore(snap);
         rt.ws.subscribe(snap.bet_id);
       }
+      await cam; // judge cam or not decides the screen this bet opens on
       const newest = open[0];
       if (live && newest) dispatch({ type: 'bet_opened', bet_id: newest.bet_id });
     })();
@@ -248,7 +286,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       live = false;
       rt.ws.stop();
     };
-  }, [app.auth, userId, rt]);
+  }, [app.auth, userId, rt, camSync]);
 
   // ---- youreon:// links (./deepLink): the stage's room and demo-claim QRs -------------------
   useEffect(() => {
@@ -272,9 +310,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   // ---- socket status, presence -------------------------------------------------------------
   useEffect(() => {
-    const a = rt.onStatus((s) =>
-      dispatch({ type: 'offline', offline: s === 'reconnecting' || s === 'unauthorized' }),
-    );
+    const a = rt.onStatus((s) => {
+      dispatch({ type: 'offline', offline: s === 'reconnecting' || s === 'unauthorized' });
+      // A turn-off the server never confirmed (./judgeCam): send it again now that it answers.
+      if (s === 'live') void camSync.retry();
+    });
     const b = rt.onControl((f) => {
       if (f.op === 'room.presence')
         dispatch({ type: 'presence', room_id: f.room_id, members: f.members });
@@ -292,7 +332,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       b();
       c();
     };
-  }, [rt]);
+  }, [rt, camSync]);
 
   // ---- bet events --------------------------------------------------------------------------
   useEffect(() => {
@@ -550,21 +590,40 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return;
       }
       dispatch({ type: 'judge_cam', on });
-      const remember = (v: boolean) =>
-        void import('expo-secure-store')
-          .then((S) => (v ? S.setItemAsync(JUDGE_CAM_KEY, '1') : S.deleteItemAsync(JUDGE_CAM_KEY)))
-          .catch(() => undefined);
-      remember(on);
-      rt.api.setDeviceRole(req.role, req.roomId).catch((e: unknown) => {
-        console.warn('[yo] device role', e);
-        // Off stays off on screen; the Profile row can send it again.
-        if (!on) return;
-        dispatch({ type: 'judge_cam', on: false });
-        remember(false);
-        setHomeNote(homeErrorLabel('judgeCam', e));
+      const sent = req.role === 'judge_cam' ? camSync.on(req.roomId) : camSync.off();
+      void sent.then((r) => {
+        if (r.status !== 'failed') return;
+        console.warn('[yo] device role', r.error);
+        // A failed turn-on goes back off here (camSync then sends 'phone'). A failed turn-off
+        // stays off on screen: camSync keeps 'phone' pending and re-sends it when the socket is
+        // live again, or at the next sign-in.
+        if (on) dispatch({ type: 'judge_cam', on: false });
+        setHomeNote(homeErrorLabel('judgeCam', r.error));
       });
     },
-    [rt],
+    [camSync],
+  );
+
+  /**
+   * Bind the judge cam to the room this phone is in now, on the server too (a restart, or a room
+   * link while judging). No room, or a refusal: judge cam off here as well, and home says why.
+   */
+  const bindJudgeCam = useCallback(
+    async (roomId: string | null) => {
+      if (!roomId) {
+        // The last room is gone or unreachable: the operator joins one and turns it on again.
+        dispatch({ type: 'judge_cam', on: false });
+        void camSync.off();
+        setHomeNote(t(COPY.home.joinRoomFirst));
+        return;
+      }
+      const r = await camSync.on(roomId);
+      if (r.status !== 'failed') return; // 'superseded': a newer on/off, or another user
+      console.warn('[yo] device role', r.error);
+      dispatch({ type: 'judge_cam', on: false }); // camSync sends 'phone' after a failed turn-on
+      setHomeNote(homeErrorLabel('judgeCam', r.error));
+    },
+    [camSync],
   );
 
   async function joinRoom(code: string): Promise<boolean> {
@@ -580,6 +639,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         members: r.members,
       });
       rt.ws.subscribeRoom(r.room.room_id);
+      // A judge cam that moved rooms (a room link) judges the new one.
+      if (prev && prev.room_id !== r.room.room_id && appRef.current.judgeCam)
+        void bindJudgeCam(r.room.room_id);
       void import('expo-secure-store')
         .then((S) => S.setItemAsync(LAST_ROOM_KEY, r.room.code))
         .catch(() => undefined);
@@ -631,8 +693,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     try {
       await rt.api.startAttempt(bet.bet_id, nextAttemptNo(bet));
     } catch (e) {
-      if (!(e instanceof ApiClientError && e.code === 'INVALID_STATE'))
-        setAlert(t(COPY.app.failed));
+      // Quiet on the benign races; 'No judge cam' when the room has none on the server.
+      const note = attemptStartAlert(e);
+      if (note) setAlert(note);
     } finally {
       setBusy(false);
     }
