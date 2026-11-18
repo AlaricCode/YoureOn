@@ -29,18 +29,22 @@ import {
 } from './connection';
 import {
   CONFIG_KEY,
+  foreignServer,
   isUuid,
   roomLabelOf,
   loadSession,
   parseLaunch,
   readJson,
+  rememberBets,
   resolveServer,
   scrubbedHref,
+  serverOverrideAllowed,
   SESSION_KEY,
   writeJson,
   type LaunchParams,
   type SavedSession,
 } from './config';
+import { seedBet } from './seed';
 import { fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
@@ -83,6 +87,20 @@ interface Live {
   demoKey: string | null;
 }
 
+/** What start() connects with. */
+interface StartParams {
+  /** As typed or saved: '' is this page's origin (resolveServer; throws on a bad URL). */
+  serverUrl: string;
+  token: string;
+  roomId: string;
+  roomLabel: string;
+  /** ?bet= / the form's bet id: shown first and pinned while it is live. */
+  betId: string | null;
+  demoKey: string | null;
+  /** A reloaded tab: the card it showed and the other bets it knew. */
+  resume?: { focus: string | null; bets: string[] };
+}
+
 function useNow(offsetMs: number | null, everyMs = 250): number {
   const [t, setT] = useState(() => Date.now());
   useEffect(() => {
@@ -102,7 +120,10 @@ const origin = () => {
 
 function readLaunch(): LaunchParams {
   try {
-    return parseLaunch(globalThis.location?.search ?? '', globalThis.location?.hash ?? '');
+    const loc = globalThis.location;
+    return parseLaunch(loc?.search ?? '', loc?.hash ?? '', {
+      allowServer: serverOverrideAllowed(loc?.hostname ?? '', import.meta.env.DEV === true),
+    });
   } catch {
     return parseLaunch('', '');
   }
@@ -113,7 +134,8 @@ function initialForm(l: LaunchParams): FormState {
   return {
     serverUrl: l.server ?? saved.serverUrl ?? '',
     roomId: l.room ?? saved.roomId ?? '',
-    betId: l.bet ?? saved.betId ?? '',
+    // a bet id is for one bet (and pins the focus): it is not remembered across visits
+    betId: l.bet ?? '',
     stageKey: l.key ?? '',
     token: l.token ?? '',
     demoKey: l.demo ?? '',
@@ -219,6 +241,8 @@ export function App() {
   const [connectError, setConnectError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const conn = useRef<StageConnection | null>(null);
+  /** Bumped by every start(): answers for an older connection are dropped. */
+  const generation = useRef(0);
   const seeded = useRef(new Set<string>());
   /** Bets re-fetched once for their appeal deadline. */
   const refetched = useRef(new Set<string>());
@@ -252,6 +276,7 @@ export function App() {
   useEffect(() => () => conn.current?.stop(), []);
 
   const disconnect = useCallback(() => {
+    generation.current++;
     conn.current?.stop();
     conn.current = null;
     seeded.current = new Set();
@@ -259,73 +284,70 @@ export function App() {
     writeJson('session', SESSION_KEY, null);
   }, []);
 
-  const start = useCallback(
-    (s: {
-      serverUrl: string;
-      token: string;
-      roomId: string;
-      roomLabel: string;
-      betId: string | null;
-      demoKey: string | null;
-    }) => {
-      conn.current?.stop();
-      seeded.current = new Set();
-      refetched.current = new Set();
-      framesAsked.current = new Set();
-      for (const u of frameUrls.current.splice(0)) URL.revokeObjectURL(u);
-      dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
-      // ?bet= / the form's bet id keeps the focus until that bet is over
-      if (s.betId) dispatch({ kind: 'focus', bet_id: s.betId, pin: true });
-      const serverUrl = resolveServer(s.serverUrl, origin());
-      conn.current = new StageConnection({
-        wsUrl: wsUrlFor(serverUrl),
-        token: s.token,
-        roomId: s.roomId,
-        onAction: dispatch,
-        subs: s.betId ? [{ bet_id: s.betId, after_seq: 0 }] : [],
-      });
-      conn.current.start();
-      setLive({
-        token: s.token,
-        serverUrl,
-        roomId: s.roomId,
-        roomLabel: s.roomLabel,
-        demoKey: s.demoKey,
-      });
-      fetchMarket(serverUrl, s.token).then(
-        (snapshot) => dispatch({ kind: 'market', snapshot, receivedAt: Date.now() }),
-        () => undefined, // the feed may be off; stage.market frames fill it later
+  /** Connects to a room. Throws (before touching anything) on a server that is not a URL. */
+  const start = useCallback((s: StartParams) => {
+    const serverUrl = resolveServer(s.serverUrl, origin());
+    const wsUrl = wsUrlFor(serverUrl);
+    const gen = ++generation.current;
+    conn.current?.stop();
+    seeded.current = new Set();
+    refetched.current = new Set();
+    framesAsked.current = new Set();
+    for (const u of frameUrls.current.splice(0)) URL.revokeObjectURL(u);
+    dispatch({ kind: 'reset' }); // a different room must not inherit the last one's bets
+    // ?bet= / the form's bet id keeps the focus until that bet is over; a reload comes back to
+    // the card it showed
+    if (s.betId) dispatch({ kind: 'focus', bet_id: s.betId, pin: true });
+    else if (s.resume?.focus) dispatch({ kind: 'focus', bet_id: s.resume.focus });
+    const c = new StageConnection({ wsUrl, token: s.token, roomId: s.roomId, onAction: dispatch });
+    conn.current = c;
+    c.start();
+    setLive({
+      token: s.token,
+      serverUrl,
+      roomId: s.roomId,
+      roomLabel: s.roomLabel,
+      demoKey: s.demoKey,
+    });
+    fetchMarket(serverUrl, s.token).then(
+      (snapshot) =>
+        gen === generation.current &&
+        dispatch({ kind: 'market', snapshot, receivedAt: Date.now() }),
+      () => undefined, // the feed may be off; stage.market frames fill it later
+    );
+    // Bets the page was told about load their snapshot first, then subscribe (seed.ts).
+    const told = [
+      ...(s.betId ? [s.betId] : []),
+      ...(s.resume?.focus ? [s.resume.focus] : []),
+      ...(s.resume?.bets ?? []),
+    ].filter((id, i, all) => isUuid(id) && all.indexOf(id) === i);
+    for (const id of told) {
+      seeded.current.add(id);
+      void seedBet(
+        id,
+        {
+          fetchSnapshot: (bet) => fetchBetSnapshot(serverUrl, s.token, bet),
+          dispatch,
+          subscribe: (bet) => c.subscribe(bet, 0),
+          current: () => gen === generation.current,
+          failed: (bet) => seeded.current.delete(bet), // the room may show it again later
+        },
+        { quiet: id !== s.betId },
       );
-      if (s.betId) {
-        seeded.current.add(s.betId);
-        const pinned = s.betId;
-        fetchBetSnapshot(serverUrl, s.token, pinned).then(
-          (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
-          (err: unknown) => {
-            dispatch({ kind: 'unfocus', bet_id: pinned });
-            dispatch({ kind: 'error', message: String(err) });
-          },
-        );
-      }
-    },
-    [],
-  );
+    }
+  }, []);
 
   const connect = useCallback(
     async (f: FormState) => {
       setConnectError(null);
       setBusy(true);
-      const serverUrl = resolveServer(f.serverUrl, origin());
       const room = f.roomId.trim();
       const betId = f.betId?.trim() || null;
       const demoKey = f.demoKey?.trim() || null;
-      writeJson('local', CONFIG_KEY, {
-        serverUrl: f.serverUrl.trim(),
-        roomId: room,
-        betId: betId ?? '',
-      });
       try {
+        const serverUrl = resolveServer(f.serverUrl, origin());
         if (!room) throw new Error('Enter the room code from phone A.');
+        if (betId && !isUuid(betId)) throw new Error('The bet id is a uuid (or leave it empty).');
         dispatch({ kind: 'status', status: 'authorizing' });
         let token = f.token?.trim() ?? '';
         let roomId = room;
@@ -343,6 +365,9 @@ export function App() {
         } else if (!isUuid(room)) {
           throw new Error('With a pasted stage token, give the room id (uuid), not its code.');
         }
+        const roomLabel = roomLabelOf(room);
+        // connect first: only a session that started is saved (a reload resumes it)
+        start({ serverUrl: f.serverUrl, token, roomId, roomLabel, betId, demoKey });
         const saved: SavedSession = {
           serverUrl: f.serverUrl.trim(),
           roomId,
@@ -350,10 +375,10 @@ export function App() {
           demoKey,
           betId,
           expiresAt,
+          roomLabel,
         };
-        const roomLabel = roomLabelOf(room);
-        writeJson('session', SESSION_KEY, { ...saved, roomLabel });
-        start({ serverUrl: f.serverUrl, token, roomId, roomLabel, betId, demoKey });
+        writeJson('session', SESSION_KEY, saved);
+        writeJson('local', CONFIG_KEY, { serverUrl: f.serverUrl.trim(), roomId: room });
       } catch (err) {
         dispatch({ kind: 'status', status: 'closed' });
         setConnectError(err instanceof Error ? err.message : String(err));
@@ -373,8 +398,9 @@ export function App() {
       void connect(initialForm(launch));
       return;
     }
-    const s = loadSession(Date.now()) as (SavedSession & { roomLabel?: string }) | null;
-    if (s)
+    const s = loadSession(Date.now());
+    if (!s) return;
+    try {
       start({
         serverUrl: s.serverUrl,
         token: s.token,
@@ -382,7 +408,13 @@ export function App() {
         roomLabel: s.roomLabel ?? roomLabelOf(s.roomId),
         betId: s.betId,
         demoKey: s.demoKey,
+        resume: { focus: s.focusBetId ?? null, bets: s.bets ?? [] },
       });
+    } catch (err) {
+      // a saved session that cannot start must not blank the page on every reload
+      writeJson('session', SESSION_KEY, null);
+      setConnectError(`Could not resume: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }, [connect, launch, start]);
 
   // A rejected token / wrong room is final: back to the form with the reason.
@@ -400,16 +432,26 @@ export function App() {
   const betIds = Object.keys(state.bets).join(',');
   useEffect(() => {
     if (!live) return;
+    const gen = generation.current;
     for (const id of betIds ? betIds.split(',') : []) {
       if (seeded.current.has(id)) continue;
       seeded.current.add(id);
       conn.current?.subscribe(id, 0);
       fetchBetSnapshot(live.serverUrl, live.token, id).then(
-        (bet) => dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
-        (err: unknown) => dispatch({ kind: 'error', message: String(err) }),
+        (bet) =>
+          gen === generation.current && dispatch({ kind: 'snapshot', bet, receivedAt: Date.now() }),
+        (err: unknown) =>
+          gen === generation.current && dispatch({ kind: 'error', message: String(err) }),
       );
     }
   }, [betIds, live]);
+
+  // The saved session remembers the card on screen and the bets the page knows, so a reload
+  // (Cmd+R, a crashed tab) comes back to the same card instead of "Waiting for a challenge…".
+  useEffect(() => {
+    if (!live) return;
+    rememberBets(state.focusBetId, betIds ? betIds.split(',') : []);
+  }, [live, state.focusBetId, betIds]);
 
   // RULED but no countdown yet (bet.state's reason did not carry appeal_deadline, and Streams'
   // BetResolved has not come): the payout service writes bets.appeal_deadline at the confirmed
@@ -544,6 +586,8 @@ export function App() {
     </label>
   );
 
+  const otherServer = foreignServer(form.serverUrl, origin());
+
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     void connect(form);
@@ -579,10 +623,27 @@ export function App() {
               {field('betId', 'Bet id (optional)')}
               {field('demoKey', 'Demo admin key (health strip)', { type: 'password' })}
             </details>
+            {otherServer && (
+              <p className="warn server-note">
+                Server: <code>{otherServer}</code> (not this page&apos;s server). The stage key goes
+                there.
+              </p>
+            )}
             <button type="submit" disabled={busy}>
               {busy ? 'Connecting…' : 'Connect'}
             </button>
             {connectError && <p className="bad">{connectError}</p>}
+            {launch.secretInQuery && (
+              <p className="warn">
+                A key after <code>?</code> in the link was ignored: it reaches the server&apos;s
+                logs. Put it after <code>#</code> instead (<code>#key=…</code>).
+              </p>
+            )}
+            {launch.serverIgnored && (
+              <p className="muted small">
+                The link&apos;s server= was ignored: this page only talks to its own server.
+              </p>
+            )}
           </form>
           <p className="muted small">
             Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}

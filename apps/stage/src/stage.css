@@ -1130,6 +1130,48 @@ code,
   color: var(--text);
   word-break: break-all;
 }
+.warn {
+  color: var(--accent);
+}
+.connect p.warn,
+.connect p.bad {
+  margin: 0;
+  font-size: 0.75em;
+  line-height: 1.4;
+}
+.connect .server-note {
+  padding: 0.5em 0.7em;
+  border: 1px solid var(--accent);
+  border-radius: 0.4em;
+}
+.connect .server-note code {
+  word-break: break-all;
+}
+.crash {
+  max-width: 34em;
+  text-align: center;
+}
+.crash .actions {
+  display: flex;
+  gap: 0.8em;
+  justify-content: center;
+  margin-top: 1.2em;
+}
+.crash .actions button {
+  font: inherit;
+  font-size: 0.8em;
+  padding: 0.45em 0.9em;
+  border-radius: 0.4em;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.crash .actions button.primary {
+  background: var(--accent);
+  color: #1a1400;
+  font-weight: 800;
+}
 
 /* ---- motion ------------------------------------------------------------------------------- */
 @keyframes pulse {
