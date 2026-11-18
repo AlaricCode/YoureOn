@@ -178,7 +178,8 @@ export async function loadBetSnapshot(
   );
 }
 
-function canRead(auth: AuthContext, row: typeof bets.$inferSelect): boolean {
+/** Who may read a bet (its snapshot, frames and slow-mo replay, replay/routes.ts). */
+export function canRead(auth: AuthContext, row: typeof bets.$inferSelect): boolean {
   if (auth.scopes.includes('app') && partyOf(row, auth.user_id) !== null) return true;
   return auth.scopes.includes('stage') && auth.room_id !== null && auth.room_id === row.room_id;
 }

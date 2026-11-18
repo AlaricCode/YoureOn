@@ -993,6 +993,7 @@ export function QrOverlay({
 
 export const KEYS: Array<[string, string]> = [
   ['1 – 6', 'Play the REPLAY clip of that beat'],
+  ['R', 'Slow-mo of the decisive moment (the bet on screen)'], // slow-mo (feat/slowmo-replay)
   ['Esc', 'Close any overlay'],
   ['F', 'Full screen on / off'],
   ['Q', 'Big QR of the latest transaction'],
