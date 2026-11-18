@@ -10,11 +10,12 @@
 //                    the card still arrives by the terms.proposed push; "Lock it in" confirms.
 import { useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { File } from 'expo-file-system';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
 import { feel } from '../device/feedback';
+import { SCAN_PROBLEM_LABEL, type ScanOutcome } from '../face/scan';
 import { signedUsd, type BetView } from '../bets/view';
-import type { PreviewUser } from '../preview/data';
 import {
   AlertLine,
   Label,
@@ -28,22 +29,26 @@ import { Avatar, Card, Chip, DataText, DotsLabel, Page, Screen, TopBar } from '.
 import { color, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
-export interface FaceMatch {
-  user: PreviewUser;
-  headToHead: { wins: number; losses: number; net: string };
-}
+/** What the scan screen shows for a match (face/scan.ts ScanOutcome 'match'). */
+export type FaceMatch = Extract<ScanOutcome, { kind: 'match' }>;
+
+const toFileUrl = (path: string) => (path.startsWith('file://') ? path : `file://${path}`);
 
 export function ScanScreen({
   onBack,
-  match,
+  scan,
   onChallenge,
   onPickList,
   tag,
 }: {
   onBack: () => void;
-  /** Runs the room-scoped match on a still (POST /v1/rooms/:id/face-match); null = no match. */
-  match: () => Promise<FaceMatch | null>;
-  onChallenge: (user: PreviewUser) => void;
+  /**
+   * Runs one scan on a still (face/scan.ts createFaceScanner: detect → embed → POST
+   * /v1/rooms/:id/face-match). The photo is deleted as soon as this returns.
+   */
+  scan: (photoUrl: string) => Promise<ScanOutcome>;
+  /** "Challenge": POST /v1/bets with challenge_method 'face' and the match's 60 s ticket. */
+  onChallenge: (match: FaceMatch) => void;
   onPickList: () => void;
   tag?: string | undefined;
 }) {
@@ -52,6 +57,7 @@ export function ScanScreen({
   const outputs = useMemo(() => [photoOutput], [photoOutput]);
   const [checking, setChecking] = useState(false);
   const [found, setFound] = useState<FaceMatch | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
   const [asked, setAsked] = useState(false);
 
   useEffect(() => {
@@ -60,15 +66,33 @@ export function ScanScreen({
     void permission.requestPermission();
   }, [permission, asked]);
 
-  const scan = async () => {
+  const shoot = async () => {
+    if (checking) return;
     setChecking(true);
+    setProblem(null);
+    let url: string | null = null;
     try {
-      // No confident match shows nothing and stores nothing (BRIEF 5e).
-      setFound(await match());
+      const photo = await photoOutput.capturePhotoToFile({ enableShutterSound: false }, {});
+      url = toFileUrl(photo.filePath);
+      const out = await scan(url);
+      // No confident match shows nobody (BRIEF 5e): just a fix-it line.
+      if (out.kind === 'match') setFound(out);
+      else setProblem(out.label);
+    } catch {
+      setProblem(SCAN_PROBLEM_LABEL.failed);
     } finally {
+      if (url) {
+        try {
+          new File(url).delete();
+        } catch {
+          // best effort: the OS clears the temp directory anyway
+        }
+      }
       setChecking(false);
     }
   };
+
+  const cameraAlert = permission.hasPermission || !asked ? null : t(COPY.scan.cameraNeeded);
 
   return (
     <Screen>
@@ -85,7 +109,7 @@ export function ScanScreen({
             <StageBubble prompt={t(COPY.scan.point)} checking={checking} />
             {!found ? (
               <View style={styles.shutterSlot}>
-                <ShutterButton onPress={() => void scan()} disabled={checking} label="Scan" />
+                <ShutterButton onPress={() => void shoot()} disabled={checking} label="Scan" />
               </View>
             ) : null}
           </Stage>
@@ -106,13 +130,11 @@ export function ScanScreen({
             </View>
           </Stage>
         )}
-        <AlertLine
-          message={permission.hasPermission || !asked ? null : t(COPY.scan.cameraNeeded)}
-        />
+        <AlertLine message={cameraAlert ?? (found ? null : problem)} testID="scan-alert" />
         {found ? (
           <Card style={styles.matchCard}>
             <View style={styles.matchHead}>
-              <Avatar name={found.user.display_name} size={48} online={found.user.online} />
+              <Avatar name={found.user.display_name} size={48} />
               <View style={styles.flex}>
                 <DataText variant="heading">{fill.challengeName(found.user.display_name)}</DataText>
                 <DataText muted>
@@ -128,7 +150,7 @@ export function ScanScreen({
             <PrimaryButton
               testID="scan-challenge"
               label={t(COPY.home.challenge)}
-              onPress={() => onChallenge(found.user)}
+              onPress={() => onChallenge(found)}
             />
             <View style={styles.gap} />
             <QuietButton label={t(COPY.scan.notThem)} onPress={() => setFound(null)} />

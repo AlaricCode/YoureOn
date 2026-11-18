@@ -2,14 +2,17 @@
 // §5.2). Both phones show the same card, rendered from the Terms alone. The hold stays off until
 // the device policy passes; a full hold opens Face ID; "Decline" needs no Face ID and works until
 // the second signature. The lock state lives in bets/lock.ts.
+import { useRef } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { declineEnabled, END_COPY, holdEnabled, type LockState } from '../bets/lock';
 import { clockLabel, countdownLabel, type BetView } from '../bets/view';
 import { AlertLine, Label, PrimaryButton, QuietButton } from '../ui/kit';
 import {
+  Appear,
   Avatar,
   Bullets,
+  CountdownBar,
   Card,
   DataText,
   DotsLabel,
@@ -18,6 +21,7 @@ import {
   Page,
   Screen,
   Section,
+  StatusBadge,
   StatusHero,
   TopBar,
   useNow,
@@ -47,13 +51,21 @@ export function TermsCardScreen({
   tag?: string | undefined;
 }) {
   const now = useNow(500);
+  // The accept window as it stood when the card opened, for the draining bar.
+  const windowMs = useRef(Math.max(1, expiresAtMs - Date.now())).current;
+  const mine = lock.phase === 'signed' || lock.phase === 'locking';
 
   if (lock.phase === 'locked') {
     return (
       <Screen>
         <TopBar tag={tag} />
         <Page style={styles.center}>
-          <StatusHero mark="check" title={t(COPY.terms.locked)} detail={`${view.potUsd} pot`} />
+          <StatusHero
+            mark="check"
+            title={t(COPY.terms.locked)}
+            detail={`${view.potUsd} pot`}
+            pulse
+          />
         </Page>
         <Page style={styles.footer}>
           <PrimaryButton label={t(COPY.terms.continue)} onPress={onContinue} />
@@ -95,9 +107,20 @@ export function TermsCardScreen({
         <DataText variant="title">{view.claim}</DataText>
 
         <Card style={styles.parties}>
-          <Party name={view.myName} label={t(COPY.terms.you)} stake={view.myStakeUsd} accent />
+          <Party
+            name={view.myName}
+            label={t(COPY.terms.you)}
+            stake={view.myStakeUsd}
+            signed={mine}
+            accent
+          />
           <DataText muted>vs</DataText>
-          <Party name={view.theirName} label={view.theirName} stake={view.theirStakeUsd} />
+          <Party
+            name={view.theirName}
+            label={view.theirName}
+            stake={view.theirStakeUsd}
+            signed={lock.theirsIn}
+          />
         </Card>
 
         <Section label={t(COPY.terms.counts)}>
@@ -130,6 +153,7 @@ export function TermsCardScreen({
 
       <View style={styles.dock}>
         <InfoRow label={t(COPY.terms.timeLeft)} value={countdownLabel(expiresAtMs - now)} />
+        <CountdownBar fraction={(expiresAtMs - now) / windowMs} />
         <View style={styles.status}>{status}</View>
         <AlertLine message={alert} testID="terms-alert" />
         {lock.phase === 'signed' || lock.phase === 'locking' ? null : (
@@ -157,16 +181,26 @@ function Party({
   name,
   label,
   stake,
+  signed = false,
   accent = false,
 }: {
   name: string;
   label: string;
   stake: string;
+  /** This party has locked in: a small tick on their avatar. */
+  signed?: boolean;
   accent?: boolean;
 }) {
   return (
     <View style={styles.party}>
-      <Avatar name={name} size={48} accent={accent} />
+      <View>
+        <Avatar name={name} size={48} accent={accent} />
+        {signed ? (
+          <Appear style={styles.signedTick}>
+            <StatusBadge mark="check" size={20} />
+          </Appear>
+        ) : null}
+      </View>
       <Label>{label}</Label>
       <DataText variant="heading">{stake}</DataText>
     </View>
@@ -220,6 +254,14 @@ const styles = StyleSheet.create({
     marginTop: space.x3,
   },
   party: { alignItems: 'center', gap: 4 },
+  signedTick: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: palette.surface,
+  },
   edge: { gap: 2, marginBottom: space.x1 },
   rows: {
     marginTop: space.x3,

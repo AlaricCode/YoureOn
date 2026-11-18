@@ -67,14 +67,14 @@ const EMOJI =
   /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}\u{20E3}\u{200D}\u{231A}\u{231B}\u{23E9}-\u{23FA}\u{2B05}-\u{2B07}\u{2B1B}\u{2B1C}\u{2B50}\u{2B55}\u{3030}\u{303D}]/u;
 
 /** TASKS D5-M2 crypto-copy audit, plus the chain/token names spec §6.2 keeps out of primary UI. */
-const JARGON: readonly RegExp[] = [
+export const CRYPTO_JARGON: readonly RegExp[] = [
   /\bSOL\b/,
   /\bUSDC\b/i,
   /\bSolana\b/i,
   /\blamports?\b/i,
   /\bgas\b/i,
   /\bseed phrase\b/i,
-  /\bwallet address\b/i,
+  /\bwallets?\b/i,
   /\btransactions?\b/i,
   /\bdevnet\b/i,
   /\bblockchain\b/i,
@@ -123,7 +123,7 @@ export function checkCopy(text: string, role: CopyRole = 'label'): CopyViolation
   if (EMOJI.test(t)) v('emoji', 'no emoji anywhere (spec §6.4)');
   if (BASE58_RUN.test(t)) v('address', 'no addresses or signatures on a party screen');
   if (role !== 'data') {
-    const hit = JARGON.find((re) => re.test(t));
+    const hit = CRYPTO_JARGON.find((re) => re.test(t));
     if (hit) v('crypto_jargon', `chain jargon in copy: ${hit.source}`);
   }
 
