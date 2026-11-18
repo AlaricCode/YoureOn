@@ -20,6 +20,8 @@
     "@hono/node-server": "2.1.6",
     "@noble/ed25519": "3.2.0",
     "@noble/hashes": "2.4.0",
+    "@solana-program/system": "0.14.1",
+    "@solana-program/token": "0.16.1",
     "@solana/kit": "8.6.0",
     "@youre-on/db": "*",
     "@youre-on/shared": "*",

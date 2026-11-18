@@ -7,7 +7,7 @@ const URL = process.env.DATABASE_URL;
 const d = URL ? describe : describe.skip;
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const b58 = (n: number) => Array.from(randomBytes(n), (b) => B58[b % B58.length]).join('');
-const ESCROW = 'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm';
+const ESCROW = 'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp';
 
 async function pgError(p: Promise<unknown>): Promise<string> {
   try {

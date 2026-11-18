@@ -21,7 +21,7 @@ import {
   UserRef,
   Uuid,
 } from './primitives';
-import { Ruling } from './ruling';
+import { OnchainOutcome, Ruling } from './ruling';
 import { TermsEnvelope } from './terms';
 
 // ---------------------------------------------------------------------------------------
@@ -332,13 +332,53 @@ export const LoginRequest = z.object({
 });
 export type LoginRequest = z.infer<typeof LoginRequest>;
 
-/** POST /v1/auth/demo-claim (DEMO_MODE only; handler PENDING) */
+/**
+ * POST /v1/auth/demo-claim (DEMO_MODE only) -> 200 DemoClaimResponse. `device_sig` is over
+ * authChallengeMessage({purpose: 'demo-claim', wallet_pubkey: null}). `challenge_id` names the
+ * challenge that was signed; without it the server uses this device key's newest challenge.
+ */
 export const DemoClaimRequest = z.object({
+  challenge_id: Uuid.optional(),
   claim_token: z.string().min(1).max(256),
   device_pubkey: Pubkey,
   device_sig: Ed25519SigB64,
 });
 export type DemoClaimRequest = z.infer<typeof DemoClaimRequest>;
+
+/** The two custodial demo parties (env DEMO_A_SECRET_KEY / DEMO_B_SECRET_KEY, decision D-A). */
+export const DemoParty = z.enum(['a', 'b']);
+export type DemoParty = z.infer<typeof DemoParty>;
+
+/** Demo claim tokens are single use and live 10 min (§1.3). */
+export const DEMO_CLAIM_TOKEN_TTL_MS = 10 * 60 * 1000;
+/** `yo_dc_<base64url 32 B>`. */
+export const DemoClaimToken = z.string().regex(/^yo_dc_[A-Za-z0-9_-]{43}$/);
+/** The QR word: lowercase letters and `-` (the phone strips `youreon://<word>/`). */
+export const DemoClaimWord = z.string().regex(/^[a-z-]{1,32}$/);
+
+/** The stage QR payload: `youreon://<word>/<token>`. */
+export const demoClaimQr = (word: string, token: string): string => `youreon://${word}/${token}`;
+/** QR text -> claim token: a raw token, or `youreon://<word>/<token>`. */
+export const demoClaimTokenFromQr = (qr: string): string =>
+  qr.trim().replace(/^youreon:\/\/[a-z-]+\//i, '');
+
+/** POST /v1/demo/claim-tokens (DEMO_MODE + X-YO-Demo-Key, §2.17) */
+export const DemoClaimTokenRequest = z.object({
+  party: DemoParty,
+  /** Renames the demo account on claim (else it keeps its name, or a new one is "Demo A/B"). */
+  display_name: DisplayName.optional(),
+});
+export type DemoClaimTokenRequest = z.infer<typeof DemoClaimTokenRequest>;
+export const DemoClaimTokenResponse = z.object({
+  token: DemoClaimToken,
+  word: DemoClaimWord,
+  qr: z.string(),
+  expires_at: IsoUtc,
+  party: DemoParty,
+  /** The demo party's wallet pubkey: the claimed session's user.pubkey. */
+  pubkey: Pubkey,
+});
+export type DemoClaimTokenResponse = z.infer<typeof DemoClaimTokenResponse>;
 
 export const Session = z.object({
   token: SessionToken,
@@ -349,6 +389,13 @@ export const Session = z.object({
   server_time: IsoUtc,
 });
 export type Session = z.infer<typeof Session>;
+
+/**
+ * POST /v1/auth/demo-claim -> Session + the custodial seed, sent exactly once: base64 of the
+ * 32-byte ed25519 seed whose public key is `user.pubkey`.
+ */
+export const DemoClaimResponse = Session.extend({ wallet_seed_b64: z.string().min(1) });
+export type DemoClaimResponse = z.infer<typeof DemoClaimResponse>;
 
 // ---------------------------------------------------------------------------------------
 // §2.18 API-owned types
@@ -460,6 +507,34 @@ export const BetSnapshot = z.object({
   last_seq: z.number().int(),
 });
 export type BetSnapshot = z.infer<typeof BetSnapshot>;
+
+/**
+ * §2.14 GET /v1/me/bets item: a whole BetSnapshot (a phone adopts it exactly like
+ * GET /v1/bets/:bet_id) plus the contract's BetSummary list fields. Only bets the caller is a
+ * party of (any of the caller's devices, including A's judge cam), so each item is GETtable and
+ * subscribable by the caller.
+ */
+export const MeBetItem = BetSnapshot.extend({
+  title: z.string(),
+  opponent: UserRef,
+  my_stake: MicroUsdc.nullable(),
+  my_payout: MicroUsdc.nullable(),
+  outcome: OnchainOutcome.nullable(),
+  settled_at: IsoUtc.nullable(),
+  is_seed: z.boolean(),
+});
+export type MeBetItem = z.infer<typeof MeBetItem>;
+
+/** `active` = not terminal; `settled` = PAID / VOIDED; `all` (the default) = everything. */
+export const MeBetsStatus = z.enum(['active', 'settled', 'all']);
+export type MeBetsStatus = z.infer<typeof MeBetsStatus>;
+
+export const MeBetsResponse = z.object({
+  items: z.array(MeBetItem),
+  /** Opaque; pass back as `cursor` for the next (older) page. null on the last page. */
+  next_cursor: z.string().nullable(),
+});
+export type MeBetsResponse = z.infer<typeof MeBetsResponse>;
 
 /** §2.3 */
 export const RoomMember = z.object({

@@ -23,6 +23,8 @@
     "fund": "tsx scripts/fund.ts",
     "smoke-devnet": "tsx scripts/smoke-devnet.ts",
     "crank": "tsx scripts/crank.ts",
+    "cp1-drive": "tsx scripts/cp1-drive.ts",
+    "demo-claim-qr": "tsx scripts/demo-claim-qr.ts",
     "e2e:local": "bash scripts/e2e-local.sh"
   },
   "devDependencies": {
@@ -40,5 +42,8 @@
     "typescript": "~5.9",
     "typescript-eslint": "^8.72.1",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "@livekit/react-native-webrtc": "144.1.2"
   }
 }

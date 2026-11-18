@@ -64,12 +64,12 @@ export type InitializeConfigInstruction<
   TAccountAdmin extends string | AccountMeta<string> = string,
   TAccountConfig extends string | AccountMeta<string> = string,
   TAccountEscrowProgram extends string | AccountMeta<string> =
-    'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm',
+    'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp',
   TAccountProgramData extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> = '11111111111111111111111111111111',
   TAccountEventAuthority extends string | AccountMeta<string> = string,
   TAccountProgram extends string | AccountMeta<string> =
-    'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm',
+    'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp',
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -262,7 +262,7 @@ export async function getInitializeConfigInstructionAsync<
   }
   if (!accounts.escrowProgram.value) {
     accounts.escrowProgram.value =
-      'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm' as Address<'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm'>;
+      'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp' as Address<'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp'>;
   }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
@@ -411,7 +411,7 @@ export function getInitializeConfigInstruction<
   // Resolve default values.
   if (!accounts.escrowProgram.value) {
     accounts.escrowProgram.value =
-      'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm' as Address<'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm'>;
+      'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp' as Address<'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp'>;
   }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =

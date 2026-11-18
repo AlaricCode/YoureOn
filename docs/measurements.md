@@ -8,7 +8,7 @@ section rather than editing an old one.
 
 Toolchain: Anchor 1.2.2, Agave 4.1.2 `solana-test-validator`, npm `litesvm` 1.6.2, `@solana/kit`
 8.6.0, the Codama client (`@youre-on/shared/escrow-client`), and `escrow.so` built from branch
-`escrow/complete` (program ID `FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm`). No devnet was used.
+`escrow/complete` (program ID `BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp`). No devnet was used.
 
 Commands (from `packages/shared`; set `ESCROW_MEASURE_OUT=<file>` to collect the JSON lines):
 

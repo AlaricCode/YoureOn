@@ -29,6 +29,20 @@
       "when": 1794708014809,
       "tag": "0003_chain_events",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794969615328,
+      "tag": "0004_chain_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795000000000,
+      "tag": "0005_judge_pipeline",
+      "breakpoints": true
     }
   ]
 }
