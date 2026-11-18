@@ -39,6 +39,8 @@ export const COPY = {
     slowDown: ['Slow down', 'error'],
     betOpen: ['Bet in progress', 'error'],
     failed: ['Try again', 'error'],
+    // A face screen crashed (a native module missing from the build): face is off until restart.
+    unavailable: ['Face scan unavailable', 'error'],
   },
   incoming: {
     accept: ['Accept', 'label'],

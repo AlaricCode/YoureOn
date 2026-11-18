@@ -150,6 +150,40 @@ export function createDeviceEmbedder(
 }
 
 // ---------------------------------------------------------------------------------------
+// Loading the device embedder on first use
+// ---------------------------------------------------------------------------------------
+
+/**
+ * A device embedder whose native half loads on first use. In the app `load` is
+ * `() => import('../face/native').then((m) => m.getNativeEmbedder())`: Metro runs a module only
+ * when it is first required, and import() requires it at call time, so nitro-image, the ML Kit
+ * detector and fast-tflite (which create their native objects as their modules load) stay out
+ * of app start. A native module that fails to start then fails only the scan or enrollment photo
+ * that asked for it (both already show a rejected open() as "Try again"); the app, the room list
+ * and Beats 2-4 keep working. A failed load is not cached, so a later try loads again.
+ */
+export function createLazyEmbedder(load: () => Promise<FaceEmbedder>): FaceEmbedder {
+  let loading: Promise<FaceEmbedder> | null = null;
+  const get = (): Promise<FaceEmbedder> => {
+    // Promise.resolve().then(load): a load that throws synchronously still only rejects.
+    loading ??= Promise.resolve()
+      .then(load)
+      .catch((e: unknown) => {
+        loading = null;
+        throw e;
+      });
+    return loading;
+  };
+  return {
+    preview: false,
+    open: async (photoUrl) => (await get()).open(photoUrl),
+    prewarm: async () => {
+      await (await get()).prewarm?.();
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------------------
 // The preview stand-in
 // ---------------------------------------------------------------------------------------
 

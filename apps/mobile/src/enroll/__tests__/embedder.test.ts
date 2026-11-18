@@ -11,12 +11,14 @@ import {
 } from '../../face/pipeline';
 import {
   createDeviceEmbedder,
+  createLazyEmbedder,
   createPreviewEmbedder,
   FaceOrientationError,
   PREVIEW_FACE,
   type EmbedderNatives,
 } from '../embedder';
 import type { DetectedFace } from '../flow';
+import type { FaceEmbedder, FaceStill } from '../embedder';
 
 const W = 960;
 const H = 1280;
@@ -198,6 +200,90 @@ describe('device embedder (fake natives)', () => {
     await e.prewarm!();
     expect(order).toEqual(['warm']);
     expect(createDeviceEmbedder(fakeNatives().natives).prewarm).toBeUndefined();
+  });
+});
+
+describe('lazy embedder (the native half loads on first use)', () => {
+  const STILL: FaceStill = {
+    faces: [FACE],
+    width: W,
+    height: H,
+    embed: async () => new Float32Array(512),
+    close() {},
+  };
+  function inner(log: string[], withPrewarm = true): FaceEmbedder {
+    return {
+      preview: false,
+      async open(url) {
+        log.push(`open ${url}`);
+        return STILL;
+      },
+      prewarm: withPrewarm
+        ? async () => {
+            log.push('prewarm');
+          }
+        : undefined,
+    };
+  }
+
+  it('loads nothing until a photo is opened or the model is warmed up', async () => {
+    const log: string[] = [];
+    let loads = 0;
+    const e = createLazyEmbedder(async () => {
+      loads++;
+      return inner(log);
+    });
+    // Creating it (what DemoApp does at start) must not touch the native modules.
+    expect(loads).toBe(0);
+    expect(e.preview).toBe(false);
+    expect(typeof e.prewarm).toBe('function');
+
+    await e.prewarm!();
+    const s = await e.open('file:///a.jpg');
+    expect(s.faces).toEqual([FACE]);
+    await e.open('file:///b.jpg');
+    expect(log).toEqual(['prewarm', 'open file:///a.jpg', 'open file:///b.jpg']);
+    expect(loads).toBe(1);
+  });
+
+  it('concurrent first calls share one load', async () => {
+    let loads = 0;
+    let resolve!: (x: FaceEmbedder) => void;
+    const log: string[] = [];
+    const e = createLazyEmbedder(() => {
+      loads++;
+      return new Promise<FaceEmbedder>((r) => (resolve = r));
+    });
+    const a = e.open('file:///a.jpg');
+    const w = e.prewarm!();
+    const b = e.open('file:///b.jpg');
+    await Promise.resolve();
+    resolve(inner(log));
+    await Promise.all([a, w, b]);
+    expect(loads).toBe(1);
+    expect(log.sort()).toEqual(['open file:///a.jpg', 'open file:///b.jpg', 'prewarm']);
+  });
+
+  it('prewarm is a no-op when the loaded embedder has none', async () => {
+    const e = createLazyEmbedder(async () => inner([], false));
+    await expect(e.prewarm!()).resolves.toBeUndefined();
+  });
+
+  it('a native module that fails to start rejects that call only, and the next call retries', async () => {
+    const log: string[] = [];
+    let attempt = 0;
+    const e = createLazyEmbedder(() => {
+      attempt++;
+      // Metro's require throws synchronously when a module's factory throws.
+      if (attempt === 1) throw new Error('NitroModules: ImageFactory is not registered');
+      if (attempt === 2) return Promise.reject(new Error('still missing'));
+      return Promise.resolve(inner(log));
+    });
+    await expect(e.open('file:///a.jpg')).rejects.toThrow(/ImageFactory/);
+    await expect(e.prewarm!()).rejects.toThrow('still missing');
+    await expect(e.open('file:///b.jpg')).resolves.toMatchObject({ width: W, height: H });
+    expect(attempt).toBe(3);
+    expect(log).toEqual(['open file:///b.jpg']);
   });
 });
 
