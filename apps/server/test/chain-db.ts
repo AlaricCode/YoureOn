@@ -2,20 +2,54 @@
 // the chain events are built from (chain-fixtures.ts), and the chain_txs lock row the LockService
 // records at send (the projector's attribution source, DATA-MODEL §8.2 step 2).
 import { createHash, randomBytes } from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import {
   auditLog,
   betEvents,
   bets,
   chainEvents,
   chainTxs,
+  createDb,
   outbox,
+  runMigrations,
   users,
   type Db,
 } from '@youre-on/db';
 import { randomPubkey, randomSig, type BetFacts } from './chain-fixtures';
 
 type BetRow = typeof bets.$inferSelect;
+
+/**
+ * A suite-private database <db>_<suffix> next to DATABASE_URL's, created + migrated on first use
+ * (a suite that owns nonce_pool must not share it: vitest runs files in parallel). Same recipe as
+ * e2e-beats.test.ts.
+ */
+export async function ownDatabase(url: string, suffix: string): Promise<string> {
+  const u = new URL(url);
+  const name = `${u.pathname.replace(/^\//, '')}_${suffix}`;
+  if (!/^[a-z0-9_]{1,63}$/.test(name)) throw new Error(`unsupported database name ${name}`);
+  const admin = createDb({ url, max: 1 });
+  try {
+    const found = await admin.db.execute(
+      sql`SELECT 1 AS ok FROM pg_database WHERE datname = ${name}`,
+    );
+    if (found.length === 0) {
+      try {
+        await admin.db.execute(sql.raw(`CREATE DATABASE ${name}`));
+      } catch (e) {
+        const code =
+          (e as { code?: string; cause?: { code?: string } }).code ??
+          (e as { cause?: { code?: string } }).cause?.code;
+        if (code !== '42P04') throw e; // duplicate_database: a concurrent run made it
+      }
+    }
+  } finally {
+    await admin.close();
+  }
+  u.pathname = `/${name}`;
+  await runMigrations(u.toString());
+  return u.toString();
+}
 
 export async function mkUser(db: Db, name = 'T'): Promise<string> {
   const [u] = await db
