@@ -767,6 +767,60 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
       expect(await auditOf(db(), b.id, 'chain.mismatch')).toHaveLength(1);
     });
 
+    it('a value changed after its event was applied is audited when the chain overwrites it', async () => {
+      const b = await bet('LOCKED', { pending: true });
+      await post(delivery([lockTx(b)]));
+      // someone (a bug, an operator) moves a projector-owned column after BetAccepted applied
+      await db()
+        .update(bets)
+        .set({ resolve_deadline: new Date((b.f.t0 + 99) * 1000) })
+        .where(eq(bets.id, b.id));
+      await post(
+        delivery([
+          tx(randomSig(), 700_100, [
+            { outerIx: 1, name: 'BetResolved', payload: b.L.resolved('PartyA') },
+          ]),
+        ]),
+      );
+      expect((await betRow(db(), b.id)).resolve_deadline).toEqual(new Date((b.f.t0 + 3600) * 1000));
+      const [audit] = await auditOf(db(), b.id, 'chain.mismatch');
+      expect(audit!.details).toMatchObject({
+        mismatches: [{ field: 'resolve_deadline', event: 'BetAccepted' }],
+      });
+    });
+
+    it('pushes: "locked in" when the BetAccepted applies (even after a revive wrote the status), never next to a payout', async () => {
+      // the LockService's chain-wins revive already wrote onchain_status 'locked'
+      const revived = await bet('LOCKED', { pending: true, extra: { onchain_status: 'locked' } });
+      await post(delivery([lockTx(revived)]));
+      expect((await outboxOf(db(), revived.id)).map((p) => p.kind)).toEqual([
+        'bet_locked',
+        'bet_locked',
+      ]);
+      // one fold that goes from nothing to paid out: only the payout push
+      const late = await bet('AWAITING_LOCK');
+      await post(
+        delivery([
+          lockTx(late),
+          tx(randomSig(), 700_100, [
+            { outerIx: 1, name: 'BetResolved', payload: late.L.resolved('PartyB') },
+          ]),
+          tx(randomSig(), 700_200, [
+            { outerIx: 2, name: 'BetFinalized', payload: late.L.finalized('PartyB') },
+          ]),
+        ]),
+      );
+      expect(
+        (await outboxOf(db(), late.id)).map((p) => [
+          p.kind,
+          (p.payload as { title: string }).title,
+        ]),
+      ).toEqual([
+        ['payout', 'Bet settled'],
+        ['payout', '$10 is yours'],
+      ]);
+    });
+
     it('a terminal row keeps its money columns when a later event disagrees', async () => {
       const b = await bet('LOCKED', { pending: true });
       await post(delivery([lockTx(b)]));

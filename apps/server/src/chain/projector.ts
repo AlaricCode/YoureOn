@@ -64,9 +64,7 @@ import {
   diffProjection,
   foldChainEvents,
   impliedState,
-  statusRank,
   terminalFacts,
-  STATUS_RANK,
   type ChainFold,
   type FoldEvent,
   type FoldMismatch,
@@ -202,6 +200,43 @@ export const serverLockSignatures: LockSignatureLookup = async (tx, betIds) => {
   for (const [id, sig] of await betsColumnLockSignatures(tx, betIds)) addTo(out, id, sig);
   return out;
 };
+
+/**
+ * Both sets in one chain_txs query, with pending_sig read from the bets rows the projector already
+ * holds FOR UPDATE (the default lookups; serverLockSignatures / serverTxSignatures are the
+ * injectable equivalents).
+ */
+async function signatureSets(
+  tx: Tx,
+  rows: readonly BetRow[],
+): Promise<{ lock: Map<string, Set<string>>; all: Map<string, Set<string>> }> {
+  const lock = new Map<string, Set<string>>();
+  const all = new Map<string, Set<string>>();
+  if (rows.length === 0) return { lock, all };
+  const txs = await tx
+    .select({ bet_id: chainTxs.bet_id, kind: chainTxs.kind, signature: chainTxs.signature })
+    .from(chainTxs)
+    .where(
+      and(
+        inArray(
+          chainTxs.bet_id,
+          rows.map((r) => r.id),
+        ),
+        isNotNull(chainTxs.signature),
+      ),
+    );
+  for (const t of txs) {
+    addTo(all, t.bet_id, t.signature!);
+    if (t.kind === 'atomic_lock' || t.kind === 'create_bet') addTo(lock, t.bet_id, t.signature!);
+  }
+  for (const r of rows) {
+    if (!r.pending_sig) continue;
+    addTo(all, r.id, r.pending_sig);
+    if (r.onchain_pending === 'open' || r.onchain_pending === 'locked')
+      addTo(lock, r.id, r.pending_sig);
+  }
+  return { lock, all };
+}
 
 /** Every chain_txs signature of the bet (resolve, payouts, close, …) plus pending_sig. */
 export const serverTxSignatures: ServerSignatureLookup = async (tx, betIds) => {
@@ -339,8 +374,15 @@ export interface ChainProjectorOptions {
 }
 
 export function createChainProjector(o: ChainProjectorOptions = {}): ChainProjector {
-  const lockSignatures = o.lockSignatures ?? serverLockSignatures;
-  const serverSignatures = o.serverSignatures ?? serverTxSignatures;
+  const custom = o.lockSignatures !== undefined || o.serverSignatures !== undefined;
+  const lookups = async (tx: Tx, rows: readonly BetRow[]) => {
+    if (!custom) return signatureSets(tx, rows);
+    const ids = rows.map((r) => r.id);
+    return {
+      lock: await (o.lockSignatures ?? serverLockSignatures)(tx, ids),
+      all: await (o.serverSignatures ?? serverTxSignatures)(tx, ids),
+    };
+  };
   return {
     async apply(tx, inserted, nowMs, log = silentLogger) {
       const now = new Date(nowMs);
@@ -380,8 +422,10 @@ export function createChainProjector(o: ChainProjectorOptions = {}): ChainProjec
 
       const present = ids.filter((id) => found.has(id));
       if (present.length === 0) return [];
-      const lockSigs = await lockSignatures(tx, present);
-      const serverSigs = await serverSignatures(tx, present);
+      const { lock: lockSigs, all: serverSigs } = await lookups(
+        tx,
+        present.map((id) => found.get(id)!),
+      );
       const fanout: Fanout[] = [];
       for (const betId of present) {
         const fresh = inserted.filter((r) => r.bet_id === betId && !r.apply_error).map((r) => r.id);
@@ -526,7 +570,7 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
               sent_at: chainTxs.sent_at,
               rpc_confirmed_at: chainTxs.rpc_confirmed_at,
             });
-        await queuePushes(sp, bet, row, fold, nowMs);
+        await queuePushes(sp, bet, row, fold, new Set(pending.map((p) => p.row.id)), nowMs);
         return row;
       });
       // The Streams lane latency (ARCHITECTURE §6 "Streams: send -> webhook", PENDING-KEY).
@@ -553,8 +597,10 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
       .map((p) => p.row.id),
   );
   const names = new Map(events.map((e) => [e.id, e.name]));
+  // ...and when this write overwrites a value someone else changed after its event was applied
+  const overwritten = new Set(rejected ? [] : Object.keys(diff.patch));
   const mismatches = diff.mismatches.filter(
-    (m) => m.event_id === null || firstSeen.has(m.event_id),
+    (m) => m.event_id === null || firstSeen.has(m.event_id) || overwritten.has(m.field),
   );
   if (mismatches.length) {
     log.error('chain.mismatch', { alert: true, bet_id: bet.id, mismatches: mismatches.map(fmt) });
@@ -722,19 +768,29 @@ async function cueFor(tx: Tx, before: BetRow, after: BetRow, move: StateMove, fo
 
 /**
  * Outbox rows (API-CONTRACT §7.4, DATA-MODEL §5.17) for money the chain just locked or moved,
- * written in the projection's transaction. dedupe_key = {bet_id}:{kind}:{signature}:{user_id},
- * so a re-fold or a replay is a no-op. Display data only.
+ * written in the projection's transaction (a rejected write rolls them back with it; the retry
+ * queues them again). dedupe_key = {bet_id}:{kind}:{signature}:{user_id}, so a re-fold or a
+ * replay is a no-op. Display data only.
  */
-async function queuePushes(sp: Tx, before: BetRow, after: BetRow, fold: ChainFold, nowMs: number) {
-  const was = statusRank(before.onchain_status);
-  const is = statusRank(after.onchain_status);
+async function queuePushes(
+  sp: Tx,
+  before: BetRow,
+  after: BetRow,
+  fold: ChainFold,
+  applying: ReadonlySet<bigint>,
+  nowMs: number,
+) {
   const rows: (typeof outbox.$inferInsert)[] = [];
+  const accepted = [...applying].some((id) => fold.source.accept_sig === id);
   const at = new Date(nowMs);
   const parties = [
     { user: before.party_a_id, amount: fold.terminal?.to_a ?? 0n },
     { user: before.party_b_id, amount: fold.terminal?.to_b ?? 0n },
   ];
-  if (was < STATUS_RANK.locked && is >= STATUS_RANK.locked && after.accept_sig) {
+  // Locked in: when this pass applies the BetAccepted (whatever wrote onchain_status first,
+  // e.g. the LockService's chain-wins revive), unless the same fold already reached the payout
+  // (a "locked in" push next to a "refunded" one would be stale).
+  if (accepted && !fold.terminal && after.accept_sig) {
     const pot = usd((after.stake_a ?? 0n) + (after.stake_b ?? 0n));
     for (const p of parties)
       rows.push({
@@ -752,7 +808,7 @@ async function queuePushes(sp: Tx, before: BetRow, after: BetRow, fold: ChainFol
       });
   }
   const t = fold.terminal;
-  if (t && was < STATUS_RANK.settled && is >= STATUS_RANK.settled) {
+  if (t && applying.has(t.event_id)) {
     // A refund / cancel gives stakes back: nobody "lost", and a party that never staked (a
     // sequential cancel or a refund from Open: to_b = 0) gets no push at all.
     const refund = t.status !== 'settled' || t.outcome === 'refund';

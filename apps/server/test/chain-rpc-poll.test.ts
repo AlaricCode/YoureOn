@@ -179,6 +179,13 @@ describe('eventsFromRpcTransaction = filter.js + parseStreamDelivery', () => {
     blockGone = true;
     expect((await client.transaction!(tx.transaction.signatures[0]!))!.blockHeight).toBeNull();
     blockGone = false;
+    // a block without a height (the RPC type allows null) is unknown, never height 0
+    const nullHeight = rpcChainClient('https://rpc.example', {
+      ...rpc,
+      getBlock: () => ({ send: async () => ({ blockHeight: null }) }),
+    } as never);
+    expect((await nullHeight.transaction!(tx.transaction.signatures[0]!))!.blockHeight).toBeNull();
+    asked.splice(3); // forget that second client's calls (it has its own version memory)
     // remembered: the next call goes straight to 0
     reject1 = false;
     await client.transaction!(tx.transaction.signatures[0]!);
