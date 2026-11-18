@@ -45,7 +45,8 @@ import { chainEvents, chainTxs } from '@youre-on/db';
 import { STREAM_FALLBACK_MS } from '@youre-on/shared/constants';
 import type { AppDeps } from '../context';
 import { eventAuthorityAddress } from './filter-config';
-import { ingestChainEvents, publishFanout, refoldParkedInTx } from './ingest';
+import { isTransientDbError } from './db-errors';
+import { ingestChainEvents, publishFanout, refoldParkedInTx, storeUnprojected } from './ingest';
 import { APPLY_ERROR, createChainProjector, type ChainProjector } from './projector';
 import { eventsFromRpcTransaction } from './streams';
 import type { ChainRuntime } from './tx';
@@ -56,6 +57,8 @@ export const RPC_POLL_MAX_AGE_MS = 30 * 60_000;
 export const RPC_POLL_BATCH = 10;
 /** How often one bet's rejected projection is retried. */
 export const REFOLD_RETRY_MS = 60_000;
+/** Parked projections are retried for this long (a fix may take a while to ship). */
+export const REFOLD_MAX_AGE_MS = 24 * 60 * 60_000;
 const BACKOFF_MAX_MS = 60_000;
 /** Bets re-folded per tick by retryRejected. */
 const REFOLD_BATCH = 5;
@@ -77,6 +80,7 @@ export interface StreamGapOptions {
   maxAgeMs?: number;
   batch?: number;
   refoldRetryMs?: number;
+  refoldMaxAgeMs?: number;
 }
 
 type Deps = Pick<AppDeps, 'db' | 'hub' | 'now' | 'log'>;
@@ -158,10 +162,25 @@ export class StreamGapReconciler {
           this.backoff.set(sig, { at: nowMs + maxAge, delay: BACKOFF_MAX_MS });
           continue;
         }
-        const res = await ingestChainEvents(deps, this.projector, events, {
-          deliveryId: `rpc_poll:${tx.slot ?? '-'}`,
-          source: 'rpc_poll',
-        });
+        const delivery = { deliveryId: `rpc_poll:${tx.slot ?? '-'}`, source: 'rpc_poll' as const };
+        let res;
+        try {
+          res = await ingestChainEvents(deps, this.projector, events, delivery);
+        } catch (err) {
+          if (isTransientDbError(err)) throw err;
+          // Deterministic (a projector bug): keep the rows, as the webhook does, so retryRejected
+          // finishes them after a fix instead of the copy being lost.
+          const kept = await storeUnprojected(deps, events, delivery, isTransientDbError);
+          deps.log.error('chain.rpc_poll_projector_failed', {
+            alert: true,
+            bet_id: r.bet_id,
+            kind: r.kind,
+            err,
+            ...kept,
+          });
+          this.backoff.delete(sig);
+          continue;
+        }
         this.backoff.delete(sig);
         out.ingested += res.inserted;
         out.published += res.published;
@@ -182,7 +201,7 @@ export class StreamGapReconciler {
   /** Re-folds bets whose projection is parked as rejected / failed (see the header). */
   async retryRejected(deps: Deps, nowMs: number): Promise<number> {
     const every = this.o.refoldRetryMs ?? REFOLD_RETRY_MS;
-    const maxAge = this.o.maxAgeMs ?? RPC_POLL_MAX_AGE_MS;
+    const maxAge = this.o.refoldMaxAgeMs ?? REFOLD_MAX_AGE_MS;
     for (const [bet, at] of this.refoldAt) if (at < nowMs - maxAge) this.refoldAt.delete(bet);
     const waiting = [...this.refoldAt].filter(([, at]) => at > nowMs).map(([bet]) => bet);
     const rows = await deps.db

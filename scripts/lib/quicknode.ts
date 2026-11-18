@@ -508,14 +508,31 @@ export async function createStream(
       `a Stream named "${body.name}" already exists (${same.map((s) => String(s['id'])).join(', ')}). ` +
         'Resume it (npm run qn-stream -- resume <id>) or pass --replace.',
     );
-  for (const s of same) {
-    io.log(`deleting the old Stream ${String(s['id'])} (--replace)`);
-    await call(req.delete(String(s['id'])));
+  const deleteOld = async () => {
+    for (const s of same) {
+      io.log(`deleting the old Stream ${String(s['id'])} (--replace)`);
+      await call(req.delete(String(s['id'])));
+    }
+    same.length = 0;
+  };
+  // --replace creates the new Stream FIRST, so a refused create never leaves us with none. Only
+  // if QuickNode refuses a second Stream of that name is the old one deleted before retrying.
+  let created: Record<string, unknown>;
+  try {
+    created = (await call(req.create(body))) as Record<string, unknown>;
+  } catch (e) {
+    const nameTaken =
+      e instanceof QnApiError &&
+      (e.status === 409 || (e.status < 500 && /exist|duplicate|already|unique/i.test(e.message)));
+    if (!same.length || !nameTaken) throw e; // a bad body: the old Stream stays untouched
+    io.log(`create refused next to the old Stream (HTTP ${e.status}); replacing it instead`);
+    await deleteOld();
+    created = (await call(req.create(body))) as Record<string, unknown>;
   }
-  const created = (await call(req.create(body))) as Record<string, unknown>;
   const id = typeof created['id'] === 'string' ? created['id'] : '';
   if (!id) throw new Error(`create returned no id: ${JSON.stringify(redact(created))}`);
   io.log(`created ${id} (paused)`);
+  await deleteOld();
 
   // 3. the token the Stream will sign with must be the one the server verifies
   const returned = tokenOf(created);

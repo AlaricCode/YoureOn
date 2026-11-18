@@ -201,6 +201,47 @@ describeDb('StreamGapReconciler over Postgres', () => {
     expect((await eventsOfBet(h.db, f.bet_id)).every((e) => e.apply_error === null)).toBe(true);
   });
 
+  it('a projector bug on the rpc_poll path keeps the rows (projector_failed); the retry finishes them', async () => {
+    const f = betFacts();
+    const L = lifecycle(f);
+    await mkBetRow(h.db, f, { partyA: A, partyB: B, state: 'AWAITING_LOCK' });
+    const lockSig = randomSig();
+    await mkLockTx(h.db, f.bet_id, lockSig, 'sent');
+    chain.set(
+      lockSig,
+      landed(lockSig, [
+        { outer: 3, name: 'BetCreated', payload: L.created() },
+        { outer: 4, name: 'BetAccepted', payload: L.accepted() },
+      ]),
+    );
+    const buggy = new StreamGapReconciler({
+      projector: {
+        apply: async () => {
+          throw new TypeError('bug in this build');
+        },
+      },
+    });
+    await buggy.run(deps, rt, Date.now() + 6_000);
+    expect((await eventsOfBet(h.db, f.bet_id)).map((e) => [e.source, e.apply_error])).toEqual([
+      ['rpc_poll', 'projector_failed'],
+      ['rpc_poll', 'projector_failed'],
+    ]);
+    // the fixed build's keeper: nothing to poll any more (the rows exist), the retry pass applies
+    const fixed = new StreamGapReconciler();
+    const r = await fixed.run(deps, rt, Date.now() + 7_000);
+    expect(r.refolded).toBeGreaterThanOrEqual(1);
+    expect(await betRow(h.db, f.bet_id)).toMatchObject({
+      state: 'LOCKED',
+      onchain_status: 'locked',
+    });
+    expect((await logOf(h.db, f.bet_id)).map((e) => e.type)).toEqual([
+      'chain.BetCreated',
+      'chain.BetAccepted',
+      'bet.state',
+      'judge.cue',
+    ]);
+  });
+
   it('without a chain runtime the gap-fill pass is skipped (the retry pass still runs)', async () => {
     const r = await new StreamGapReconciler().run(deps, null, Date.now() + 6_000);
     expect(r).toMatchObject({ polled: 0, ingested: 0, missing: 0 });

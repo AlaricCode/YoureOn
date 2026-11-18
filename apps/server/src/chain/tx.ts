@@ -348,7 +348,9 @@ export function rpcChainClient(
             rewards: false,
           })
           .send();
-        blockHeight = b ? Number(b.blockHeight) : null;
+        // (blockHeight can be null on old blocks: unknown, never 0)
+        blockHeight =
+          b?.blockHeight === null || b?.blockHeight === undefined ? null : Number(b.blockHeight);
       } catch {
         blockHeight = null;
       }

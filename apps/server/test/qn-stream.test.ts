@@ -51,6 +51,10 @@ class FakeStreams {
   /** Makes create answer with a different security_token (QuickNode replaced ours). */
   replaceToken: string | null = null;
   listShape: 'data' | 'array' = 'data';
+  /** QuickNode refusing a second Stream with the same name (409). */
+  uniqueNames = false;
+  /** Every create answers this status (a body QuickNode rejects). */
+  rejectCreate: number | null = null;
 
   async handle(u: URL, init: RequestInit): Promise<Response> {
     const method = init.method ?? 'GET';
@@ -70,9 +74,13 @@ class FakeStreams {
       return json(200, this.listShape === 'data' ? { data: all, pageInfo: {} } : all);
     }
     if (!id && method === 'POST') {
+      if (this.rejectCreate)
+        return json(this.rejectCreate, { message: 'dataset_batch_size invalid' });
       const b = body as Record<string, unknown> & {
         destination_attributes: Record<string, unknown>;
       };
+      if (this.uniqueNames && [...this.streams.values()].some((x) => x['name'] === b['name']))
+        return json(409, { message: 'a stream with this name already exists' });
       const s = {
         ...b,
         id: randomUUID(),
@@ -342,7 +350,7 @@ describe('webhook probe + flows against the real webhook route and a fake Stream
     expect(resumed['status']).toBe('active');
   });
 
-  it('a Stream with the same name is refused unless --replace (which deletes it first)', async () => {
+  it('a Stream with the same name is refused unless --replace (create first, then delete the old)', async () => {
     reset();
     const file = join(tmp(), 'qn.env');
     const token = resolveToken({}, file)!.token;
@@ -360,6 +368,33 @@ describe('webhook probe + flows against the real webhook route and a fake Stream
     });
     expect(fake.streams.has(first.id)).toBe(false);
     expect([...fake.streams.keys()]).toEqual([second.id]);
+    const order = fake.calls
+      .slice(-5)
+      .map((c) => `${c.method} ${c.path.replace(second.id, ':new').replace(first.id, ':old')}`);
+    expect(order).toEqual([
+      'GET /streams/rest/v1/streams',
+      'POST /streams/rest/v1/streams',
+      'DELETE /streams/rest/v1/streams/:old',
+      'POST /streams/rest/v1/streams/:new/activate',
+      'GET /streams/rest/v1/streams/:new',
+    ]);
+    // a body QuickNode rejects: the old Stream is left alone (delivery never stops)
+    fake.rejectCreate = 422;
+    await expect(
+      createStream(io(), { baseUrl: BASE, tokenFile: file, replace: true, filterJs: FILTER_JS }),
+    ).rejects.toThrow(/HTTP 422/);
+    expect([...fake.streams.keys()]).toEqual([second.id]);
+    // names unique on QuickNode's side: the old one goes first, then the create is retried
+    fake.rejectCreate = null;
+    fake.uniqueNames = true;
+    const third = await createStream(io(), {
+      baseUrl: BASE,
+      tokenFile: file,
+      replace: true,
+      filterJs: FILTER_JS,
+    });
+    expect([...fake.streams.keys()]).toEqual([third.id]);
+    expect(third.stream['status']).toBe('active');
   });
 
   it('QuickNode answering with a different token: saved to the file, the Stream stays paused', async () => {
