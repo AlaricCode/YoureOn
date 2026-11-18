@@ -106,6 +106,12 @@ export interface ChainClient {
   /** Sum of every token account of `owner` for `mint` (API-CONTRACT §2.14). */
   tokenBalanceByOwner(owner: Address, mint: Address): Promise<bigint>;
   lamports(addr: Address): Promise<bigint>;
+  /**
+   * The wire bytes of a transaction that landed and succeeded (`confirmed`), else null
+   * (unknown, failed, pruned). Optional: the settlement evidence reads a closed bet's resolve
+   * args from it (markets/onchain.ts).
+   */
+  transactionBytes?(sig: string): Promise<Uint8Array | null>;
 }
 
 /** The RPC rejected the tx at preflight (nothing landed, no fee). */
@@ -290,6 +296,17 @@ export function rpcChainClient(
     async lamports(addr) {
       const { value } = await rpc.getBalance(addr, { commitment: 'confirmed' }).send();
       return value;
+    },
+    async transactionBytes(sig) {
+      const res = await rpc
+        .getTransaction(sig as Signature, {
+          encoding: 'base64',
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        })
+        .send();
+      if (!res || res.meta?.err) return null;
+      return new Uint8Array(getBase64Encoder().encode(res.transaction[0]));
     },
   };
 }

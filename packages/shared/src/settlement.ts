@@ -258,12 +258,17 @@ export const SettlementEvidence = z.object({
   ruling_hash: Hex32,
   /** Gemini's response body byte for byte (UTF-8), when this record's fetch is the one kept. */
   raw_body: z.string().nullable(),
-  /** What the resolve tx put on chain (null until RULED). */
+  /**
+   * What the resolve put on chain, as the server read it from the chain (null until RULED, or
+   * when the chain can't be read): `source` is the open Bet account, or the confirmed resolve
+   * transaction's instruction data once finalize + close_bet closed the account.
+   */
   onchain: z
     .object({
       evidence_hash: Hex32.nullable(),
       ruling_hash: Hex32.nullable(),
       resolve_signature: Signature.nullable(),
+      source: z.enum(['bet_account', 'resolve_tx']).optional(),
     })
     .nullable(),
   verification: z.object({ ok: z.boolean(), checks: z.record(z.string(), z.boolean()) }),

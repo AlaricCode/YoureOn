@@ -548,7 +548,17 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
       settlementValue: '64367.38366666667',
     });
     // The evidence chain, re-checked end to end: Gemini's bytes -> record -> ruling -> chain.
+    // The on-chain links come from the chain: a bets row that disagrees does not change them.
+    const rowHashes = await betRow(betId);
+    await ctx.deps.db
+      .update(bets)
+      .set({ evidence_hash: 'ff'.repeat(32), ruling_hash: 'ee'.repeat(32) })
+      .where(eq(bets.id, betId));
     const ev = await get(B, `/v1/bets/${betId}/settlement`);
+    await ctx.deps.db
+      .update(bets)
+      .set({ evidence_hash: rowHashes.evidence_hash, ruling_hash: rowHashes.ruling_hash })
+      .where(eq(bets.id, betId));
     expect(ev.status).toBe(200);
     const evidence = SettlementEvidence.parse(ev.json);
     expect(evidence.raw_body).toBe(JSON.stringify(F.event_0240_settled));
@@ -566,9 +576,12 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
       },
     });
     const onchain = await onchainBet(betId);
-    expect(evidence.onchain?.evidence_hash).toBe(
-      Buffer.from(onchain!.evidenceHash).toString('hex'),
-    );
+    // read from the open Bet account itself, not from the bets row
+    expect(evidence.onchain).toMatchObject({
+      source: 'bet_account',
+      evidence_hash: Buffer.from(onchain!.evidenceHash).toString('hex'),
+      ruling_hash: Buffer.from(onchain!.rulingHash).toString('hex'),
+    });
     expect(evidence.onchain?.resolve_signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]{64,88}$/);
     await finalizeAfterWindow(betId, 'PAID');
     // B wins the whole $10 pot: A's $6.10 on top of B's own $3.90
@@ -612,10 +625,21 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
     await phonesSign(betId);
     await expectAwaitingMarket(betId, res);
 
-    const { ruling } = await settleWith(betId, voided(), 9_000);
+    const { ruling, record } = await settleWith(betId, voided(), 9_000);
     expect(ruling).toMatchObject({ outcome: 'VOID', void_reason: 'market_invalid' });
     expect((await betRow(betId)).outcome).toBe('refund');
     await finalizeAfterWindow(betId, 'VOIDED');
+    // the Bet account is closed now: the evidence chain reads the resolve tx's own arguments
+    const ev = SettlementEvidence.parse((await get(A, `/v1/bets/${betId}/settlement`)).json);
+    expect(ev.onchain).toMatchObject({
+      source: 'resolve_tx',
+      evidence_hash: hashJcs(record),
+      ruling_hash: hashJcs(ruling),
+    });
+    expect(ev.verification).toMatchObject({
+      ok: true,
+      checks: { onchain_evidence: true, onchain_ruling: true },
+    });
     // each side got exactly its own (unequal) stake back
     expect(await usdc(signerA.address)).toBe(a0);
     expect(await usdc(signerB.address)).toBe(b0);

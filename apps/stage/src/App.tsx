@@ -156,9 +156,18 @@ function outcomeLine(b: BetView): string {
 /** The stage's own re-check of a Gemini bet's evidence chain (verifySettlement). */
 export interface Verification {
   ok: boolean;
-  /** The on-chain hashes were part of it (the resolve landed). */
+  /** Gemini's raw response body was part of it (it hashed to the record's response_sha256). */
+  body: boolean;
+  /** The on-chain hashes were part of it (the resolve landed; read from the chain). */
   onchain: boolean;
   failed: string[];
+}
+
+/** "Gemini's response → record → on-chain evidence": only the links that were checked. */
+export function verifiedChain(v: Pick<Verification, 'body' | 'onchain'>): string {
+  return [v.body && "Gemini's response", 'record', v.onchain ? 'on-chain evidence' : 'ruling']
+    .filter(Boolean)
+    .join(' → ');
 }
 
 /** Re-runs the shared verifySettlement over GET /v1/bets/:id/settlement (never trusts its `ok`). */
@@ -176,6 +185,7 @@ export function verifyEvidence(bet: BetView, ev: SettlementEvidence): Verificati
   });
   return {
     ok: v.ok,
+    body: v.checks.body_matches_record === true,
     onchain: v.checks.onchain_evidence === true && v.checks.onchain_ruling === true,
     failed: Object.entries(v.checks)
       .filter(([, good]) => !good)
@@ -285,9 +295,7 @@ export function MarketPanel({
           {verification && (
             <p className={`market-evidence ${verification.ok ? 'good' : 'bad'}`}>
               {verification.ok
-                ? verification.onchain
-                  ? "✓ verified: Gemini's response → record → on-chain evidence"
-                  : "✓ verified: Gemini's response → record → ruling"
+                ? `✓ verified: ${verifiedChain(verification)}`
                 : `✗ evidence mismatch: ${verification.failed.join(', ')}`}
             </p>
           )}

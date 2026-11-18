@@ -5,6 +5,9 @@
 //   GeminiSettlementRecord --hashJcs--> evidence_hash  (on chain at resolve)
 //   settlement Ruling (commits to evidence_hash) --hashJcs--> ruling_hash  (on chain at resolve)
 //   ruling.outcome = settlementOutcome(record, the line bound into the terms)
+// `onchain` is read from the chain (markets/onchain.ts: the Bet account, or the resolve tx once
+// the account is closed), never from bets.evidence_hash / ruling_hash: those are the server's own
+// copy of what it sent. null when the bet is not resolved yet or the chain can't be read.
 // The server runs the shared verifySettlement over exactly what it returns; clients can rerun it.
 // 404 (not 403) for a bet the caller can't see, as GET /v1/bets/:id.
 import { and, desc, eq } from 'drizzle-orm';
@@ -13,9 +16,11 @@ import { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { Ruling } from '@youre-on/shared/ruling';
 import { verifySettlement, type SettlementEvidence } from '@youre-on/shared/settlement';
-import type { AppDeps, AuthContext } from '../context';
+import type { AuthContext } from '../context';
 import { HttpError } from '../errors';
+import type { LifecycleDeps } from '../lock/common';
 import { loadEnvelope } from '../lock/terms';
+import { readOnchainResolve } from './onchain';
 
 function canRead(auth: AuthContext, bet: typeof bets.$inferSelect): boolean {
   if (auth.scopes.includes('app') && auth.user_id !== null)
@@ -24,7 +29,7 @@ function canRead(auth: AuthContext, bet: typeof bets.$inferSelect): boolean {
 }
 
 export async function settlementEvidence(
-  deps: Pick<AppDeps, 'db'>,
+  deps: LifecycleDeps,
   auth: AuthContext,
   betId: string,
 ): Promise<SettlementEvidence> {
@@ -60,14 +65,19 @@ export async function settlementEvidence(
     )
     .orderBy(desc(chainTxs.rpc_confirmed_at))
     .limit(1);
-  const onchain =
-    bet.evidence_hash || bet.ruling_hash
-      ? {
-          evidence_hash: bet.evidence_hash,
-          ruling_hash: bet.ruling_hash,
-          resolve_signature: resolve?.signature ?? null,
-        }
+  // Only once the server saw its resolve confirm (RULED or later) is there anything to read.
+  const read =
+    bet.ruling_hash || resolve
+      ? await readOnchainResolve(deps, betId, resolve?.signature ?? null)
       : null;
+  const onchain = read
+    ? {
+        evidence_hash: read.evidence_hash,
+        ruling_hash: read.ruling_hash,
+        resolve_signature: resolve?.signature ?? null,
+        source: read.source,
+      }
+    : null;
   const verification = verifySettlement({
     record,
     evidence_hash: row.evidence_hash,
