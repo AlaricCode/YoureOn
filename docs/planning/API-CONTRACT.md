@@ -936,7 +936,7 @@ Grammar:
 
 | Event | Voice | Line (`packages/shared/src/stage-voice.ts`, the same words on server and stage) |
 |---|---|---|
-| `ruling.issued` | judge | `Jake wins. <reason>`; REDO `Run it back. <reason>`; VOID why, then `It's void: both stakes go back.`; a Gemini settlement starts `Gemini settles it.` |
+| `ruling.issued` | judge | `Jake wins. <reason>`; REDO `Run it back. <reason>` (said once: a reason that already says "Run it back", as the server's own REDO reasons do, is read as it is); VOID why, then `It's void: both stakes go back.`; a Gemini settlement starts `Gemini settles it.` |
 | `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
 | `appeal.vote` | `seat_1` … `seat_3` | `Judge 2, GPT, votes Logan. <reason>` / `Judge 3, Gemini, abstains.` |
 
