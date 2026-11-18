@@ -31,6 +31,7 @@ import {
   MarketTermsResponse,
   MARKET_CONFIRM_MAX_AGE_MS,
 } from '@youre-on/shared/judge/market-terms';
+import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import { termsConfirmPath } from '@youre-on/shared/judge/typed-terms';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { Ruling, GEMINI_SETTLEMENT_MODEL } from '@youre-on/shared/ruling';
@@ -46,6 +47,7 @@ import {
   SETTLE_SWEEP_EVERY_MS,
 } from '../src/markets/settlement';
 import { confirmTerms } from '../src/lock/terms';
+import { realWorldReply } from '../src/markets/voice-tool';
 import { silentLogger } from '../src/log';
 import {
   clone,
@@ -852,6 +854,46 @@ describeDb(
       expect(
         (await postJson(ctx.base, '/v1/demo/gemini', { feed: 'live' }, admin)).json,
       ).toMatchObject({ feed: 'live' });
+    });
+
+    it('voice propose_terms for a real_world bet speaks Gemini’s split (or its refusal) at once', async () => {
+      const args = {
+        type: 'real_world',
+        claim: 'Bitcoin finishes the current five-minute round at or above the line.',
+        performer: 'none',
+        yes_party: 'A',
+        attempts: { count: 1, rule: 'single' },
+        success_criteria: ['Gemini settles the five-minute Bitcoin contract at or above its line.'],
+        failure_criteria: [],
+        edge_cases: [],
+        amount_usd: '5',
+        market_side: 'YES',
+        deadline_minutes: 0,
+      };
+      const ev = evaluateProposeTerms(args, { realWorldEnabled: true });
+      const template = proposeTermsReply(ev, { rev: 1 });
+      expect(template.say).toContain('Gemini sets the odds');
+      expect(realWorldReply(ctx.deps, ev, template)).toEqual({
+        ...template,
+        say: 'Bitcoin finishes the current five-minute round at or above the line. Gemini prices it 61/39: $6.10 against $3.90.',
+      });
+      // skill bets, refusals and invalid calls pass through untouched
+      const skill = evaluateProposeTerms({ ...args, type: 'skill', performer: 'B' }, {});
+      expect(realWorldReply(ctx.deps, skill, { ok: true, say: 'x' })).toEqual({
+        ok: true,
+        say: 'x',
+      });
+      // a stale snapshot keeps the template (the sink refetches for the binding quote)
+      clock.t += 10_000;
+      expect(realWorldReply(ctx.deps, ev, template)).toBe(template);
+      // too late for this round: refused now, with the next window
+      clock.t = Date.parse('2026-11-18T02:38:30.000Z');
+      await markets.refresh();
+      expect(realWorldReply(ctx.deps, ev, template)).toEqual({
+        ok: false,
+        fix: 'TOO_CLOSE_TO_EXPIRY',
+        say: 'Too late for this round. The next one opens at 02:40 UTC.',
+      });
     });
 
     it('a bet that left AWAITING_MARKET (e.g. RULED) is skipped and forgotten', async () => {
