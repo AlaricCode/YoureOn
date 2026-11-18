@@ -1,7 +1,8 @@
 // Beats 4-6 and the judge cam:
 //   LiveScreen      after the lock: Locked → filming (try n) → judging (ARCHITECTURE §3.4)
-//   JudgeCamScreen  the third phone: "3-2-1, Go", record up to 6 s with a big Stop, send the
-//                   frames (TASKS D3-M1)
+//   JudgeCamScreen  the phone that films: the judge cam (a third phone), or with two phones the
+//                   non-performer's own. "3-2-1, Go", record up to 6 s (video only, the mic
+//                   stays with the voice judge) with a big Stop, send the frames (TASKS D3-M1)
 //   RulingScreen    the ruling with the 10 s window; the loser gets GG (tap + Face ID) and, on
 //                   camera bets, "I appeal!" until 1 s before the window ends (D3-M2, D4-M3)
 //   RedoScreen      "Run it back" with one filming tip (D3-M2)
@@ -14,6 +15,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
 import { hasCameraLens } from '../device/camera';
 import {
@@ -67,7 +69,10 @@ export function LiveScreen({
   view: BetView;
   phase: LivePhase;
   attemptNo: number;
-  /** A's phone: the "Start" fallback for the judge's request_attempt (API-CONTRACT §2.9). */
+  /**
+   * The non-performer's phone: "Start" (also the fallback for the judge's request_attempt). With
+   * no judge cam in the room this phone films (API-CONTRACT §2.9, ../attempt/recorder).
+   */
   onStart?: (() => void) | undefined;
   startBusy?: boolean;
   tag?: string | undefined;
@@ -297,10 +302,7 @@ export function JudgeCamScreen({
             <CameraView
               ref={cam}
               style={StyleSheet.absoluteFill}
-              facing="back"
-              mode="video"
-              mute
-              videoQuality="720p"
+              {...RECORDING_CAMERA}
               onCameraReady={() => {
                 setReady(true);
                 void hasCameraLens(cam.current).then((ok) => setNoCamera(!ok));
