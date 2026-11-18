@@ -554,17 +554,16 @@ export function instrumentChainClient(
 /** The real client over a kit RPC (QuickNode devnet in production, a local validator in e2e). */
 export function rpcChainClient(
   url: string,
-  rpc?: Rpc<SolanaRpcApi>,
+  given?: Rpc<SolanaRpcApi>,
   stats: RpcStats = new RpcStats(),
 ): ChainClient {
-  rpc ??= createRetryingSolanaRpc(url, { stats });
-  const kit = rpc;
+  const rpc = given ?? createRetryingSolanaRpc(url, { stats });
   let cluster: Promise<'devnet' | 'localnet'> | null = null;
   return {
     label: redactUrl(url),
     rpcStats: () => stats.snapshot(),
     async programAccounts(program, filters) {
-      const res = await kit
+      const res = await rpc
         .getProgramAccounts(program, {
           commitment: 'confirmed',
           encoding: 'base64',
@@ -587,7 +586,7 @@ export function rpcChainClient(
       }));
     },
     assertSafeCluster() {
-      cluster ??= kit
+      cluster ??= rpc
         .getGenesisHash()
         .send()
         .then((g) => {
@@ -598,11 +597,11 @@ export function rpcChainClient(
       return cluster;
     },
     async latestBlockhash() {
-      const { value } = await kit.getLatestBlockhash({ commitment: 'confirmed' }).send();
+      const { value } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
       return { blockhash: value.blockhash, lastValidBlockHeight: value.lastValidBlockHeight };
     },
     async simulate(wire, replaceRecentBlockhash) {
-      const { value } = await kit
+      const { value } = await rpc
         .simulateTransaction(wire, {
           encoding: 'base64',
           sigVerify: false,
@@ -614,7 +613,7 @@ export function rpcChainClient(
     },
     async send(wire, skipPreflight) {
       try {
-        await kit
+        await rpc
           .sendTransaction(
             wire,
             skipPreflight
@@ -646,7 +645,7 @@ export function rpcChainClient(
         for (let i = 0; i < 2; i++) {
           let st: unknown;
           try {
-            const { value } = await kit
+            const { value } = await rpc
               .getSignatureStatuses([sig], { searchTransactionHistory: true })
               .send();
             st = value[0] ?? null;
@@ -660,7 +659,7 @@ export function rpcChainClient(
       }
     },
     async signatureStatus(sig, o) {
-      const { value } = await kit
+      const { value } = await rpc
         .getSignatureStatuses(
           [sig as Signature],
           o?.searchHistory ? { searchTransactionHistory: true } : undefined,
@@ -670,10 +669,10 @@ export function rpcChainClient(
       return st ? { err: st.err, confirmationStatus: st.confirmationStatus, slot: st.slot } : null;
     },
     async blockHeight() {
-      return kit.getBlockHeight({ commitment: 'confirmed' }).send();
+      return rpc.getBlockHeight({ commitment: 'confirmed' }).send();
     },
     async getAccount(addr) {
-      const { value } = await kit
+      const { value } = await rpc
         .getAccountInfo(addr, { commitment: 'confirmed', encoding: 'base64' })
         .send();
       if (!value) return null;
@@ -684,7 +683,7 @@ export function rpcChainClient(
       };
     },
     async tokenBalanceByOwner(owner, mint) {
-      const { value } = await kit
+      const { value } = await rpc
         .getTokenAccountsByOwner(
           owner,
           { mint },
@@ -701,7 +700,7 @@ export function rpcChainClient(
       return sum;
     },
     async lamports(addr) {
-      const { value } = await kit.getBalance(addr, { commitment: 'confirmed' }).send();
+      const { value } = await rpc.getBalance(addr, { commitment: 'confirmed' }).send();
       return value;
     },
   };
