@@ -173,7 +173,17 @@ rebuilds it), so the model test skips too; with the model present it is 827 + 1 
 
 ### Beat 6 (Gemini BTC 5-minute closer)
 
-> **TODO (Beat 6 live run):** not measured yet. Record a live Gemini round end to end on the deployed
-> server: quote → lock → `AWAITING_MARKET` → Gemini settles → `resolve` → GG or `finalize`, with the
-> contract ticker, the odds, expiry → settled, settled → `resolve` confirmed, and the Explorer links.
-> Driver: `npm run cp1-drive -- --base-url https://youre-on.fly.dev --market up --through paid [--gg]`.
+Live on 2026-11-18 against the deployed server (`npm run cp1-drive -- --base-url https://youre-on.fly.dev --market down --amount 2 --through paid`):
+
+- Contract `BTC05M2611180835` (expiry 08:35 UTC). A quoted DOWN at 0.53 (Gemini mid): stakes A $1.88 / B $2.12. Binding snapshot sha256 `ec5b7cd8a6626b1f580bc68c69c9d7f1401bd9fb6d13f6ba238f7921016eea2d`.
+- Confirm → `AWAITING_MARKET` (locked) in 4537 ms. Lock: [`4t9wP5ht…`](https://explorer.solana.com/tx/4t9wP5htPThcqYT6riWpbkqJA2zxuTEWcTq7ALVA5oVxFKrVgpYEvFEg3M8a1Nz9Ejd2LFkRXrGQjMTBdPKRpLkE?cluster=devnet).
+- Gemini settled DOWN: BTC 64,665.71 below the 64,684.59 line. The settlement ruling (`rule/gemini-settlement@1`, A_WINS) went on chain with evidence hash `ca291532…`. Resolve: [`5v68hm8p…`](https://explorer.solana.com/tx/5v68hm8pRofXZDcGvjPyksmMuSPCTBwewxJFB29zHFUSnQivHXUSgu5FX4BfPDB5eqPsYvrhPrQDS9WypCeBzax5?cluster=devnet).
+- After the 10 s appeal window: finalize, PAID to A. Finalize: [`3vjg2iMd…`](https://explorer.solana.com/tx/3vjg2iMdkEKZaaQryi93DLKz1hWb7oK3MVc4foCUVKKXgeNvct21BUKPHYf5jtZd1HvDmRPkjMCqmgXQRHcNTzWt?cluster=devnet).
+
+### Beat 5 (appeal, live devnet)
+
+2026-11-18, `npm run cp1-drive -- --base-url https://youre-on.fly.dev --through paid --appeal`, with the runtime cached ruling switched on for a decisive B_WINS (`POST /v1/demo/toggles`), then off again:
+
+- Lock in 5638 ms. The cached ruling B_WINS resolved on chain. A appealed inside the 10 s window: [`4d53oi6F…`](https://explorer.solana.com/tx/4d53oi6F9qc6gWk1xtKV2xynsbJwbMoGdfwFThj8x9mx6uTFBjzcwXjpQrXpP331APbMEZFc9NwcnTNRm6FRBhFe?cluster=devnet).
+- Panel: the Claude seat (Opus 5.5) answered REDO in 2986 ms on the synthetic frames (counted as an abstention); the OpenAI and Google seats abstained (no keys on the server). No majority, so the ruling stood.
+- `resolve_appeal` paid B: [`4XevQ7To…`](https://explorer.solana.com/tx/4XevQ7TodjnCFN6kQXN7UpPPe6czky2Xe9st1kdR9qzjCuuNAV36dPQgw63c5mpiy6rQwyb1LmJU9QaKSyTLarJm?cluster=devnet).

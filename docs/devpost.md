@@ -29,10 +29,10 @@ an atomic durable-nonce lock), a Hono server on Fly with Postgres, an Expo iPhon
 projector page that shows the bet, the judge's words and every on-chain event live.
 
 Where it stands (2026-11-18): the escrow, the server, the atomic lock, the live Claude ruling and
-the GG / finalize payouts run on devnet (10/10 soak runs). The voice judge and the QuickNode Stream
-are built and waiting on their API keys, the iPhone app is waiting on its signed build, the
-Bitcoin closer is built and tested but not yet run live, and the spoken hearing and appeal panel
-are not built. See "Honest status" below.
+the GG / finalize payouts run on devnet (10/10 soak runs). The Bitcoin closer ran end to end on a
+real Gemini round, and the appeal (filing, panel, `resolve_appeal`) ran end to end on devnet. The
+voice judge and the QuickNode Stream are built and waiting on their API keys, the iPhone app is
+waiting on its signed build, and the spoken hearing is not built. See "Honest status" below.
 
 ## What problem does it solve?
 
