@@ -425,8 +425,18 @@ export async function matchInRoom(
       if (score === null) unreadable++;
       else scored.push({ id: r.user_id, score });
     }
-    if (unreadable > 0)
-      deps.log.warn('face.candidates_unreadable', { room_id: room.id, unreadable });
+    if (unreadable > 0) {
+      const fields = { room_id: room.id, unreadable, candidates: rows.length };
+      // Every candidate unreadable is almost always a replaced KEK (FACE_KEK_* set again with a
+      // new value): every scan then abstains ("No match") and nothing else shows it, so this is
+      // an error, visible in `fly logs | grep face`. Names and counts only, never key material.
+      if (unreadable === rows.length)
+        deps.log.error('face.candidates_unreadable', {
+          ...fields,
+          hint: 'no enrollment in this room decrypts: was FACE_KEK_* changed?',
+        });
+      else deps.log.warn('face.candidates_unreadable', fields);
+    }
     const decision = decideMatch(scored);
     scored.length = 0;
     if (decision.kind === 'abstain') return { match: null };

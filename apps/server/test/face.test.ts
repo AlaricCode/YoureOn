@@ -720,6 +720,124 @@ describeDb('face rate limits (§1.7)', () => {
   });
 });
 
+describeDb('a replaced face KEK (operator hazard)', () => {
+  it('logs face.candidates_unreadable at error level when no candidate in the room decrypts', async () => {
+    type Line = { level: string; msg: string; fields: Record<string, unknown> };
+    const lines: Line[] = [];
+    const capture =
+      (level: string) =>
+      (msg: string, fields: Record<string, unknown> = {}) =>
+        void lines.push({ level, msg, fields });
+    const log = {
+      debug: capture('debug'),
+      info: capture('info'),
+      warn: capture('warn'),
+      error: capture('error'),
+    };
+    /** A server whose face-kek-2026-11-a is `kek` (the same key_id, as after a rerun one-liner). */
+    async function boot(kek: string) {
+      const env = testEnv({ FACE_KEK_ACTIVE: 'face-kek-2026-11-a', FACE_KEK_2026_11_A: kek });
+      const dbHandle = createDb({ url: env.DATABASE_URL, max: 2 });
+      const { deps } = createDeps({ env, dbHandle, rateLimit: false, log });
+      const server = await startServer(deps, {
+        port: 0,
+        hostname: '127.0.0.1',
+        modules: routeModules,
+        onClose: () => dbHandle.close(),
+      });
+      const base = `http://127.0.0.1:${server.port}`;
+      const send = async (u: SignedUp, method: string, path: string, body: unknown) => {
+        const raw = JSON.stringify(body);
+        const res = await fetch(base + path, {
+          method,
+          headers: signedHeaders(u, method, path, raw),
+          body: raw,
+        });
+        return { status: res.status, json: (await res.json()) as Record<string, any> };
+      };
+      return { server, base, send };
+    }
+    const enrollBody = (v: Float32Array) => ({
+      consent: {
+        consent_version: 'face-consent-v1',
+        consent_text_sha256: FACE_CONSENT_V1_SHA256,
+        consent_at: new Date(Date.now() - 10_000).toISOString(),
+      },
+      liveness: { method: 'head_turn', passed_at: new Date(Date.now() - 1_000).toISOString() },
+      model: FACE_MODEL_W600K,
+      embedding: sealed(v),
+      shots: 3,
+    });
+    const scan = (v: Float32Array) => ({ probe: sealed(v), model: FACE_MODEL_W600K });
+    const unreadableLines = () => lines.filter((l) => l.msg === 'face.candidates_unreadable');
+
+    // Enrolled under the original key.
+    const first = await boot(Buffer.alloc(32, 1).toString('base64'));
+    const uid = (u: SignedUp) => u.session.user.user_id;
+    let A!: SignedUp, B!: SignedUp, C!: SignedUp, roomId!: string;
+    try {
+      A = await signUp(first.base, 'Kai');
+      B = await signUp(first.base, 'Lio');
+      C = await signUp(first.base, 'Mae');
+      const room = await first.send(A, 'POST', '/v1/rooms', { kind: 'session' });
+      roomId = room.json.room_id as string;
+      for (const u of [B, C])
+        expect(
+          (await first.send(u, 'POST', '/v1/rooms/join', { code: room.json.code })).status,
+        ).toBe(200);
+      expect(
+        (await first.send(B, 'POST', '/v1/face/enrollment', enrollBody(basis(80)))).status,
+      ).toBe(201);
+      expect(
+        (await first.send(C, 'POST', '/v1/face/enrollment', enrollBody(basis(81)))).status,
+      ).toBe(201);
+      const ok = await first.send(A, 'POST', `/v1/rooms/${roomId}/face-match`, scan(basis(80)));
+      expect(ok.json.match.user.user_id).toBe(uid(B));
+      expect(unreadableLines()).toEqual([]);
+    } finally {
+      await first.server.close();
+    }
+
+    // The same key_id with a new value: nothing in the room decrypts.
+    const second = await boot(Buffer.alloc(32, 2).toString('base64'));
+    try {
+      const path = `/v1/rooms/${roomId}/face-match`;
+      const miss = await second.send(A, 'POST', path, scan(basis(80)));
+      expect(miss.status).toBe(200);
+      expect(miss.json).toEqual({ match: null });
+      expect(unreadableLines()).toEqual([
+        {
+          level: 'error',
+          msg: 'face.candidates_unreadable',
+          fields: {
+            room_id: roomId,
+            unreadable: 2,
+            candidates: 2,
+            hint: expect.stringMatching(/FACE_KEK/),
+          },
+        },
+      ]);
+      // Re-enrolling under the new key fixes that person; the rest is only a warning now.
+      expect(
+        (await second.send(C, 'POST', '/v1/face/enrollment', enrollBody(basis(81)))).status,
+      ).toBe(201);
+      const hit = await second.send(A, 'POST', path, scan(basis(81)));
+      expect(hit.json.match.user.user_id).toBe(uid(C));
+      expect(unreadableLines().at(-1)).toEqual({
+        level: 'warn',
+        msg: 'face.candidates_unreadable',
+        fields: { room_id: roomId, unreadable: 1, candidates: 2 },
+      });
+      // No key material in any log line.
+      const all = JSON.stringify(lines);
+      expect(all).not.toContain(Buffer.alloc(32, 1).toString('base64'));
+      expect(all).not.toContain(Buffer.alloc(32, 2).toString('base64'));
+    } finally {
+      await second.server.close();
+    }
+  });
+});
+
 describeDb('face retention keeper task', () => {
   it('the face routes register face-retention on the server keeper', async () => {
     const env = testEnv();
