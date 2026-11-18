@@ -929,10 +929,13 @@ const hhmmss = (iso: string) => {
 export function Ticker({ state }: { state: TickerState }) {
   const custodial = useCustodial();
   const rows = tickerRows(state);
+  // the header names the source truthfully: Streams only once a chain event actually came
+  const streamed = state.events.some((e) => e.source === 'chain');
   return (
     <section aria-label="ticker" className="ticker">
       <h2>
-        On-chain · devnet <span className="muted">via QuickNode Streams</span>
+        On-chain · devnet{' '}
+        <span className="muted">{streamed ? 'via QuickNode Streams' : 'via Solana RPC'}</span>
       </h2>
       {state.errors.length > 0 && (
         <ul className="errors">
