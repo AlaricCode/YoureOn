@@ -63,20 +63,18 @@ function testPatternStream(label: string): MediaStream {
   const g = c.getContext('2d');
   if (!g || typeof c.captureStream !== 'function')
     throw Object.assign(new Error('unsupported'), { name: 'Unsupported' });
-  const hue = label.startsWith('Phone B') ? 268 : 45;
   const t0 = performance.now();
   const stream = c.captureStream(24);
   const track = stream.getVideoTracks()[0];
+  // Obsidian, monochrome: black, white type, grey hairlines; green only for the moving ring
+  const sans = 'Geist, system-ui, sans-serif';
   const draw = () => {
     const t = (performance.now() - t0) / 1000;
     const { width: w, height: h } = c;
-    const bg = g.createLinearGradient(0, 0, 0, h);
-    bg.addColorStop(0, `hsl(${hue} 45% 16%)`);
-    bg.addColorStop(1, '#05060a');
-    g.fillStyle = bg;
+    g.fillStyle = '#000000';
     g.fillRect(0, 0, w, h);
     // grid
-    g.strokeStyle = 'rgb(255 255 255 / 0.07)';
+    g.strokeStyle = '#1c1c1f';
     g.lineWidth = 1;
     for (let x = 0; x <= w; x += 45) {
       g.beginPath();
@@ -92,44 +90,45 @@ function testPatternStream(label: string): MediaStream {
     }
     // status bar
     const d = new Date();
-    g.fillStyle = '#f6f7fa';
-    g.font = '600 26px system-ui, sans-serif';
+    g.fillStyle = '#ffffff';
+    g.font = `600 26px ${sans}`;
     g.textAlign = 'left';
     g.fillText(`${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`, 44, 58);
     g.textAlign = 'right';
     g.fillText('5G ▮▮▮', w - 40, 58);
     // the moving sweep: a frozen feed stops moving
     const sweep = ((t * 0.35) % 1) * h;
-    g.fillStyle = `hsl(${hue} 90% 60% / 0.18)`;
+    g.fillStyle = 'rgb(255 255 255 / 0.06)';
     g.fillRect(0, sweep - 30, w, 60);
-    // center ring
+    // center ring: a grey track and a green arc that turns
     const r = 120 + Math.sin(t * 2) * 10;
-    g.strokeStyle = `hsl(${hue} 95% 62%)`;
-    g.lineWidth = 10;
+    g.lineWidth = 6;
+    g.strokeStyle = '#1c1c1f';
     g.beginPath();
     g.arc(w / 2, h * 0.42, r, 0, Math.PI * 2);
     g.stroke();
-    g.fillStyle = `hsl(${hue} 95% 62%)`;
+    g.strokeStyle = '#00d47a';
+    g.lineCap = 'round';
     g.beginPath();
-    g.arc(w / 2, h * 0.42, 14, t * 2, t * 2 + Math.PI * 1.5);
-    g.lineTo(w / 2, h * 0.42);
-    g.fill();
+    g.arc(w / 2, h * 0.42, r, t * 2, t * 2 + Math.PI * 1.2);
+    g.stroke();
+    g.lineCap = 'butt';
     // label
     const [slot, name] = label.split(' · ');
     g.textAlign = 'center';
-    g.fillStyle = '#f6f7fa';
-    g.font = '900 64px system-ui, sans-serif';
-    g.fillText((slot ?? label).toUpperCase(), w / 2, h * 0.68);
+    g.fillStyle = '#ffffff';
+    g.font = `600 64px ${sans}`;
+    g.fillText(slot ?? label, w / 2, h * 0.68);
     if (name) {
-      g.font = '700 40px system-ui, sans-serif';
-      g.fillStyle = `hsl(${hue} 95% 70%)`;
+      g.font = `500 40px ${sans}`;
+      g.fillStyle = '#8d8d93';
       g.fillText(name, w / 2, h * 0.68 + 56);
     }
-    g.font = '700 22px ui-monospace, Menlo, monospace';
-    g.fillStyle = 'rgb(246 247 250 / 0.6)';
-    g.fillText(`TEST PATTERN · ${t.toFixed(1)}s`, w / 2, h - 70);
+    g.font = `500 22px ${sans}`;
+    g.fillStyle = '#8d8d93';
+    g.fillText(`Test pattern · ${t.toFixed(1)}s`, w / 2, h - 70);
     // home indicator
-    g.fillStyle = 'rgb(246 247 250 / 0.8)';
+    g.fillStyle = 'rgb(255 255 255 / 0.8)';
     g.beginPath();
     g.roundRect(w / 2 - 70, h - 26, 140, 8, 4);
     g.fill();
@@ -438,7 +437,7 @@ export function StatusRail({
       {caption && (
         <p className="rail-caption">
           <span className="label">
-            {caption.speaker === 'judge' ? 'JUDGE' : slotName(bet, caption.speaker)}
+            {caption.speaker === 'judge' ? 'Judge' : slotName(bet, caption.speaker)}
           </span>{' '}
           {caption.text}
         </p>

@@ -107,8 +107,8 @@ export function bottleFrame(attempt: 1 | 2, i: number): string {
     : '';
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120">` +
-    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#323848"/>` +
-    `<stop offset="1" stop-color="#161a22"/></linearGradient></defs>` +
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2e2e32"/>` +
+    `<stop offset="1" stop-color="#141416"/></linearGradient></defs>` +
     `<rect width="160" height="120" fill="url(#g)"/>` +
     `<rect y="90" width="160" height="30" fill="#6b4f35"/><rect y="90" width="160" height="2" fill="#8a6a4a"/>` +
     bottle +
