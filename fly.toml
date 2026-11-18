@@ -2,7 +2,7 @@
 # PENDING (window): the app name is fixed at `fly launch` (API-CONTRACT §1.1); Fly + Neon
 # accounts don't exist yet. Secrets go in `fly secrets set` (names: SETUP-CHECKLIST §7),
 # never here; [env] holds non-secret config only (TASKS K-08).
-app = "youre-on" # PENDING: replace with the name `fly launch` assigns
+app = "youre-on"
 primary_region = "dfw"
 
 [build]
@@ -13,11 +13,10 @@ primary_region = "dfw"
   PORT = "8080"
   LOCK_MODE = "atomic"
   DEMO_MODE = "false"
-  # Non-secret, filled at deploy once known (PENDING):
-  # PUBLIC_BASE_URL = "https://<app>.fly.dev"
-  # PROGRAM_ID = "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp" # = packages/shared ESCROW_ID; env.ts rejects any other value
-  # USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
-  # ELEVENLABS_AGENT_ID = "<agent id>"
+  PUBLIC_BASE_URL = "https://youre-on.fly.dev"
+  PROGRAM_ID = "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp" # = packages/shared ESCROW_ID; env.ts rejects any other value
+  USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  # ELEVENLABS_AGENT_ID = "<agent id>"  (set once scripts/el-agent.ts has created the agent)
 
 # Migrations are NOT run on deploy: they run from L's laptop over DATABASE_URL_DIRECT
 # (`npm run db:migrate -w packages/db`), which never lives on Fly (SETUP-CHECKLIST §7).
