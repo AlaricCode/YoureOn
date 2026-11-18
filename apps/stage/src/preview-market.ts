@@ -1,11 +1,17 @@
-// `?preview=market` on the stage URL: Beat 6 on sample frames (no server). A Gemini bet (Logan
+// `?preview=gemini` on the stage URL: Beat 6 on sample frames (no server). A Gemini bet (Logan
 // Up at 61/39) locked at `baseMs`, its contract expiring 75 s later, Gemini settling it DOWN 6 s
 // after that, so a rehearsal sees the live clock, the wait and the result in under 1.5 minutes.
 // Labelled PREVIEW in the header like `?preview`; never used when connected. The numbers are
 // Gemini's real BTC05M2611180240 round (line 64389.6, settled 64367.38366666667).
+// (`?preview=market` is preview.ts's frozen Beat 6 moment of the full loop, not this walk-through.)
 import { hashJcs } from '@youre-on/shared/jcs';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { applyFrame, initialTicker, type TickerState } from './ticker';
+
+/** The `?preview=` value that plays this sample (App.tsx). */
+export const MARKET_PREVIEW = 'gemini';
+/** The App rebuilds the sample once per slot: one relay tick (the fixture ticks every 2 s). */
+export const MARKET_PREVIEW_SLOT_MS = 2000;
 
 const BET = '0b8e5d2c-9a41-4f37-b6e2-5c1d0a9f8e73';
 const PK_A = 'E97T44N6hdDS7S8r6vDYGrFPzNb9uKJsg5Eecya3AR4';

@@ -226,23 +226,23 @@ describe('Beat 6 on the stage', () => {
     ).not.toContain('REPLAY');
   });
 
-  it('?preview=market walks through the clock, the wait and Gemini’s result', () => {
+  it('?preview=gemini walks through the clock, the wait and Gemini’s result', () => {
     const base = Date.parse('2026-11-19T00:41:00.000Z');
     const live = previewMarketState(base, base + 10_000);
     const bet = live.bets[live.focusBetId!]!;
     expect(bet.state).toBe('AWAITING_MARKET');
     expect(bet.envelope?.terms.market?.eventTicker).toBe('BTC05MPREVIEW');
     const now1 = base + 10_000;
-    const out1 = html(<StageView state={live} now={now1} preview />);
+    const out1 = html(<StageView state={live} now={now1} preview="gemini" />);
     expect(out1).toContain('PREVIEW');
     expect(out1).toContain('BTC 5-MIN · GEMINI');
     expect(out1).toContain('1:05'); // 75 s - 10 s to expiry
     const waiting = previewMarketState(base, base + 78_000);
-    expect(html(<StageView state={waiting} now={base + 78_000} preview />)).toContain(
+    expect(html(<StageView state={waiting} now={base + 78_000} preview="gemini" />)).toContain(
       'Waiting for Gemini to settle',
     );
     const done = previewMarketState(base, base + 90_000);
-    const out3 = html(<StageView state={done} now={base + 90_000} preview />);
+    const out3 = html(<StageView state={done} now={base + 90_000} preview="gemini" />);
     expect(out3).toContain('Gemini settled DOWN');
     expect(out3).toContain('Jake wins');
   });
