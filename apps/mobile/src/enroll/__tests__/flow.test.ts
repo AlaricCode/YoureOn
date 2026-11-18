@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { REQUEST_CLOCK_SKEW_MS } from '@youre-on/shared/api';
 
 import { FACE_MODEL } from '../../face/model';
 import {
@@ -11,6 +12,7 @@ import {
   makePrompts,
   plainEmbedding,
   problemLabel,
+  seriesEnrollmentRequest,
   SHOTS,
   type DetectedFace,
   type Shot,
@@ -22,7 +24,7 @@ import { createPreviewEmbedder } from '../embedder';
 const face = (yawAngle: number, pitchAngle = 0, width = 300): DetectedFace => ({
   yawAngle,
   pitchAngle,
-  bounds: { width, height: width },
+  bounds: { x: 0, y: 0, width, height: width },
   frameWidth: 1000,
 });
 
@@ -140,6 +142,45 @@ describe('enrollment request', () => {
     expect(enrollErrorLabel('FACE_CONSENT_REQUIRED')).toBe('Consent needed');
   });
 
+  describe('on a phone whose clock runs fast', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('stamps passed_at from the server-corrected clock, so the server accepts it', async () => {
+      const server = Date.parse('2026-11-20T16:00:00.000Z');
+      // The device clock is 5 minutes fast; rt.clock.now() corrects it back to server time.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(server + 5 * 60_000);
+      const now = () => Date.now() - 5 * 60_000;
+      const consent = await createPreviewFaceApi().getConsent();
+      const shots = [shot('ahead', 0, 1), shot('left', 25, 2), shot('right', -25, 3)];
+      const consentAt = new Date(now() - 20_000);
+
+      const req = seriesEnrollmentRequest({ consent, consentAt, shots, now });
+
+      expect(req.liveness.passed_at).toBe(new Date(server).toISOString());
+      expect(req.consent.consent_at).toBe(new Date(server - 20_000).toISOString());
+      // The server's rules (apps/server face/service enroll): neither time more than
+      // REQUEST_CLOCK_SKEW_MS ahead of server time, and the capture after consent.
+      for (const at of [req.consent.consent_at, req.liveness.passed_at]) {
+        expect(Date.parse(at)).toBeLessThanOrEqual(server + REQUEST_CLOCK_SKEW_MS);
+      }
+      expect(Date.parse(req.liveness.passed_at)).toBeGreaterThanOrEqual(
+        Date.parse(req.consent.consent_at),
+      );
+      // The same body buildEnrollmentRequest makes from the averaged shots.
+      expect(req).toEqual(
+        buildEnrollmentRequest({
+          consent,
+          consentAt,
+          passedAt: new Date(server),
+          embedding: plainEmbedding(averageEmbedding(shots)),
+        }),
+      );
+    });
+  });
+
   it('cannot toggle matching before a face is saved', async () => {
     await expect(createPreviewFaceApi().setStatus('active')).rejects.toBeInstanceOf(FaceApiError);
   });
@@ -155,11 +196,13 @@ describe('preview embedder', () => {
       ['left', 25],
       ['right', -25],
     ] as const) {
+      const still = await e.open('file:///x.jpg');
       shots.push({
         prompt: p,
         yawAngle: yaw,
-        embedding: await e.embed('file:///x.jpg', face(yaw)),
+        embedding: await still.embed(face(yaw)),
       });
+      still.close();
     }
     expect(checkSeries(shots)).toBeNull();
   });

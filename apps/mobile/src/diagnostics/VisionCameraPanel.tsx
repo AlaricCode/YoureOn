@@ -1,8 +1,8 @@
-// VisionCamera 5 panel: the preview check (first frame) and the ML Kit still-image check
+// VisionCamera 5 panel: the preview check (first frame), the ML Kit still-image check
 // (capture a photo to a file, then run the still-image face detector with landmarks in
 // 'accurate' mode, which only takes effect on iOS with patches/react-native-vision-camera-face-
-// detector+2.1.0.patch). Loaded lazily by the diagnostics screen, so a missing native module
-// fails this panel only.
+// detector+2.1.0.patch), and the full face-embedding pipeline with stage timings. Loaded lazily
+// by the diagnostics screen, so a missing native module fails this panel only.
 import { File } from 'expo-file-system';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Button, StyleSheet, Text, View } from 'react-native';
@@ -12,6 +12,9 @@ import {
   type ImageFaceDetector,
 } from 'react-native-vision-camera-face-detector';
 
+import { cosine } from '../enroll/flow';
+import { getNativeEmbedder } from '../face/native';
+import { alignTransform, pickProbeFace } from '../face/pipeline';
 import type { PanelProps } from './panelTypes';
 import { describeError, runCheck } from './runner';
 
@@ -27,6 +30,8 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
   const previewReported = useRef(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
+  /** The previous capture's embedding, for the same-person cosine (TASKS D1-M3). */
+  const prevEmbedding = useRef<Float32Array | null>(null);
 
   // The face detector's hooks re-create the detector on every render (FINDINGS §7), so create
   // one ourselves, lazily, and keep it for the panel's lifetime.
@@ -100,6 +105,52 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
     setBusy(false);
   }, [getDetector, onResult, photoOutput]);
 
+  // The whole Beat 1 pipeline on this phone (src/enroll/embedder.ts): capture -> upright copy
+  // -> ML Kit -> ArcFace alignment -> w600k_mbf on the face and its mirror. Two captures of the
+  // same person should score well above the 0.30 match threshold.
+  const captureAndEmbed = useCallback(async () => {
+    setBusy(true);
+    onResult('face-embed-pipeline', { status: 'running', detail: 'capturing…' });
+    const result = await runCheck(async () => {
+      const embedder = getNativeEmbedder();
+      await embedder.prewarm?.();
+      const t0 = performance.now();
+      const photo = await photoOutput.capturePhotoToFile({ enableShutterSound: false }, {});
+      const t1 = performance.now();
+      const url = toFileUrl(photo.filePath);
+      const still = await embedder.open(url);
+      try {
+        const t2 = performance.now();
+        const pick = pickProbeFace(still.faces, still);
+        if (!pick.ok)
+          throw new Error(`${pick.problem} in ${still.width}x${still.height} upright still`);
+        const embedding = await still.embed(pick.face);
+        const t3 = performance.now();
+        const prev = prevEmbedding.current;
+        prevEmbedding.current = embedding;
+        const same = prev
+          ? `; cosine vs previous capture ${cosine(prev, embedding).toFixed(3)}`
+          : '';
+        return (
+          `${still.faces.length} face(s) in ${still.width}x${still.height}; ` +
+          `align ${alignTransform(pick.face).method}; capture ${(t1 - t0).toFixed(0)} ms, ` +
+          `upright+detect ${(t2 - t1).toFixed(0)} ms, align+embed x2 ${(t3 - t2).toFixed(0)} ms` +
+          same
+        );
+      } finally {
+        still.close();
+        try {
+          new File(url).delete();
+        } catch {
+          // best effort: the OS clears the temp directory anyway
+        }
+      }
+    });
+    onResult('face-embed-pipeline', result);
+    setNote(result.detail);
+    setBusy(false);
+  }, [onResult, photoOutput]);
+
   if (!permission.hasPermission) {
     return (
       <View style={styles.panel}>
@@ -136,6 +187,11 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
         title={busy ? 'Detecting…' : 'Capture still + detect face'}
         disabled={busy}
         onPress={() => void captureAndDetect()}
+      />
+      <Button
+        title={busy ? 'Embedding…' : 'Capture still + embed (full face pipeline)'}
+        disabled={busy}
+        onPress={() => void captureAndEmbed()}
       />
       {note ? <Text style={styles.note}>{note}</Text> : null}
     </View>

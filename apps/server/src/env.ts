@@ -125,6 +125,10 @@ export const EnvSchema = z.object({
   MARKETS_FEED: opt(z.enum(['on', 'off', 'replay'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
+  /** HMAC key for face match tickets (src/face/config.ts); falls back to SESSION_SECRET. */
+  FACE_TICKET_SECRET: opt(str),
+  /** API-CONTRACT §2.2: when true, `plain-v0` embeddings are refused (sealing is not built yet). */
+  FACE_SEAL_REQUIRED: z.preprocess(unset, boolStr.default(false)),
   // --- optional
   EXPO_ACCESS_TOKEN: opt(str),
 });

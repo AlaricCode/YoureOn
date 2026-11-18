@@ -6,6 +6,7 @@
 // computed on the phone, and the liveness check runs here before anything is sent (the server only
 // sees one averaged, sealed embedding: never an image).
 import { FACE_MODEL, l2NormalizeInPlace } from '../face/model';
+import type { Landmarks } from '../face/pipeline';
 
 // ---------------------------------------------------------------------------------------
 // Prompts
@@ -40,12 +41,24 @@ export function makePrompts(random: () => number = Math.random): Prompt[] {
 // One photo
 // ---------------------------------------------------------------------------------------
 
-/** The fields we read from the on-device face detector (react-native-vision-camera-face-detector). */
+/**
+ * The fields we read from the on-device face detector (react-native-vision-camera-face-detector),
+ * in the pixel coordinates of the still it ran on (src/enroll/embedder.ts runs it on an upright
+ * copy, so these match the pixels the embedder samples).
+ */
 export interface DetectedFace {
   readonly yawAngle: number;
   readonly pitchAngle: number;
-  readonly bounds: { readonly width: number; readonly height: number };
+  readonly bounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
   readonly frameWidth: number;
+  readonly frameHeight?: number | undefined;
+  /** Eyes, nose and mouth corners for the ArcFace alignment (src/face/pipeline.ts). */
+  readonly landmarks?: Landmarks | undefined;
 }
 
 /** A head turn must reach this yaw (degrees). Verdict's on-device threshold. */
@@ -107,7 +120,7 @@ export function problemLabel(prompt: Prompt, problem: ShotProblem): string {
 export interface Shot {
   readonly prompt: Prompt;
   readonly yawAngle: number;
-  /** The model's 512-d output for this photo (not yet normalised). */
+  /** The 512-d embedding of this photo (normalised again when the shots are averaged). */
   readonly embedding: Float32Array;
 }
 
@@ -248,6 +261,27 @@ export function buildEnrollmentRequest(args: {
     embedding: args.embedding,
     shots: SHOTS,
   };
+}
+
+/**
+ * The finished series as the POST /v1/face/enrollment body: the shots averaged, `passed_at` now.
+ * `now` is the server-corrected clock (rt.clock.now on the phone), and `consentAt` must come from
+ * it too: the server refuses either time more than REQUEST_CLOCK_SKEW_MS (60 s) ahead of its own,
+ * so on a phone whose clock runs fast, Date.now here would fail every enrollment with "Consent
+ * needed" while every signed request (already on the corrected clock) still works.
+ */
+export function seriesEnrollmentRequest(args: {
+  consent: FaceConsent;
+  consentAt: Date;
+  shots: readonly Shot[];
+  now: () => number;
+}): FaceEnrollmentRequest {
+  return buildEnrollmentRequest({
+    consent: args.consent,
+    consentAt: args.consentAt,
+    passedAt: new Date(args.now()),
+    embedding: plainEmbedding(averageEmbedding(args.shots)),
+  });
 }
 
 /** Server error codes on face routes → the red line on the face step (API-CONTRACT §1.6). */

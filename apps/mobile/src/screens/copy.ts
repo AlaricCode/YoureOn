@@ -1,6 +1,7 @@
 // Every fixed string the bet screens show, by screen, with its copy role, so one node test can
 // check them all against ui/copyRule (TASKS D5-M2 crypto-copy audit). Templates with {name},
 // {amount} or {n} are CONTRACT_COPY lines; fill them with the helpers below.
+import type { ScanMiss } from '../app/scan';
 import type { CopyRole } from '../ui/copyRule';
 
 type Line = readonly [text: string, role: CopyRole];
@@ -30,6 +31,16 @@ export const COPY = {
     allowCamera: ['Allow camera', 'label'],
     openSettings: ['Open settings', 'label'],
     cameraNeeded: ['Camera access needed', 'error'],
+    // Why a scan found nobody to address (app/scan ScanMiss), shown as the red line.
+    noFace: ['No face found', 'error'],
+    closer: ['Move closer', 'error'],
+    scanAgain: ['Scan again', 'error'],
+    joinRoom: ['Join the room', 'error'],
+    slowDown: ['Slow down', 'error'],
+    betOpen: ['Bet in progress', 'error'],
+    failed: ['Try again', 'error'],
+    // A face screen crashed (a native module missing from the build): face is off until restart.
+    unavailable: ['Face scan unavailable', 'error'],
   },
   incoming: {
     accept: ['Accept', 'label'],
@@ -187,6 +198,18 @@ export const COPY = {
 } as const satisfies Record<string, Record<string, Line>>;
 
 export const t = (line: Line): string => line[0];
+
+/** The red line for each scan miss (1-3 words; "No match" is the friendly abstain line). */
+export const SCAN_MISS_COPY: Readonly<Record<ScanMiss, Line>> = {
+  no_face: COPY.scan.noFace,
+  too_far: COPY.scan.closer,
+  no_match: COPY.scan.noMatch,
+  expired: COPY.scan.scanAgain,
+  not_in_room: COPY.scan.joinRoom,
+  busy: COPY.scan.slowDown,
+  pair_busy: COPY.scan.betOpen,
+  failed: COPY.scan.failed,
+};
 
 /** CONTRACT_COPY fillers (ui/copyRule). */
 export const fill = {

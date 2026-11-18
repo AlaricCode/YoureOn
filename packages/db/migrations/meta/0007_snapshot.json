@@ -1,6 +1,6 @@
 {
   "id": "6c494bc2-2460-4f13-bb7e-6f10e6cf0283",
-  "prevId": "dfc8c499-74e3-4fdd-acdc-9e536dc4c830",
+  "prevId": "d534571d-2ca3-4a33-a1aa-19ed9416097d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4102,6 +4102,202 @@
         "market_snapshots_snapshot_sha256_fmt": {
           "name": "market_snapshots_snapshot_sha256_fmt",
           "value": "snapshot_sha256 ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.face_enrollments": {
+      "name": "face_enrollments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "enrollment_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "embedding_ciphertext": {
+          "name": "embedding_ciphertext",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_nonce": {
+          "name": "embedding_nonce",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "embedding_dim": {
+          "name": "embedding_dim",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model_name": {
+          "name": "model_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model_version": {
+          "name": "model_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_version": {
+          "name": "consent_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_text_sha256": {
+          "name": "consent_text_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_at": {
+          "name": "consent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "liveness_method": {
+          "name": "liveness_method",
+          "type": "liveness_method",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "liveness_passed_at": {
+          "name": "liveness_passed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_used_at": {
+          "name": "last_used_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "disabled_at": {
+          "name": "disabled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "face_enrollments_active_model_idx": {
+          "name": "face_enrollments_active_model_idx",
+          "columns": [
+            {
+              "expression": "model_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "model_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status = 'active'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "face_enrollments_user_id_users_id_fk": {
+          "name": "face_enrollments_user_id_users_id_fk",
+          "tableFrom": "face_enrollments",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "face_enrollments_user_id_uq": {
+          "name": "face_enrollments_user_id_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "face_enrollments_nonce_len": {
+          "name": "face_enrollments_nonce_len",
+          "value": "octet_length(embedding_nonce) = 12"
+        },
+        "face_enrollments_dim": {
+          "name": "face_enrollments_dim",
+          "value": "embedding_dim BETWEEN 64 AND 1024"
+        },
+        "face_enrollments_ciphertext_len": {
+          "name": "face_enrollments_ciphertext_len",
+          "value": "octet_length(embedding_ciphertext) = embedding_dim * 4 + 16"
+        },
+        "face_enrollments_consent_before_capture": {
+          "name": "face_enrollments_consent_before_capture",
+          "value": "consent_at <= created_at"
+        },
+        "face_enrollments_disabled_at": {
+          "name": "face_enrollments_disabled_at",
+          "value": "(status = 'disabled') = (disabled_at IS NOT NULL)"
+        },
+        "face_enrollments_consent_text_sha256_fmt": {
+          "name": "face_enrollments_consent_text_sha256_fmt",
+          "value": "consent_text_sha256 ~ '^[0-9a-f]{64}$'"
         }
       },
       "isRLSEnabled": false
