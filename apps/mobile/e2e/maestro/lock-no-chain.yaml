@@ -1,0 +1,30 @@
+# LOCAL SERVER WITH THE CHAIN OFF ONLY. Beat 3 without a chain: A taps "Lock it in" on the
+# typed-terms card (after 06-send-terms.yaml, B accepted); the server freezes the terms, cannot
+# build the atomic lock (no RPC, no nonce pool) and fails it: both phones say "Couldn't lock it.
+# Nothing moved." and go home. Against https://youre-on.fly.dev with LOCK_SIGNER=server this tap
+# LOCKS REAL DEVNET STAKES, so the flow refuses to run unless you say where it runs:
+#   maestro --device <udid A> test -e LOCAL_CHAIN_OFF=yes -e PARTY=A e2e/maestro/lock-no-chain.yaml
+#   maestro --device <udid B> test -e LOCAL_CHAIN_OFF=yes -e PARTY=B e2e/maestro/lock-no-chain.yaml
+# (start B's right after A's tap, or after it: B only waits for the outcome).
+appId: dev.youreon.app
+name: lock-no-chain
+---
+- assertTrue: ${LOCAL_CHAIN_OFF == 'yes'}
+- runFlow:
+    when:
+      true: ${PARTY == 'A'}
+    commands:
+      - assertVisible:
+          id: typed-confirm
+          enabled: true
+      - tapOn:
+          id: typed-confirm
+- extendedWaitUntil:
+    visible: Couldn't lock it. Nothing moved.
+    timeout: 30000
+- takeScreenshot: 60-lock-failed-${PARTY}
+- tapOn: Back home
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 15000
