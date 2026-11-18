@@ -369,7 +369,7 @@ function AppealPanel({ bet }: { bet: BetView }) {
             <li
               key={seat}
               className={
-                v ? `vote ${v.counted_as === 'abstain' ? 'abstain' : 'cast'}` : 'vote pending'
+                v ? `vote ${v.counted_as === 'ABSTAIN' ? 'abstain' : 'cast'}` : 'vote pending'
               }
             >
               <span className="who">
