@@ -286,7 +286,8 @@ Flows are in §1.3.
 ### 2.3 Rooms and presence
 
 - **`POST /v1/rooms`** (S) takes `{name?, kind:'session'}` and returns 201 `{room_id, code, qr_payload: "youreon://room/<code>", expires_at}`. The creator is joined.
-- **`POST /v1/rooms/join`** (S) takes `{code}` or `{qr_payload}` and returns `{room: RoomSummary, members: RoomMember[]}`. Errors: `NOT_FOUND`, `ROOM_EXPIRED`. Idem: `room_members` PK; a re-join clears `left_at`.
+- **`POST /v1/rooms/join`** (S) takes `{code}` or `{qr_payload}` and returns `{room: RoomSummary, members: RoomMember[]}`. Errors: `NOT_FOUND`, `ROOM_EXPIRED`, `403 NOT_IN_ROOM {reason:'demo_room'}`. Idem: `room_members` PK; a re-join clears `left_at`.
+- **The demo room (`DEMO_MODE=true`).** A room created by a demo account (`users.is_demo`, or the demo-a / demo-b wallet), or one with a live stage session, admits only demo accounts: anyone else's join is `403 NOT_IN_ROOM {reason:'demo_room'}`, and `POST /v1/bets` there needs both parties to be demo accounts (same error, `details.party`). The projector shows every bet of its room (§3.1) and its code is on screen, so this keeps strangers' bets, captions and cues off it, and keeps them from challenging demo B.
 - **`POST /v1/rooms/:room_id/leave`** (S) returns 204 and sets `left_at`. A member who has left is no longer a match candidate.
 - **`GET /v1/rooms/:room_id/presence`** (B, member) returns `{members: RoomMember[]}` with `RoomMember = {user: UserRef, face_enrolled: boolean, online: boolean, last_seen_at}`. `online` means a live WS within 30 s. The same list is pushed as the WS control frame `room.presence` (§3.2).
 - Demo: seeded room `UBC26X` (DATA-MODEL §11).
@@ -325,7 +326,7 @@ Flows are in §1.3.
 - Response 201: `{bet: BetSnapshot (state DRAFTING), voice: {dynamic_variables: {bet_id, party_a_name, party_b_name, max_stake_usd: "20"}}}`. The app passes `dynamic_variables` verbatim to `startSession`.
 - Errors:
   - `AGE_REQUIRED` (either party);
-  - `NOT_IN_ROOM` (either party);
+  - `NOT_IN_ROOM` (either party; `details.reason='demo_room'`: a non-demo party in the demo room, §2.3);
   - `VALIDATION_FAILED` (self-challenge, or a bad or expired ticket);
   - `409 INVALID_STATE` (`details.reason='pair_busy'`: a pre-lock bet between the same two users already exists);
   - `RATE_LIMITED`.

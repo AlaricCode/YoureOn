@@ -5,9 +5,10 @@
 // cp1-drive signs those wallets up through the ordinary signup, so is_demo alone is not enough.
 // The wallets come from env DEMO_A / DEMO_B_SECRET_KEY and from the chain runtime's custodial keys
 // (the same values in production; tests install a runtime with their own).
-import { inArray } from 'drizzle-orm';
-import { users, type Db } from '@youre-on/db';
+import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { apiSessions, users, type Db } from '@youre-on/db';
 import type { AppDeps } from '../context';
+import { HttpError } from '../errors';
 import type { LifecycleDeps } from '../lock/common';
 import { lifecycleOf } from '../lock/runtime';
 import { demoPartyKey } from './claim-tokens';
@@ -67,3 +68,35 @@ export async function nonDemoPlayers(
   const demo = new Set(rows.filter((u) => isDemoPlayer(u, wallets)).map((u) => u.id));
   return userIds.filter((id) => !demo.has(id));
 }
+
+/**
+ * DEMO_MODE: is this the demo room, i.e. one a demo player created or one the projector shows (a
+ * live stage session)? Only demo players may join it or bet in it (rooms/routes.ts, bets/routes.ts).
+ * The projector shows every bet of its room and plays its cues, and the room code is on screen:
+ * otherwise anyone at the venue could put their own bet, "judge" captions and sounds on it, or
+ * challenge demo B and park B's phone on that bet.
+ */
+export async function isDemoRoom(
+  deps: LifecycleDeps,
+  room: { id: string; created_by: string | null },
+): Promise<boolean> {
+  if (!deps.env.DEMO_MODE) return false;
+  const [stage] = await deps.db
+    .select({ id: apiSessions.id })
+    .from(apiSessions)
+    .where(
+      and(
+        eq(apiSessions.room_id, room.id),
+        sql`'stage' = ANY(${apiSessions.scopes})`,
+        isNull(apiSessions.revoked_at),
+        gt(apiSessions.expires_at, new Date(deps.now())),
+      ),
+    )
+    .limit(1);
+  if (stage) return true;
+  return room.created_by !== null && (await nonDemoPlayers(deps, [room.created_by])).length === 0;
+}
+
+/** 403 NOT_IN_ROOM {reason: 'demo_room'}: the demo room is for the demo players. */
+export const demoRoomError = (message: string, details: Record<string, unknown> = {}) =>
+  new HttpError('NOT_IN_ROOM', message, { reason: 'demo_room', ...details });

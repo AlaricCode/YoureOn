@@ -2,6 +2,7 @@
 // Rooms + challenge API (TASKS D0-J4; API-CONTRACT §2.3, §2.5, §3). DB-backed suites skip
 // without DATABASE_URL; the pure helpers below run everywhere.
 import { randomUUID } from 'node:crypto';
+import { getBase58Decoder } from '@solana/kit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, asc, eq } from 'drizzle-orm';
 import {
@@ -29,6 +30,7 @@ import { PresenceTracker } from '../src/rooms/service';
 import {
   connectWs,
   describeDb,
+  newKey,
   postJson,
   signedHeaders,
   signUp,
@@ -36,6 +38,7 @@ import {
   testEnv,
   type Ctx,
   type SignedUp,
+  type TestKey,
   type WsClient,
 } from './helpers';
 
@@ -805,5 +808,96 @@ describeDb('rooms and challenge API over Postgres', () => {
     const r = await challenge(A, B, room.room_id);
     expect(r.status).toBe(410);
     expect(r.json!.error.code).toBe('ROOM_EXPIRED');
+  });
+});
+
+describeDb('DEMO_MODE: the demo room is for the demo players (auth-01)', () => {
+  let ctx: Ctx;
+  const STAGE_KEY = 'test-stage-key';
+  const walletA = newKey();
+  const walletB = newKey();
+  const seed = (k: TestKey) => getBase58Decoder().decode(k.secret);
+
+  beforeAll(async () => {
+    ctx = await startTestServer({
+      env: {
+        DEMO_MODE: 'true',
+        STAGE_KEY,
+        DEMO_A_SECRET_KEY: seed(walletA),
+        DEMO_B_SECRET_KEY: seed(walletB),
+      },
+    });
+  });
+  afterAll(async () => {
+    await ctx?.server.close();
+  });
+
+  const post = (u: SignedUp, path: string, body?: unknown) => {
+    const raw = body === undefined ? '' : JSON.stringify(body);
+    return postJson(ctx.base, path, raw, signedHeaders(u, 'POST', path, raw));
+  };
+  const uid = (u: SignedUp) => u.session.user.user_id;
+  const challenge = (a: SignedUp, b: SignedUp, roomId: string) =>
+    post(a, '/v1/bets', { room_id: roomId, opponent_user_id: uid(b), challenge_method: 'list' });
+  const demoRoomRefusal = { code: 'NOT_IN_ROOM', details: { reason: 'demo_room' } };
+
+  it('a stranger with the code on the projector can neither join the demo room nor bet in it', async () => {
+    // The demo accounts, signed up with the demo-a / demo-b wallets (as cp1-drive does).
+    const A = await signUp(ctx.base, 'Demo A', walletA);
+    const B = await signUp(ctx.base, 'Demo B', walletB);
+    const X = await signUp(ctx.base, 'Mallory');
+    const room = await post(A, '/v1/rooms', { name: 'Finals', kind: 'session' });
+    expect(room.status).toBe(201);
+    const { room_id, code } = room.json as { room_id: string; code: string };
+    expect((await post(B, '/v1/rooms/join', { code })).status).toBe(200);
+
+    const join = await post(X, '/v1/rooms/join', { code });
+    expect(join.status).toBe(403);
+    expect(join.json!.error).toMatchObject(demoRoomRefusal);
+    expect(join.json!.members).toBeUndefined(); // and no member ids leak
+    // Not a member, so no bet in the room: no projector takeover, no challenge for demo B.
+    expect((await challenge(X, B, room_id)).json!.error.code).toBe('NOT_IN_ROOM');
+
+    const ok = await challenge(A, B, room_id);
+    expect(ok.status).toBe(201);
+  });
+
+  it('a room the projector shows is a demo room too, whoever created it', async () => {
+    const T = await signUp(ctx.base, 'Teammate');
+    const F = await signUp(ctx.base, 'Friend');
+    const X = await signUp(ctx.base, 'Mallory');
+    const room = await post(T, '/v1/rooms', { name: 'Rehearsal', kind: 'session' });
+    const { room_id, code } = room.json as { room_id: string; code: string };
+    // No stage yet: an ordinary room.
+    expect((await post(F, '/v1/rooms/join', { code })).status).toBe(200);
+    const st = await postJson(ctx.base, '/v1/stage/session', { stage_key: STAGE_KEY, room_id });
+    expect(st.status).toBe(201);
+
+    const join = await post(X, '/v1/rooms/join', { code });
+    expect(join.status).toBe(403);
+    expect(join.json!.error).toMatchObject(demoRoomRefusal);
+    // Members from before the stage opened can't put a bet on it either.
+    const bet = await challenge(T, F, room_id);
+    expect(bet.status).toBe(403);
+    expect(bet.json!.error).toMatchObject({ ...demoRoomRefusal, details: { party: 'A' } });
+  });
+
+  it('a demo-claim account (users.is_demo) is a demo player; other rooms stay open', async () => {
+    const A = await signUp(ctx.base, 'Claimed demo');
+    await ctx.deps.db
+      .update(users)
+      .set({ is_demo: true })
+      .where(eq(users.id, uid(A)));
+    const T = await signUp(ctx.base, 'Teammate');
+    const room = await post(T, '/v1/rooms', { name: 'Hack night', kind: 'session' });
+    const { room_id, code } = room.json as { room_id: string; code: string };
+    const F = await signUp(ctx.base, 'Friend');
+    expect((await post(F, '/v1/rooms/join', { code })).status).toBe(200);
+    expect((await post(A, '/v1/rooms/join', { code })).status).toBe(200);
+    expect((await challenge(T, F, room_id)).status).toBe(201);
+
+    const demoRoom = await post(A, '/v1/rooms', { name: 'Demo', kind: 'session' });
+    const join = await post(F, '/v1/rooms/join', { code: demoRoom.json!.code });
+    expect(join.json!.error).toMatchObject(demoRoomRefusal);
   });
 });
