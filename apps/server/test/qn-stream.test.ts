@@ -389,4 +389,38 @@ describe('webhook probe + flows against the real webhook route and a fake Stream
     ).rejects.toThrow(/HTTP 401/);
     expect(fake.streams.size).toBe(0);
   });
+
+  it('--quicknode-token: no token sent; the generated one is saved, set on Fly, verified, then activated', async () => {
+    reset();
+    const file = join(tmp(), 'qn.env');
+    const generated = newSecurityToken();
+    fake.replaceToken = generated; // what QuickNode generates when the body carries none
+    const r = await createStream(io(), {
+      baseUrl: BASE,
+      tokenFile: file,
+      flyApp: 'youre-on',
+      quicknodeToken: true,
+      filterJs: FILTER_JS,
+    });
+    const created = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/streams'))!
+      .body as { destination_attributes: Record<string, unknown> };
+    expect(created.destination_attributes).not.toHaveProperty('security_token');
+    expect(readTokenFile(file)).toBe(generated);
+    expect(flyCalls).toEqual([{ app: 'youre-on', token: generated }]);
+    expect(r.stream['status']).toBe('active');
+    expect(r.tokenFingerprint).toBe(fingerprint(generated));
+    expect(lines.join('\n')).not.toContain(generated);
+    // without the Fly step the server cannot verify it: the Stream stays paused
+    reset();
+    fake.replaceToken = newSecurityToken();
+    await expect(
+      createStream(io(), {
+        baseUrl: BASE,
+        tokenFile: join(tmp(), 'qn.env'),
+        quicknodeToken: true,
+        filterJs: FILTER_JS,
+      }),
+    ).rejects.toThrow(/stays paused/);
+    expect([...fake.streams.values()][0]!['status']).toBe('paused');
+  });
 });
