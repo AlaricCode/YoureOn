@@ -242,6 +242,35 @@ describeDb('StreamGapReconciler over Postgres', () => {
     ]);
   });
 
+  it('fallbackMs: with a Stream configured (30 s) rpc_poll leaves the Stream its lag', async () => {
+    const f = betFacts();
+    const L = lifecycle(f);
+    await mkBetRow(h.db, f, { partyA: A, partyB: B, state: 'LOCKED' });
+    const lockSig = randomSig();
+    await mkLockTx(h.db, f.bet_id, lockSig, 'confirmed');
+    chain.set(
+      lockSig,
+      landed(lockSig, [
+        { outer: 3, name: 'BetCreated', payload: L.created() },
+        { outer: 4, name: 'BetAccepted', payload: L.accepted() },
+      ]),
+    );
+    const sentAt = (
+      await h.db.select().from(chainTxs).where(eq(chainTxs.signature, lockSig))
+    )[0]!.sent_at!.getTime();
+    const gaps = new StreamGapReconciler({ fallbackMs: 30_000 });
+    asked.length = 0;
+    await gaps.run(deps, rt, sentAt + 6_000); // the 5 s default would poll here
+    expect(asked).not.toContain(lockSig);
+    expect(await eventsOfBet(h.db, f.bet_id)).toEqual([]);
+    await gaps.run(deps, rt, sentAt + 31_000);
+    expect(asked).toContain(lockSig);
+    expect((await eventsOfBet(h.db, f.bet_id)).map((e) => e.source)).toEqual([
+      'rpc_poll',
+      'rpc_poll',
+    ]);
+  });
+
   it('without a chain runtime the gap-fill pass is skipped (the retry pass still runs)', async () => {
     const r = await new StreamGapReconciler().run(deps, null, Date.now() + 6_000);
     expect(r).toMatchObject({ polled: 0, ingested: 0, missing: 0 });

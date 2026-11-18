@@ -445,6 +445,40 @@ export function createChainProjector(o: ChainProjectorOptions = {}): ChainProjec
   };
 }
 
+/** A chain_txs row whose stream_seen_at was just stamped (its first Stream copy arrived). */
+export interface StreamSeen {
+  bet_id: string;
+  kind: string;
+  sent_at: Date | null;
+  rpc_confirmed_at: Date | null;
+  /** Which source stored the tx's events first: 'rpc_poll' when the Stream copy was a duplicate. */
+  first_copy: 'stream' | 'rpc_poll';
+}
+
+/** RETURNING columns of the stream_seen_at stamp (StreamSeen minus first_copy). */
+export const streamSeenCols = {
+  bet_id: chainTxs.bet_id,
+  kind: chainTxs.kind,
+  sent_at: chainTxs.sent_at,
+  rpc_confirmed_at: chainTxs.rpc_confirmed_at,
+};
+
+/**
+ * The Streams lane latency (ARCHITECTURE §6 "Streams: send -> webhook", PENDING-KEY): once per
+ * server tx, when its first Stream copy arrives, whether the projector applied it or it was a
+ * duplicate of an rpc_poll copy (ingest.ts). The operator reads these to measure the Stream's lag.
+ */
+export function logStreamSeen(log: Logger, seen: readonly StreamSeen[], nowMs: number): void {
+  for (const s of seen)
+    log.info('chain.stream_seen', {
+      bet_id: s.bet_id,
+      kind: s.kind,
+      first_copy: s.first_copy,
+      send_to_stream_ms: s.sent_at ? nowMs - s.sent_at.getTime() : null,
+      rpc_confirm_to_stream_ms: s.rpc_confirmed_at ? nowMs - s.rpc_confirmed_at.getTime() : null,
+    });
+}
+
 function setError(tx: Tx, ids: readonly bigint[], apply_error: string) {
   return ids.length
     ? tx
@@ -545,7 +579,7 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
   }
   let after: BetRow = bet;
   let rejected: ReturnType<typeof dbErrorSummary> | null = null;
-  let seen: { kind: string; sent_at: Date | null; rpc_confirmed_at: Date | null }[] = [];
+  let seen: Omit<StreamSeen, 'first_copy'>[] = [];
   if (Object.keys(set).length || streamSigs.length)
     try {
       after = await tx.transaction(async (sp) => {
@@ -565,24 +599,15 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
                 isNull(chainTxs.stream_seen_at),
               ),
             )
-            .returning({
-              kind: chainTxs.kind,
-              sent_at: chainTxs.sent_at,
-              rpc_confirmed_at: chainTxs.rpc_confirmed_at,
-            });
+            .returning(streamSeenCols);
         await queuePushes(sp, bet, row, fold, new Set(pending.map((p) => p.row.id)), nowMs);
         return row;
       });
-      // The Streams lane latency (ARCHITECTURE §6 "Streams: send -> webhook", PENDING-KEY).
-      for (const s of seen)
-        log.info('chain.stream_seen', {
-          bet_id: bet.id,
-          kind: s.kind,
-          send_to_stream_ms: s.sent_at ? nowMs - s.sent_at.getTime() : null,
-          rpc_confirm_to_stream_ms: s.rpc_confirmed_at
-            ? nowMs - s.rpc_confirmed_at.getTime()
-            : null,
-        });
+      logStreamSeen(
+        log,
+        seen.map((x) => ({ ...x, first_copy: 'stream' as const })),
+        nowMs,
+      );
     } catch (e) {
       if (isTransientDbError(e)) throw e;
       rejected = dbErrorSummary(e);
