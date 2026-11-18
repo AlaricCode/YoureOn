@@ -40,6 +40,16 @@ const SIG = {
   pay2: 'GerzrLSJyjrNuxk9tMqGmauShKHjG3FhGA6d6VoVLJ9MURMSTB3nteGTCqCsbGdmR72d7FKExQNv12n1Ajgt7pJh',
 };
 const NAMES = { A: 'Logan', B: 'Jake' };
+/** describeChecks() of the bottle-flip spec (visible end gate; at_rest, upright needs). */
+export const FLIP_READBACK =
+  'Ref cam: the bottle fully in shot at the end; the bottle comes to rest; the bottle stands upright. Film from the side. If the ref cam is offline, the judge decides alone.';
+/** The ref cam's rows on the flip (checks.report labels, spec order: gate, need, need). */
+const FLIP_CHECKS = [
+  'the bottle fully in shot at the end',
+  'the bottle comes to rest',
+  'the bottle stands upright',
+];
+
 /** Beat 6: a $10 pot split at Gemini's 61% Up (Logan, party A, holds Up). */
 const BTC_FAIR = splitPot(10_000_000n, 'YES', 61n);
 const BTC_STAKES = { a: BTC_FAIR.a.toString(), b: BTC_FAIR.b.toString() };
@@ -288,6 +298,12 @@ function sequence(): Entry[] {
   judge(6_000, BET_FLIP, 'Jake, does landing on the cap count? No? Upright on its base only.');
   frame(9_000, BET_FLIP, 'terms.proposed', (b) => ({ envelope: flip(b) }));
   state(9_000, BET_FLIP, 'TERMS_PROPOSED', 'DRAFTING');
+  // the server compiles the terms into ref cam checks beside the bet (non-binding, checks.ts)
+  frame(9_400, BET_FLIP, 'checks.compiled', (b) => ({
+    terms_hash: flip(b).terms_hash,
+    decision: 'checks',
+    readback: FLIP_READBACK,
+  }));
   judge(
     9_500,
     BET_FLIP,
@@ -393,8 +409,46 @@ function sequence(): Entry[] {
       },
       ruling_hash: hex(`ruling${n}`),
     }));
+  /**
+   * The ref cam's report, just before the ruling: attempt 1's bottle is out of shot at the end
+   * (the judge already calls it REDO, so no veto); attempt 2's three checks pass, the box on the
+   * bottle in the end frames (the preview frames' 160x120 px).
+   */
+  const report = (at: number, n: 1 | 2) =>
+    frame(at, BET_FLIP, 'checks.report', () => {
+      const ok = n === 2;
+      const rows = FLIP_CHECKS.map((label, i) => ({
+        role: i === 0 ? 'gate' : 'need',
+        label,
+        value: ok ? 'true' : i === 0 ? 'false' : 'unknown',
+        why: ok ? 'ok' : 'absent',
+        frames: [5, 6, 7],
+        measures: [],
+      }));
+      const box = (b: number[], score: number) => [
+        { key: 'bottle', prompt: 'bottle', box_xyxy: b, score },
+      ];
+      return {
+        attempt_no: n,
+        status: 'ok',
+        gate: ok ? 'true' : 'false',
+        need: ok ? 'true' : 'unknown',
+        veto: null,
+        results: rows,
+        boxes: ok
+          ? {
+              5: box([84, 47, 133, 81], 0.91),
+              6: box([102, 39, 126, 90], 0.95),
+              7: box([105, 39, 127, 90], 0.96),
+            }
+          : {},
+        frame_size: { w: 160, h: 120 },
+        report_hash: hex(`report${n}`),
+      };
+    });
   attempt(22_000, 1);
   evidence(26_000, 1);
+  report(28_000, 1);
   ruling(28_000, 1, {
     outcome: 'REDO',
     claim_result: 'UNCLEAR',
@@ -406,6 +460,7 @@ function sequence(): Entry[] {
   judge(28_300, BET_FLIP, 'Redo! The bottle flew out of the shot. Keep it in frame, Jake.');
   attempt(31_000, 2);
   evidence(35_000, 2);
+  report(37_000, 2);
   ruling(37_000, 2, {
     outcome: 'B_WINS',
     claim_result: 'MET',

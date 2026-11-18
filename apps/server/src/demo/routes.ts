@@ -202,7 +202,10 @@ export const demoRoutes: RouteModule = {
           actor_kind: 'system',
           action: 'demo.toggle',
           request_id: c.get('requestId'),
-          details: { ...ch, env_default: deps.env.CACHED_RULING },
+          details: {
+            ...ch,
+            env_default: ch.toggle === 'checks' ? deps.env.CHECKS_ENABLED : deps.env.CACHED_RULING,
+          },
         });
         deps.log.warn('demo.toggle', { ...ch });
       }

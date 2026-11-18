@@ -18,3 +18,5 @@ apps/stage/public/replay/*.mp4
 .gstack/
 # drizzle-kit run from the repo root (not packages/db) writes an empty journal here
 /migrations/
+# Sample videos
+*.mov

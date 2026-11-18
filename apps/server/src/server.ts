@@ -17,6 +17,7 @@ import { createPayoutService } from './payout';
 import { createGeminiClient } from './markets/gemini';
 import { createReplayClient, createRoutedClient } from './markets/replay';
 import { MarketService } from './markets/service';
+import { createSamClient, type SamClient } from './judge/sam';
 import { createProviders } from './providers/registry';
 import type { Providers } from './providers/types';
 import { dbHubAccess } from './realtime/access';
@@ -48,6 +49,11 @@ export interface CreateDepsOptions {
   /** Where stage clips are cached on disk; null = memory only. Default: the OS tmp dir, except
    *  NODE_ENV=test (memory only, so runs never share a cache). */
   clipDir?: string | null;
+  /**
+   * The SAM 3.1 client for the camera checks: a ready client (tests: a fake fetch), null for none,
+   * or default: built when SAM3_URL and SAM3_API_TOKEN are set.
+   */
+  sam?: SamClient | null;
 }
 
 export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbHandle } {
@@ -87,6 +93,13 @@ export function createDeps(o: CreateDepsOptions): { deps: AppDeps; dbHandle: DbH
   const tts = o.stageTts !== undefined ? o.stageTts : createStageTts(o.env, { log, cache: clips });
   deps.stageVoice = new StageVoice(deps, tts, clips);
   hub.onBetEvent(deps.stageVoice.onBetEvent);
+  const sam =
+    o.sam !== undefined
+      ? o.sam
+      : o.env.SAM3_URL && o.env.SAM3_API_TOKEN
+        ? createSamClient({ url: o.env.SAM3_URL, token: o.env.SAM3_API_TOKEN, log, now })
+        : null;
+  if (sam) deps.sam = sam;
   if (o.keeper ?? o.env.NODE_ENV !== 'test') deps.keeper = createServerKeeper(deps);
   if (o.markets instanceof MarketService) deps.markets = o.markets;
   else if (
