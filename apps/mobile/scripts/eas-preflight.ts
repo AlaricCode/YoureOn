@@ -653,8 +653,36 @@ function dependencyChecks(ctx: Ctx): Result[] {
   return out;
 }
 
+/** Reads `npm ci --dry-run`'s outcome. Not being able to fetch npm 10 is not a lockfile problem. */
+export function lockfileSyncResult(
+  status: number | null,
+  stderr: string,
+  offline: boolean,
+): Result {
+  const which = offline ? 'local npm' : `npm ${WORKER_NPM_VERSION}`;
+  if (status === 0) return pass(`package-lock.json in sync (npm ci --dry-run, ${which})`);
+  const all = lines(stderr);
+  if (!offline && all.some((l) => /ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRE|network/i.test(l))) {
+    return warn(
+      `could not fetch npm ${WORKER_NPM_VERSION} to check package-lock.json`,
+      're-run with --offline to check with the local npm',
+    );
+  }
+  // "Missing: x@1 from lock file" names the culprit; the "not in sync" line only says that.
+  const reason = (
+    all.find((l) => /Missing:|Invalid:/.test(l)) ??
+    all.find((l) => /in sync/.test(l)) ??
+    all[0] ??
+    `exit ${String(status)}`
+  ).replace(/^npm (error|ERR!) /, '');
+  return fail(
+    'npm ci would fail on EAS',
+    `${String(reason)}; run npm install at the repo root and commit package-lock.json`,
+  );
+}
+
 /** `npm ci --dry-run` with the worker's npm, on a temp copy of the manifests only. */
-function lockfileSyncCheck(ctx: Ctx, rootPkg: Json): Result {
+export function lockfileSyncCheck(ctx: Pick<Ctx, 'root' | 'offline'>, rootPkg: Json): Result {
   const dir = mkdtempSync(join(tmpdir(), 'eas-preflight-npm-'));
   try {
     const manifests = ['package.json', 'package-lock.json', '.npmrc'];
@@ -679,14 +707,7 @@ function lockfileSyncCheck(ctx: Ctx, rootPkg: Json): Result {
       : run('npm', ['exec', '--yes', `--package=npm@${WORKER_NPM_VERSION}`, '--', 'npm', ...args], {
           cwd: dir,
         });
-    const which = ctx.offline ? 'local npm' : `npm ${WORKER_NPM_VERSION}`;
-    if (r.status === 0) return pass(`package-lock.json in sync (npm ci --dry-run, ${which})`);
-    const reason =
-      lines(r.stderr).find((l) => /sync|Missing|Invalid/.test(l)) ?? lines(r.stderr)[0];
-    return fail(
-      'npm ci would fail on EAS',
-      `${String(reason)}; run npm install and commit the lockfile`,
-    );
+    return lockfileSyncResult(r.status, r.stderr, ctx.offline);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

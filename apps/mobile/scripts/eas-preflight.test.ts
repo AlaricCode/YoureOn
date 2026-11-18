@@ -1,10 +1,12 @@
 // Unit tests for the EAS preflight's pure checks, plus (with EAS_CLI_DIR set) a full run of the
 // real preflight against this repo, which replays eas-cli's own upload copy.
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { FACE_MODEL } from '../src/face/model';
 import {
@@ -20,6 +22,8 @@ import {
   checkShellEnv,
   checkWebrtcPin,
   compareVersions,
+  lockfileSyncCheck,
+  lockfileSyncResult,
   lockVersions,
   MODEL_PATH,
   parseArgs,
@@ -474,4 +478,61 @@ describe.runIf(easCliDir && modelOnDisk)('preflight against this repo (EAS_CLI_D
     expect(r.stdout, r.stdout).toMatch(/, 0 failed,/);
     expect(r.status).toBe(0);
   }, 300_000);
+});
+
+describe('lockfileSyncCheck (npm ci --dry-run on a copy of the manifests)', () => {
+  const dirs: string[] = [];
+  afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+
+  /** A one-workspace repo with a lockfile npm made itself (no dependencies, no network). */
+  function workspace() {
+    const root = mkdtempSync(join(tmpdir(), 'eas-lock-'));
+    dirs.push(root);
+    const rootPkg = { name: 'r', private: true, workspaces: ['apps/*'] };
+    writeFileSync(join(root, 'package.json'), JSON.stringify(rootPkg));
+    mkdirSync(join(root, 'apps/a'), { recursive: true });
+    writeFileSync(
+      join(root, 'apps/a/package.json'),
+      JSON.stringify({ name: 'a', version: '1.0.0' }),
+    );
+    const r = spawnSync(
+      'npm',
+      ['install', '--package-lock-only', '--offline', '--ignore-scripts'],
+      {
+        cwd: root,
+        encoding: 'utf8',
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    return { root, rootPkg };
+  }
+
+  it('passes a lockfile in sync, and fails one a workspace drifted from', () => {
+    const { root, rootPkg } = workspace();
+    expect(lockfileSyncCheck({ root, offline: true }, rootPkg).status).toBe('pass');
+    writeFileSync(
+      join(root, 'apps/a/package.json'),
+      JSON.stringify({ name: 'a', version: '1.0.0', dependencies: { 'left-pad': '1.3.0' } }),
+    );
+    const r = lockfileSyncCheck({ root, offline: true }, rootPkg);
+    expect(r.status).toBe('fail');
+    expect(r.detail).toContain('left-pad');
+  }, 60_000);
+
+  it('leaves the real tree alone (it runs on a temp copy)', () => {
+    const { root, rootPkg } = workspace();
+    mkdirSync(join(root, 'node_modules/keep'), { recursive: true });
+    lockfileSyncCheck({ root, offline: true }, rootPkg);
+    expect(existsSync(join(root, 'node_modules/keep'))).toBe(true);
+  }, 60_000);
+
+  it('tells a fetch failure apart from a lockfile problem', () => {
+    const network = 'npm error code ENOTFOUND\nnpm error network request failed';
+    expect(lockfileSyncResult(1, network, false).status).toBe('warn');
+    expect(lockfileSyncResult(1, network, true).status).toBe('fail');
+    expect(lockfileSyncResult(1, 'npm error Missing: x@1 from lock file', false).status).toBe(
+      'fail',
+    );
+    expect(lockfileSyncResult(0, '', true).title).toContain('local npm');
+  });
 });
