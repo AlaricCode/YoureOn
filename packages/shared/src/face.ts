@@ -1,0 +1,280 @@
+// Face addressing (Beat 1): the wire contract and the pure math both sides share.
+// BRIEF 5e; API-CONTRACT §2.2 (enrollment), §2.4 (face-match); DATA-MODEL §5.3, §7.2, §10.
+//
+// A face match only ADDRESSES a challenge. It never authorizes anything: the person found still
+// reviews the terms and authorizes their own stake on their own phone (D1/D7/D9).
+//
+// The phone computes the embedding (InsightFace w600k_mbf, 512 floats, L2-normalized) and sends
+// only that, never an image. `plain-v0` sends the float32-LE bytes in `ct_b64` over TLS; the
+// sealed form (x25519 + chacha20poly1305, API-CONTRACT O8) is not built yet, so servers run with
+// FACE_SEAL_REQUIRED=false. Import by subpath: `@youre-on/shared/face`.
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { z } from 'zod/v4';
+import { HeadToHead, SealedEmbedding } from './api';
+import { Hex32, IsoUtc, UserRef } from './primitives';
+
+// ---------------------------------------------------------------------------------------
+// Consent (API-CONTRACT §2.2 GET /v1/face/consent; DATA-MODEL §10 "Consent before capture")
+// ---------------------------------------------------------------------------------------
+
+export const FACE_CONSENT_VERSION = 'face-consent-v1';
+
+/**
+ * The consent text, version `face-consent-v1` (TASKS D3-M3 step 2). The server serves exactly
+ * this from GET /v1/face/consent and only accepts an enrollment whose `consent_text_sha256` is
+ * its hash. Changing a single character is a new consent version. Not legal advice. Party-screen
+ * copy: no chain or crypto words (copy rule, TASKS D5-M2).
+ */
+export const FACE_CONSENT_V1_TEXT =
+  "Face matching is optional. If you turn it on, You're On uses your face so friends in the same " +
+  'room can challenge you by pointing their camera at you. A match only picks who is being ' +
+  'challenged. It never moves money or confirms a bet; Face ID does that. ' +
+  'Your phone turns three photos of you into a face template (a list of numbers). The photos never ' +
+  'leave your phone. We keep one encrypted template, never sell or share it, and only compare it ' +
+  'with people in rooms you join. ' +
+  'You can turn matching off or delete your template at any time. We delete it automatically ' +
+  '180 days after it was last used, 30 days after you turn matching off, or on December 31, 2026, ' +
+  'whichever comes first.';
+
+export const FACE_CONSENT_V1_RETENTION =
+  'Deleted 180 days after last use, 30 days after you turn it off, or on December 31, 2026.';
+
+/** sha256 hex of UTF-8 text (the consent hash the phone echoes back). */
+export const sha256HexOfText = (text: string): string => bytesToHex(sha256(utf8ToBytes(text)));
+
+export const FACE_CONSENT_V1_SHA256 = sha256HexOfText(FACE_CONSENT_V1_TEXT);
+
+/** DATA-MODEL §10 written retention schedule (the keeper's face-retention sweep). */
+export const FACE_RETENTION = {
+  /** Destroyed this long after the last match (or enrollment, if never matched). */
+  unusedMs: 180 * 24 * 60 * 60 * 1000,
+  /** Destroyed this long after matching was turned off (unless turned back on). */
+  disabledMs: 30 * 24 * 60 * 60 * 1000,
+  /** Hackathon deployment: everything is destroyed at this instant. */
+  hardDeadlineIso: '2026-12-31T00:00:00.000Z',
+} as const;
+
+// ---------------------------------------------------------------------------------------
+// Models (API-CONTRACT §2.2 `accepted_models`; DATA-MODEL §5.3)
+// ---------------------------------------------------------------------------------------
+
+export const FaceModelRef = z.object({
+  name: z.string().min(1).max(64),
+  version: z.string().min(1).max(64),
+  /** DATA-MODEL §5.3 `embedding_dim` CHECK 64..1024. */
+  dim: z.number().int().min(64).max(1024),
+});
+export type FaceModelRef = z.infer<typeof FaceModelRef>;
+
+/** The bundled on-device model (apps/mobile/assets/models; non-commercial weights). */
+export const FACE_MODEL_W600K = { name: 'w600k_mbf', version: 'buffalo_s-fp32', dim: 512 } as const;
+/** The documented fallback (OpenCV SFace, Apache-2.0); no app build ships it yet. */
+export const FACE_MODEL_SFACE = { name: 'sface', version: '2021dec', dim: 128 } as const;
+
+export const ACCEPTED_FACE_MODELS: readonly FaceModelRef[] = [FACE_MODEL_W600K, FACE_MODEL_SFACE];
+
+export const isAcceptedFaceModel = (m: FaceModelRef): boolean =>
+  ACCEPTED_FACE_MODELS.some((a) => a.name === m.name && a.version === m.version && a.dim === m.dim);
+
+// ---------------------------------------------------------------------------------------
+// Match rule (API-CONTRACT §2.4; DATA-MODEL §7.2; FINDINGS §3.2 spike 01)
+// ---------------------------------------------------------------------------------------
+
+/** Accept the top candidate only at cosine >= this... */
+export const FACE_MATCH_MIN_COSINE = 0.3;
+/** ...and only when it beats the runner-up by at least this much. */
+export const FACE_MATCH_MIN_MARGIN = 0.05;
+/** At most this many room candidates are compared (DATA-MODEL §7.2 `LIMIT 50`). */
+export const FACE_MATCH_MAX_CANDIDATES = 50;
+/** A match ticket addresses one challenge for this long (API-CONTRACT §2.4: 60 s). */
+export const MATCH_TICKET_TTL_MS = 60_000;
+/** |‖v‖₂ − 1| allowed for an "L2-normalized" float32 embedding. */
+export const EMBEDDING_NORM_TOLERANCE = 1e-3;
+
+export interface ScoredCandidate<Id = string> {
+  readonly id: Id;
+  readonly score: number;
+}
+
+export type MatchDecision<Id = string> =
+  | { readonly kind: 'match'; readonly id: Id }
+  | {
+      readonly kind: 'abstain';
+      readonly reason: 'no_candidates' | 'below_threshold' | 'ambiguous';
+    };
+
+/**
+ * The room-scoped top-2 rule. With a single candidate there is no runner-up, so only the
+ * threshold applies. Scores that are not finite never match. Pure: the scores never leave the
+ * caller (no score is ever returned to a client).
+ */
+export function decideMatch<Id>(
+  candidates: readonly ScoredCandidate<Id>[],
+  rule: { minCosine: number; minMargin: number } = {
+    minCosine: FACE_MATCH_MIN_COSINE,
+    minMargin: FACE_MATCH_MIN_MARGIN,
+  },
+): MatchDecision<Id> {
+  const valid = candidates.filter((c) => Number.isFinite(c.score));
+  if (valid.length === 0) return { kind: 'abstain', reason: 'no_candidates' };
+  let best = valid[0]!;
+  let second = -Infinity;
+  for (const c of valid.slice(1)) {
+    if (c.score > best.score) {
+      second = best.score;
+      best = c;
+    } else if (c.score > second) {
+      second = c.score;
+    }
+  }
+  if (best.score < rule.minCosine) return { kind: 'abstain', reason: 'below_threshold' };
+  if (best.score - second < rule.minMargin) return { kind: 'abstain', reason: 'ambiguous' };
+  return { kind: 'match', id: best.id };
+}
+
+// ---------------------------------------------------------------------------------------
+// Embedding bytes (plain-v0 `ct_b64` plaintext and the at-rest plaintext: float32 LE)
+// ---------------------------------------------------------------------------------------
+
+/** Float32 little-endian bytes of `v` (4 bytes per value). */
+export function embeddingToBytes(v: ArrayLike<number>): Uint8Array {
+  const bytes = new Uint8Array(v.length * 4);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < v.length; i++) view.setFloat32(i * 4, v[i] as number, true);
+  return bytes;
+}
+
+/** Float32 little-endian bytes -> values. Throws unless the length is a multiple of 4. */
+export function bytesToEmbedding(bytes: Uint8Array): Float32Array {
+  if (bytes.length % 4 !== 0) throw new Error(`embedding byte length ${bytes.length} is not 4k`);
+  const out = new Float32Array(bytes.length / 4);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < out.length; i++) out[i] = view.getFloat32(i * 4, true);
+  return out;
+}
+
+/** Why `v` is not a usable `dim`-d L2-normalized embedding, or null when it is. */
+export function embeddingProblem(v: ArrayLike<number>, dim: number): string | null {
+  if (v.length !== dim) return `has ${v.length} values, expected ${dim}`;
+  let sum = 0;
+  for (let i = 0; i < v.length; i++) {
+    const x = v[i] as number;
+    if (!Number.isFinite(x)) return `value ${i} is not finite`;
+    sum += x * x;
+  }
+  const norm = Math.sqrt(sum);
+  if (Math.abs(norm - 1) > EMBEDDING_NORM_TOLERANCE) return 'is not L2-normalized';
+  return null;
+}
+
+/** Cosine similarity (in float64). Throws on a length mismatch or a zero vector. */
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  if (a.length !== b.length) throw new Error(`length ${a.length} vs ${b.length}`);
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] as number;
+    const y = b[i] as number;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  if (!(na > 0 && nb > 0)) throw new Error('cosine of a zero vector');
+  return dot / Math.sqrt(na * nb);
+}
+
+// ---------------------------------------------------------------------------------------
+// Wire shapes (API-CONTRACT §2.2, §2.4). Tolerant z.object: unknown keys are stripped.
+// ---------------------------------------------------------------------------------------
+
+export const FACE_CONSENT_PATH = '/v1/face/consent';
+export const FACE_ENROLLMENT_PATH = '/v1/face/enrollment';
+export const faceMatchPath = (roomId: string): string =>
+  `/v1/rooms/${encodeURIComponent(roomId)}/face-match`;
+
+/** GET /v1/face/consent */
+export const FaceConsentResponse = z.object({
+  consent_version: z.string(),
+  text: z.string(),
+  text_sha256: Hex32,
+  retention_summary: z.string(),
+  /** x25519 public key (base64) for sealed embeddings; null while only plain-v0 is accepted. */
+  face_seal_pubkey: z.string().nullable(),
+  accepted_models: z.array(FaceModelRef),
+});
+export type FaceConsentResponse = z.infer<typeof FaceConsentResponse>;
+
+export const LivenessMethod = z.enum(['blink', 'head_turn']);
+export type LivenessMethod = z.infer<typeof LivenessMethod>;
+
+/** POST /v1/face/enrollment */
+export const FaceEnrollmentRequest = z.object({
+  consent: z.object({
+    consent_version: z.string().min(1).max(64),
+    consent_text_sha256: Hex32,
+    consent_at: IsoUtc,
+  }),
+  liveness: z.object({ method: LivenessMethod, passed_at: IsoUtc }),
+  model: FaceModelRef,
+  embedding: SealedEmbedding,
+  /** Stills averaged on the phone (API-CONTRACT §2.2: 3). */
+  shots: z.number().int().min(1).max(10),
+});
+export type FaceEnrollmentRequest = z.infer<typeof FaceEnrollmentRequest>;
+
+/** POST /v1/face/enrollment -> 201 */
+export const FaceEnrollmentResponse = z.object({
+  status: z.literal('active'),
+  enrolled_at: IsoUtc,
+});
+export type FaceEnrollmentResponse = z.infer<typeof FaceEnrollmentResponse>;
+
+export const FaceStatus = z.enum(['none', 'active', 'disabled']);
+export type FaceStatus = z.infer<typeof FaceStatus>;
+
+/**
+ * GET /v1/face/enrollment (and the body of PATCH): the caller's own enrollment, without any
+ * vector data. Same fields as GET /v1/me `face` (API-CONTRACT §2.1), plus model and dates.
+ */
+export const FaceEnrollmentStatusResponse = z.object({
+  status: FaceStatus,
+  consent_version: z.string().nullable(),
+  model: FaceModelRef.nullable(),
+  enrolled_at: IsoUtc.nullable(),
+  disabled_at: IsoUtc.nullable(),
+});
+export type FaceEnrollmentStatusResponse = z.infer<typeof FaceEnrollmentStatusResponse>;
+
+/** PATCH /v1/face/enrollment */
+export const FaceEnrollmentPatchRequest = z.object({ status: z.enum(['active', 'disabled']) });
+export type FaceEnrollmentPatchRequest = z.infer<typeof FaceEnrollmentPatchRequest>;
+
+/** POST /v1/rooms/:room_id/face-match */
+export const FaceMatchRequest = z.object({
+  probe: SealedEmbedding,
+  model: FaceModelRef,
+  /** Capture metadata for latency and quality logs; never required, never stored. */
+  capture: z
+    .object({
+      captured_at: IsoUtc.optional(),
+      eye_distance_px: z.number().nonnegative().optional(),
+      yaw_deg: z.number().optional(),
+    })
+    .nullish(),
+});
+export type FaceMatchRequest = z.infer<typeof FaceMatchRequest>;
+
+/** One of `{match: {...}}` or `{match: null}`. No score is ever returned. */
+export const FaceMatchResponse = z.object({
+  match: z
+    .object({
+      user: UserRef,
+      match_ticket: z.string().min(1).max(512),
+      ticket_expires_at: IsoUtc,
+      head_to_head: HeadToHead,
+    })
+    .nullable(),
+});
+export type FaceMatchResponse = z.infer<typeof FaceMatchResponse>;
