@@ -21,7 +21,7 @@ import {
   QuietButton,
   TextField,
 } from '../ui/kit';
-import { Screen } from '../ui/parts';
+import { OperatorHold, Screen } from '../ui/parts';
 import { palette, space } from '../ui/tokens';
 import { SignupApiError, type SignedUpUser, type SignupApi } from './api';
 import { SIGNUP_COPY } from './copy';
@@ -80,9 +80,9 @@ export function SignupScreen({
           {preview ? <Label variant="small">{SIGNUP_COPY.previewTag}</Label> : null}
         </View>
         <View style={styles.body}>
-          <Pressable onLongPress={onTitleLongPress} delayLongPress={1200} accessible={false}>
+          <OperatorHold onHold={onTitleLongPress}>
             <Label variant="display">{SIGNUP_COPY.title}</Label>
-          </Pressable>
+          </OperatorHold>
           <BodyText style={styles.gap}>{SIGNUP_COPY.body}</BodyText>
           {/* Tapping the empty space puts the keyboard away. */}
           <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />

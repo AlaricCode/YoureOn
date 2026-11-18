@@ -16,20 +16,11 @@ name: sim-diagnostics
     visible: Build diagnostics
     timeout: 10000
 - waitForAnimationToEnd
-# The first touch after the long-press can be swallowed: the Pressable that owned the gesture
-# unmounted mid-touch (the screen swapped), and RN's responder system spends the next touch on it.
 - tapOn: Run checks
-- waitForAnimationToEnd
-- runFlow:
-    when:
-      visible: Required 0/8 green
-    commands:
-      - tapOn:
-          text: Run checks
-          optional: true
-# The Face ID check prompts. With Face ID enrolled in the simulator (see two-phones.sh notes:
-# notifyutil com.apple.BiometricKit.enrollmentChanged) the host posts a match; without it the
-# gate falls back to the passcode sheet, which takes any passcode in the simulator.
+# The Face ID check prompts. Without Face ID enrolled the gate falls back to the passcode
+# sheet, which takes any passcode in the simulator. With it enrolled (e2e/sim-faceid.sh
+# <udid> enroll), answer the prompt from the host: e2e/sim-faceid.sh <udid> match (or nomatch);
+# unanswered, the check times out after 60 s and the flow goes on.
 - extendedWaitUntil:
     visible: Run checks|Enter iPhone Passcode.*
     timeout: 120000
