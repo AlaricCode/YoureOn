@@ -18,6 +18,7 @@ import {
   FaceMatchResponse,
   MATCH_TICKET_TTL_MS,
 } from '@youre-on/shared/face';
+import { buildApp } from '../src/app';
 import { createDeps, startServer } from '../src/server';
 import { routeModules } from '../src/routes';
 import { purgeExpiredEnrollments } from '../src/face/service';
@@ -406,6 +407,28 @@ describeDb('face addressing API over Postgres', () => {
     expect((await match(A, room.room_id, probeWith({ 11: 0.9 }))).json).toEqual({ match: null });
   });
 
+  it('a scan that finds nobody stores nothing (no audit row, no last_used_at)', async () => {
+    const A = await signUp(ctx.base, 'Ira');
+    const B = await signUp(ctx.base, 'Jun');
+    const room = await newRoom(A, B);
+    await enroll(B, basis(70));
+    const before = (await auditsOf(B)).length;
+    const scannerRows = () =>
+      ctx.deps.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(eq(auditLog.actor_user_id, uid(A)));
+    const scannerBefore = (await scannerRows()).length;
+    for (let i = 0; i < 5; i++) {
+      // Strangers: nobody in the room looks like these.
+      const r = await match(A, room.room_id, probeWith({ [71 + i]: 0.95 }));
+      expect(r.json).toEqual({ match: null });
+    }
+    expect((await auditsOf(B)).length).toBe(before);
+    expect((await scannerRows()).length).toBe(scannerBefore);
+    expect((await rowOf(B))!.last_used_at).toBeNull();
+  });
+
   it('non-members get 403, unknown rooms 404, closed rooms 410; bad probes are refused', async () => {
     const A = await signUp(ctx.base, 'Ola');
     const B = await signUp(ctx.base, 'Pat');
@@ -678,6 +701,20 @@ describeDb('face rate limits (§1.7)', () => {
       expect(lines.join('\n')).not.toMatch(/ct_b64|embedding_ciphertext/);
     } finally {
       await server.close();
+    }
+  });
+});
+
+describeDb('face retention keeper task', () => {
+  it('the face routes register face-retention on the server keeper', async () => {
+    const env = testEnv();
+    const dbHandle = createDb({ url: env.DATABASE_URL, max: 1 });
+    const { deps } = createDeps({ env, dbHandle, rateLimit: false, keeper: true });
+    try {
+      buildApp(deps, routeModules);
+      expect(deps.keeper?.taskNames).toContain('face-retention');
+    } finally {
+      await dbHandle.close();
     }
   });
 });
