@@ -14,6 +14,7 @@ import { AppealResult, AppealVote } from './appeal';
 import { AuthorizationMethod, AuthorizeRequest, TxKind } from './authorization';
 import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
 import { ChainEvents } from './chain-events';
+import { ChecksCompiledPayload, ChecksReportPayload } from './checks/events';
 import { CameraEvidence, GeminiSettlementRecord } from './evidence';
 import { GeminiMarketSnapshot } from './gemini';
 import { BetGgPayload, ReviewClosedPayload, ReviewRequestedPayload } from './gg';
@@ -151,6 +152,10 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
   env('review.requested', 'server', ReviewRequestedPayload),
   /** NEW (./gg): the loser kept the ruling, or confirm_by passed unconfirmed. */
   env('review.closed', 'server', ReviewClosedPayload),
+  /** NEW (./checks/events): the bet's terms compiled into camera checks (non-binding). */
+  env('checks.compiled', 'server', ChecksCompiledPayload),
+  /** NEW (./checks/events): one attempt's camera-check report, just before its ruling.issued. */
+  env('checks.report', 'server', ChecksReportPayload),
   env('appeal.vote', 'server', z.object({ vote: AppealVote })),
   env('appeal.result', 'server', z.object({ result: AppealResult, ruling_hash: Hex32 })),
   /** 1 Hz per gemini bet; the stage chart uses the stage.market control frame (API-CONTRACT §3.1). */

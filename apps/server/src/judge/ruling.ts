@@ -2,7 +2,8 @@
 //
 // Rules, in order:
 //   1. confidence rounded to 2 dp; outcome = toOutcome(verdict, yes_party) (REDO_BELOW = 0.8)
-//   2. a decisive verdict whose deterministic checks disagree -> REDO 'unclear' (checks.ts)
+//   2. a decisive verdict whose deterministic checks disagree -> REDO 'unclear' (checks.ts; for a
+//      bet with camera checks, camera-checks.ts: the veto's own template reason is the reason)
 //   3. redo_reason: 'contested' if contested, else 'unclear' if UNCLEAR, else 'low_confidence'
 //   4. a model failure (timeout, error, refusal, bad JSON) -> REDO 'unclear' (API-CONTRACT §7.1);
 //      it counts toward MAX_REDOS
@@ -20,6 +21,7 @@ import {
   type RedoReason,
   type VisionVerdict,
 } from '@youre-on/shared/ruling';
+import type { VetoKind } from '@youre-on/shared/checks/report';
 import type { AppDeps } from '../context';
 import { cachedRulingOn } from '../demo/toggles';
 import { compareChecks, isBottleFlip, type JudgeVerdict } from './checks';
@@ -43,7 +45,17 @@ export { CACHED_RULING_MODEL };
 
 /** What the vision step produced for one attempt. */
 export type Judged =
-  | { kind: 'verdict'; model: string; verdict: VisionVerdict; disagreement: string | null }
+  | {
+      kind: 'verdict';
+      model: string;
+      verdict: VisionVerdict;
+      disagreement: string | null;
+      /**
+       * Set by the camera checks (camera-checks.ts applyCameraVeto): `disagreement` then is
+       * `veto.why`, a full sentence the players read as the ruling's reason.
+       */
+      veto?: { kind: VetoKind; why: string } | null;
+    }
   | { kind: 'failure'; model: string; status: string; message: string };
 
 export interface RulingContext {
@@ -102,7 +114,10 @@ export function buildRuling(ctx: RulingContext, judged: Judged): Ruling {
     } else if (judged.disagreement) {
       outcome = 'REDO';
       redo = 'unclear';
-      reason = cleanReason(`Checks disagree: ${judged.disagreement}. Run it back.`, reason);
+      reason = cleanReason(
+        judged.veto ? judged.veto.why : `Checks disagree: ${judged.disagreement}. Run it back.`,
+        reason,
+      );
     }
   }
 

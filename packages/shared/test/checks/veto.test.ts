@@ -77,11 +77,12 @@ describe('checksVeto truth table (§7)', () => {
     expect(kind('UNCLEAR', ['false', 'false', 'false'])).toBeNull();
   });
 
-  it('gate not true: REDO for MET and NOT_MET alike', () => {
-    for (const g of ['false', 'unknown'] as const)
-      for (const c of ['MET', 'NOT_MET'] as const)
-        expect(kind(c, [g, 'true', 'true'])).toBe('not_on_camera');
-    expect(checksVeto('NOT_MET', SPEC, rep(['unknown', 'true', 'true']))?.why).toBe(
+  it('gate not true: MET -> REDO; NOT_MET stands (out of shot never overturns a miss)', () => {
+    for (const g of ['false', 'unknown'] as const) {
+      expect(kind('MET', [g, 'true', 'true'])).toBe('not_on_camera');
+      expect(kind('NOT_MET', [g, 'true', 'true'])).toBeNull();
+    }
+    expect(checksVeto('MET', SPEC, rep(['unknown', 'true', 'true']))?.why).toBe(
       "Couldn't see the table at the end. Keep it in frame and run it back.",
     );
   });

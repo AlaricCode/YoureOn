@@ -111,7 +111,7 @@ describe('fixtures/sam3: the four bottle-flip clips', () => {
     expect(checksVeto('NOT_MET', BOTTLE_FLIP, r)).toBeNull();
   });
 
-  it('bottle_flip_3_fling (clip C, gone after frame 3): gate false, REDO either verdict', () => {
+  it('bottle_flip_3_fling (clip C, gone after frame 3): gate false, MET -> REDO, NOT_MET stands', () => {
     const r = report('bottle_flip_3_fling');
     expect(r.results[0]).toMatchObject({ value: 'false', why: 'absent', frames: [9, 10, 11] });
     expect(r.results.map((x) => [x.value, x.why])).toEqual([
@@ -120,11 +120,11 @@ describe('fixtures/sam3: the four bottle-flip clips', () => {
       ['unknown', 'absent'],
     ]);
     expect([r.gate, r.need]).toEqual(['false', 'unknown']);
-    for (const c of ['MET', 'NOT_MET'] as const)
-      expect(checksVeto(c, BOTTLE_FLIP, r)?.kind).toBe('not_on_camera');
+    expect(checksVeto('MET', BOTTLE_FLIP, r)?.kind).toBe('not_on_camera');
+    expect(checksVeto('NOT_MET', BOTTLE_FLIP, r)).toBeNull(); // flung out of shot: a miss
   });
 
-  it('bottle_flip_4_partial (clip D, clipped then lost): gate unknown, REDO either verdict', () => {
+  it('bottle_flip_4_partial (clip D, clipped then lost): gate unknown, MET -> REDO, NOT_MET stands', () => {
     const r = report('bottle_flip_4_partial');
     // frame 9 clipped at the right edge; frame 10 scored -10000 (below S_FLOOR); frame 11 empty
     expect(r.results[0]).toMatchObject({ value: 'unknown', why: 'clipped' });
@@ -134,11 +134,11 @@ describe('fixtures/sam3: the four bottle-flip clips', () => {
       ['unknown', 'clipped'],
     ]);
     expect([r.gate, r.need]).toEqual(['unknown', 'unknown']);
-    for (const c of ['MET', 'NOT_MET'] as const)
-      expect(checksVeto(c, BOTTLE_FLIP, r)).toEqual({
-        kind: 'not_on_camera',
-        index: 0,
-        why: "Couldn't see the bottle at the end. Keep it in frame and run it back.",
-      });
+    expect(checksVeto('MET', BOTTLE_FLIP, r)).toEqual({
+      kind: 'not_on_camera',
+      index: 0,
+      why: "Couldn't see the bottle at the end. Keep it in frame and run it back.",
+    });
+    expect(checksVeto('NOT_MET', BOTTLE_FLIP, r)).toBeNull();
   });
 });

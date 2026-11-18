@@ -53,6 +53,13 @@ import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
 import { chainAckOf, partyOf, toOnchainStatus, type BetRow } from '../bets/snapshot';
 import { attemptArmedCue, rulingCue } from './cues';
+import {
+  applyCameraVeto,
+  runAttemptChecks,
+  storeAttemptChecks,
+  warmForAttempt,
+  type CheckRun,
+} from './camera-checks';
 import { buildRuling, judgeFrames, rulingCanonical, type Judged } from './ruling';
 import {
   DevicePatchRequest,
@@ -253,7 +260,22 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
     const [bet0] = await deps.db.select().from(bets).where(eq(bets.id, job.bet_id)).limit(1);
     if (!bet0) return;
     const names = await displayNames(deps.db, bet0);
-    const judged =
+    // Camera checks (camera-checks.ts): SAM on the regular frames, in parallel with the vision
+    // call (never the landing crop). null = none for this bet / attempt: legacy behaviour.
+    const regular = job.frames.flatMap((f, i) =>
+      f.landing_crop ? [] : [{ t_ms: f.t_ms, bytes: f.bytes, hash: job.frame_hashes[i]! }],
+    );
+    const checksP: Promise<CheckRun | null> = forced
+      ? Promise.resolve(null)
+      : runAttemptChecks(deps, {
+          bet_id: job.bet_id,
+          attempt_no: job.attempt_no,
+          terms_hash: bet0.terms_hash!,
+          frames: regular,
+          frame_hashes: regular.map((f) => f.hash),
+          duration_ms: job.duration_ms,
+        });
+    let judged =
       forced ??
       (await judgeFrames(deps, {
         terms: job.terms,
@@ -261,6 +283,9 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         frames: job.frames,
         duration_ms: job.duration_ms,
       }));
+    const checks = await checksP;
+    let veto: Parameters<typeof storeAttemptChecks>[1]['veto'] = null;
+    if (checks) ({ judged, veto } = applyCameraVeto(judged, checks, job.terms.yes_party));
     const now = deps.now();
     const ruling = buildRuling(
       {
@@ -310,6 +335,16 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         await versionedState(tx, bet, { redo_count: Math.min(3, bet.redo_count + 1) });
       }
       const events: BetEventEnvelope[] = [
+        // checks.report first, so a client has the boxes when the ruling lands.
+        ...(checks
+          ? await storeAttemptChecks(tx, {
+              bet_id: bet.id,
+              attempt_no: job.attempt_no,
+              run: checks,
+              veto,
+              now,
+            })
+          : []),
         await appendBetEvent(tx, {
           bet_id: bet.id,
           type: 'ruling.issued',
@@ -336,6 +371,18 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           ...(judged.kind === 'failure' ? { llm_status: judged.status } : {}),
           ...(judged.kind === 'verdict' && judged.disagreement
             ? { checks_disagree: judged.disagreement }
+            : {}),
+          ...(checks
+            ? {
+                camera_checks: {
+                  status: checks.report.status,
+                  gate: checks.report.gate,
+                  need: checks.report.need,
+                  report_hash: checks.report_hash,
+                  veto: veto?.kind ?? null,
+                  sam_ms: checks.sam_ms,
+                },
+              }
             : {}),
         },
       });
@@ -671,6 +718,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         });
 
         for (const e of out.events) deps.hub.publishBetEvent(e, bet0.room_id);
+        // Recording starts: wake SAM for a bet with camera checks (fire-and-forget).
+        void warmForAttempt(deps, betId);
         // The judge cam may only be on its user channel; the hub dedupes by seq per socket.
         if (out.recorderUser) {
           for (const e of out.events) deps.hub.publishToUser(out.recorderUser, e);

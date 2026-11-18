@@ -128,8 +128,11 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /**
  * §7. null: Claude's outcome stands. Otherwise REDO 'unclear' (which counts toward MAX_REDOS).
  * - no spec, no report, SAM unavailable, or UNCLEAR: null (UNCLEAR is already REDO).
- * - MET or NOT_MET with any gate not true: not_on_camera.
- * - NOT_MET otherwise stands: needs are necessary, never sufficient, so cannot contradict a miss.
+ * - NOT_MET stands: needs are necessary, never sufficient, so cannot contradict a miss; and a
+ *   subject out of shot is no ground to overturn one either (a bottle flung out of frame is a miss,
+ *   and a gate veto on NOT_MET would let a failing performer duck out of shot into REDO, then VOID
+ *   max_redos). The checks only ever refuse a MET.
+ * - MET with any gate not true: not_on_camera.
  * - MET with a false need: contradicts; else with an unknown need: unconfirmed (first in spec order).
  */
 export function checksVeto(
@@ -137,7 +140,7 @@ export function checksVeto(
   spec: CheckSpec | null,
   r: CheckReport | null,
 ): Veto | null {
-  if (spec === null || r === null || r.status === 'unavailable' || claim === 'UNCLEAR') return null;
+  if (spec === null || r === null || r.status === 'unavailable' || claim !== 'MET') return null;
   const ent = lookupOf(spec);
   const row = (i: number) => r.results[i]?.value ?? 'unknown';
   const gi = spec.assertions.findIndex((a, i) => a.role === 'gate' && row(i) !== 'true');
@@ -152,7 +155,6 @@ export function checksVeto(
       why: `Couldn't see ${what}. Keep it in frame and run it back.`,
     };
   }
-  if (claim === 'NOT_MET') return null;
   const fi = spec.assertions.findIndex((a, i) => a.role === 'need' && row(i) === 'false');
   const f = spec.assertions[fi]?.test;
   if (f !== undefined)

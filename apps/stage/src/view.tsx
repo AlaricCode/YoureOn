@@ -45,6 +45,8 @@ import { BEAT_TITLES, replayProgress, type ReplayStatus } from './replays';
 import { verifiedChain, type Verification } from './verify';
 import { liveGg, payoutLabel, reviewBannerOn } from './gg';
 import { ReviewBanner } from './gg-moment';
+import { boxFrame, reportFor } from './checks';
+import { RefCamFrame, RefCamResult, RefCamTermsLine } from './checks-view';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -252,6 +254,9 @@ export function TermsCard({ bet }: { bet: BetView }) {
             </span>
           )}
         </div>
+        {t.evidence_source === 'camera' && (
+          <RefCamTermsLine checks={bet.checks} termsHash={env.terms_hash} />
+        )}
       </div>
       {bet.terms_code && (
         <div className="code-box" aria-label="terms code">
@@ -469,6 +474,9 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
   if (!r) return null;
   const cited = r.cited_frames[0];
   const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
+  // the ref cam's result for this attempt (checks.report, sent just before the ruling)
+  const refcam = r.stage === 'attempt' ? reportFor(bet.checks, r.attempt_no) : null;
+  const boxIdx = refcam ? boxFrame(refcam, bet.frame_urls, r.cited_frames) : null;
   return (
     <div
       className={`ruling ${r.outcome === 'REDO' ? 'redo' : r.outcome === 'VOID' ? 'void' : 'decisive'}`}
@@ -506,12 +514,23 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
             !reviewBannerOn(bet, now) && (
               <span className="countdown">Appealed · the panel is reviewing</span>
             )}
+          {/* last: the appeal clock and the review banner never give way to it */}
+          {refcam && <RefCamResult report={refcam} reason={r.reason} />}
         </div>
-        {citedUrl && (
-          <figure className="cited">
-            <img src={citedUrl} alt={`cited frame ${cited}`} />
-            <figcaption>frame {cited}</figcaption>
-          </figure>
+        {refcam && boxIdx !== null ? (
+          <RefCamFrame
+            report={refcam}
+            idx={boxIdx}
+            url={bet.frame_urls[boxIdx]!}
+            cited={r.cited_frames.includes(boxIdx)}
+          />
+        ) : (
+          citedUrl && (
+            <figure className="cited">
+              <img src={citedUrl} alt={`cited frame ${cited}`} />
+              <figcaption>frame {cited}</figcaption>
+            </figure>
+          )
         )}
       </div>
     </div>
