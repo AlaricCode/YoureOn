@@ -184,7 +184,7 @@ function useReplays(enabled: boolean, hold: { readonly current: boolean }): Repl
     // after the page settles, so the bundle and the socket go first
     const t = setTimeout(() => {
       void preloadReplays({
-        fetch: (u) => fetch(u),
+        fetch: (u, init) => fetch(u, init), // the signal: a pause aborts the download
         createObjectURL: (b) => {
           const u = URL.createObjectURL(b);
           urls.push(u);
