@@ -16,6 +16,7 @@ import { cosine } from '../enroll/flow';
 import { getNativeEmbedder } from '../face/native';
 import { alignTransform, pickProbeFace } from '../face/pipeline';
 import { useVisionCameraPresence } from '../device/visionCamera';
+import { palette, radius, type } from '../ui/tokens';
 import type { PanelProps } from './panelTypes';
 import { describeError, runCheck } from './runner';
 
@@ -164,8 +165,9 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
   if (!permission.hasPermission) {
     return (
       <View style={styles.panel}>
-        <Text>Camera permission: {permission.status}</Text>
+        <Text style={styles.text}>Camera permission: {permission.status}</Text>
         <Button
+          color={palette.accent}
           title={permission.canRequestPermission ? 'Grant camera access' : 'Open Settings to allow'}
           onPress={() => {
             void permission.requestPermission().then((granted) => {
@@ -205,11 +207,13 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
         onError={onError}
       />
       <Button
+        color={palette.accent}
         title={busy ? 'Detecting…' : 'Capture still + detect face'}
         disabled={busy}
         onPress={() => void captureAndDetect()}
       />
       <Button
+        color={palette.accent}
         title={busy ? 'Embedding…' : 'Capture still + embed (full face pipeline)'}
         disabled={busy}
         onPress={() => void captureAndEmbed()}
@@ -221,6 +225,7 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
 
 const styles = StyleSheet.create({
   panel: { gap: 8 },
-  preview: { width: '100%', aspectRatio: 3 / 4, borderRadius: 8, overflow: 'hidden' },
-  note: { fontSize: 12, color: '#444' },
+  preview: { width: '100%', aspectRatio: 3 / 4, borderRadius: radius.lg, overflow: 'hidden' },
+  text: { ...type.label },
+  note: { ...type.small },
 });

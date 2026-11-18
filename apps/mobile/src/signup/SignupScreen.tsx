@@ -21,8 +21,9 @@ import {
   QuietButton,
   TextField,
 } from '../ui/kit';
+import { AppMark } from '../ui/brand';
 import { OperatorHold, Screen } from '../ui/parts';
-import { palette, space } from '../ui/tokens';
+import { half, space } from '../ui/tokens';
 import { SignupApiError, type SignedUpUser, type SignupApi } from './api';
 import { SIGNUP_COPY } from './copy';
 import {
@@ -80,32 +81,42 @@ export function SignupScreen({
           {preview ? <Label variant="small">{SIGNUP_COPY.previewTag}</Label> : null}
         </View>
         <View style={styles.body}>
+          {/* The brand switch above the name, decorative only: the title already says it. */}
+          <View
+            style={styles.mark}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            <AppMark width={MARK_WIDTH} />
+          </View>
           <OperatorHold onHold={onTitleLongPress}>
             <Label variant="display">{SIGNUP_COPY.title}</Label>
           </OperatorHold>
           <BodyText style={styles.gap}>{SIGNUP_COPY.body}</BodyText>
-          {/* Tapping the empty space puts the keyboard away. */}
-          <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />
-          <TextField
-            testID="signup-name"
-            label={SIGNUP_COPY.nameLabel}
-            placeholder={SIGNUP_COPY.namePlaceholder}
-            value={name}
-            onChangeText={(t) => {
-              setName(t);
-              setAlert(null);
-            }}
-            maxLength={MAX_NAME_LENGTH + 8}
-            onSubmitEditing={() => void submit()}
-          />
-          <View style={styles.check}>
-            <CheckRow
-              testID="signup-age"
-              label={SIGNUP_COPY.ageCheck}
-              checked={attestedAt !== null}
-              onToggle={() => setAttestedAt(attestedAt ? null : new Date())}
+          <View style={styles.form}>
+            <TextField
+              testID="signup-name"
+              label={SIGNUP_COPY.nameLabel}
+              placeholder={SIGNUP_COPY.namePlaceholder}
+              value={name}
+              onChangeText={(t) => {
+                setName(t);
+                setAlert(null);
+              }}
+              maxLength={MAX_NAME_LENGTH + 8}
+              onSubmitEditing={() => void submit()}
             />
+            <View style={styles.check}>
+              <CheckRow
+                testID="signup-age"
+                label={SIGNUP_COPY.ageCheck}
+                checked={attestedAt !== null}
+                onToggle={() => setAttestedAt(attestedAt ? null : new Date())}
+              />
+            </View>
           </View>
+          {/* The empty space between the form and Continue: tapping it puts the keyboard away. */}
+          <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />
           <AlertLine
             testID="signup-alert"
             message={alert ?? (problem === 'too_long' ? NAME_PROBLEM_LABEL.too_long : null)}
@@ -118,7 +129,7 @@ export function SignupScreen({
             onPress={() => void submit()}
           />
           {onDemo ? (
-            <View style={styles.check}>
+            <View style={styles.secondary}>
               <QuietButton testID="signup-demo" label={SIGNUP_COPY.demo} onPress={onDemo} />
             </View>
           ) : null}
@@ -128,8 +139,10 @@ export function SignupScreen({
   );
 }
 
+/** The switch mark at the top of the first screen: small, so the title stays the hero. */
+const MARK_WIDTH = space.x7;
+
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: palette.background },
   flex: { flex: 1 },
   top: {
     height: space.x6,
@@ -138,6 +151,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.page,
   },
   body: { flex: 1, paddingHorizontal: space.page, paddingBottom: space.x2 },
-  gap: { marginTop: space.x1 },
-  check: { marginTop: space.x2 },
+  mark: { marginTop: space.x2, marginBottom: space.x3, alignSelf: 'flex-start' },
+  gap: { marginTop: half.x15 },
+  // The name field and the 18+ box sit right under the tagline; Continue stays at the bottom.
+  form: { marginTop: space.x5 },
+  check: { marginTop: space.x3 },
+  secondary: { marginTop: space.x1 },
 });

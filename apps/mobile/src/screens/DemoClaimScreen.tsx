@@ -5,12 +5,34 @@
 // this phone's wallet, so a link alone never claims.
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { hasCameraLens } from '../device/camera';
-import { AlertLine, PrimaryButton, QuietButton, Stage, StageBubble } from '../ui/kit';
+import {
+  AlertLine,
+  BackdropProvider,
+  PrimaryButton,
+  QuietButton,
+  Stage,
+  StageBubble,
+} from '../ui/kit';
 import { Page, Screen, StatusHero, TopBar } from '../ui/parts';
+import { palette, radius, space } from '../ui/tokens';
 import { COPY, t } from './copy';
+
+/** Four thin white corners framing where the stage code goes. Decoration only. */
+function Viewfinder() {
+  return (
+    <View style={styles.finderWrap} pointerEvents="none">
+      <View style={styles.finder}>
+        <View style={[styles.corner, styles.tl]} />
+        <View style={[styles.corner, styles.tr]} />
+        <View style={[styles.corner, styles.bl]} />
+        <View style={[styles.corner, styles.br]} />
+      </View>
+    </View>
+  );
+}
 
 export function DemoClaimScreen({
   onBack,
@@ -55,15 +77,15 @@ export function DemoClaimScreen({
       <TopBar onBack={onBack} title={t(COPY.demo.title)} tag={tag} />
       <Page>
         {name ? (
-          <Stage style={styles.center}>
+          <Stage style={[styles.stage, styles.center]}>
             <StatusHero mark="check" title={t(COPY.demo.done)} detail={name} />
           </Stage>
         ) : linkCode ? (
-          <Stage style={styles.center}>
+          <Stage style={[styles.stage, styles.center]}>
             <StatusHero mark="ring" title={t(COPY.demo.title)} />
           </Stage>
         ) : permission?.granted ? (
-          <Stage>
+          <Stage style={styles.stage}>
             <CameraView
               ref={cam}
               style={StyleSheet.absoluteFill}
@@ -73,17 +95,25 @@ export function DemoClaimScreen({
               onCameraReady={() => void hasCameraLens(cam.current).then((ok) => setNoCamera(!ok))}
               onMountError={() => setNoCamera(true)}
             />
-            <StageBubble
-              prompt={t(noCamera ? COPY.judgeCam.noCamera : COPY.demo.scan)}
-              checking={checking}
-            />
+            {noCamera ? null : <Viewfinder />}
+            {noCamera ? (
+              // No lens (the simulator): the note sits in the middle of the stage, as on Scan.
+              <View style={styles.finderWrap} pointerEvents="none">
+                <StageBubble prompt={t(COPY.judgeCam.noCamera)} centered />
+              </View>
+            ) : (
+              <StageBubble prompt={t(COPY.demo.scan)} checking={checking} />
+            )}
           </Stage>
         ) : (
-          <Stage style={styles.center}>
-            <QuietButton
-              label={t(COPY.scan.allowCamera)}
-              onPress={() => void requestPermission()}
-            />
+          <Stage style={[styles.stage, styles.center]}>
+            {/* On the raised stage the quiet button keeps its #1C1C1F fill. */}
+            <BackdropProvider value="raised">
+              <QuietButton
+                label={t(COPY.scan.allowCamera)}
+                onPress={() => void requestPermission()}
+              />
+            </BackdropProvider>
           </Stage>
         )}
         <AlertLine message={alert} />
@@ -102,6 +132,50 @@ export function DemoClaimScreen({
   );
 }
 
+const FINDER = 220;
+const CORNER = space.x5;
+const STROKE = 2;
+
 const styles = StyleSheet.create({
-  center: { alignItems: 'center', justifyContent: 'center' },
+  stage: { marginTop: space.x1 },
+  center: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: space.x3 },
+  finderWrap: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  finder: { width: FINDER, height: FINDER },
+  corner: { position: 'absolute', width: CORNER, height: CORNER, borderColor: palette.text },
+  tl: {
+    top: 0,
+    left: 0,
+    borderTopWidth: STROKE,
+    borderLeftWidth: STROKE,
+    borderTopLeftRadius: radius.md,
+  },
+  tr: {
+    top: 0,
+    right: 0,
+    borderTopWidth: STROKE,
+    borderRightWidth: STROKE,
+    borderTopRightRadius: radius.md,
+  },
+  bl: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: STROKE,
+    borderLeftWidth: STROKE,
+    borderBottomLeftRadius: radius.md,
+  },
+  br: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: STROKE,
+    borderRightWidth: STROKE,
+    borderBottomRightRadius: radius.md,
+  },
 });

@@ -9,6 +9,7 @@ import { createVideoPlayer, type VideoPlayer } from 'expo-video';
 import { useCallback, useRef, useState } from 'react';
 import { Button, StyleSheet, Text, View } from 'react-native';
 
+import { palette, radius, type } from '../ui/tokens';
 import type { PanelProps } from './panelTypes';
 import { runCheck } from './runner';
 
@@ -127,12 +128,16 @@ export default function ExpoCameraPanel({ onResult }: PanelProps) {
     setBusy(false);
   }, [onResult]);
 
-  if (!permission) return <Text>Checking camera permission…</Text>;
+  if (!permission) return <Text style={styles.text}>Checking camera permission…</Text>;
   if (!permission.granted) {
     return (
       <View style={styles.panel}>
-        <Text>Camera permission: {permission.status}</Text>
-        <Button title="Grant camera access" onPress={() => void requestPermission()} />
+        <Text style={styles.text}>Camera permission: {permission.status}</Text>
+        <Button
+          color={palette.accent}
+          title="Grant camera access"
+          onPress={() => void requestPermission()}
+        />
       </View>
     );
   }
@@ -157,6 +162,7 @@ export default function ExpoCameraPanel({ onResult }: PanelProps) {
         }
       />
       <Button
+        color={palette.accent}
         title={busy ? 'Recording…' : ready ? 'Record 2 s' : 'Waiting for camera…'}
         disabled={!ready || busy}
         onPress={() => void record()}
@@ -168,6 +174,7 @@ export default function ExpoCameraPanel({ onResult }: PanelProps) {
 
 const styles = StyleSheet.create({
   panel: { gap: 8 },
-  preview: { width: '100%', aspectRatio: 16 / 9, borderRadius: 8, overflow: 'hidden' },
-  note: { fontSize: 12, color: '#444' },
+  preview: { width: '100%', aspectRatio: 16 / 9, borderRadius: radius.lg, overflow: 'hidden' },
+  text: { ...type.label },
+  note: { ...type.small },
 });

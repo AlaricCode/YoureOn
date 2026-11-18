@@ -29,10 +29,11 @@ import {
   SavedRow,
   StepHeader,
   StepScaffold,
+  TextButton,
   ToggleRow,
 } from '../ui/kit';
 import { Screen } from '../ui/parts';
-import { palette, space } from '../ui/tokens';
+import { half, palette, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi, type FaceStatus } from './api';
 import type { FaceEmbedder } from './embedder';
 import { ENROLL_COPY } from './copy';
@@ -54,9 +55,15 @@ export function FaceEnrollFlow({
   onDone,
   onSkip,
   onExit,
+  showPreviewTag = true,
 }: {
   api: FaceApi;
   embedder: FaceEmbedder;
+  /**
+   * Tag the steps "Preview" when the embedder is a stand-in (default). The design preview turns
+   * it off: its own Preview bar already says so.
+   */
+  showPreviewTag?: boolean;
   /** The server-corrected clock (ms; rt.clock.now) for consent_at and passed_at: the server
    *  refuses either one more than 60 s ahead of its own time. */
   now: () => number;
@@ -102,7 +109,7 @@ export function FaceEnrollFlow({
   }, [back]);
 
   const checked = consentAt !== null;
-  const tag = embedder.preview ? ENROLL_COPY.previewTag : undefined;
+  const tag = embedder.preview && showPreviewTag ? ENROLL_COPY.previewTag : undefined;
 
   return (
     <Screen>
@@ -121,7 +128,13 @@ export function FaceEnrollFlow({
           }
           secondary={
             saved ? undefined : (
-              <QuietButton testID="enroll-skip" label={ENROLL_COPY.skip} onPress={onSkip} />
+              // A plain text action, so the disabled "Continue" pill above reads as disabled.
+              <TextButton
+                tone="plain"
+                testID="enroll-skip"
+                label={ENROLL_COPY.skip}
+                onPress={onSkip}
+              />
             )
           }
         >
@@ -133,15 +146,23 @@ export function FaceEnrollFlow({
             )
           ) : (
             <>
+              {/* The consent text sits straight on black between two hairlines and scrolls
+                  inside them: no boxed card. */}
+              <Hairline />
               <ScrollView style={styles.flex} contentContainerStyle={styles.consentInner}>
                 <BodyText>{consent.text}</BodyText>
               </ScrollView>
-              <CheckRow
-                testID="enroll-consent"
-                label={ENROLL_COPY.consentCheck}
-                checked={checked}
-                onToggle={saved ? undefined : () => setConsentAt(checked ? null : new Date(now()))}
-              />
+              <Hairline />
+              <View style={styles.consentCheck}>
+                <CheckRow
+                  testID="enroll-consent"
+                  label={ENROLL_COPY.consentCheck}
+                  checked={checked}
+                  onToggle={
+                    saved ? undefined : () => setConsentAt(checked ? null : new Date(now()))
+                  }
+                />
+              </View>
             </>
           )}
         </StepScaffold>
@@ -243,10 +264,11 @@ export function FaceSettings({
           <>
             <View style={styles.savedHead}>
               <CheckBadge size={40} />
-              <Label variant="heading">{ENROLL_COPY.savedTitle}</Label>
+              <Label variant="subtitle">{ENROLL_COPY.savedTitle}</Label>
             </View>
             <BodyText style={styles.gap}>{ENROLL_COPY.savedBody}</BodyText>
             <View style={styles.rows}>
+              <Hairline />
               {status === 'active' ? (
                 <SavedRow label={ENROLL_COPY.faceRow} value={ENROLL_COPY.savedValue} />
               ) : (
@@ -265,7 +287,8 @@ export function FaceSettings({
           </>
         ) : (
           <>
-            <Label variant="heading" style={styles.gapLarge}>
+            {/* 17/500 white, not a second bold heading under "Face matching". */}
+            <Label variant="rowMedium" style={styles.gapLarge}>
               {ENROLL_COPY.noneTitle}
             </Label>
             <BodyText style={styles.gap}>{ENROLL_COPY.noneBody}</BodyText>
@@ -300,15 +323,22 @@ export function FaceSettings({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: palette.background },
   flex: { flex: 1 },
-  consentInner: { paddingBottom: space.x2 },
+  // Text on the 20 pt page margin (no inset), breathing room above and below the hairlines.
+  consentInner: { paddingVertical: space.x2 + half.x05 },
+  consentCheck: { marginTop: space.x1 },
   titleBar: { marginBottom: space.x1 },
-  settings: { flex: 1, paddingHorizontal: space.page, paddingBottom: space.x2 },
+  settings: {
+    flex: 1,
+    paddingHorizontal: space.page,
+    paddingBottom: space.x2,
+    paddingTop: space.x1,
+  },
   spinner: { marginTop: space.x4 },
-  savedHead: { flexDirection: 'row', alignItems: 'center', gap: space.x2, marginTop: space.x3 },
-  gap: { marginTop: space.x2 },
-  gapLarge: { marginTop: space.x3 },
-  rows: { marginTop: space.x3 },
-  alertSlot: { height: space.x3, alignItems: 'center', justifyContent: 'center' },
+  savedHead: { flexDirection: 'row', alignItems: 'center', gap: half.x15, marginTop: space.x4 },
+  gap: { marginTop: half.x15 },
+  gapLarge: { marginTop: space.x4 },
+  // Saved + toggle as plain rows on black, a hairline above, between and below.
+  rows: { marginTop: space.x4 },
+  alertSlot: { height: space.x4, alignItems: 'center', justifyContent: 'center' },
 });

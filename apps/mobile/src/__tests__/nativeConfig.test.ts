@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { palette } from '../ui/tokens';
+
 const here = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const readJson = (rel: string) =>
   JSON.parse(readFileSync(here(rel), 'utf8')) as Record<string, unknown>;
@@ -61,6 +63,11 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
     'react-dom': '19.3.0',
     'react-native-reanimated': '4.7.1',
     'react-native-worklets': '0.13.0',
+    // The one typeface (ui/fonts, Geist): asset-only, pinned so a font file never shifts.
+    '@expo-google-fonts/geist': '0.4.2',
+    // Native (the balance sparkline, the moment glow): Expo SDK 58's bundledNativeModules pin.
+    // Adding it needs a full native rebuild (expo prebuild + a new dev-client build).
+    'react-native-svg': '15.16.0',
   };
   for (const [name, version] of Object.entries(exact)) {
     it(`${name} is pinned to exactly ${version} and installed at it`, () => {
@@ -88,6 +95,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
       'expo-local-authentication',
       'expo-crypto',
       'expo-splash-screen',
+      'expo-font',
     ]) {
       expect(pkg.dependencies[name], name).toMatch(/^~58\./);
     }
@@ -99,6 +107,9 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
       '@coral-xyz/anchor',
       '@anchor-lang/core',
       'onnxruntime-react-native',
+      // Replaced by Geist (Obsidian redesign).
+      '@expo-google-fonts/big-shoulders-display',
+      '@expo-google-fonts/instrument-sans',
     ]) {
       expect(pkg.dependencies[name], name).toBeUndefined();
     }
@@ -138,8 +149,10 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
     expect(app.userInterfaceStyle).toBe('dark');
     expect(pluginOptions('expo-splash-screen')).toMatchObject({
       image: './assets/splash-icon.png',
-      backgroundColor: '#0B0B0C',
+      backgroundColor: '#000000',
     });
+    // The native splash hands off to ui/brand SplashView on the app background: same colour.
+    expect(palette.background).toBe('#000000');
   });
 
   it('passes the same camera and mic strings to every plugin that writes them', () => {
@@ -217,12 +230,13 @@ describe('dark appearance (ui/tokens palette is dark)', () => {
     expect((app as unknown as { userInterfaceStyle: string }).userInterfaceStyle).toBe('dark');
   });
 
-  it('shows a light status bar over the app (the white diagnostics screen gets dark)', () => {
+  it('shows a light status bar over the app (diagnostics is night too)', () => {
     const demo = readFileSync(here('../app/DemoApp.tsx'), 'utf8');
     expect(demo).toContain('<StatusBar style="light" />');
     expect(demo).not.toMatch(/<StatusBar style="dark"/);
     const root = readFileSync(here('../../App.tsx'), 'utf8');
-    expect(root).toContain("<StatusBar style={operator ? 'dark' : 'light'} />");
+    expect(root).toContain('<StatusBar style="light" />');
+    expect(root).not.toMatch(/<StatusBar style=\{operator/);
   });
 });
 

@@ -1,145 +1,253 @@
-// You're On design tokens. Ported from Verdict app/lib/ui/tokens.dart, app/lib/ui/theme.dart and
-// verdict-spec.md §6.2-§6.4 (docs/CONTRACTS.md §12.12), re-expressed as plain React Native style
-// values. Monochrome, dark, ONE accent reserved for the primary action and live state, plus one
-// red (`danger`) from the enroll redesign: destructive actions, capture problems the user can
-// fix ("Turn further left"), and the cross on a loss or a bet that ended ("You lost",
-// "Declined. Nothing moved."). Generic errors stay in the text color.
+// You're On design tokens: "Obsidian". A black fintech look: pure OLED black, white type, hairline
+// rows instead of cards, and colour kept for two jobs only: green for the one action and money
+// going up (won, paid, "+$"), red for money going down, losses and fixable problems. One
+// typeface, Geist, in four weights; big money figures are thin (Light) and tightly tracked with
+// tabular numerals. No shadows, no gradients, no full-bleed colour screens.
 //
 // Pure TS on purpose: no react-native / expo imports, so vitest can load it in Node and every
 // screen gets the same numbers. Haptics are named tokens only; the call site maps them to
-// expo-haptics (whose enum values are these same strings: 'light', 'success', ...).
+// expo-haptics (whose enum values are these same strings: 'light', 'success', ...). Font files are
+// loaded by ./fonts (expo-font) under exactly the family names in `fontFamily` below.
 //
 // Timing sources from OUR contracts: HoldToConfirm 800 ms / maxDistance 24 (TASKS D1-M5); the
 // payout animation fires at `processed` and reverts if not confirmed within 5 s (SCHEMAS X10,
 // API-CONTRACT §6.2, ARCHITECTURE §5.2); LOCKED is a double haptic on both phones (ARCHITECTURE §5.2).
 
 // ---------------------------------------------------------------------------------------
-// Color: monochrome + one accent (Verdict Palette) + danger (enroll redesign)
+// Color
 // ---------------------------------------------------------------------------------------
 
+/** The named swatches. Screens should reach for the semantic names in `palette` / `color`. */
+export const swatch = {
+  /** Background everywhere, the status bar area too. */
+  black: '#000000',
+  /** Sheets, modals and inputs only. Most content sits straight on black. */
+  raised: '#0F0F11',
+  /** Hairline dividers; also the fill of secondary buttons, chips and avatars. */
+  line: '#1C1C1F',
+  /** Primary text. */
+  white: '#FFFFFF',
+  /** Secondary text (>= 4.5:1 on black). */
+  grey: '#8D8D93',
+  /** Tertiary text, disabled, offline. */
+  dim: '#4A4A4F',
+  /** The one accent: the primary action, money up, live, selection. Ink on it is black. */
+  green: '#00D47A',
+  /** Money down, losses, destructive actions, fixable capture problems. Sparingly. */
+  red: '#FF4F45',
+} as const;
+
 export const palette = {
-  background: '#0B0B0C',
-  surface: '#141416',
-  hairline: '#26262A',
-  text: '#EDEDEF',
-  textSecondary: '#8A8A8F',
-  /** The only accent: the primary action and the live dot. Nothing else. */
-  accent: '#5E6AD2',
-  /**
-   * Red, from Verdict's enroll redesign (branch enroll-redesign): destructive actions ("Delete
-   * face data", "Yes, delete") and capture problems the user can fix ("Turn further left",
-   * "No face found"). Not for generic errors, which stay in the text color.
-   */
-  danger: '#E5484D',
+  ...swatch,
+  // Semantic aliases (the names every screen uses).
+  background: swatch.black,
+  /** Sheets, modals, inputs, the camera stage. */
+  surface: swatch.raised,
+  /** Secondary buttons, chips, avatar discs, toggles off. */
+  fill: swatch.line,
+  hairline: swatch.line,
+  text: swatch.white,
+  textSecondary: swatch.grey,
+  textTertiary: swatch.dim,
+  /** The accent: the primary action, live state, selection, the hold ring. */
+  accent: swatch.green,
+  /** Money down, the loss cross, destructive actions, fixable capture problems. */
+  danger: swatch.red,
+  /** Money up ("+$", Won, paid) and online presence. Same green as the accent. */
+  success: swatch.green,
 } as const;
 
 /** Semantic roles. Every role resolves to a palette value. */
 export const color = {
   ...palette,
-  onAccent: palette.text,
-  /** Errors are short noun phrases in the text color, never red (Verdict theme: error = text). */
+  /** Text and icons on a green (accent) fill: black, never white. */
+  onAccent: palette.black,
+  /** Text on a green success fill. */
+  onSuccess: palette.black,
+  /** Text on a red fill (the filled "Yes, delete"). */
+  onDanger: palette.black,
+  /** Errors are short noun phrases in the text color, never red. */
   error: palette.text,
   divider: palette.hairline,
   border: palette.hairline,
-  borderFocused: palette.textSecondary,
+  /** A focused input: a 1 pt green border (`border.focused`). */
+  borderFocused: palette.green,
+  /** Avatar discs: a grey disc with a white initial. No per-person tints. */
+  avatar: palette.fill,
+  disabled: palette.dim,
   /** The balance shown "+$" at processed, before confirmation (ARCHITECTURE §5.2). */
   pending: palette.textSecondary,
   live: palette.accent,
   primaryAction: palette.accent,
+  /** The selected chip / stake. */
+  selected: palette.accent,
   /** Destructive buttons and fixable capture problems (see palette.danger). */
   destructive: palette.danger,
   fixable: palette.danger,
-  /** The cross badge on a loss, a lock that ended, or a failed payout. */
+  /** Money down: a loss, "−$", a lock that ended badly, a failed payout. */
   negative: palette.danger,
+  /** Money up: "+$" on a payout you received, Won, paid. */
+  positive: palette.green,
+  /** Presence dots. */
+  online: palette.green,
+  offline: palette.dim,
 } as const;
 
 export type ColorToken = keyof typeof color;
 
-/** The only hex values a screen may use. */
+/** Every hex value a screen may use. */
 export const ALLOWED_COLORS: ReadonlySet<string> = new Set(Object.values(palette));
 
+/** Money direction -> its colour: up green, down red, flat white. */
+export function moneyColor(deltaCents: number): string {
+  return deltaCents > 0 ? color.positive : deltaCents < 0 ? color.negative : color.text;
+}
+
+/**
+ * The soft glow behind a moment's money figure: a radial fade of the money colour from
+ * `opacity` at the centre to 0 at the edge of a `size` disc (no gradient banners, no blur views).
+ */
+export const glow = { size: 320, opacity: 0.22, lossOpacity: 0.1 } as const;
+
 // ---------------------------------------------------------------------------------------
-// Type: one sans family, two weights, scale 13/15/17/22/28 (Verdict Typo)
+// Type: Geist, one family, four weights
 // ---------------------------------------------------------------------------------------
 
 /**
- * Verdict ships Inter. The app has no font asset or expo-font yet, and an unknown fontFamily is a
- * red-box error on iOS, so `family` stays undefined (system SF Pro, one sans) until Inter is added.
+ * Loaded font family names, one per weight (./fonts registers each file under exactly this
+ * name). iOS does not pick a weight inside a custom family from fontWeight, so each weight is its
+ * own family; fontWeight is still set on every style so the system-font fallback (fonts failed to
+ * load) keeps the hierarchy.
  */
-export const fontFamily: string | undefined = undefined;
+export const fontFamily = {
+  /** Geist 300: money figures and big numbers, the moment headline. */
+  light: 'Geist_300Light',
+  /** Geist 400: body, inputs, mid-size amounts. */
+  regular: 'Geist_400Regular',
+  /** Geist 500: labels. */
+  medium: 'Geist_500Medium',
+  /** Geist 600: headings, buttons, titles. */
+  semibold: 'Geist_600SemiBold',
+} as const;
 
-export const fontWeight = { regular: '400', semibold: '600' } as const;
+export type FontFamilyName = (typeof fontFamily)[keyof typeof fontFamily];
+
+export const fontWeight = {
+  light: '300',
+  regular: '400',
+  medium: '500',
+  semibold: '600',
+} as const;
 export type FontWeight = (typeof fontWeight)[keyof typeof fontWeight];
+type Weight = keyof typeof fontWeight;
 
+/** UI sizes. */
 export const typeScale = [13, 15, 17, 22, 28] as const;
+/** Display sizes: money figures, big numbers, the moment headline. Geist Light/Regular only. */
+export const displayScale = [34, 44, 56] as const;
+
+/** Numerals all the same width, so a counting figure does not jitter. */
+export const TABULAR: ['tabular-nums'] = ['tabular-nums'];
 
 type TypeStyle = {
-  readonly fontSize: (typeof typeScale)[number];
+  readonly fontFamily: FontFamilyName;
+  readonly fontSize: (typeof typeScale)[number] | (typeof displayScale)[number];
   readonly lineHeight: number;
   readonly fontWeight: FontWeight;
   readonly letterSpacing: number;
   readonly color: string;
+  readonly fontVariant?: ['tabular-nums'];
 };
 
+const ui = (
+  fontSize: (typeof typeScale)[number],
+  lineHeight: number,
+  w: Exclude<Weight, 'light'>,
+  c: string = palette.text,
+  letterSpacing = 0,
+): TypeStyle => ({
+  fontFamily: fontFamily[w],
+  fontSize,
+  lineHeight,
+  fontWeight: fontWeight[w],
+  letterSpacing,
+  color: c,
+});
+
+/** A figure: tabular numerals, tight tracking (about -2.8 % of the size). */
+const figure = (
+  fontSize: (typeof typeScale)[number] | (typeof displayScale)[number],
+  lineHeight: number,
+  w: 'light' | 'regular' = 'light',
+): TypeStyle => ({
+  fontFamily: fontFamily[w],
+  fontSize,
+  lineHeight,
+  fontWeight: fontWeight[w],
+  letterSpacing: -Math.round(fontSize * 0.028 * 10) / 10,
+  color: palette.text,
+  fontVariant: TABULAR,
+});
+
 export const type = {
-  display: {
-    fontSize: 28,
-    lineHeight: 36,
-    fontWeight: fontWeight.semibold,
-    letterSpacing: -0.4,
-    color: palette.text,
-  },
-  title: {
-    fontSize: 22,
-    lineHeight: 32,
-    fontWeight: fontWeight.semibold,
-    letterSpacing: -0.2,
-    color: palette.text,
-  },
-  heading: {
-    fontSize: 17,
-    lineHeight: 24,
-    fontWeight: fontWeight.semibold,
-    letterSpacing: 0,
-    color: palette.text,
-  },
-  label: {
-    fontSize: 15,
-    lineHeight: 24,
-    fontWeight: fontWeight.regular,
-    letterSpacing: 0,
-    color: palette.text,
-  },
-  labelStrong: {
-    fontSize: 15,
-    lineHeight: 24,
-    fontWeight: fontWeight.semibold,
-    letterSpacing: 0,
-    color: palette.text,
-  },
-  value: {
-    fontSize: 15,
-    lineHeight: 24,
-    fontWeight: fontWeight.regular,
-    letterSpacing: 0,
-    color: palette.textSecondary,
-  },
-  small: {
-    fontSize: 13,
-    lineHeight: 16,
-    fontWeight: fontWeight.regular,
-    letterSpacing: 0,
-    color: palette.textSecondary,
-  },
+  // --- Figures (Geist Light / Regular, tabular) ------------------------------------------
+  /** The balance: 56 Light. The signature. */
+  balance: figure(56, 62),
+  /** The money figure on a moment ("+$5.00"): 56 Light, coloured by direction. */
+  money: figure(56, 62),
+  /** The moment headline ("You're on", the ruling): 56 Light white. */
+  moment: figure(56, 62),
+  /** A longer moment line ("Logan challenged you"), or a moment on a small phone: 44 Light. */
+  momentSmall: figure(44, 50),
+  /** Big numbers that are not money: the countdown clock, the sign-up title. 44 Light. */
+  display: figure(44, 50),
+  /** A mid-size figure (the pot, a stake on the terms card): 34 Light. */
+  figure: figure(34, 40),
+  /** Dollar amounts in rows ("$10"): 22 Regular. */
+  amount: figure(22, 28, 'regular'),
+  /** End-state titles ("Declined. Nothing moved.", "Payout failed"): 34 Light, the moment voice. */
+  endTitle: figure(34, 40),
+  // --- UI (Geist) ------------------------------------------------------------------------
+  /** Screen titles: 28/600. */
+  title: ui(28, 34, 'semibold', palette.text, -0.6),
+  /** A sub-headline (sheet titles, "Face saved"): 22/600. */
+  subtitle: ui(22, 28, 'semibold', palette.text, -0.3),
+  /** The bet statement (the claim on terms, live, hearing, market): 22/400, quiet. */
+  statement: ui(22, 28, 'regular', palette.text, -0.3),
+  /** A large initial on a 56 pt avatar disc: 22/500. */
+  initial: ui(22, 28, 'medium'),
+  /** Names in lists, sheet titles, the stage prompt: 17/600. */
+  heading: ui(17, 24, 'semibold'),
+  /** Button labels: 17/600. */
+  button: ui(17, 22, 'semibold'),
+  /** A plain text button ("Skip for now", "Back"): 17/500 white. */
+  buttonQuiet: ui(17, 22, 'medium'),
+  /** List row titles (Profile, History): 17/400. */
+  row: ui(17, 24, 'regular'),
+  /** Names that lead a row (the appeal panel's models), stake chips: 17/500. */
+  rowMedium: ui(17, 24, 'medium'),
+  /** Text typed into a field: 17/400. */
+  input: ui(17, 22, 'regular'),
+  /** Running text and explanations under a title: 15, grey. */
+  body: ui(15, 22, 'regular', palette.textSecondary),
+  label: ui(15, 22, 'regular'),
+  /** Section headers ("Counts if", "Profile"): grey 15/500, quieter than the rows under them. */
+  section: ui(15, 22, 'medium', palette.textSecondary),
+  labelMedium: ui(15, 22, 'medium'),
+  labelStrong: ui(15, 22, 'semibold'),
+  /** The value in a row, and "Balance" above the figure: 15, grey. */
+  value: ui(15, 22, 'regular', palette.textSecondary),
+  small: ui(13, 18, 'regular', palette.textSecondary),
+  smallStrong: ui(13, 18, 'medium', palette.text),
 } as const satisfies Record<string, TypeStyle>;
 
 export type TypeToken = keyof typeof type;
 
 // ---------------------------------------------------------------------------------------
-// Space (8-pt grid), radii, sizes
+// Space (4-pt grid, 8-pt steps), radii, sizes
 // ---------------------------------------------------------------------------------------
 
-export const GRID = 8;
+export const GRID = 4;
 
 export const space = {
   x1: 8,
@@ -148,31 +256,68 @@ export const space = {
   x4: 32,
   x5: 40,
   x6: 48,
+  x7: 56,
   x8: 64,
+  x10: 80,
   /** Horizontal page margin. */
-  page: 24,
-  /** Standard control height (buttons, inputs). */
-  control: 48,
+  page: 20,
+  /** Standard control height (buttons, inputs, the hold control). */
+  control: 56,
+  /** A list row's minimum height (hairline-separated). */
+  row: 56,
 } as const;
 
-/** Verdict: 4 (chips, tags), 8 (buttons, inputs, banners), 12 (sheet top corners). */
-export const radius = { sm: 4, md: 8, lg: 12, pill: 999 } as const;
+/** Half-steps of the grid, for tight inner gaps (chip padding, label-to-field). */
+export const half = { x05: 4, x15: 12 } as const;
+
+/** sm: checkboxes; md: inputs, banners; lg: sheets and the camera stage; pill: buttons, chips. */
+export const radius = { sm: 6, md: 14, lg: 20, pill: 999 } as const;
 
 /** Hairline: use StyleSheet.hairlineWidth at the call site; this is the logical fallback. */
-export const border = { hairline: 0.5 } as const;
+export const border = { hairline: 0.5, focused: 1 } as const;
 
 /** One outline icon set (Lucide), used sparingly. */
 export const iconSize = { sm: 16, md: 20 } as const;
 
+/** Avatar disc sizes in use. */
+export const avatarSize = {
+  sm: 32,
+  md: 40,
+  lg: 48,
+  vs: 56,
+  xl: 72,
+  moment: 88,
+  hero: 112,
+} as const;
+
+/** The balance sparkline (Home): a 2 pt line, no axes, no grid. */
+export const sparkline = {
+  height: 56,
+  strokeWidth: 2,
+  endDot: 3,
+  /** The soft halo around the end dot: an r = 6 disc at 0.2 opacity. */
+  haloRadius: 6,
+  haloOpacity: 0.2,
+  /** Fewer points than this draw nothing (two points are just a ruler line). */
+  minPoints: 3,
+} as const;
+
 // ---------------------------------------------------------------------------------------
-// Motion: functional only, <= 200 ms, ease-out, no springs, no bounce
+// Motion: functional only, ease-out, no springs, no bounce. One reveal on a moment (fade and a
+// slight rise, <= 300 ms); every other transition <= 200 ms.
 // ---------------------------------------------------------------------------------------
 
 export const MAX_TRANSITION_MS = 200;
+export const MAX_MOMENT_MS = 300;
 
 export const motion = {
   /** Every UI transition. */
   fastMs: 150,
+  /** The moment reveal: fade in and rise `momentRise` pt. Off under Reduce Motion. */
+  momentMs: 280,
+  momentRise: 12,
+  /** A slight scale-in some reveals pair with the fade (kept subtle). */
+  momentFromScale: 0.98,
   /** Flutter Curves.easeOut = cubic-bezier(0, 0, 0.58, 1). Reanimated: Easing.bezier(...). */
   easing: [0, 0, 0.58, 1] as const,
   /** Springs are banned (spec §6.2); a component must not use withSpring. */
@@ -191,6 +336,8 @@ export const hold = {
   /** Releasing early returns the ring to 0 over this; then no prompt. */
   releaseMs: 150,
   ringStrokeWidth: 2,
+  /** The hold's progress: a black overlay at this opacity sweeping across the green pill. */
+  progressOpacity: 0.18,
 } as const;
 
 // ---------------------------------------------------------------------------------------
@@ -207,6 +354,8 @@ export const payout = {
   /** The pending tint lasts until `confirmed` (tx.confirmed), then the value turns to `text`. */
   pendingColor: color.pending,
   settledColor: color.text,
+  /** The "+$" delta beside the balance. */
+  deltaColor: color.positive,
 } as const;
 
 // ---------------------------------------------------------------------------------------

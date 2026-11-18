@@ -61,3 +61,29 @@ export function historyFrom(items: readonly unknown[]): HistoryItem[] {
     return row ? [row] : [];
   });
 }
+
+/** micro-USDC (signed, as a string) -> whole cents, rounded toward zero like the balance. */
+const centsOf = (micro: string) => Number(BigInt(micro) / 10_000n);
+
+/**
+ * The Home sparkline: my balance (cents) after each settled bet, oldest first, ending at today's
+ * balance. Walks back from `balanceCents` through `items` (newest first, as historyFrom returns
+ * them) by each bet's net. Bets still in escrow are not in `items`, so the curve is the settled
+ * balance; that is the line the user's wins and losses moved. Fewer than one item -> [] (the
+ * Sparkline hides itself under two points).
+ */
+export function balanceSeries(balanceCents: number, items: readonly HistoryItem[]): number[] {
+  if (items.length === 0) return [];
+  const out = [balanceCents];
+  let at = balanceCents;
+  for (const it of items) {
+    at -= centsOf(it.net);
+    out.push(at);
+  }
+  return out.reverse();
+}
+
+/** The net (cents) of every loaded settled bet: the "+$12.50" under the balance. */
+export function netCents(items: readonly HistoryItem[]): number {
+  return items.reduce((sum, it) => sum + centsOf(it.net), 0);
+}

@@ -1,9 +1,14 @@
-// UI kit for party screens, ported from Verdict's Flutter widgets and its enroll redesign
-// (branch enroll-redesign): step header with back arrow and progress bars, a title with a short
-// explanation, the prompt bubble over the camera with an animated "Checking…", red fix-it lines,
-// the check badge, the shutter, a red destructive button and a Yes/No confirmation sheet.
-// Every color, size and duration comes from ./tokens; copy follows ./copyRule.
-import { useEffect, useState, type ReactNode } from 'react';
+// UI kit for party screens ("Obsidian", ./tokens): step header with back chevron and progress
+// bars, a title with a short explanation, the prompt bubble over the camera with an animated
+// "Checking…", red fix-it lines, the check badge, the shutter, pill buttons, a text field and a
+// Yes/No confirmation sheet. Every color, size and duration comes from ./tokens; copy follows
+// ./copyRule.
+//
+// Backdrops: what a component sits on changes how it draws, without new props at the call site.
+// The page is black; a ConfirmSheet, a raised Card or the camera Stage is "raised" (#0F0F11), so
+// a text field in it takes the next step up (#1C1C1F) instead of vanishing. Read it with
+// useBackdrop().
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -18,7 +23,29 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { color, palette, radius, space, type, type TypeToken } from './tokens';
+import { border, color, half, palette, radius, space, type, type TypeToken } from './tokens';
+
+// ---------------------------------------------------------------------------------------
+// Backdrop
+// ---------------------------------------------------------------------------------------
+
+export type Backdrop = 'page' | 'raised';
+
+const BackdropContext = createContext<Backdrop>('page');
+
+/** Declares what its children sit on ('raised' inside a sheet, raised card or the stage). */
+export function BackdropProvider({ value, children }: { value: Backdrop; children: ReactNode }) {
+  return <BackdropContext.Provider value={value}>{children}</BackdropContext.Provider>;
+}
+
+export function useBackdrop(): Backdrop {
+  return useContext(BackdropContext);
+}
+
+/** The colour of the surface under the component (for cut-out rings around presence dots). */
+export function useBackdropColor(): string {
+  return useBackdrop() === 'raised' ? palette.surface : palette.background;
+}
 
 // ---------------------------------------------------------------------------------------
 // Text
@@ -43,13 +70,13 @@ export function Label({
   );
 }
 
-/** A step's one- or two-sentence explanation under its title (copy role `body`). */
+/** A step's one- or two-sentence explanation under its title (copy role `body`), grey. */
 export function BodyText({ children, style }: { children: string; style?: StyleProp<TextStyle> }) {
-  return <Text style={[styles.body, style]}>{children}</Text>;
+  return <Text style={[type.body, style]}>{children}</Text>;
 }
 
 // ---------------------------------------------------------------------------------------
-// Buttons
+// Buttons: full pills, 56 pt, Geist 600 17. Fills, no outlines.
 // ---------------------------------------------------------------------------------------
 
 type ButtonProps = {
@@ -67,10 +94,27 @@ function BaseButton({
   busy,
   testID,
   box,
-  text,
-  spinner,
-}: ButtonProps & { box: ViewStyle; text: TextStyle; spinner: string }) {
+  ink,
+  offBox,
+  offInk,
+  face = 'button',
+  hitSlop,
+}: ButtonProps & {
+  /** Extra touch area around a compact (32 pt) text button, so it still takes a 44 pt tap. */
+  hitSlop?: number;
+  box: StyleProp<ViewStyle>;
+  ink: string;
+  /**
+   * The label's type: 17/600 (`button`), 17/500 (`buttonQuiet`, plain text buttons) or 15/500
+   * (`labelMedium`, the small in-row and quiet-exit actions).
+   */
+  face?: 'button' | 'buttonQuiet' | 'labelMedium';
+  /** Disabled look at full opacity (instead of dimming `box`). */
+  offBox?: StyleProp<ViewStyle>;
+  offInk?: string;
+}) {
   const enabled = !disabled && !busy && onPress !== undefined;
+  const off = !enabled && !busy && offBox !== undefined;
   return (
     <Pressable
       testID={testID}
@@ -78,12 +122,18 @@ function BaseButton({
       accessibilityLabel={label}
       accessibilityState={{ disabled: !enabled, busy: Boolean(busy) }}
       onPress={enabled ? onPress : undefined}
-      style={[styles.button, box, !enabled && styles.dimmed]}
+      hitSlop={hitSlop}
+      style={({ pressed }) => [
+        styles.button,
+        off ? offBox : box,
+        !enabled && !busy && !off && styles.dimmed,
+        pressed && enabled && styles.pressed,
+      ]}
     >
       {busy ? (
-        <ActivityIndicator color={spinner} />
+        <ActivityIndicator color={ink} />
       ) : (
-        <Text style={text} numberOfLines={1}>
+        <Text style={[type[face], { color: off ? (offInk ?? ink) : ink }]} numberOfLines={1}>
           {label}
         </Text>
       )}
@@ -91,32 +141,83 @@ function BaseButton({
   );
 }
 
-/** The one filled, accent-coloured action on a screen. */
+/**
+ * The one filled action on a screen: a green pill with black text. Disabled, it is a #1C1C1F pill
+ * with dim text at full opacity (a dimmed green reads murky on black).
+ */
 export function PrimaryButton(p: ButtonProps) {
   return (
     <BaseButton
       {...p}
       box={styles.primary}
-      text={{ ...type.labelStrong, color: color.onAccent }}
-      spinner={palette.text}
+      ink={color.onAccent}
+      offBox={styles.secondary}
+      offInk={palette.textTertiary}
     />
   );
 }
 
-/** A secondary action: hairline outline, no fill. */
-export function QuietButton(p: ButtonProps) {
-  return <BaseButton {...p} box={styles.quiet} text={type.label} spinner={palette.text} />;
+/**
+ * A secondary action: a #1C1C1F pill with white text. `small` is the 32 pt in-row pill (white
+ * 15/500, 14 pt sides), e.g. "Challenge" on a room row.
+ */
+export function QuietButton({ small = false, ...p }: ButtonProps & { small?: boolean }) {
+  return small ? (
+    <BaseButton
+      {...p}
+      box={[styles.secondary, styles.small]}
+      ink={palette.text}
+      face="labelMedium"
+    />
+  ) : (
+    <BaseButton {...p} box={styles.secondary} ink={palette.text} />
+  );
 }
 
-/** A destructive action: red outline, or red fill for the final "Yes, delete". */
-export function DangerButton({ filled = false, ...p }: ButtonProps & { filled?: boolean }) {
+/**
+ * A tertiary action: text only, no fill (44 pt tall). Green by default; `tone="danger"` is red
+ * (e.g. "Back out"), `tone="muted"` grey, `tone="plain"` white 17/500 ("Skip for now", "Back").
+ */
+export function TextButton({
+  tone = 'accent',
+  small = false,
+  dense = false,
+  ...p
+}: ButtonProps & {
+  tone?: 'accent' | 'danger' | 'muted' | 'plain';
+  /** 15/500 instead of 17 (a quiet exit under other actions). */
+  small?: boolean;
+  /** 32 pt tall (44 pt touch area) so two stacked text actions sit close together. */
+  dense?: boolean;
+}) {
+  const ink =
+    tone === 'danger'
+      ? palette.danger
+      : tone === 'muted'
+        ? palette.textSecondary
+        : tone === 'plain'
+          ? palette.text
+          : palette.accent;
   return (
     <BaseButton
       {...p}
-      box={filled ? styles.dangerFilled : styles.dangerOutline}
-      text={{ ...type.labelStrong, color: filled ? palette.text : palette.danger }}
-      spinner={filled ? palette.text : palette.danger}
+      box={dense ? [styles.text, styles.dense] : styles.text}
+      hitSlop={dense ? 6 : undefined}
+      ink={ink}
+      face={small ? 'labelMedium' : tone === 'plain' ? 'buttonQuiet' : 'button'}
     />
+  );
+}
+
+/**
+ * A destructive action: red text on a #1C1C1F pill; `filled` is a red pill with black text
+ * ("Yes, delete").
+ */
+export function DangerButton({ filled = false, ...p }: ButtonProps & { filled?: boolean }) {
+  return filled ? (
+    <BaseButton {...p} box={styles.dangerFilled} ink={color.onDanger} />
+  ) : (
+    <BaseButton {...p} box={styles.secondary} ink={palette.danger} />
   );
 }
 
@@ -141,8 +242,12 @@ export function Tick({ size, tint }: { size: number; tint: string }) {
   );
 }
 
-/** A round badge with a tick ("Face saved", the per-photo flash). */
-export function CheckBadge({ size, fill = palette.accent }: { size: number; fill?: string }) {
+/**
+ * A round badge with a tick ("Face saved", the per-photo flash): a #1C1C1F disc with a green
+ * tick. Pass `fill={palette.accent}` for a solid green disc (the tick turns black).
+ */
+export function CheckBadge({ size, fill = palette.fill }: { size: number; fill?: string }) {
+  const tick = fill === palette.accent ? color.onAccent : palette.accent;
   return (
     <View
       style={{
@@ -154,13 +259,13 @@ export function CheckBadge({ size, fill = palette.accent }: { size: number; fill
         justifyContent: 'center',
       }}
     >
-      <Tick size={size * 0.42} tint={palette.text} />
+      <Tick size={size * 0.42} tint={tick} />
     </View>
   );
 }
 
-/** A back chevron drawn with borders. */
-export function ChevronLeft() {
+/** A back chevron drawn with borders. White by default. */
+export function ChevronLeft({ tint = palette.text }: { tint?: string } = {}) {
   return (
     <View
       style={{
@@ -168,10 +273,35 @@ export function ChevronLeft() {
         height: 11,
         borderLeftWidth: 2,
         borderBottomWidth: 2,
-        borderColor: palette.text,
+        borderColor: tint,
         transform: [{ translateX: 3 }, { rotate: '45deg' }],
       }}
     />
+  );
+}
+
+/**
+ * The back button used by StepHeader and TopBar: a bare white chevron, its left edge on the page
+ * margin, with a 44 pt touch area (hitSlop).
+ */
+export function BackButton({
+  onPress,
+  testID,
+}: {
+  onPress?: (() => void) | undefined;
+  testID: string;
+}) {
+  return (
+    <Pressable
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+      onPress={onPress}
+      hitSlop={{ top: 10, bottom: 10, left: 12, right: 20 }}
+      style={({ pressed }) => [styles.back, pressed && styles.pressed]}
+    >
+      <ChevronLeft />
+    </Pressable>
   );
 }
 
@@ -184,7 +314,7 @@ export function AlertLine({ message, testID }: { message: string | null; testID?
   return (
     <View style={styles.alertSlot}>
       {message ? (
-        <Text testID={testID} style={[type.label, { color: color.fixable }]} numberOfLines={1}>
+        <Text testID={testID} style={[type.labelMedium, styles.alert]} numberOfLines={1}>
           {message}
         </Text>
       ) : null}
@@ -192,15 +322,16 @@ export function AlertLine({ message, testID }: { message: string | null; testID?
   );
 }
 
-export function Hairline() {
-  return <View style={styles.hairline} />;
+/** A full-width hairline divider (#1C1C1F, StyleSheet.hairlineWidth). */
+export function Hairline({ style }: { style?: StyleProp<ViewStyle> } = {}) {
+  return <View style={[styles.hairline, style]} />;
 }
 
 // ---------------------------------------------------------------------------------------
 // Step screens
 // ---------------------------------------------------------------------------------------
 
-/** Back arrow on the left, one progress segment per step; an optional tag on the right. */
+/** Back chevron on the left, one thin progress segment per step; an optional tag on the right. */
 export function StepHeader({
   step,
   count,
@@ -214,26 +345,14 @@ export function StepHeader({
 }) {
   return (
     <View style={styles.header}>
-      <Pressable
-        testID="step-back"
-        accessibilityRole="button"
-        accessibilityLabel="Back"
-        onPress={onBack}
-        hitSlop={8}
-        style={styles.back}
-      >
-        <ChevronLeft />
-      </Pressable>
+      <BackButton testID="step-back" onPress={onBack} />
       <View style={styles.segments}>
         {Array.from({ length: count }, (_, i) => (
           <View
             key={i}
             style={[
               styles.segment,
-              {
-                backgroundColor:
-                  i < step ? palette.text : i === step ? palette.accent : palette.hairline,
-              },
+              { backgroundColor: i <= step ? palette.accent : palette.hairline },
             ]}
           />
         ))}
@@ -267,12 +386,12 @@ export function StepScaffold({
       <View style={[styles.stepContent, !body && styles.stepContentTight]}>{children}</View>
       <AlertLine message={alert ?? null} testID="step-alert" />
       {action}
-      {secondary ? <View style={styles.secondary}>{secondary}</View> : null}
+      {secondary ? <View style={styles.secondaryAction}>{secondary}</View> : null}
     </View>
   );
 }
 
-/** "I consent": a checkbox; the whole row is tappable. */
+/** "I consent": a checkbox (green when checked); the whole row is tappable. */
 export function CheckRow({
   label,
   checked,
@@ -294,14 +413,17 @@ export function CheckRow({
       style={styles.checkRow}
     >
       <View style={[styles.box, checked ? styles.boxOn : styles.boxOff]}>
-        {checked ? <Tick size={12} tint={palette.text} /> : null}
+        {checked ? <Tick size={12} tint={color.onAccent} /> : null}
       </View>
-      <Label variant="labelStrong">{label}</Label>
+      <Label variant="labelMedium">{label}</Label>
     </Pressable>
   );
 }
 
-/** A labelled one-line text field ("Your name"); the label sits above, never inside. */
+/**
+ * A labelled one-line text field ("Your name"); the label sits above, never inside. A #0F0F11
+ * well (#1C1C1F inside a raised sheet), radius 14; focused, a 1 pt green border.
+ */
 export function TextField({
   label,
   value,
@@ -327,6 +449,7 @@ export function TextField({
   textContentType?: 'givenName' | 'none';
 }) {
   const [focused, setFocused] = useState(false);
+  const raised = useBackdrop() === 'raised';
   return (
     <View>
       <Label variant="small" style={styles.fieldLabel}>
@@ -338,7 +461,7 @@ export function TextField({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={palette.textSecondary}
+        placeholderTextColor={palette.textTertiary}
         maxLength={maxLength}
         autoFocus={autoFocus}
         autoCapitalize={autoCapitalize}
@@ -347,16 +470,21 @@ export function TextField({
         returnKeyType="done"
         keyboardAppearance="dark"
         selectionColor={palette.accent}
+        cursorColor={palette.accent}
         onSubmitEditing={onSubmitEditing}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        style={[styles.field, { borderColor: focused ? color.borderFocused : color.border }]}
+        style={[
+          styles.field,
+          { backgroundColor: raised ? palette.fill : palette.surface },
+          { borderColor: focused ? color.borderFocused : 'transparent' },
+        ]}
       />
     </View>
   );
 }
 
-/** A labelled on/off row ("Face matching"). */
+/** A labelled on/off row ("Face matching"), green when on. */
 export function ToggleRow({
   label,
   value,
@@ -372,24 +500,25 @@ export function ToggleRow({
 }) {
   return (
     <View style={styles.row}>
-      <Label>{label}</Label>
+      <Label variant="labelMedium">{label}</Label>
       <Switch
         testID={testID}
         value={value}
         onValueChange={onChange}
         disabled={disabled}
-        trackColor={{ false: palette.hairline, true: palette.accent }}
+        trackColor={{ false: palette.fill, true: palette.accent }}
+        ios_backgroundColor={palette.fill}
         thumbColor={palette.text}
       />
     </View>
   );
 }
 
-/** A row with a label and a data value on the right, plus a tick ("Face · Saved"). */
+/** A row with a label and a grey value on the right, plus a green tick ("Face · Saved"). */
 export function SavedRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.row}>
-      <Label>{label}</Label>
+      <Label variant="labelMedium">{label}</Label>
       <View style={styles.rowRight}>
         <Text style={type.value}>{value}</Text>
         <Tick size={12} tint={palette.accent} />
@@ -402,9 +531,13 @@ export function SavedRow({ label, value }: { label: string; value: string }) {
 // Camera stage
 // ---------------------------------------------------------------------------------------
 
-/** The rounded camera / phrase area. */
+/** The rounded camera / phrase area (#0F0F11, radius 20). Children see a raised backdrop. */
 export function Stage({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
-  return <View style={[styles.stage, style]}>{children}</View>;
+  return (
+    <BackdropProvider value="raised">
+      <View style={[styles.stage, style]}>{children}</View>
+    </BackdropProvider>
+  );
 }
 
 /** "Checking" with dots that cycle . → .. → ... every 400 ms. */
@@ -422,25 +555,38 @@ export function CheckingLabel() {
   );
 }
 
-/** The translucent bubble at the top of the camera with the current prompt. */
+/** The translucent black pill at the top of the camera with the current prompt. */
 export function StageBubble({
   prompt,
   checking = false,
   recording = false,
+  centered = false,
 }: {
   prompt: string;
   checking?: boolean;
   recording?: boolean;
+  /**
+   * In the middle of the stage (a "No camera" note), not 16 pt under its top edge: plain grey
+   * 15/500 text, no pill (a quiet note, not the heaviest thing on the screen).
+   */
+  centered?: boolean;
 }) {
+  if (centered && !checking && !recording) {
+    return (
+      <View style={styles.stageNote} testID="stage-bubble">
+        <Text style={[type.section, styles.stageNoteText]}>{prompt}</Text>
+      </View>
+    );
+  }
   return (
-    <View style={styles.bubble} testID="stage-bubble">
+    <View style={[styles.bubble, centered && styles.bubbleCentered]} testID="stage-bubble">
       <View style={[StyleSheet.absoluteFill, styles.scrim]} />
       {checking ? (
         <CheckingLabel />
       ) : recording ? (
         <View style={styles.recording}>
           <View style={styles.redDot} />
-          <Text style={[type.heading, { color: palette.danger }]}>{prompt}</Text>
+          <Text style={type.heading}>{prompt}</Text>
         </View>
       ) : (
         <Text style={type.heading}>{prompt}</Text>
@@ -449,7 +595,7 @@ export function StageBubble({
   );
 }
 
-/** Round capture button; while recording, a small square sits inside the ring. */
+/** Round capture button: a white ring and disc; while recording, a small red square inside. */
 export function ShutterButton({
   onPress,
   disabled,
@@ -474,12 +620,8 @@ export function ShutterButton({
         style={{
           width: inner,
           height: inner,
-          borderRadius: active ? 5 : inner / 2,
-          backgroundColor: disabled
-            ? palette.textSecondary
-            : active
-              ? palette.accent
-              : palette.text,
+          borderRadius: active ? radius.sm : inner / 2,
+          backgroundColor: disabled ? palette.textTertiary : active ? palette.danger : palette.text,
         }}
       />
     </Pressable>
@@ -515,24 +657,27 @@ export function ConfirmSheet({
       <Pressable style={styles.sheetBackdrop} onPress={onCancel} accessibilityLabel="Close">
         <View style={[StyleSheet.absoluteFill, styles.backdropTint]} />
       </Pressable>
-      <View style={styles.sheet}>
-        <Label variant="heading">{title}</Label>
-        <BodyText style={styles.stepBody}>{body}</BodyText>
-        <View style={styles.sheetButtons}>
-          <View style={styles.flex}>
-            <QuietButton testID="confirm-no" label={cancelLabel} onPress={onCancel} />
-          </View>
-          <View style={styles.flex}>
-            <DangerButton
-              testID="confirm-yes"
-              filled
-              label={confirmLabel}
-              busy={Boolean(busy)}
-              onPress={onConfirm}
-            />
+      <BackdropProvider value="raised">
+        <View style={styles.sheet}>
+          <View style={styles.grabber} />
+          <Label variant="subtitle">{title}</Label>
+          <BodyText style={styles.stepBody}>{body}</BodyText>
+          <View style={styles.sheetButtons}>
+            <View style={styles.flex}>
+              <QuietButton testID="confirm-no" label={cancelLabel} onPress={onCancel} />
+            </View>
+            <View style={styles.flex}>
+              <DangerButton
+                testID="confirm-yes"
+                filled
+                label={confirmLabel}
+                busy={Boolean(busy)}
+                onPress={onConfirm}
+              />
+            </View>
           </View>
         </View>
-      </View>
+      </BackdropProvider>
     </Modal>
   );
 }
@@ -541,53 +686,63 @@ export function ConfirmSheet({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  body: { ...type.label, color: palette.textSecondary, lineHeight: 22 },
   button: {
     height: space.control,
-    borderRadius: radius.md,
+    borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: space.x2,
+    paddingHorizontal: space.x3,
   },
-  dimmed: { opacity: 0.4 },
+  dimmed: { opacity: 0.35 },
+  pressed: { opacity: 0.7 },
   primary: { backgroundColor: color.primaryAction },
-  quiet: { borderWidth: StyleSheet.hairlineWidth, borderColor: color.border },
-  dangerOutline: { borderWidth: 1, borderColor: color.destructive },
+  secondary: { backgroundColor: palette.fill },
+  text: { backgroundColor: 'transparent', height: 44, paddingHorizontal: half.x15 },
+  small: { height: space.x4, paddingHorizontal: 14 },
+  dense: { height: space.x4 },
   dangerFilled: { backgroundColor: color.destructive },
-  alertSlot: { height: space.x3, alignItems: 'center', justifyContent: 'center' },
+  alertSlot: { height: space.x4, alignItems: 'center', justifyContent: 'center' },
+  alert: { color: color.fixable },
   hairline: { height: StyleSheet.hairlineWidth, backgroundColor: color.divider },
   header: {
-    height: space.x6 + space.x1,
+    height: space.x7,
     flexDirection: 'row',
     alignItems: 'center',
+    paddingLeft: space.page,
+    gap: space.x2,
   },
-  back: { width: space.x6, height: space.x6, alignItems: 'center', justifyContent: 'center' },
-  segments: { flex: 1, flexDirection: 'row', gap: 6 },
-  segment: { flex: 1, height: 4, borderRadius: 2 },
-  tagSlot: { minWidth: space.page, alignItems: 'flex-end', paddingRight: space.x2 },
-  step: { flex: 1, paddingHorizontal: space.page, paddingBottom: space.x2 },
+  back: {
+    width: 24,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
+  segments: { flex: 1, flexDirection: 'row', gap: half.x05 },
+  segment: { flex: 1, height: 2, borderRadius: 1 },
+  tagSlot: { minWidth: space.x1, alignItems: 'flex-end', paddingRight: space.page },
+  step: { flex: 1, paddingHorizontal: space.page, paddingBottom: space.x2, paddingTop: space.x1 },
   stepBody: { marginTop: space.x1 },
-  stepContent: { flex: 1, marginTop: space.x3 },
-  stepContentTight: { marginTop: space.x2 },
-  secondary: { marginTop: space.x1 },
+  stepContent: { flex: 1, marginTop: space.x4 },
+  stepContentTight: { marginTop: space.x3 },
+  secondaryAction: { marginTop: space.x1 },
   checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.x1 + 4,
+    gap: half.x15,
     paddingVertical: space.x1,
     alignSelf: 'flex-start',
   },
   box: {
-    width: 22,
-    height: 22,
+    width: space.x3,
+    height: space.x3,
     borderRadius: radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
   },
   boxOn: { backgroundColor: palette.accent },
-  boxOff: { borderWidth: 1.5, borderColor: palette.textSecondary },
+  boxOff: { borderWidth: 1.5, borderColor: palette.textTertiary },
   row: {
-    minHeight: space.x6 + space.x1,
+    minHeight: space.row,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -603,43 +758,56 @@ const styles = StyleSheet.create({
   dots: { width: 18 },
   bubble: {
     alignSelf: 'center',
-    borderRadius: 16,
+    borderRadius: radius.pill,
     overflow: 'hidden',
-    paddingHorizontal: space.x2,
-    paddingVertical: 10,
+    paddingHorizontal: space.x3,
+    paddingVertical: half.x15,
     marginTop: space.x2,
   },
-  scrim: { backgroundColor: palette.background, opacity: 0.8 },
+  bubbleCentered: { marginTop: 0 },
+  stageNote: { alignSelf: 'center', paddingHorizontal: space.x3 },
+  stageNoteText: { textAlign: 'center' },
+  scrim: { backgroundColor: palette.background, opacity: 0.72 },
   recording: { flexDirection: 'row', alignItems: 'center', gap: space.x1 },
   redDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: palette.danger },
   shutter: {
-    width: space.x8,
-    height: space.x8,
-    borderRadius: space.x8 / 2,
-    borderWidth: 2,
+    width: space.x8 + space.x1,
+    height: space.x8 + space.x1,
+    borderRadius: (space.x8 + space.x1) / 2,
+    borderWidth: 3,
     borderColor: palette.text,
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
   },
-  fieldLabel: { color: palette.textSecondary, marginBottom: 6 },
+  fieldLabel: { marginBottom: space.x1 },
   field: {
-    ...type.label,
+    fontFamily: type.input.fontFamily,
+    fontSize: type.input.fontSize,
+    fontWeight: type.input.fontWeight,
     height: space.control,
     borderRadius: radius.md,
-    borderWidth: 1,
+    borderWidth: border.focused,
     paddingHorizontal: space.x2,
     color: palette.text,
   },
   sheetBackdrop: { flex: 1 },
-  backdropTint: { backgroundColor: palette.background, opacity: 0.6 },
+  backdropTint: { backgroundColor: palette.background, opacity: 0.72 },
   sheet: {
     backgroundColor: palette.surface,
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
     paddingHorizontal: space.page,
-    paddingTop: space.x3,
+    paddingTop: half.x15,
     paddingBottom: space.x5,
   },
-  sheetButtons: { flexDirection: 'row', gap: space.x2, marginTop: space.x3 },
+  grabber: {
+    alignSelf: 'center',
+    width: space.x5,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: palette.textTertiary,
+    marginBottom: space.x3,
+  },
+  sheetButtons: { flexDirection: 'row', gap: half.x15, marginTop: space.x4 },
 });
