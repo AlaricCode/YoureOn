@@ -22,6 +22,13 @@ export const Confidence = z
 
 /** The model id of a deterministic Gemini settlement ruling. */
 export const GEMINI_SETTLEMENT_MODEL = 'rule/gemini-settlement@1';
+/**
+ * `Ruling.model` of a CACHED_RULING ruling: the stored demo verdict, no model call
+ * (ARCHITECTURE §7.2 cached_ruling; apps/server/src/judge/ruling.ts).
+ */
+export const CACHED_RULING_MODEL = 'cache/demo-bottle@1';
+/** A ruling served from a stored verdict (`cache/…`): the stage labels it "replay ruling". */
+export const isCachedRulingModel = (model: string): boolean => model.startsWith('cache/');
 
 /** LLM structured output for attempt judging (and the base of the hearing verdict). Non-strict: we only read it. */
 export const VisionVerdict = z.object({
