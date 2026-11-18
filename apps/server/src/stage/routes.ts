@@ -1,9 +1,13 @@
 // Stage laptop routes (API-CONTRACT §1.3 "Stage and demo", §2.14, §2.17):
 //   POST /v1/stage/session {stage_key, room_id | room_code} -> 201 StageSessionResponse (scope
-//        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code (or QR payload). 404 unless STAGE_KEY is configured. The key is compared in
-//        constant time; 10/min per client IP.
+//        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code phone A shows (or
+//        its QR payload). 404 unless STAGE_KEY is configured. The key is compared in constant
+//        time; 10/min per client IP.
 //   GET  /v1/bets/:bet_id -> BetSnapshot, for a party of the bet or a stage session of its room
 //        (cold start / resync).
+//   GET  /v1/bets/:bet_id/attempts/:n/frames/:idx -> the evidence JPEG the judge was sent (the
+//        frames live in Postgres until object storage lands, so attempt.evidence carries no
+//        frame_urls); same readers as the snapshot. Immutable (content-addressed by sha256).
 // Also fans the Gemini relay's snapshots out as `stage.market` to every room that has a live
 // stage session (§3.1; ≤ 2/s: the relay polls every 2 s).
 import { timingSafeEqual } from 'node:crypto';
@@ -11,7 +15,15 @@ import type { Context } from 'hono';
 import type { HttpBindings } from '@hono/node-server';
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
-import { apiSessions, betEvents, bets, rooms, type Db } from '@youre-on/db';
+import {
+  apiSessions,
+  attemptFrames,
+  attempts,
+  betEvents,
+  bets,
+  rooms,
+  type Db,
+} from '@youre-on/db';
 import { BetSnapshot, parseRoomCode } from '@youre-on/shared/api';
 import { AppealResult } from '@youre-on/shared/appeal';
 import { BetState } from '@youre-on/shared/bet-state';
@@ -226,6 +238,54 @@ export const stageRoutes: RouteModule = {
         expires_at: expires_at.toISOString(),
       };
       return c.json(out, 201);
+    });
+
+    app.use('/v1/bets/:bet_id/attempts/*', stageCors(deps.env));
+    app.get('/v1/bets/:bet_id/attempts/:n/frames/:idx', requireSession, async (c) => {
+      const id = BetId.safeParse(c.req.param('bet_id'));
+      if (!id.success) throw validationError(id.error);
+      const n = Number(c.req.param('n'));
+      const idx = Number(c.req.param('idx'));
+      if (
+        !Number.isInteger(n) ||
+        n < 1 ||
+        n > 32_767 ||
+        !Number.isInteger(idx) ||
+        idx < 0 ||
+        idx > 23
+      )
+        throw new HttpError('NOT_FOUND', 'No such frame.');
+      const [row] = await deps.db.select().from(bets).where(eq(bets.id, id.data)).limit(1);
+      if (!row || !canRead(c.get('auth'), row)) throw new HttpError('NOT_FOUND', 'No such bet.');
+      const [f] = await deps.db
+        .select({
+          bytes: attemptFrames.bytes,
+          sha256: attemptFrames.sha256,
+          mime: attemptFrames.mime,
+        })
+        .from(attemptFrames)
+        .innerJoin(attempts, eq(attempts.id, attemptFrames.attempt_id))
+        .where(
+          and(
+            eq(attempts.bet_id, id.data),
+            eq(attempts.attempt_no, n),
+            isNull(attempts.purged_at),
+            eq(attemptFrames.idx, idx),
+          ),
+        )
+        .limit(1);
+      if (!f) throw new HttpError('NOT_FOUND', 'No such frame.');
+      const headers = {
+        ETag: `"${f.sha256}"`,
+        'Cache-Control': 'private, max-age=86400, immutable',
+        'X-Content-Type-Options': 'nosniff',
+      };
+      if (c.req.header('if-none-match') === headers.ETag)
+        return new Response(null, { status: 304, headers });
+      return new Response(new Uint8Array(f.bytes), {
+        status: 200,
+        headers: { ...headers, 'Content-Type': f.mime, 'Content-Length': String(f.bytes.length) },
+      });
     });
 
     app.get('/v1/bets/:bet_id', requireSession, async (c) => {
