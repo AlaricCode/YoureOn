@@ -3,9 +3,12 @@
 // Differences from an RPC, on purpose: a send executes immediately and is `confirmed` at once; a
 // failed send is reported as a preflight rejection (LiteSVM has no preflight, and a failed tx in
 // LiteSVM does not advance a durable nonce, ESCROW §9.1 note); every landed tx expires the
-// blockhash (a new slot).
+// blockhash (a new slot). getProgramAccounts is emulated over every address a sent tx touched
+// (LiteSVM cannot enumerate accounts), plus any address passed to `track`.
 import {
+  getBase58Encoder,
   getBase64Encoder,
+  getCompiledTransactionMessageDecoder,
   getI64Encoder,
   getSignatureFromTransaction,
   getTransactionDecoder,
@@ -35,13 +38,17 @@ export function rpcErr(f: FailedTransactionMetadata): unknown {
   return { Other: String(err) };
 }
 
-export function liteSvmClient(svm: LiteSVM): ChainClient & { sent: string[] } {
+export function liteSvmClient(
+  svm: LiteSVM,
+): ChainClient & { sent: string[]; track(addr: Address): void } {
   const statuses = new Map<string, SigStatus>();
   const sent: string[] = [];
+  const seen = new Set<Address>();
   const decode = (wire: Base64EncodedWireTransaction) =>
     getTransactionDecoder().decode(getBase64Encoder().encode(wire));
   return {
     sent,
+    track: (addr) => void seen.add(addr),
     label: 'litesvm',
     assertSafeCluster: async () => 'localnet',
     latestBlockhash: async () => ({
@@ -84,6 +91,8 @@ export function liteSvmClient(svm: LiteSVM): ChainClient & { sent: string[] } {
         return;
       }
       sent.push(sig);
+      for (const a of getCompiledTransactionMessageDecoder().decode(tx.messageBytes).staticAccounts)
+        seen.add(a);
       statuses.set(sig, { err: null, confirmationStatus: 'confirmed', slot: svm.getClock().slot });
       // A new "slot": a durable nonce advanced in this tx may be advanced again (Agave refuses a
       // second advance under the same blockhash, NonceBlockhashNotExpired).
@@ -115,5 +124,26 @@ export function liteSvmClient(svm: LiteSVM): ChainClient & { sent: string[] } {
       return a.exists ? getTokenDecoder().decode(a.data).amount : 0n;
     },
     lamports: async (a) => svm.getBalance(a) ?? 0n,
+    async programAccounts(program, filters) {
+      const out: Array<{
+        address: Address;
+        account: { owner: Address; lamports: bigint; data: Uint8Array };
+      }> = [];
+      for (const addr of seen) {
+        const a = svm.getAccount(addr);
+        if (!a.exists || a.programAddress !== program) continue;
+        const data = new Uint8Array(a.data);
+        const match = filters.every((f) => {
+          const want = getBase58Encoder().encode(f.bytes);
+          return want.every((b, i) => data[f.offset + i] === b);
+        });
+        if (match)
+          out.push({
+            address: addr,
+            account: { owner: a.programAddress, lamports: a.lamports, data },
+          });
+      }
+      return out;
+    },
   };
 }

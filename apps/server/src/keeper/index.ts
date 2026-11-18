@@ -4,6 +4,7 @@
 // register here.
 import type { AppDeps } from '../context';
 import { lifecycleOf } from '../lock/runtime';
+import { ORPHAN_SWEEP_MS, REFUND_SWEEP_MS } from '../payout/refund';
 import { resolveDueTask } from '../payout/resolve-due';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
 import { Keeper, type KeeperOptions, type KeeperTask } from './keeper';
@@ -25,11 +26,25 @@ export {
  *    nonce advances finished / retried (DATA-MODEL §5.20 "Boot reconcile and sweep").
  *  - finalize-due: RULED bets past appeal_deadline + 1 s -> [finalize, close_bet] (the durable
  *    backstop of the PayoutService setTimeout fast path).
+ *  - timeout-refund (every 15 s): bets Locked past resolve_deadline / Appealed past
+ *    appeal_resolve_deadline -> [timeout_refund, close_bet] -> EXPIRED (src/payout/refund.ts).
+ *  - orphan-escrow (every 60 s): our Bets that no live bets row owns (deleted by demo reset,
+ *    or terminal offchain) get their exit once due, so escrowed money never strands.
  */
 export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask[] {
   return [
     { name: 'lock-sweep', run: (now) => lifecycleOf(deps).lock.sweep(now) },
     { name: 'finalize-due', run: (now) => lifecycleOf(deps).payout.finalizeDue(now) },
+    {
+      name: 'timeout-refund',
+      everyMs: REFUND_SWEEP_MS,
+      run: (now) => lifecycleOf(deps).refund.sweep(now),
+    },
+    {
+      name: 'orphan-escrow',
+      everyMs: ORPHAN_SWEEP_MS,
+      run: (now) => lifecycleOf(deps).refund.sweepOrphans(now),
+    },
   ];
 }
 

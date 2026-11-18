@@ -1,10 +1,11 @@
-// The chain lifecycle bundle (LockService + PayoutService over one ChainRuntime) and its
+// The chain lifecycle bundle (LockService + PayoutService + RefundService over one ChainRuntime) and its
 // per-deps locator. Routes, the voice tools and the keeper tasks call `lifecycleOf(deps)`; it is
 // built lazily from env (SOLANA_DEVNET_RPC + FEE_PAYER_SECRET_KEY, src/chain/tx.ts). Tests and
 // scripts install their own with `installLifecycle(deps, createLifecycle(deps, { runtime }))`
 // (e.g. a LiteSVM-backed ChainClient). No AppDeps field is needed, so no core edit.
 import type { AppDeps } from '../context';
 import { chainRuntimeFromEnv, type ChainRuntime, type SendOptions } from '../chain/tx';
+import { RefundService } from '../payout/refund';
 import { PayoutService } from '../payout/service';
 import { Inflight, type LifecycleDeps } from './common';
 import { LockService } from './service';
@@ -14,6 +15,8 @@ export interface Lifecycle {
   runtime(): Promise<ChainRuntime | null>;
   lock: LockService;
   payout: PayoutService;
+  /** timeout_refund of stuck bets, orphan escrow exits (src/payout/refund.ts). */
+  refund: RefundService;
   /** Resolves once every background send/confirm started so far has settled (tests). */
   idle(): Promise<void>;
   stop(): void;
@@ -61,10 +64,12 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
     send: o.send,
     timers: o.timers,
   });
+  const refund = new RefundService({ deps, runtime, inflight, send: o.send });
   return {
     runtime,
     lock,
     payout,
+    refund,
     idle: () => inflight.idle(),
     stop: () => payout.stop(),
   };
