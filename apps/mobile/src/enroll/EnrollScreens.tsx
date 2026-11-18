@@ -10,8 +10,11 @@
 // Every step has a back arrow: Face → Consent → onExit (the screen before enrollment).
 // Consent comes first: nothing is captured until it is ticked, and unticking it after a save is
 // not offered (delete from FaceSettings instead).
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, BackHandler, ScrollView, StyleSheet, View } from 'react-native';
+
+import { importSafely } from '../app/importSafely';
+import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 
 import {
   BodyText,
@@ -33,8 +36,13 @@ import { palette, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi, type FaceStatus } from './api';
 import type { FaceEmbedder } from './embedder';
 import { ENROLL_COPY } from './copy';
-import { FaceCapturePanel } from './FaceCapturePanel';
 import { enrollErrorLabel, type FaceConsent } from './flow';
+
+// The capture panel pulls in the MLKit face detector, which simulator builds leave out
+// (react-native.config.js). Loaded lazily, so a build without it loses this step only.
+const FaceCapturePanel = lazy(() =>
+  importSafely(() => import('./FaceCapturePanel')).then((m) => ({ default: m.FaceCapturePanel })),
+);
 
 type Step = 'consent' | 'face';
 const STEPS: readonly Step[] = ['consent', 'face'];
@@ -148,15 +156,19 @@ export function FaceEnrollFlow({
           }
         >
           {consent && consentAt ? (
-            <FaceCapturePanel
-              api={api}
-              embedder={embedder}
-              consent={consent}
-              consentAt={consentAt}
-              saved={saved}
-              onSaved={() => setSaved(true)}
-              onAlert={setAlert}
-            />
+            <PanelErrorBoundary name="Face camera" onError={() => undefined}>
+              <Suspense fallback={<ActivityIndicator color={palette.textSecondary} />}>
+                <FaceCapturePanel
+                  api={api}
+                  embedder={embedder}
+                  consent={consent}
+                  consentAt={consentAt}
+                  saved={saved}
+                  onSaved={() => setSaved(true)}
+                  onAlert={setAlert}
+                />
+              </Suspense>
+            </PanelErrorBoundary>
           ) : null}
         </StepScaffold>
       )}

@@ -34,8 +34,14 @@ const ExpoCameraPanel = lazy(() => importSafely(() => import('./ExpoCameraPanel'
 /** Every app screen on stand-in data, until auth (D0-M4), realtime and navigation exist. */
 const PreviewApp = lazy(() => importSafely(() => import('../preview/PreviewApp')));
 
-/** The model is 13.6 MB; over a Metro tunnel the first load can take a while. */
-const TIMEOUTS_MS: Partial<Record<CheckId, number>> = { 'tflite-warmup': 90_000 };
+/**
+ * The model is 13.6 MB; over a Metro tunnel the first load can take a while. The Face ID check
+ * waits for a person (and, without Face ID, for the passcode to be typed).
+ */
+const TIMEOUTS_MS: Partial<Record<CheckId, number>> = {
+  'tflite-warmup': 90_000,
+  'faceid-gate': 60_000,
+};
 
 const COLORS: Record<CheckResult['status'], string> = {
   idle: '#9e9e9e',
