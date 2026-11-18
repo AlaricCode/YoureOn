@@ -10,6 +10,7 @@ import {
   foldChainEvents,
   impliedState,
   statusOf,
+  terminalFacts,
   type FoldEvent,
 } from '../src/chain/fold';
 import { betFacts, lifecycle, randomSig, type BetFacts } from './chain-fixtures';
@@ -256,6 +257,49 @@ describe('diffProjection', () => {
     );
     expect(d.patch.ruling_hash).toBe('ab'.repeat(32));
     expect(d.mismatches.map((m) => m.field)).toEqual(['ruling_hash']);
+  });
+});
+
+describe('terminal edge cases', () => {
+  it('any terminal status clears a pending terminal one (they are alternatives, not ordered)', () => {
+    const f = betFacts();
+    const L = lifecycle(f);
+    const settled = foldChainEvents([ev('BetFinalized', L.finalized('PartyA'))]);
+    // the RPC path waited for a refund ('refunded' ranks above 'settled'), someone finalized first
+    const d = diffProjection(
+      rowFor(f, {
+        onchain_status: 'resolved',
+        onchain_pending: 'refunded',
+        pending_sig: randomSig(),
+      }),
+      settled,
+    );
+    expect(d.patch).toMatchObject({
+      onchain_status: 'settled',
+      onchain_pending: null,
+      pending_sig: null,
+    });
+  });
+
+  it('without a terminal event in the fold, the row’s recorded outcome decides PAID vs VOIDED', () => {
+    const f = betFacts();
+    const none = foldChainEvents([]);
+    const voided = rowFor(f, {
+      onchain_status: 'settled',
+      outcome: 'refund',
+      accept_sig: randomSig(),
+    });
+    expect(impliedState('settled', terminalFacts(none, voided), 'camera')?.state).toBe('VOIDED');
+    const paid = { ...voided, outcome: 'party_b' as const };
+    expect(impliedState('settled', terminalFacts(none, paid), 'camera')?.state).toBe('PAID');
+    // a refund from Open (no accept_sig) / from Appealed
+    const fromOpen = rowFor(f, { onchain_status: 'refunded', outcome: 'refund' });
+    expect(terminalFacts(none, fromOpen)).toEqual({ outcome: 'refund', from_status: 'open' });
+    const fromAppeal = { ...fromOpen, accept_sig: randomSig(), appealed_at: new Date() };
+    expect(impliedState('refunded', terminalFacts(none, fromAppeal), 'camera')?.end_reason).toBe(
+      'appeal_timeout',
+    );
+    expect(terminalFacts(none, rowFor(f))).toBeNull();
   });
 });
 

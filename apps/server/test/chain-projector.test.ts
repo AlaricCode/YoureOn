@@ -394,6 +394,11 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
       const log = await logOf(db(), b.id);
       expect(stateOf(log)).toMatchObject([{ state: 'EXPIRED', reason: 'resolve_timeout' }]);
       expect(cueOf(log).map((c) => c.cue)).toEqual(['EXPIRED']);
+      const refunds = (await outboxOf(db(), b.id)).filter((p) => p.kind === 'payout');
+      expect(refunds.map((p) => [p.recipient_user_id, p.payload])).toEqual([
+        [A, expect.objectContaining({ title: '$5 refunded', amount: '5000000' })],
+        [B, expect.objectContaining({ title: '$5 refunded', amount: '5000000' })],
+      ]);
     });
 
     it('appeal overturned: APPEAL_RESOLVED -> PAID, outcome flips without a mismatch', async () => {
@@ -525,6 +530,49 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
       const env = (await logOf(db(), b.id))[0]!.envelope as { payload: { observed_via: string } };
       expect(env.payload.observed_via).toBe('rpc_poll');
     });
+
+    it('rpc_poll stored the lock first: the late Stream copy backfills its block position, so a third party’s payout still attributes', async () => {
+      const b = await bet('RULED', { pending: true });
+      const body = delivery([lockTx(b, 820_000)]);
+      const polled = parseStreamDelivery(body).events.map((e) => ({
+        ...e,
+        block_height: null,
+        tx_index: null,
+      }));
+      await ingestChainEvents(deps, createChainProjector(), polled, {
+        deliveryId: null,
+        source: 'rpc_poll',
+      });
+      expect((await eventsOfBet(db(), b.id)).map((e) => e.block_height)).toEqual([null, null]);
+      // the resumed Stream delivers its copy: a duplicate, but it fills in what rpc_poll lacked
+      expect((await post(body)).json).toMatchObject({ inserted: 0, published: 0 });
+      expect((await eventsOfBet(db(), b.id)).map((e) => [e.block_height, e.tx_index])).toEqual([
+        [820_000, 0],
+        [820_000, 0],
+      ]);
+      expect((await lockTxOf(db(), b.lockTx)).stream_seen_at).toEqual(new Date(NOW));
+      // someone else's resolve + finalize + close (permissionless, never in chain_txs): with
+      // the lock's position known, the BetClosed no longer makes them ambiguous
+      const fin = randomSig();
+      const r = await post(
+        delivery([
+          tx(randomSig(), 820_100, [
+            { outerIx: 1, name: 'BetResolved', payload: b.L.resolved('PartyA') },
+          ]),
+          tx(fin, 820_200, [
+            { outerIx: 2, name: 'BetFinalized', payload: b.L.finalized('PartyA') },
+            { outerIx: 3, name: 'BetClosed', payload: b.L.closed('Settled') },
+          ]),
+        ]),
+      );
+      expect(r.json).toMatchObject({ inserted: 3 });
+      expect(await betRow(db(), b.id)).toMatchObject({
+        state: 'PAID',
+        onchain_status: 'settled',
+        payout_sig: fin,
+      });
+      expect((await eventsOfBet(db(), b.id)).every((e) => e.apply_error === null)).toBe(true);
+    });
   });
 
   describe('parking, containment and audit', () => {
@@ -583,6 +631,20 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
         onchain_status: 'locked',
         state: 'LOCKED',
       });
+      // parked as projection_rejected (already pushed), not as applied
+      expect(
+        (await eventsOfBet(db(), bad.id)).map((e) => [e.apply_error, e.applied_at !== null]),
+      ).toEqual([
+        ['projection_rejected', true],
+        ['projection_rejected', true],
+      ]);
+      // a duplicate copy retries it: still rejected -> no second audit row, nothing re-pushed
+      expect((await post(delivery([lockTx(bad, 900_000)]))).json).toMatchObject({
+        inserted: 0,
+        published: 0,
+      });
+      expect(await auditOf(db(), bad.id, 'chain.projection_rejected')).toHaveLength(1);
+      expect(types(await logOf(db(), bad.id))).toEqual(['chain.BetCreated', 'chain.BetAccepted']);
       // fixed by hand: the bet's next event re-attempts the projection from the full set
       const at = new Date();
       await db()
@@ -606,6 +668,67 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
         onchain_status: 'resolved',
         create_sig: bad.lockSig,
       });
+      // the lock rows are applied now, and were pushed exactly once
+      expect((await eventsOfBet(db(), bad.id)).every((e) => e.apply_error === null)).toBe(true);
+      expect(types(await logOf(db(), bad.id))).toEqual([
+        'chain.BetCreated',
+        'chain.BetAccepted',
+        'chain.BetResolved',
+        'bet.state',
+      ]);
+    });
+
+    it('a rejected terminal projection is retried by a duplicate copy once fixed (no later event needed)', async () => {
+      // bets_locked_authorized rejects the whole history (lock .. payout) in one delivery
+      const b = await bet('AWAITING_LOCK', { authorized: false });
+      const fin = randomSig();
+      const payout = tx(fin, 700_200, [
+        { outerIx: 2, name: 'BetFinalized', payload: b.L.finalized('PartyA') },
+        { outerIx: 3, name: 'BetClosed', payload: b.L.closed('Settled') },
+      ]);
+      await post(
+        delivery([
+          lockTx(b),
+          tx(randomSig(), 700_100, [
+            { outerIx: 1, name: 'BetResolved', payload: b.L.resolved('PartyA') },
+          ]),
+          payout,
+        ]),
+      );
+      expect(await betRow(db(), b.id)).toMatchObject({
+        state: 'AWAITING_LOCK',
+        onchain_status: 'none',
+      });
+      // the last events a bet ever emits: no later event will come to retry it
+      const at = new Date();
+      await db()
+        .update(bets)
+        .set({
+          a_authorized_at: at,
+          a_authorization_method: 'faceid_hold',
+          b_authorized_at: at,
+          b_authorization_method: 'faceid_hold',
+        })
+        .where(eq(bets.id, b.id));
+      // the Stream retries / the reconciler's copy arrives: the projection goes through
+      const again = await post(delivery([payout]));
+      expect(again.json).toMatchObject({ inserted: 0, published: 2 }); // bet.state + judge.cue
+      expect(await betRow(db(), b.id)).toMatchObject({
+        state: 'PAID',
+        onchain_status: 'settled',
+        payout_sig: fin,
+        payout_a: 10_000_000n,
+      });
+      const log = await logOf(db(), b.id);
+      expect(types(log).filter((t) => t.startsWith('chain.'))).toEqual([
+        'chain.BetCreated',
+        'chain.BetAccepted',
+        'chain.BetResolved',
+        'chain.BetFinalized',
+        'chain.BetClosed',
+      ]);
+      expect(cueOf(log).map((c) => c.cue)).toEqual(['PAID']);
+      expect((await eventsOfBet(db(), b.id)).every((e) => e.apply_error === null)).toBe(true);
     });
 
     it('a chain value that disagrees with the row is applied (chain wins) and audited once', async () => {

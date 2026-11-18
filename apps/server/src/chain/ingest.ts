@@ -5,13 +5,15 @@
 //   COMMIT, then publish the chain.* envelopes to the WS hub.
 //
 // Duplicates alone produce an empty RETURNING, so a replayed delivery is a cheap no-op (§8.3),
-// with one exception: a duplicate of a PARKED row (REFOLDABLE_ERRORS: 'not_ours' = no server
+// with two exceptions: a duplicate of a PARKED row (REFOLDABLE_ERRORS: 'not_ours' = no server
 // lock signature matched yet, 'unknown_bet' = no bets row yet, 'projector_failed' = stored by the
-// deterministic-failure fallback) is handed to the projector again, so the reconciler's / startup
-// sweep's rpc_poll copy of the same event un-parks it.
+// deterministic-failure fallback, 'projection_rejected' = the bets write was refused) is handed
+// to the projector again, so a later copy of the same event un-parks it; and a Stream copy of a
+// row rpc_poll stored first backfills its block position and chain_txs.stream_seen_at.
 // No RPC calls happen in here: the ack budget is p95 ≤ 150 ms.
-import { and, inArray, isNull } from 'drizzle-orm';
-import { chainEvents } from '@youre-on/db';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { chainEvents, chainTxs } from '@youre-on/db';
+import type { Logger } from '../log';
 import type { AppDeps } from '../context';
 import {
   APPLY_ERROR,
@@ -64,7 +66,7 @@ export async function ingestChainEvents(
       });
     const fresh = new Set(ins.map(keyOf));
     const dupes = rows.filter((r) => !fresh.has(keyOf(r)));
-    const parked = dupes.length ? await parkedDuplicates(tx, dupes) : [];
+    const parked = dupes.length ? await storedDuplicates(tx, dupes, nowMs) : [];
     const toApply: InsertedChainEvent[] = [
       ...ins.map(({ id, bet_id, event_name, apply_error }) => ({
         id,
@@ -120,29 +122,47 @@ export function publishFanout(deps: Pick<AppDeps, 'hub'>, fanout: readonly Fanou
   }
 }
 
-/** Stored rows matching these keys that are still parked (REFOLDABLE_ERRORS, never applied). */
-async function parkedDuplicates(
+/**
+ * The stored twins of this delivery's duplicates. Returns the ones still parked
+ * (REFOLDABLE_ERRORS) for the projector. A Stream copy of a row an rpc_poll copy stored first also
+ * backfills what getTransaction could not give (block_height, tx_index: attribution orders by
+ * them) and stamps chain_txs.stream_seen_at (the Stream did see the tx).
+ */
+async function storedDuplicates(
   tx: Tx,
-  keys: readonly { signature: string; outer_ix: number; inner_ix: number }[],
+  dupes: readonly ReturnType<typeof toRows>[number][],
+  nowMs: number,
 ): Promise<InsertedChainEvent[]> {
-  const want = new Set(keys.map(keyOf));
+  const incoming = new Map(dupes.map((d) => [keyOf(d), d]));
   const rows = await tx
     .select({
       ...parkedCols,
       signature: chainEvents.signature,
       outer_ix: chainEvents.outer_ix,
       inner_ix: chainEvents.inner_ix,
+      block_height: chainEvents.block_height,
+      tx_index: chainEvents.tx_index,
     })
     .from(chainEvents)
-    .where(
-      and(
-        inArray(chainEvents.signature, [...new Set(keys.map((k) => k.signature))]),
-        inArray(chainEvents.apply_error, [...REFOLDABLE_ERRORS]),
-        isNull(chainEvents.applied_at),
-      ),
-    );
-  return rows
-    .filter((r) => want.has(keyOf(r)))
+    .where(inArray(chainEvents.signature, [...new Set(dupes.map((k) => k.signature))]));
+  const mine = rows.filter((r) => incoming.has(keyOf(r)));
+  const backfilled = new Set<string>();
+  for (const r of mine) {
+    const d = incoming.get(keyOf(r))!;
+    if (d.source !== 'stream') continue;
+    backfilled.add(r.signature);
+    const block_height = r.block_height ?? d.block_height;
+    const tx_index = r.tx_index ?? d.tx_index;
+    if (block_height !== r.block_height || tx_index !== r.tx_index)
+      await tx.update(chainEvents).set({ block_height, tx_index }).where(eq(chainEvents.id, r.id));
+  }
+  if (backfilled.size)
+    await tx
+      .update(chainTxs)
+      .set({ stream_seen_at: new Date(nowMs) })
+      .where(and(inArray(chainTxs.signature, [...backfilled]), isNull(chainTxs.stream_seen_at)));
+  return mine
+    .filter((r) => r.apply_error !== null && REFOLDABLE_ERRORS.includes(r.apply_error))
     .map(({ id, bet_id, event_name, apply_error }) => ({ id, bet_id, event_name, apply_error }));
 }
 
@@ -158,6 +178,7 @@ export async function refoldParkedInTx(
   projector: ChainProjector,
   betIds: readonly string[],
   nowMs: number,
+  log?: Logger,
 ): Promise<Fanout[]> {
   if (betIds.length === 0) return [];
   const rows = await tx
@@ -167,7 +188,6 @@ export async function refoldParkedInTx(
       and(
         inArray(chainEvents.bet_id, [...betIds]),
         inArray(chainEvents.apply_error, [...REFOLDABLE_ERRORS]),
-        isNull(chainEvents.applied_at),
       ),
     );
   return rows.length
@@ -175,6 +195,7 @@ export async function refoldParkedInTx(
         tx,
         rows.map((r) => ({ ...r, apply_error: null })),
         nowMs,
+        log,
       )
     : [];
 }
