@@ -450,6 +450,34 @@ describe('bet card state', () => {
     expect(s.bets[BET]!.state).toBe('FINALIZED');
   });
 
+  it('captions: the judge (partial, then final) and the players (party.line)', () => {
+    seq = 0;
+    const u = '00000000-0000-4000-8000-0000000000c1';
+    let s = run([ev('judge.line', { utterance_id: u, text: 'Jake, does the cap', final: false })]);
+    expect(s.bets[BET]!.caption).toMatchObject({ speaker: 'judge', final: false });
+    expect(s.bets[BET]!.last_judge_line).toBeNull();
+    s = run(
+      [ev('judge.line', { utterance_id: u, text: 'Jake, does the cap count?', final: true })],
+      s,
+    );
+    expect(s.bets[BET]!.caption).toMatchObject({ text: 'Jake, does the cap count?', final: true });
+    expect(s.bets[BET]!.last_judge_line).toBe('Jake, does the cap count?');
+    s = run(
+      [
+        ev('party.line', {
+          party: 'B',
+          utterance_id: u.replace('c1', 'c2'),
+          text: 'Nope.',
+          final: true,
+        }),
+      ],
+      s,
+    );
+    expect(s.bets[BET]!.caption).toMatchObject({ speaker: 'B', text: 'Nope.' });
+    const html = renderToString(<BetCard bet={s.bets[BET]!} now={0} />);
+    expect(html).toContain('<span class="label player">Player B</span> <!-- -->Nope.');
+  });
+
   it('tx.failed on the lock shows the error; market.tick does not steal the focus', () => {
     seq = 0;
     let s = run([

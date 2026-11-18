@@ -78,6 +78,18 @@ describe('preview sequence', () => {
     expect(challenge).toContain('Logan challenged Jake');
     expect(challenge).toContain('PREVIEW · sample data');
 
+    const terms = render('terms');
+    expect(terms).toContain('Terms are set');
+    expect(terms).toContain('It comes to rest standing upright on its base.');
+    expect(terms).toContain('Does landing on the cap count? <b>No. Only upright on its base.</b>');
+    expect(
+      text(
+        renderToString(
+          <StageView state={previewAt(START, START + 5_000).state} now={START + 5_000} />,
+        ),
+      ),
+    ).toContain('<span class="label player">Jake</span> Easy money. I never miss.');
+
     const lock = render('lock');
     expect(lock).toContain('1 of 2 authorized');
     expect(lock).toContain('Nothing has moved yet');

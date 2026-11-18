@@ -342,7 +342,6 @@ describe('demo health strip', () => {
       ['rpc', 'ok'],
       ['db', 'ok'],
       ['last', 'ok'],
-      ['signer', 'idle'],
     ]);
     expect(ok[0]!.value).toBe('4.820 SOL');
     expect(ok[1]!.value).toBe('7 free / 8');

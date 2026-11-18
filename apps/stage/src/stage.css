@@ -763,6 +763,49 @@ code,
   color: var(--accent);
   margin-right: 0.4em;
 }
+.caption .label.player {
+  color: var(--chain);
+}
+.caption.partial {
+  color: var(--muted);
+}
+.rules {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.4em;
+  height: 100%;
+}
+.rules .big {
+  font-size: 1.6em;
+  font-weight: 800;
+}
+.rules ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+  font-size: 1.05em;
+}
+.rules li span {
+  display: inline-block;
+  width: 1.3em;
+  font-weight: 900;
+}
+.rules .yes span {
+  color: var(--good);
+}
+.rules .no span {
+  color: var(--bad);
+}
+.rules .edge span {
+  color: var(--accent);
+}
+.rules .edge b {
+  color: var(--accent);
+}
 
 /* ---- right column ------------------------------------------------------------------------- */
 .odds {

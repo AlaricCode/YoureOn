@@ -541,6 +541,36 @@ function PaidPanel({ bet }: { bet: BetView }) {
   );
 }
 
+/** Beat 2: the rules the judge wrote, and the edge cases it asked about. */
+function RulesPanel({ bet }: { bet: BetView }) {
+  const t = bet.envelope!.terms;
+  return (
+    <div className="rules">
+      <p className="big">Terms are set. Both confirm on their phones.</p>
+      <ul>
+        {t.success_criteria.slice(0, 3).map((c, i) => (
+          <li key={`s${i}`} className="yes">
+            <span aria-hidden="true">✓</span> {c}
+          </li>
+        ))}
+        {t.failure_criteria.slice(0, 2).map((c, i) => (
+          <li key={`f${i}`} className="no">
+            <span aria-hidden="true">✕</span> {c}
+          </li>
+        ))}
+        {t.edge_cases.slice(0, 2).map((e, i) => (
+          <li key={`e${i}`} className="edge">
+            <span aria-hidden="true">?</span> {e.question} <b>{e.answer}</b>
+          </li>
+        ))}
+      </ul>
+      <p className="muted">
+        Same terms code on both phones and up here: everyone agrees to the same bet.
+      </p>
+    </div>
+  );
+}
+
 function ChallengePanel({ bet }: { bet: BetView }) {
   const a = nameOf(bet, 'A');
   const b = nameOf(bet, 'B');
@@ -618,15 +648,13 @@ export function MomentPanel({
   else if (phase === 'play') body = <PlayPanel bet={bet} now={now} market={market} />;
   else if (phase === 'lock') body = <LockPhasePanel bet={bet} />;
   else if (phase === 'terms')
-    body = (
+    body = bet.envelope ? (
+      <RulesPanel bet={bet} />
+    ) : (
       <div className="intro">
-        <p className="big">
-          {bet.envelope ? 'Terms are set. Both confirm on their phones.' : 'Negotiating terms…'}
-        </p>
+        <p className="big">Negotiating terms…</p>
         <p className="muted">
-          {bet.envelope
-            ? 'Same terms code on both phones and up here: everyone is agreeing to the same bet.'
-            : 'The AI judge asks the edge-case questions, then reads the terms back.'}
+          The AI judge asks the edge-case questions, then reads the terms back.
         </p>
       </div>
     );
@@ -688,9 +716,12 @@ export function BetCard({
       </div>
       <TermsCard bet={bet} />
       <MomentPanel bet={bet} now={now} market={market} />
-      {bet.last_judge_line && (
-        <p className="caption" aria-live="polite">
-          <span className="label">JUDGE</span> {bet.last_judge_line}
+      {bet.caption && bet.caption.text.trim() && (
+        <p className={`caption${bet.caption.final ? '' : ' partial'}`} aria-live="polite">
+          <span className={`label ${bet.caption.speaker === 'judge' ? 'judge' : 'player'}`}>
+            {bet.caption.speaker === 'judge' ? 'JUDGE' : nameOf(bet, bet.caption.speaker)}
+          </span>{' '}
+          {bet.caption.text}
         </p>
       )}
     </section>
