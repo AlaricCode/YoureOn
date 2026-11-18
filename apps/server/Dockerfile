@@ -10,6 +10,9 @@
 
 # ---- stage: the projector page ------------------------------------------------------------------
 FROM node:22.23.4-bookworm-slim AS stage
+# Escape hatch: `fly deploy --build-arg SKIP_STAGE=1` ships the server without the page (/stage
+# then answers 404 "not built") if the page's build ever blocks an urgent server deploy.
+ARG SKIP_STAGE=0
 WORKDIR /app
 # apps/stage plus every workspace it links: shared, and (dev-only, for its integration tests)
 # server + db. Their manifests make npm link them as workspaces, never fetch from the registry.
@@ -19,8 +22,9 @@ COPY apps/server/package.json apps/server/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
 # --include=dev: vite and its React plugin are devDependencies of the stage.
-RUN npm ci --include=dev -w apps/stage --ignore-scripts --no-audit --no-fund \
- && npm cache clean --force
+RUN if [ "$SKIP_STAGE" = "1" ]; then echo "SKIP_STAGE=1: no stage page"; else \
+      npm ci --include=dev -w apps/stage --ignore-scripts --no-audit --no-fund \
+      && npm cache clean --force; fi
 COPY packages/shared/src packages/shared/src
 COPY packages/shared/idl packages/shared/idl
 COPY apps/stage/index.html apps/stage/vite.config.ts apps/stage/tsconfig.json apps/stage/
@@ -28,7 +32,7 @@ COPY apps/stage/src apps/stage/src
 # public/ holds the REPLAY clips (replay/beat{n}.mp4) when they are present at deploy time.
 COPY apps/stage/public apps/stage/public
 # -> apps/stage/dist: index.html, hashed assets with .br/.gz siblings, public/ copied over.
-RUN npm run build -w apps/stage
+RUN if [ "$SKIP_STAGE" = "1" ]; then mkdir -p apps/stage/dist; else npm run build -w apps/stage; fi
 
 # ---- runtime ------------------------------------------------------------------------------------
 FROM node:22.23.4-bookworm-slim
