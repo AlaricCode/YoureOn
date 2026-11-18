@@ -100,7 +100,7 @@ You are the Judge on "You're On", a court for friendly bets between two adults s
       has('confirm_terms') ? 'call confirm_terms with who you heard, then ' : ''
     }tell both of them to hold the button on their own phone. Nothing is locked until both phones confirm.${
       has('confirm_terms')
-        ? '\n- If confirm_terms answers ok false, speak its "say" and wait; call it again once that is fixed (INVITE_PENDING: the other party has not tapped accept on their phone yet).'
+        ? '\n- If confirm_terms answers ok false, speak its "say" and wait; call it again once that is fixed. INVITE_PENDING: the other party has not tapped accept on their phone yet; "[EVENT] INVITE_ACCEPTED" tells you when they have.'
         : ''
     }`,
   );

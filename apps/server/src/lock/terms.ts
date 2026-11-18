@@ -8,7 +8,8 @@
 //                        DRAFTING); a refusal cancels the bet (terms.refused, judge.cue REFUSED).
 //   confirmTerms()       freeze: the latest version becomes is_final, -> AWAITING_AUTHORIZATIONS
 //                        (the bets_guard trigger freezes the binding fields from here). The
-//                        caller then starts the LockService.
+//                        caller then starts the LockService. requireInviteAccepted: refused
+//                        (INVITE_PENDING + an audit row) until B tapped accept, under the row lock.
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { auditLog, bets, betTermsVersions } from '@youre-on/db';
 import { ACCEPT_WINDOW_SKILL_SECS } from '@youre-on/shared/constants';
@@ -25,6 +26,7 @@ import {
 } from '@youre-on/shared/terms';
 import type { BetState } from '@youre-on/shared/bet-state';
 import { judgeCue } from '../bets/cues';
+import { priorAnswers, recordInvitePending } from '../bets/invite';
 import { loadUserRefs, type BetRow } from '../bets/snapshot';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { fanout, iso, lockBet, statePayload, type LifecycleDeps, type Tx } from './common';
@@ -349,18 +351,29 @@ async function cancelRefused(
 
 export type ConfirmResult =
   | { ok: true; code: string; envelope: TermsEnvelope; already: boolean }
-  | { ok: false; fix: 'NOT_PROPOSED' | 'NOT_FOUND' | 'FROZEN'; state?: BetState };
+  | { ok: false; fix: 'NOT_PROPOSED' | 'NOT_FOUND' | 'FROZEN'; state?: BetState }
+  | { ok: false; fix: 'INVITE_PENDING'; state: BetState; party_b_id: string };
+
+export interface ConfirmOptions {
+  heard?: string;
+  requestId?: string;
+  actor?: 'judge' | 'system' | 'user';
+  actorUserId?: string;
+  /**
+   * B's consent is B's own tap on the invite (§2.5), never what the judge heard: refuse with
+   * INVITE_PENDING until bet.invite_answered accepted is in the log. Checked here, under the row
+   * lock, because the state a caller read before it can be stale (the propose_terms sink may be
+   * committing DRAFTING -> TERMS_PROPOSED right then). With LOCK_SIGNER=server a freeze signs
+   * B's stake custodially.
+   */
+  requireInviteAccepted?: boolean;
+}
 
 /** confirm_terms step 2: freeze -> AWAITING_AUTHORIZATIONS. The caller starts the lock. */
 export async function confirmTerms(
   deps: LifecycleDeps,
   betId: string,
-  o: {
-    heard?: string;
-    requestId?: string;
-    actor?: 'judge' | 'system' | 'user';
-    actorUserId?: string;
-  } = {},
+  o: ConfirmOptions = {},
 ): Promise<ConfirmResult> {
   const now = deps.now();
   const out = await deps.db.transaction(async (tx) => {
@@ -388,6 +401,26 @@ export async function confirmTerms(
     const latest = await loadEnvelope(tx, betId);
     if (!latest || latest.envelope.terms_hash !== bet.terms_hash)
       return { res: { ok: false, fix: 'NOT_PROPOSED' } as ConfirmResult, bet, envs: [] };
+    if (o.requireInviteAccepted && !(await priorAnswers(tx, betId)).has('accepted')) {
+      await recordInvitePending(tx, {
+        betId,
+        termsHash: bet.terms_hash,
+        actor: o.actor ?? 'judge',
+        actorUserId: o.actorUserId,
+        requestId: o.requestId,
+        heard: o.heard,
+      });
+      return {
+        res: {
+          ok: false,
+          fix: 'INVITE_PENDING',
+          state: bet.state,
+          party_b_id: bet.party_b_id,
+        } as ConfirmResult,
+        bet,
+        envs: [],
+      };
+    }
     await tx
       .update(betTermsVersions)
       .set({ is_final: true })

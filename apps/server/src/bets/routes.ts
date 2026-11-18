@@ -1,6 +1,8 @@
 // Challenge, API-CONTRACT §2.5 (TASKS D0-J4):
 //   POST /v1/bets                          (S)     -> 201 {bet: BetSnapshot (DRAFTING), voice: {dynamic_variables}}
 //   POST /v1/bets/:bet_id/invite/accept    (S, B)  -> 200 {bet}   bet.invite_answered accepted; state unchanged
+//                                                     (+ judge.cue INVITE_ACCEPTED if the voice judge
+//                                                     was told to wait for it: ./invite.ts)
 //   POST /v1/bets/:bet_id/invite/decline   (S, B)  -> 200 {bet}   -> CANCELLED (declined); judge.cue DECLINED
 //
 // POST /v1/bets effects, in ONE transaction: the bets row (bet_id = new UUIDv4 = the onchain
@@ -8,8 +10,8 @@
 // bet_events, outbox `challenge_received` to B, an audit row. After commit: bet.invited to
 // B's user channel (and the bet channel / room stage), bet.state to the bet channel.
 import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
-import { auditLog, bets, betEvents, outbox, users, voiceSessions } from '@youre-on/db';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { auditLog, bets, outbox, users, voiceSessions } from '@youre-on/db';
 import {
   BetInviteAnsweredPayload,
   CreateBetRequest,
@@ -28,7 +30,8 @@ import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
-import { declinedCue } from './cues';
+import { declinedCue, inviteAcceptedCue } from './cues';
+import { judgeAwaitsAccept, priorAnswers } from './invite';
 import { verifyMatchTicket } from './match-ticket';
 import { betSnapshot, loadUserRefs, partyOf, type BetRow } from './snapshot';
 
@@ -291,14 +294,34 @@ export const betsRoutes: RouteModule = {
         if (!INVITE_ACCEPTABLE.includes(bet.state)) {
           throw new HttpError('INVALID_STATE', undefined, { state: bet.state });
         }
-        const e = await appendBetEvent(tx, {
-          bet_id: betId,
-          type: 'bet.invite_answered',
-          payload: BetInviteAnsweredPayload.parse({ party: 'B', answer: 'accepted' }),
-          now: deps.now(),
-        });
+        const now = deps.now();
+        const events = [
+          await appendBetEvent(tx, {
+            bet_id: betId,
+            type: 'bet.invite_answered',
+            payload: BetInviteAnsweredPayload.parse({ party: 'B', answer: 'accepted' }),
+            now,
+          }),
+        ];
+        // The voice judge already heard both say yes and was told to wait for this tap: tell it
+        // B is in, or it stays silent until a human speaks (it only hears the room).
+        if (
+          bet.state === 'TERMS_PROPOSED' &&
+          bet.terms_hash &&
+          (await judgeAwaitsAccept(tx, betId, bet.terms_hash))
+        ) {
+          const nameB = (await loadUserRefs(tx, [bet.party_b_id])).get(bet.party_b_id)!;
+          events.push(
+            await appendBetEvent(tx, {
+              bet_id: betId,
+              type: 'judge.cue',
+              payload: inviteAcceptedCue(nameB.display_name),
+              now,
+            }),
+          );
+        }
         const [row] = await tx.select().from(bets).where(eq(bets.id, betId)).limit(1);
-        return { row: row!, events: [e] };
+        return { row: row!, events };
       });
       for (const e of events) deps.hub.publishBetEvent(e, row.room_id);
       const out: InviteAnswerResponse = { bet: await snapshotFor(deps, row, me.user_id) };
@@ -391,23 +414,8 @@ export const betsRoutes: RouteModule = {
 
 type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
 
-/** B's earlier invite answers for this bet, from the bet_events log (also terms/routes.ts). */
-export async function priorAnswers(
-  tx: Tx | AppDeps['db'],
-  betId: string,
-): Promise<Set<'accepted' | 'declined'>> {
-  const rows = await tx
-    .select({ envelope: betEvents.envelope })
-    .from(betEvents)
-    .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'bet.invite_answered')))
-    .orderBy(asc(betEvents.seq));
-  const out = new Set<'accepted' | 'declined'>();
-  for (const r of rows) {
-    const p = BetInviteAnsweredPayload.safeParse((r.envelope as { payload?: unknown }).payload);
-    if (p.success) out.add(p.data.answer);
-  }
-  return out;
-}
+/** Moved to ./invite (the lock's confirm step uses it too); re-exported for existing callers. */
+export { priorAnswers } from './invite';
 
 /** SELECT … FOR UPDATE the bet; 404 if unknown, 403 NOT_A_PARTY unless the caller is B. */
 async function lockBetAsB(tx: Tx, betId: string, userId: string): Promise<BetRow> {

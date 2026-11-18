@@ -57,3 +57,13 @@ export function declinedCue(name: string): JudgeCue {
   const n = asciiFold(name);
   return judgeCue('DECLINED', { name }, `Say ${n} passed. Nothing moved.`);
 }
+
+/**
+ * B tapped accept after the judge's confirm_terms was refused INVITE_PENDING for these terms (both
+ * already said yes out loud): `[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call
+ * confirm_terms again.` Spoken, because it must start a judge turn.
+ */
+export function inviteAcceptedCue(name: string): JudgeCue {
+  const n = asciiFold(name);
+  return judgeCue('INVITE_ACCEPTED', { name }, `Say ${n} is in, then call confirm_terms again.`);
+}
