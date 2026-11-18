@@ -596,12 +596,14 @@ function LockPhasePanel({ bet }: { bet: BetView }) {
   return (
     <div className="intro">
       <SignerSlots bet={bet} />
-      <p className="big">
-        {bet.lock && bet.lock.status !== 'failed'
-          ? 'Locking both stakes in one transaction…'
-          : n === 0
-            ? 'Hold to confirm + Face ID on both phones'
-            : `${n} of 2 authorized`}
+      <p className={`big${bet.lock?.status === 'failed' ? ' bad' : ''}`}>
+        {bet.lock?.status === 'failed'
+          ? "The lock didn't go through"
+          : bet.lock
+            ? 'Locking both stakes in one transaction…'
+            : n === 0
+              ? 'Hold to confirm + Face ID on both phones'
+              : `${n} of 2 authorized`}
       </p>
       <p className="muted">
         {bet.lock?.status === 'failed'
