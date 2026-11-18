@@ -223,6 +223,7 @@ async function rebalanceOnce(
   const built = await buildBlockhashTx(rt.client, feePayer.address, ixs, {
     signers: [feePayer, fromKey],
     label: 'demo rebalance',
+    cuPrice: rt.cuPrice,
   });
   const signature = b58.decode(built.tx.signatures[feePayer.address]!);
   const from = fromKey.address === demoA.address ? 'demo-a' : 'demo-b';

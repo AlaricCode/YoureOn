@@ -265,6 +265,7 @@ export class PayoutService {
     const built = await buildBlockhashTx(rt.client, rt.keys.feePayer.address, [ix], {
       signers: [rt.keys.feePayer, judge],
       label: 'resolve',
+      cuPrice: rt.cuPrice,
       ...(avoidBlockhash ? { avoidBlockhash } : {}),
     });
     const signature = sigString(built.tx.signatures[rt.keys.feePayer.address]!);
@@ -687,6 +688,7 @@ export class PayoutService {
         built = await buildBlockhashTx(rt.client, fp.address, ixs, {
           signers: [fp],
           label: 'finalize+close_bet',
+          cuPrice: rt.cuPrice,
         });
       } catch (err) {
         if (

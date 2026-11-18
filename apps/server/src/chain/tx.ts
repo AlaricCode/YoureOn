@@ -804,6 +804,8 @@ export interface ChainRuntime {
    * device policy refuses every lock (LOCK_SIGNER=phones); custodial / local runs still work.
    */
   feePayerPinned?: boolean;
+  /** CU_PRICE_MICROLAMPORTS: SetComputeUnitPrice on server-only txs (never phone-signed ones). */
+  cuPrice?: bigint;
 }
 
 /** From env; null when the RPC or the fee payer is not configured (chain features answer 503-ish). */
@@ -818,6 +820,7 @@ export async function chainRuntimeFromEnv(env: Env): Promise<ChainRuntime | null
     programId: address(ESCROW_ID),
     cluster: env.SOLANA_CLUSTER ?? 'devnet',
     feePayerPinned: keys.feePayer.address === FEE_PAYER_PUBKEY,
+    ...(env.CU_PRICE_MICROLAMPORTS ? { cuPrice: BigInt(env.CU_PRICE_MICROLAMPORTS) } : {}),
   };
 }
 
@@ -1152,7 +1155,7 @@ export async function buildNonceAdvance(rt: ChainRuntime, account: Address): Pro
     rt.client,
     fp.address,
     [getAdvanceNonceAccountInstruction({ nonceAccount: account, nonceAuthority: fp })],
-    { signers: [fp], label: 'nonce_advance' },
+    { signers: [fp], label: 'nonce_advance', cuPrice: rt.cuPrice },
   );
 }
 
