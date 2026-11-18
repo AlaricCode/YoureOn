@@ -50,7 +50,7 @@ import { QUICKNODE_WEBHOOK_PATH } from '../src/chain/routes';
 import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
 import { liteSvmClient } from './litesvm-client';
 import { loadQnFilter, qnSignedHeaders } from './chain-fixtures';
-import { betRow as readBet, logOf, ownDatabase } from './chain-db';
+import { auditOf, betRow as readBet, logOf, ownDatabase } from './chain-db';
 import {
   DB_URL,
   getChallenge,
@@ -400,6 +400,10 @@ run('QuickNode Stream path on LiteSVM transactions (filter -> webhook -> project
       'chain.BetClosed',
     ]);
     expect((await cues(betId)).filter((c) => c === 'PAID')).toHaveLength(1);
+    // the RPC path's writes (LockService, PayoutService) agree with the chain field for field
+    expect(
+      (await auditOf(ctx.deps.db, betId)).filter((a) => a.action.startsWith('chain.')),
+    ).toEqual([]);
 
     // QuickNode re-delivers the whole history: nothing changes
     const version = paid.version;
