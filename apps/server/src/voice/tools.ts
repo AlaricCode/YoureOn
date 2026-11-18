@@ -379,7 +379,12 @@ export function confirmSay(a: string, b: string): string {
 export async function confirmAndLock(
   deps: AppDeps,
   betId: string,
-  o: { heard?: string; requestId?: string; actor?: 'judge' | 'system' } = {},
+  o: {
+    heard?: string;
+    requestId?: string;
+    actor?: 'judge' | 'system' | 'user';
+    actorUserId?: string;
+  } = {},
 ): Promise<ToolReply> {
   const r = await confirmTerms(deps, betId, o);
   if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
