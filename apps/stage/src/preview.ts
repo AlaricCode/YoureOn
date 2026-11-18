@@ -8,6 +8,8 @@
 //                     Gemini BTC 5-minute bet, locked at fair stakes, settled by Gemini)
 //   ?preview=<step>   freezes on one moment: challenge, terms, lock, locked, attempt, redo,
 //                     judging, ruling, paid, market, settled
+//   ?preview=gemini   Beat 6 alone, in real time: a Gemini bet's clock, the wait for Gemini, then
+//                     Gemini's result (preview-market.ts)
 // Signatures and keys are fixtures: the QR codes in preview point at transactions that do not exist.
 import type { BetSnapshot } from '@youre-on/shared/api';
 import { splitPot, type GeminiMarketSnapshot } from '@youre-on/shared/gemini';
@@ -489,6 +491,12 @@ function sequence(): Entry[] {
     ts: unix(b + 66_000),
   }));
   state(69_000, BET_BTC, 'AWAITING_MARKET', 'LOCKED', 'Locked');
+  // Gemini's settled record (the market panel's result), then the rule ruling that commits to it
+  const settledHash = (b: number) => hashJcs(btcSettlement(b));
+  frame(79_600, BET_BTC, 'market.settled', (b) => ({
+    record: btcSettlement(b),
+    evidence_hash: settledHash(b),
+  }));
   frame(80_000, BET_BTC, 'ruling.issued', (b) => ({
     ruling: {
       schema_version: 1,
@@ -504,7 +512,7 @@ function sequence(): Entry[] {
       cited_frames: [],
       frame_hashes: [],
       model: GEMINI_SETTLEMENT_MODEL,
-      evidence_hash: hex('gemini-settlement'),
+      evidence_hash: settledHash(b),
       terms_hash: btc(b).terms_hash,
       created_at: iso(b + 80_000),
       redo_reason: null,
@@ -528,7 +536,7 @@ function sequence(): Entry[] {
     bet_id: BET_BTC,
     judge: PK_X,
     outcome: 'PartyA',
-    evidence_hash: hex('gemini-settlement'),
+    evidence_hash: settledHash(b),
     ruling_hash: hex('ruling-btc'),
     appeal_deadline: unix(b + 81_400),
     ts: unix(b + 81_400),
@@ -671,6 +679,29 @@ function btcEnvelope(base: number) {
     if (envCache.size > 8) envCache.delete(envCache.keys().next().value!);
   }
   return e;
+}
+
+/** Beat 6: Gemini's settled record of the bet's contract (UP at $64,412.10), as market.settled. */
+function btcSettlement(base: number) {
+  const m = marketAt(base + 61_000); // the contract btcEnvelope locked
+  return {
+    schema_version: 1,
+    kind: 'gemini_settlement',
+    bet_id: BET_BTC,
+    terms_hash: btcEnvelope(base).terms_hash,
+    contract: {
+      eventTicker: m.eventTicker,
+      instrumentSymbol: m.instrumentSymbol,
+      status: 'settled',
+      resolutionSide: 'yes',
+      settlementValue: '64412.1',
+      strike: m.strike,
+      resolvedAt: iso(base + 79_000),
+    },
+    source_url: `https://api.gemini.com/v1/prediction-markets/events/${m.eventTicker}`,
+    response_sha256: hex('gemini-body'),
+    fetched_at: iso(base + 79_600),
+  };
 }
 
 function snapshotOf(betId: string): BetSnapshot {
