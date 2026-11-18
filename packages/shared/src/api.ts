@@ -22,6 +22,7 @@ import {
   Uuid,
 } from './primitives';
 import { OnchainOutcome, Ruling } from './ruling';
+import { StageVoiceName, VoicedEventType } from './stage-voice';
 import { TermsEnvelope } from './terms';
 
 // ---------------------------------------------------------------------------------------
@@ -465,6 +466,21 @@ export const PartySignature = z.object({
 });
 export type PartySignature = z.infer<typeof PartySignature>;
 
+/** §2.12 POST /v1/bets/:bet_id/appeal -> 202 (also POST /v1/demo/bets/:bet_id/appeal, §2.17). */
+export const AppealSubmitted = z.object({
+  status: z.literal('submitted'),
+  signature: Signature,
+  appeal_id: Uuid,
+});
+export type AppealSubmitted = z.infer<typeof AppealSubmitted>;
+
+/**
+ * §2.17 POST /v1/demo/bets/:bet_id/appeal (LOCK_SIGNER=server): the server signs the appeal as the
+ * losing demo party. `party` is only needed for a VOID ruling (either party may appeal; default A).
+ */
+export const DemoAppealRequest = z.object({ party: Party.optional() });
+export type DemoAppealRequest = z.infer<typeof DemoAppealRequest>;
+
 export const AuthorizationResult = z.discriminatedUnion('status', [
   z.object({ status: z.literal('recorded'), waiting_for: Party }),
   z.object({ status: z.literal('submitted'), signature: Signature }),
@@ -692,6 +708,29 @@ export const WsStageCue = z.object({
   op: z.literal('stage.cue'),
   bet_id: BetId,
   kind: StageCueKind,
+  /**
+   * Additive: the cue's ElevenLabs Sound Effects clip (GET /v1/stage/sfx/:kind with the stage
+   * bearer), when the server generates them. Absent: the stage plays its own synthesized sound.
+   */
+  audio_url: z.string().max(200).optional(),
+});
+/**
+ * Additive (stage sessions only): the ElevenLabs TTS clip of the stage line for bet event
+ * (bet_id, seq), sent right after that event, before the clip is generated (the GET waits for
+ * it). The stage speaks `text` itself when no frame comes within ~800 ms or the clip fails.
+ * Never sent for a line the phone judge says (stage-voice.ts leftToPhoneJudge).
+ */
+export const WsStageVoice = z.object({
+  op: z.literal('stage.voice'),
+  bet_id: BetId,
+  seq: z.number().int().nonnegative(),
+  type: VoicedEventType,
+  voice: StageVoiceName,
+  text: z.string().max(400),
+  /** sha256 hex of voice id, model and text. */
+  clip_id: Hex32,
+  /** GET with the stage bearer: /v1/stage/tts/:clip_id. */
+  audio_url: z.string().max(200),
 });
 
 export const WsServerControlFrame = z.discriminatedUnion('op', [
@@ -702,8 +741,22 @@ export const WsServerControlFrame = z.discriminatedUnion('op', [
   WsRoomPresence,
   WsStageMarket,
   WsStageCue,
+  WsStageVoice,
 ]);
 export type WsServerControlFrame = z.infer<typeof WsServerControlFrame>;
+
+/**
+ * GET /v1/stage/audio (stage bearer): what the server voices on the projector. `tts` false
+ * (`tts_off` says why): no stage.voice frames, the stage speaks with the browser's voice. `sfx`
+ * null: the stage synthesizes its cues; else each cue's ElevenLabs clip URL.
+ */
+export const StageAudioResponse = z.object({
+  tts: z.boolean(),
+  tts_off: z.enum(['no_key', 'off', 'spend_disabled']).nullable(),
+  model: z.string().nullable(),
+  sfx: z.record(StageCueKind, z.string()).nullable(),
+});
+export type StageAudioResponse = z.infer<typeof StageAudioResponse>;
 
 // ---------------------------------------------------------------------------------------
 // §2.3 Rooms and presence, §2.5 Challenge (rooms/challenge stream, TASKS D0-J4)

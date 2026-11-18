@@ -1,11 +1,11 @@
 // How the stage page is told what to show, without typing on the projector laptop:
 //
-//   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
+//   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>
 //
 // Query (not secret): room (6-char code or uuid), bet (a bet already in progress), preview[=step]
 // (sample data, no server), nopreload. Fragment (secret, never sent to any server or written to its
-// logs): key (STAGE_KEY), token (a ready stage token), demo (DEMO_ADMIN_TOKEN, enables the health
-// strip). Secrets are read from the fragment only (a ?key= has already reached the server's and
+// logs): key (STAGE_KEY), token (a ready stage token), demo (DEMO_ADMIN_TOKEN: optional, the health
+// strip reads /v1/demo/health with the stage token itself). Secrets are read from the fragment only (a ?key= has already reached the server's and
 // the proxy's request logs, so it is ignored and the form says so), then removed from the address
 // bar. server (another API origin) is honoured only on localhost / in Vite dev: on the deployed
 // page a crafted ?server= link would send the typed stage key and demo admin key to another host.

@@ -153,7 +153,7 @@ Every requirement in BRIEF.md (as amended, plus D1–D7) mapped to the spec sect
 | B4d | The winner's phone buzzes with the payout | Beat 4 | SCH X10 | D3-M2 | covered |
 | B5a | Contested shot → each side gets about 10 s to argue | Beat 5 | SCH §6; API §2.11 | D4-J1, D4-M3 | **fixed-now**: `force-hearing` (trigger `'demo'`) makes the contested shot deterministic on stage |
 | B5b | The judge reviews the clip and rules | Beat 5 | SCH §6 `HearingRuling` | D4-J1 | covered (PENDING-KEY) |
-| B5c | "I appeal!" → the three-model panel votes live | Beat 5 | SCH §7; API §2.12, §7.2 | D4-L1, D4-J2, D4-M3, D4-J4 | **fixed-now**: the appeal gesture aligned to tap + Face ID (D4-M3) |
+| B5c | "I appeal!" → the three-model panel votes live | Beat 5 | SCH §7; API §2.12, §7.2 | D4-L1, D4-J2, D4-M3, D4-J4 | **fixed-now**: the appeal gesture aligned to tap + Face ID (D4-M3). **Built 2026-11-18** (`feat/appeal`; tests `apps/server/test/e2e-beats.test.ts`, `appeal-panel.test.ts`, `apps/mobile/src/app/__tests__/appeal.test.ts`); the hearing (B5a/B5b) is not |
 | B5d | The ruling stands or flips | Beat 5 | SCH §7 | D4-L1 | covered |
 | B6a | "Bitcoin's up by the end of this pitch" → the judge pulls Gemini's 5-minute BTC market | Beat 6 | API §4.3 `get_market_odds`; ARCH §3.6 | D4-J3 | covered |
 | B6b | Fair stakes from the live price (e.g. 62/38) | Beat 6 | SCH §8.2 | D1-J3, D4-M4 | covered |
@@ -212,7 +212,7 @@ Every requirement in BRIEF.md (as amended, plus D1–D7) mapped to the spec sect
 | J1 | Claude via the Anthropic API, structured JSON outputs validated by Zod | 5c | FND §3.8; API §7.1 | D2-J4, D3-J1, D1-J1 | covered (terms extraction runs on Claude inside the ElevenLabs agent, D6; the server validates it with Zod) |
 | J2 | Terms schema: claim, type, attempts, criteria, edge_cases, evidence_source, stakes, deadline | 5c | SCH §2.1 | D0-J1 | covered |
 | J3 | At most 2 clarifying questions, then read the terms back | 5c | SCH §0.1 `MAX_CLARIFICATIONS`, §3 | D2-J1 | covered |
-| J4 | Ruling: a short clip, ~8 frames including the final ones, sent with the terms | 5c | SCH §4; FND §3.3 | D3-M1, D3-J1 | covered |
+| J4 | Ruling: a short clip, ~8 frames including the final ones, sent with the terms | 5c | SCH §4; FND §3.3; README D10 | D3-M1, D3-J1 | covered (D10: 12 frames, 8 of them on the landing, + one landing crop) |
 | J5 | Output A_WINS / B_WINS / REDO, confidence, reason; confidence < 0.8 → REDO | 5c | SCH §5.1–§5.2 | D3-J1, D3-J2 | covered (deliberate shape: the model emits `claim_result` and the server maps it, FND §2.3; `MAX_REDOS` = 2 then HEARING, D7) |
 | J6 | Hash the clip → `evidence_hash` onchain | 5c | SCH §4 table; ESC `resolve` | D3-M1, D3-L1 | covered (plus `frame_hashes` in `ruling_hash`, D7) |
 | J7 | Hearing: push-to-talk turns, one phone each; the ruling cites the evidence | 5c | SCH §6; API §2.11 | D4-J1, D4-M3 | covered |
@@ -229,7 +229,7 @@ Every requirement in BRIEF.md (as amended, plus D1–D7) mapped to the spec sect
 |---|---|---|---|---|---|
 | V1 | The judge is an ElevenLabs Agent whose server tools call our backend | 5d | API §4; ARCH §3.2, §8.2 | D0-J2, D1-J1, D2-J1, D4-J1, D4-J3 | covered (5 webhook tools + 3 client tools, D6) |
 | V2 | Tools `ask_clarification`, `lock_bet`, `issue_ruling` as LLM-callable tools | 5d | API §4 (D6) | — | **deliberately-out-of-scope**: D6 replaces them. Clarifications are spoken; the lock and the ruling are server-driven and voiced through `judge.cue` → `[EVENT]`; `request_attempt` is a client tool. |
-| V3 | ElevenLabs voices the rulings and announcements and handles the parties' speech | 5d | API §4.5; ARCH §3.2, §8.2 | D2-M3, D3-J1, D4-J2 (stage TTS) | covered |
+| V3 | ElevenLabs voices the rulings and announcements and handles the parties' speech | 5d | API §4.5; ARCH §3.2, §8.2 | D2-M3, D3-J1, D4-J2 (stage TTS) | covered (feat/stage-voice: the projector speaks each ruling, payout and appeal vote as an ElevenLabs TTS clip, else in the browser's voice; in a bet the voice judge hosts, the ruling and payout are left to A's phone, one judge at a time; tests `apps/server/test/stage-voice.test.ts`, `apps/stage/test/voice.test.ts`) |
 | V4 | First judge audio < 1.5 s after a party stops talking | 5d, §6 | ARCH §4 | D1-J2, D2-J2, §6.5 | covered (PENDING-KEY; the post-tool read-back is 1.25–2.2 s, E) |
 | V5 | Verify ElevenLabs React Native/Expo support and tool-call latency early | 5d | FND §3.10, §6 steps 1, 9 | P-05, P-12, D1-J2 | covered (PENDING-KEY/PHONE) |
 
@@ -416,3 +416,4 @@ Bounty rows H19–H21 cover "core", "filter + destination" and the README.
 ## Changelog
 
 - **2026-11-08:** first version (completeness critic pass). 207 requirements from BRIEF (as amended) and D1–D7, mapped to spec and task. 33 rows fixed in place in TASKS, SETUP-CHECKLIST and ARCHITECTURE; 5 rows are deliberately out of scope; 11 contradictions checked (7 fixed or recorded, 2 kept or stale with no action, 2 checks found none).
+- **2026-11-18:** J4 points at D10 (12 frames + the landing crop, branch `feat/attempt-capture`).

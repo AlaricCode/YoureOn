@@ -12,12 +12,20 @@ import {
 } from '../judgeTools';
 
 describe('judge client tools (API-CONTRACT §4.4)', () => {
-  const make = (o: { can?: boolean; fail?: string } = {}) => {
+  const make = (
+    o: {
+      can?: boolean;
+      fail?: string;
+      details?: Record<string, unknown>;
+      recorder?: 'judge_cam' | 'self';
+    } = {},
+  ) => {
     const calls: unknown[] = [];
     const tools = judgeClientTools({
       startAttempt: async (n) => {
         calls.push(['attempt', n]);
-        if (o.fail) throw Object.assign(new Error(o.fail), { code: o.fail });
+        if (o.fail) throw Object.assign(new Error(o.fail), { code: o.fail, details: o.details });
+        return o.recorder;
       },
       showTermsCard: () => calls.push(['card']),
       cue: async (k) => void calls.push(['cue', k]),
@@ -38,6 +46,20 @@ describe('judge client tools (API-CONTRACT §4.4)', () => {
       'error: INVALID_STATE',
     );
     expect(await make().tools.request_attempt({ attempt_no: 0 })).toBe('error: VALIDATION_FAILED');
+    // Two phones: A's own phone films (no judge cam in the room).
+    expect(await make({ recorder: 'self' }).tools.request_attempt({ attempt_no: 1 })).toBe(
+      'armed: this phone films, counting down',
+    );
+    expect(await make({ recorder: 'judge_cam' }).tools.request_attempt({ attempt_no: 1 })).toBe(
+      'armed: judge cam counting down',
+    );
+    // A performs and there is no judge cam: B's phone has to start it.
+    expect(
+      await make({
+        fail: 'INVALID_STATE',
+        details: { reason: 'no_judge_cam' },
+      }).tools.request_attempt({ attempt_no: 1 }),
+    ).toBe('error: NO_JUDGE_CAM');
     // Only after [EVENT] LOCKED / REDO.
     const early = make({ can: false });
     expect(await early.tools.request_attempt({ attempt_no: 1 })).toBe('error: INVALID_STATE');

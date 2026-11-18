@@ -22,12 +22,13 @@ them it answers 404.
 
 Check these first; each changes the script ([`pitch.md`](pitch.md)).
 
-| Gap                         | Effect                                                                                                                                                                                                               | Check                                                    |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| ElevenLabs key pending      | No voice judge: A uses "Type it instead" in Beat 2.                                                                                                                                                                  | `demo "$SERVER/v1/demo/voice"`                           |
-| QuickNode key pending       | No Stream: chain events arrive through `rpc_poll`, about 5 s after the send (30 s once a Stream token is set); the stage ticker won't say "via QuickNode Streams". The RPC is not QuickNode's, so it can rate-limit. | `stream.last_delivery_at` in the health report is `null` |
-| Signed iPhone build pending | No phones: run the bets from the laptop with `cp1-drive` (see "No phones" in the pitch).                                                                                                                             | The app is installed and opens on each phone             |
-| Beat 6 not yet run live     | Rehearse it at least once on Gemini; keep `REPLAY 6` and the Gemini replay feed ready.                                                                                                                               | `docs/measurements.md` Beat 6 TODO filled in             |
+| Gap                         | Effect                                                                                                                                                                                                               | Check                                                               |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| ElevenLabs key pending      | No voice judge: A uses "Type it instead" in Beat 2. The projector still speaks each ruling and payout, in the browser's voice (`Voice: browser` on the strip).                                                       | `demo "$SERVER/v1/demo/voice"`                                      |
+| QuickNode key pending       | No Stream: chain events arrive through `rpc_poll`, about 5 s after the send (30 s once a Stream token is set); the stage ticker won't say "via QuickNode Streams". The RPC is not QuickNode's, so it can rate-limit. | `stream.last_delivery_at` in the health report is `null`            |
+| Signed iPhone build pending | No phones: run the bets from the laptop with `cp1-drive` (see "No phones" in the pitch).                                                                                                                             | The app is installed and opens on each phone                        |
+| Beat 6 rehearsal            | Ran live once on 2026-11-18 (see measurements). Rehearse again on the day; keep `REPLAY 6` and the Gemini replay feed ready.                                                                                         | `GET /v1/demo/health` `gemini.current.lockable`                     |
+| Beat 5 appeal rehearsal     | Rehearse it on devnet before showing it ("The appeal (Beat 5)" below); without the appeal key an appealed bet is refunded after 300 s instead of paid.                                                               | `appeal_key` set and no `appeal_key_*` warning in the health report |
 
 ## 1. Pre-show checklist (start 60 minutes before)
 
@@ -36,30 +37,36 @@ Check these first; each changes the script ([`pitch.md`](pitch.md)).
 ```sh
 npm run demo-check                          # GO / NO-GO; exit 0 = GO (warnings allowed)
 npm run demo-check -- --json                # the same, machine-readable
+npm run demo-check -- --warmup              # first warm up (one paid judge call), then check
 ```
 
-`scripts/demo-check.ts` is read-only (it sends and signs nothing). It reads `GET /health`
-(reachable, latency, clock skew) and, with `DEMO_ADMIN_TOKEN`, `GET /v1/demo/health`. With
-`SOLANA_RPC_URL` set it also checks the chain directly: the program is deployed, Config exists and is
-not paused, the fee payer's SOL, the nonce accounts, the demo wallets' USDC, and live bets past a
-deadline. With `QN_API_KEY` and `QN_STREAM_ID` set it reads the Stream's status. Every failed check
-prints its fix.
+`scripts/demo-check.ts` is read-only (it signs nothing and, without `--warmup`, sends nothing). It
+reads `GET /health` (reachable, latency, clock skew) and, with `DEMO_ADMIN_TOKEN`,
+`GET /v1/demo/health`, including the judge (last success and failure, p50 / p95) and the
+`cached_ruling` toggle. With `--warmup` it first calls `POST /v1/demo/warmup` (see "Warm-up"
+below) and adds one `warmup.*` line per dependency. With `SOLANA_RPC_URL` set it also checks the
+chain directly: the program is deployed, Config exists and is not paused, the fee payer's SOL, the
+nonce accounts, the demo wallets' USDC, and live bets past a deadline. With `QN_API_KEY` and
+`QN_STREAM_ID` set it reads the Stream's status. Every failed check prints its fix.
 
-| Check                | GO                      | Warn      | What to do                                                                          |
-| -------------------- | ----------------------- | --------- | ----------------------------------------------------------------------------------- |
-| `/health` round trip | ≤ 1.5 s                 | ≤ 4 s     | Slow network or a cold machine: `fly machine list -a youre-on`                      |
-| Clock skew           | < 10 s                  | < 45 s    | Fix the laptop clock; requests are signed with a 60 s window                        |
-| Fee payer SOL        | ≥ 1 SOL                 | ≥ 0.1 SOL | A human tops up `ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8` from the bank wallet |
-| Free nonces          | ≥ 2 of 5                |           | See "Nonce pool" below                                                              |
-| demo-a / demo-b USDC | ≥ $5 each               | ≥ $1 each | `POST /v1/demo/rebalance`, then `npm run fund` from the treasury                    |
-| RPC p95              | ≤ 1.5 s                 | ≤ 4 s     | See "RPC rate-limited" below                                                        |
-| Gemini relay         | a good poll < 2 min ago |           | See "Gemini is down" below                                                          |
+| Check                  | GO                              | Warn                                    | What to do                                                                          |
+| ---------------------- | ------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------- |
+| `/health` round trip   | ≤ 1.5 s                         | ≤ 4 s                                   | Slow network or a cold machine: `fly machine list -a youre-on`                      |
+| Clock skew             | < 10 s                          | < 45 s                                  | Fix the laptop clock; requests are signed with a 60 s window                        |
+| Fee payer SOL          | ≥ 1 SOL                         | ≥ 0.1 SOL                               | A human tops up `ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8` from the bank wallet |
+| Free nonces            | ≥ 2 of 5                        |                                         | See "Nonce pool" below                                                              |
+| demo-a / demo-b USDC   | ≥ $5 each                       | ≥ $1 each                               | `POST /v1/demo/rebalance`, then `npm run fund` from the treasury                    |
+| RPC p95                | ≤ 1.5 s                         | ≤ 4 s                                   | See "RPC rate-limited" below                                                        |
+| Gemini relay           | a good poll < 2 min ago         |                                         | See "Gemini is down" below                                                          |
+| Judge (`server.judge`) | a success since boot, p95 ≤ 8 s | no success yet, or the last call failed | `npm run demo-check -- --warmup`; still failing: see "The judge is slow or wrong"   |
+| `server.cached_ruling` | off                             | on                                      | Fine for a staged flip; otherwise turn it off (see "The judge is slow or wrong")    |
 
 ### The health report
 
 ```sh
 demo "$SERVER/v1/demo/health" | jq '{ok, warnings, lock_signer, fee_payer_sol, nonce_pool,
-  balances, rpc_stats, keeper, inflight, stuck_bets, escrow, stream, gemini, build}'
+  balances, rpc_stats, keeper, inflight, stuck_bets, escrow, stream, gemini, toggles, judge_llm,
+  build}'
 ```
 
 - `ok` is false when any warning is critical. Read every `warnings[]` entry: each has a `code`, a
@@ -71,6 +78,52 @@ demo "$SERVER/v1/demo/health" | jq '{ok, warnings, lock_signer, fee_payer_sol, n
   transactions older than 2 minutes; `stuck_bets` lists bets that are not moving.
 - `escrow`: orphaned escrow (bets on chain whose row is gone or terminal). See section 5.
 - `build`: which image and machine answered, to confirm the deploy you expect.
+- `toggles`: `cached_ruling` and whether it comes from the env (`CACHED_RULING`, the boot default)
+  or was set at runtime. `judge_llm`: the judge's calls since boot (rulings and warm-ups): the last
+  success and failure, p50 / p95, the provider (`live` or `mock`) and the model. These are in
+  memory: a restart starts them again, which is why `judge_no_success` (a warning, not critical)
+  shows until the first call. `judge_failing` means the last call failed after the last success;
+  `cached_ruling_on` that every ruling is the stored verdict.
+
+### Warm-up (10 minutes before the pitch)
+
+```sh
+demo -X POST "$SERVER/v1/demo/warmup" -d '{}' | jq '{ok, notes, checks}'
+```
+
+It makes no bet and moves no money. It runs four checks in parallel; each answers `ok`, `ms` and
+`error`:
+
+- `judge`: one live Claude call with the real prompt and output schema on a stored 16 px JPEG. It
+  always calls the live judge, even while `cached_ruling` is on, and counts in `judge_llm`. Its
+  verdict is meaningless (`UNCLEAR` is normal); `ok` means Claude answered in the ruling's schema.
+- `rpc`: `getLatestBlockhash` on the server's RPC.
+- `gemini`: one poll of the Gemini relay and its current contract (`lockable`, `refusal`).
+- `voice`: whether the voice judge is configured (no token is minted: that would start a billed
+  session). Until the ElevenLabs key lands this is `ok: false` and A types the terms.
+
+`notes` says when a check did not exercise the real thing: `LLM_PROVIDER=mock`, the cached ruling,
+the REPLAY feed. The server allows one warm-up per 10 s (429 with `Retry-After` otherwise): each is
+a paid call.
+
+### Head-to-head history (once, after the phones are claimed)
+
+The face-match reply on A's phone says "You're 4-7 against Jake" from the head-to-head record.
+Seed it once demo-a and demo-b have accounts (the phones are claimed, or `cp1-drive` signed them
+up):
+
+```sh
+demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{}' | jq '{inserted, replaced, head_to_head}'
+demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 4, "b_wins": 7}'   # the same, explicit
+demo -X POST "$SERVER/v1/demo/seed-h2h" -d '{"a_wins": 0, "b_wins": 0}'   # remove the history
+```
+
+- The rows are demo history, labelled `is_seed` (titles "Demo history: …"): 11 settled bets with
+  no on-chain footprint, one a day in the past, so the record reads 4-7 and −$7.00 for demo-a.
+  The phones' history lists them, flagged `is_seed`.
+- Re-running replaces the old seed rows (it never doubles them). `POST /v1/demo/reset` keeps them.
+- 409 `demo_player_missing`: that demo wallet has no account yet; claim its phone first.
+- Live bets between A and B add to the record as they settle.
 
 ### Reset between rehearsals
 
@@ -119,22 +172,60 @@ free nonces are enough for the demo. If `free` is low:
 - Force-quit and reopen A's app before the pitch (a second voice session in one app launch can come
   up with a silent mic). Face ID permission accepted, Low Power Mode off, Wi-Fi off (cellular),
   passcodes known, B's app in the foreground.
-- Judge cam on its tripod, 1–1.5 m from the landing spot, the bottle's cap taped.
+- Judge cam on its tripod, 1–1.5 m from the landing spot, the bottle's cap taped. It is a third
+  iPhone claimed as party `a` with Profile → Judge cam on (`docs/IOS-BUILD.md`).
+- **Two phones only:** decide before the pitch. With no working third phone, leave Judge cam off
+  (or turn it off on that phone in Profile). The non-performer's phone films instead: A's in the
+  demo, since B flips. A's Start, or the voice judge's `request_attempt`, arms A's camera with the
+  same 3-2-1; A holds it landscape, 1–1.5 m from the landing spot with the whole table in the
+  shot, and taps Stop a beat after it lands. The recording has no audio, so the voice judge keeps
+  A's mic. Camera permission must already be granted on A's phone (the face scan asks for it). If
+  A performs, B's phone has Start and films. A judge cam left on but dead still gets the attempt
+  (the server has no liveness check on it): turn it off on that phone, or play REPLAY `4`.
 - Phone A creates the room; its 6-character code goes into the stage URL.
 - Pick the pitch start time for the Bitcoin closer: about 1:05 after a five-minute mark
   ([`pitch.md`](pitch.md#timing-the-closer-beat-6)).
 
+### The appeal (Beat 5)
+
+Optional, and built without the hearing. The loser of a decisive ruling taps **I appeal!** (Face
+ID, no hold) on the ruling screen before the last second of the 10 s window. Claude, GPT and Gemini
+vote on the same frames (8 s each at most); two agreeing votes decide, anything else (a tie, all
+abstaining) upholds the ruling. The appeal key then pays with `resolve_appeal`, about 1 s later.
+
+- **Needs:** migration 0008 applied (the `appeals` tables); `APPEAL_AUTHORITY_SECRET_KEY` on Fly,
+  equal to Config's `appeal_authority` (health: `appeal_key`, warnings `appeal_key_missing` /
+  `appeal_key_mismatch`); for real votes `LLM_PROVIDER=live`, `ALLOW_SPEND=true` and
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`. A vendor without its key
+  abstains; with no key at all every vote abstains and the ruling stands. `CACHED_RULING` does not
+  replay the panel.
+- **From the laptop** (`LOCK_SIGNER=server`, the custodial demo): right after `RULED`,
+  `demo -X POST "$SERVER/v1/demo/bets/$BET/appeal" -d '{}'` files the losing demo party's appeal
+  (`{"party":"A"}` only for a VOID ruling). It answers 202 `{status, signature, appeal_id}`, or
+  `APPEAL_WINDOW_CLOSED` after `appeal_deadline − 1 s`. The admin route is not rate-limited.
+- **Driver:** `npm run cp1-drive -- --base-url $SERVER --through paid --appeal` runs a whole bet,
+  appeals as the loser inside the window, prints the three votes and the result, and waits for
+  `PAID via resolve_appeal`.
+- **Rate limit:** 3 appeals per hour per player (the phones and `cp1-drive`), held in memory on the
+  one machine (a restart clears it). Rehearse with the admin route, or keep the last hour's player
+  appeals under 3 before the pitch.
+- **If it stalls:** `stuck_bets` lists an `APPEALED` bet; the keeper's `appeal-sweep` re-runs a lost
+  panel and resends a failed `resolve_appeal`. Past `appeal_resolve_deadline` (300 s after the
+  appeal) the timeout-refund keeper returns both stakes (`EXPIRED`, `appeal_timeout`).
+
 ## 2. Opening the stage
 
 ```
-https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
+https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>
 ```
 
 - `<CODE>`: the room's 6-character code from phone A (or the room's uuid).
 - After `#` (the fragment, never sent to any server or its logs): `key` is the `STAGE_KEY` (it is
-  exchanged for a stage token), `demo` is the `DEMO_ADMIN_TOKEN` (it turns on the health strip). The
-  page reads them and removes them from the address bar. A secret put in the query (`?key=`) is
-  ignored, and the form says so.
+  exchanged for a stage token). The page reads it and removes it from the address bar. A secret
+  put in the query (`?key=`) is ignored, and the form says so.
+- The health strip needs no admin key: the page reads `/v1/demo/health` with its own stage token
+  (`DEMO_MODE=true`). The old link with `&demo=<DEMO_ADMIN_TOKEN>` still works, but keep the admin
+  key off the projector.
 - Optional query: `bet=<id>` pins one bet until it is over; `nopreload` turns off the REPLAY
   download.
 - A reload of the same tab comes back to the same card without the URL (session storage).
@@ -144,6 +235,7 @@ https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOK
 | --------- | -------------------------------------------------- |
 | `F`       | Full screen                                        |
 | `M`       | Mute / unmute (the first key press unlocks audio)  |
+| `V`       | Judge voice off / on (sounds keep playing)         |
 | `Q`       | QR of the latest lock or payout on Solana Explorer |
 | `H` / `?` | Key help                                           |
 | `1`–`6`   | REPLAY clip of that beat                           |
@@ -152,6 +244,24 @@ https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOK
 The bottom strip shows demo health: fee-payer SOL, free nonces, RPC and DB latency, and how many
 REPLAY clips are cached. The ticker header says "via QuickNode Streams" only for events the Stream
 delivered.
+
+**Press any key once the page is up**: browsers keep audio locked until then, and the judge's voice
+is part of the show. The projector speaks every ruling, payout and appeal vote, except in a bet the
+voice judge is hosting: once A's phone has relayed one judge line for a bet, the judge on A's phone
+announces that bet's ruling and payout, and the projector stays quiet for them (no clip, no browser
+voice). Two judges talking over each other would be noise, and the hall's sound would reach A's
+speakerphone. Nothing to press: the projector follows each bet by itself, and still voices appeal
+votes. The strip's `Voice` item says whose voice it is:
+
+| `Voice`                           | Meaning                                                                                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `ElevenLabs`                      | The server voices the stage (`ELEVENLABS_API_KEY` and `ALLOW_SPEND=true` on Fly): each line is an ElevenLabs clip.                       |
+| `ElevenLabs (last line: browser)` | The last clip did not come in time (or failed), so the browser said that line. Check `stage_voice.tts_failed` in `fly logs -a youre-on`. |
+| `browser`                         | No key yet, or `STAGE_TTS=off`: the browser's voice says the same lines, about 0.8 s after each moment.                                  |
+| `… (last line: phone judge)`      | The last line was a ruling or payout of a bet the voice judge hosts: A's phone said it, the projector stayed quiet on purpose.           |
+| `off (V)`                         | Turned off with `V`.                                                                                                                     |
+
+Use the laptop's speakers or the hall's sound, not a phone: A's phone is busy with the voice judge.
 
 ## 3. REPLAY fallbacks
 
@@ -219,18 +329,39 @@ with the deterministic checks is a REDO ("Run it back"); a third REDO voids the 
 both.
 
 - A REDO on stage: flip again. That is the judge refusing a verdict it can't confirm.
-- Rulings slow or flaky in rehearsal: set `CACHED_RULING = "true"` in `fly.toml [env]` and
-  `fly deploy` from a checkout of the deployed commit (a deploy ships whatever is checked out).
-  The ruling then comes from a stored verdict with no model call (model `cache/demo-bottle@1`,
-  always "landed"); it still commits to the hashes of the frames actually uploaded. Use it only for
-  a staged clean flip. The stage does not label a cached ruling, so say it out loud ("cached
-  ruling"). Set it back to `"false"` afterwards.
+- Check the judge first: `demo "$SERVER/v1/demo/health" | jq .judge_llm` (the last failure says
+  why), or warm it up: `demo -X POST "$SERVER/v1/demo/warmup" -d '{}' | jq .checks.judge`.
+- Rulings slow or flaky: switch on the cached ruling at runtime. It takes effect on the next
+  ruling, with no restart and no deploy:
+
+  ```sh
+  demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": true}'    # on
+  demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": false}'   # off (the live judge)
+  demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": null}'    # back to the env default
+  demo "$SERVER/v1/demo/toggles"                                         # what is on now
+  ```
+
+  The ruling then comes from a stored verdict with no model call (always "landed", B wins); it
+  still commits to the hashes of the frames actually uploaded, and pays out on chain as usual.
+  Every such ruling carries `model: "cache/demo-bottle@1"` in its payload. Use it only for a
+  staged clean flip. The stage labels it "replay ruling" on the ruling panel; say it out loud
+  too ("cached ruling"). Each switch is
+  in the audit log (`demo.toggle`) and `/v1/demo/health` shows `toggles` and the
+  `cached_ruling_on` warning while it is on.
+
+- A runtime switch lasts until the machine restarts (a `fly secrets set`, a deploy, a crash); then
+  the env `CACHED_RULING` in `fly.toml [env]` (`"false"`) applies again. To make it survive a
+  restart, set `CACHED_RULING = "true"` there and `fly deploy` from a checkout of the deployed
+  commit (a deploy ships whatever is checked out).
 
 ### The voice judge fails
 
 A failed voice session ends cleanly on A's phone, and the negotiate screen offers "Type it
 instead": the typed terms go through the same evaluation, guardrails and terms card. If A's mic
-went silent after an earlier session, force-quit and reopen A's app.
+went silent after an earlier session, force-quit and reopen A's app. If the judge failed before it
+said anything, the projector speaks that bet's ruling and payout. If it had already spoken, the
+projector still leaves them to the phone (it can't tell the session dropped), so read the ruling
+off the stage.
 
 ### Face match fails
 
@@ -288,4 +419,6 @@ npm run crank -- --url "$SOLANA_RPC_URL" --devnet --payer <funded-keypair.json> 
 - `demo -X POST "$SERVER/v1/demo/reset" -d '{"rebalance": true}'`.
 - Pause the Stream once it exists, to save credits: `npm run qn-stream -- pause <stream id>`.
 - Switch the Gemini relay back to live if you used the replay.
-- Put `CACHED_RULING` and `LOCK_SIGNER` back if you changed them.
+- Turn the cached ruling off if you switched it on
+  (`demo -X POST "$SERVER/v1/demo/toggles" -d '{"cached_ruling": null}'`), and put
+  `CACHED_RULING` and `LOCK_SIGNER` back if you changed them.

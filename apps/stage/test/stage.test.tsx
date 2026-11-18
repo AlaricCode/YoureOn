@@ -2,7 +2,8 @@
 // client follows the stage auth / heartbeat / reconnect rules (API-CONTRACT §1.3, §3.1–§3.3).
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { App, Ticker } from '../src/App';
+import { App, HealthStrip, Ticker, voiceLabel } from '../src/App';
+import { KEYS } from '../src/view';
 import {
   applyFrame,
   explorerTx,
@@ -45,6 +46,44 @@ describe('stage page', () => {
     expect(html).toContain('Connect');
     expect(html).toContain('href="?preview"');
     expect(html).toContain('/stage/?room=ABC234#key=STAGE_KEY');
+    // the health strip reads /v1/demo/health with the stage bearer: no admin key in the link
+    expect(html).not.toContain('DEMO_ADMIN_TOKEN');
+  });
+
+  it('the voice item says whose voice the judge has; V is in the key help', () => {
+    expect(voiceLabel(true, true, null)).toBe('ElevenLabs');
+    expect(voiceLabel(true, true, 'clip')).toBe('ElevenLabs');
+    expect(voiceLabel(true, true, 'speech')).toBe('ElevenLabs (last line: browser)');
+    expect(voiceLabel(true, false, null)).toBe('browser');
+    expect(voiceLabel(false, true, 'clip')).toBe('off (V)');
+    // a bet the voice judge hosts: the phone said the line, the stage stayed quiet on purpose
+    expect(voiceLabel(true, true, 'phone')).toBe('ElevenLabs (last line: phone judge)');
+    expect(voiceLabel(true, false, 'phone')).toBe('browser (last line: phone judge)');
+    const strip = renderToString(
+      <HealthStrip health={null} error={null} replays={null} status="open" voice="ElevenLabs" />,
+    );
+    expect(strip).toMatch(/hi ok"><span class="label">Voice<\/span> <!-- -->ElevenLabs/);
+    const phone = renderToString(
+      <HealthStrip
+        health={null}
+        error={null}
+        replays={null}
+        status="open"
+        voice="ElevenLabs (last line: phone judge)"
+      />,
+    );
+    expect(phone).toMatch(/hi ok"><span class="label">Voice<\/span>/);
+    const late = renderToString(
+      <HealthStrip
+        health={null}
+        error={null}
+        replays={null}
+        status="open"
+        voice="ElevenLabs (last line: browser)"
+      />,
+    );
+    expect(late).toMatch(/hi warn"><span class="label">Voice<\/span>/);
+    expect(KEYS.find(([k]) => k === 'V')?.[1]).toMatch(/voice/i);
   });
 
   it('renders events newest first with Explorer links', () => {

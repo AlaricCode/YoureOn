@@ -29,6 +29,10 @@ export const THRESHOLDS = {
   rpcP95WarnMs: 4_000,
   /** The Gemini relay's last good poll (beat 6). */
   marketsFreshMs: 120_000,
+  /** The judge's p95 over its recent calls: the vision call's own deadline is 10 s. */
+  judgeP95WarnMs: 8_000,
+  /** getLatestBlockhash in the warm-up. */
+  warmupRpcWarnMs: 1_500,
 } as const;
 
 const usd = (micro: bigint) => `$${(Number(micro) / 1e6).toFixed(2)}`;
@@ -119,6 +123,206 @@ export interface DemoHealth {
     appeal_window_secs: number;
     mint_allowed: boolean;
   } | null;
+  /** The demo runtime toggles (apps/server/src/demo/toggles.ts). */
+  toggles?: { cached_ruling: boolean; cached_ruling_source: 'env' | 'runtime' };
+  /** The judge's vision calls since boot (apps/server/src/judge/stats.ts). */
+  judge_llm?: {
+    provider: 'live' | 'mock' | null;
+    model: string;
+    cached_ruling: boolean;
+    calls: number;
+    failures: number;
+    last_ok_at: string | null;
+    last_ok_ms: number | null;
+    last_ok_source: string | null;
+    last_error_at: string | null;
+    last_error: string | null;
+    last_error_source: string | null;
+    window: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+  };
+}
+
+/** The judge (LLM) and the cached-ruling toggle, from GET /v1/demo/health. */
+function judgeChecks(h: DemoHealth, localNowMs: number): Check[] {
+  const out: Check[] = [];
+  const j = h.judge_llm;
+  if (j) {
+    const lat =
+      j.p50_ms !== null ? `; p50 ${j.p50_ms} ms, p95 ${j.p95_ms} ms over ${j.window} call(s)` : '';
+    const who = `${j.provider ?? '?'} ${j.model}`;
+    const warmup = 'npm run demo-check -- --warmup (one paid judge call), or POST /v1/demo/warmup';
+    if (!j.last_ok_at)
+      out.push({
+        id: 'server.judge',
+        verdict: 'WARN',
+        detail: `no judge success since boot (${who}${j.last_error ? `; last failure ${j.last_error}` : ''})`,
+        fix: warmup,
+      });
+    else if (j.last_error_at && j.last_error_at > j.last_ok_at)
+      out.push({
+        id: 'server.judge',
+        verdict: 'WARN',
+        detail: `last call failed: ${j.last_error} (${j.last_error_source}); last ok ${j.last_ok_at}${lat}`,
+        fix: `${warmup}; if it keeps failing: POST /v1/demo/toggles {"cached_ruling": true}`,
+      });
+    else {
+      const ago = Math.max(0, Math.round((localNowMs - Date.parse(j.last_ok_at)) / 1000));
+      const slow = (j.p95_ms ?? 0) > THRESHOLDS.judgeP95WarnMs;
+      out.push({
+        id: 'server.judge',
+        verdict: j.provider === 'mock' || slow ? 'WARN' : 'GO',
+        detail: `${who}: last ok ${ago} s ago in ${j.last_ok_ms} ms (${j.last_ok_source})${lat}${
+          j.provider === 'mock' ? ' [LLM_PROVIDER=mock: not Claude]' : ''
+        }`,
+        ...(j.provider === 'mock'
+          ? { fix: 'LLM_PROVIDER=live with ALLOW_SPEND=true and ANTHROPIC_API_KEY' }
+          : slow
+            ? {
+                fix: 'the 10 s vision deadline is close: consider cached_ruling for the staged flip',
+              }
+            : {}),
+      });
+    }
+  }
+  const t = h.toggles;
+  if (t)
+    out.push(
+      t.cached_ruling
+        ? {
+            id: 'server.cached_ruling',
+            verdict: 'WARN',
+            detail: `ON (${t.cached_ruling_source}): every ruling is the stored verdict (model cache/demo-bottle@1), no model call`,
+            fix: 'POST /v1/demo/toggles {"cached_ruling": false} for the live judge (null = the env default)',
+          }
+        : {
+            id: 'server.cached_ruling',
+            verdict: 'GO',
+            detail: `off (${t.cached_ruling_source}): the live judge rules`,
+          },
+    );
+  return out;
+}
+
+/** The subset of POST /v1/demo/warmup this check reads (apps/server/src/demo/warmup.ts). */
+export interface WarmupBody {
+  ok: boolean;
+  modes?: { llm?: string; cached_ruling?: boolean; markets_feed?: string | null };
+  notes?: string[];
+  checks: {
+    judge: {
+      ok: boolean;
+      ms: number;
+      error: string | null;
+      provider?: string;
+      model?: string | null;
+      claim_result?: string | null;
+    };
+    rpc: { ok: boolean; ms: number; error: string | null; rpc?: string | null };
+    gemini: {
+      ok: boolean;
+      ms: number;
+      error: string | null;
+      feed_mode?: string | null;
+      current?: { event_ticker: string; lockable: boolean; refusal: string | null } | null;
+    };
+    voice: { ok: boolean; ms: number; error: string | null; missing?: string[] };
+  };
+}
+
+/** POST /v1/demo/warmup (demo-check --warmup) -> one check per warmed dependency. */
+export function evaluateWarmup(
+  r: { status: number; body: unknown; retryAfter?: string | null } | { error: string } | null,
+): Check[] {
+  if (r === null) return [];
+  if ('error' in r) return [{ id: 'warmup', verdict: 'WARN', detail: `unreachable: ${r.error}` }];
+  if (r.status === 429)
+    return [
+      {
+        id: 'warmup',
+        verdict: 'WARN',
+        detail: `rate limited (one warm-up per 10 s)${r.retryAfter ? `: retry in ${r.retryAfter} s` : ''}`,
+      },
+    ];
+  if (r.status === 404)
+    return [
+      {
+        id: 'warmup',
+        verdict: 'WARN',
+        detail: 'HTTP 404: DEMO_MODE off, a wrong admin key, or a server without /v1/demo/warmup',
+      },
+    ];
+  const b = r.body as WarmupBody | null;
+  if (r.status !== 200 || !b?.checks)
+    return [{ id: 'warmup', verdict: 'WARN', detail: `HTTP ${r.status}` }];
+  const { judge, rpc, gemini, voice } = b.checks;
+  const cached = b.modes?.cached_ruling === true;
+  const out: Check[] = [];
+  out.push(
+    judge.ok
+      ? {
+          id: 'warmup.judge',
+          verdict: judge.provider === 'mock' ? 'WARN' : 'GO',
+          detail: `${judge.model ?? '?'} answered in ${judge.ms} ms (${judge.claim_result ?? '-'})${
+            judge.provider === 'mock' ? ' [offline mock, not Claude]' : ''
+          }`,
+          ...(judge.provider === 'mock'
+            ? { fix: 'LLM_PROVIDER=live with ALLOW_SPEND=true and ANTHROPIC_API_KEY' }
+            : {}),
+        }
+      : {
+          id: 'warmup.judge',
+          verdict: cached ? 'WARN' : 'NO-GO',
+          detail: `failed in ${judge.ms} ms: ${judge.error}${cached ? ' (cached_ruling is on)' : ''}`,
+          fix: 'check ANTHROPIC_API_KEY / LLM_PROVIDER in fly secrets; fallback: POST /v1/demo/toggles {"cached_ruling": true}',
+        },
+  );
+  out.push(
+    rpc.ok
+      ? {
+          id: 'warmup.rpc',
+          verdict: rpc.ms <= THRESHOLDS.warmupRpcWarnMs ? 'GO' : 'WARN',
+          detail: `getLatestBlockhash in ${rpc.ms} ms (${rpc.rpc ?? '?'})`,
+        }
+      : {
+          id: 'warmup.rpc',
+          verdict: 'NO-GO',
+          detail: `getLatestBlockhash failed: ${rpc.error}`,
+          fix: 'see the runbook "The RPC is rate-limited"',
+        },
+  );
+  const cur = gemini.current;
+  out.push(
+    gemini.ok && cur
+      ? {
+          id: 'warmup.gemini',
+          verdict: gemini.feed_mode === 'replay' ? 'WARN' : 'GO',
+          detail: `${cur.event_ticker} ${cur.lockable ? 'lockable' : `not lockable (${cur.refusal ?? 'too late'})`}, ${gemini.feed_mode ?? '?'} feed, poll ${gemini.ms} ms`,
+          ...(gemini.feed_mode === 'replay'
+            ? {
+                fix: 'on the REPLAY feed: POST /v1/demo/gemini {"feed": "live"} when Gemini is back',
+              }
+            : {}),
+        }
+      : {
+          id: 'warmup.gemini',
+          verdict: 'WARN',
+          detail: `relay: ${gemini.error ?? 'no contract'}`,
+          fix: 'beat 6 falls back to POST /v1/demo/gemini {"feed": "replay"} or REPLAY 6',
+        },
+  );
+  out.push(
+    voice.ok
+      ? { id: 'warmup.voice', verdict: 'GO', detail: 'voice judge configured (no token minted)' }
+      : {
+          id: 'warmup.voice',
+          verdict: 'WARN',
+          detail: voice.error ?? 'not ready',
+          fix: 'docs/ELEVENLABS-GO-LIVE.md; in Beat 2 A uses "Type it instead"',
+        },
+  );
+  return out;
 }
 
 /** GET /v1/demo/health -> one check per money-path item, plus the server's own warnings. */
@@ -171,6 +375,8 @@ export function evaluateDemoHealth(
       verdict: 'GO',
       detail: `${h.build.image} on ${h.build.machine ?? '?'} (${h.build.region ?? '?'})`,
     });
+  // The judge does not need the chain to answer: always reported.
+  for (const c of judgeChecks(h, localNowMs)) add(c);
   if (!h.chain_configured) return out;
 
   if (h.lock_signer === 'phones' && h.fee_payer_pinned === false)
@@ -339,6 +545,10 @@ export function evaluateDemoHealth(
 
   // The server's own warnings not already covered above.
   const covered = new Set([
+    // shown as server.judge / server.cached_ruling
+    'judge_no_success',
+    'judge_failing',
+    'cached_ruling_on',
     'fee_payer_low',
     'nonce_pool_low',
     'nonce_pool_empty',

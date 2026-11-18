@@ -1,13 +1,16 @@
 // scripts/lib/demo-check.ts: the pitch-morning GO / NO-GO rules over /health, /v1/demo/health and
-// the Stream status (pure; the script's I/O is exercised end to end in money-path.test.ts).
+// the Stream status, and --warmup's POST /v1/demo/warmup (pure; the script's I/O is exercised end
+// to end in money-path.test.ts).
 import { describe, expect, it } from 'vitest';
 import {
   evaluateBasicHealth,
   evaluateDemoHealth,
   evaluateStream,
+  evaluateWarmup,
   formatChecks,
   overall,
   type DemoHealth,
+  type WarmupBody,
 } from '../../../scripts/lib/demo-check';
 
 const NOW = Date.parse('2026-11-20T15:00:00.000Z');
@@ -159,6 +162,205 @@ describe('demo-check: /v1/demo/health', () => {
       NOW,
     );
     expect(byId(cs)['chain.fee_payer_pinned']).toBe('NO-GO');
+  });
+});
+
+describe('demo-check: the judge (LLM) and cached_ruling', () => {
+  const judge = (over: Partial<NonNullable<DemoHealth['judge_llm']>> = {}) => ({
+    provider: 'live' as const,
+    model: 'claude-sonnet-5-5',
+    cached_ruling: false,
+    calls: 3,
+    failures: 0,
+    last_ok_at: new Date(NOW - 60_000).toISOString(),
+    last_ok_ms: 2_100,
+    last_ok_source: 'warmup',
+    last_ok_model: 'anthropic/claude-sonnet-5-5',
+    last_error_at: null,
+    last_error: null,
+    last_error_source: null,
+    window: 3,
+    p50_ms: 2_000,
+    p95_ms: 3_100,
+    ...over,
+  });
+  const off = { cached_ruling: false, cached_ruling_source: 'env' as const };
+  const check = (h: DemoHealth, id: string) =>
+    evaluateDemoHealth(ok(h), NOW).find((c) => c.id === id)!;
+
+  it('a recent success is GO with p50 / p95; no success since boot is a WARN with the warm-up fix', () => {
+    const go = check({ ...healthy, judge_llm: judge(), toggles: off }, 'server.judge');
+    expect(go.verdict).toBe('GO');
+    expect(go.detail).toMatch(/last ok 60 s ago in 2100 ms \(warmup\); p50 2000 ms, p95 3100 ms/);
+    const never = check(
+      {
+        ...healthy,
+        judge_llm: judge({
+          calls: 0,
+          last_ok_at: null,
+          last_ok_ms: null,
+          last_ok_source: null,
+          p50_ms: null,
+          p95_ms: null,
+          window: 0,
+        }),
+      },
+      'server.judge',
+    );
+    expect(never.verdict).toBe('WARN');
+    expect(never.detail).toMatch(/no judge success since boot/);
+    expect(never.fix).toMatch(/--warmup/);
+    // the server's own warning is not listed twice
+    const cs = evaluateDemoHealth(
+      ok({
+        ...healthy,
+        judge_llm: judge({ last_ok_at: null }),
+        warnings: [{ code: 'judge_no_success', level: 'warn', message: 'No judge success' }],
+      }),
+      NOW,
+    );
+    expect(cs.map((c) => c.id)).not.toContain('server.judge_no_success');
+    expect(overall(cs)).toBe('GO'); // a WARN, not a NO-GO
+  });
+
+  it('a failure after the last success is a WARN; mock or a slow p95 is a WARN', () => {
+    const failing = check(
+      {
+        ...healthy,
+        judge_llm: judge({
+          last_error_at: new Date(NOW - 5_000).toISOString(),
+          last_error: 'timeout: judge took too long',
+          last_error_source: 'ruling',
+        }),
+      },
+      'server.judge',
+    );
+    expect(failing.verdict).toBe('WARN');
+    expect(failing.detail).toMatch(/last call failed: timeout: judge took too long \(ruling\)/);
+    expect(failing.fix).toMatch(/cached_ruling/);
+    // an older failure, then a success: GO
+    const recovered = check(
+      {
+        ...healthy,
+        judge_llm: judge({ last_error_at: new Date(NOW - 120_000).toISOString(), last_error: 'x' }),
+      },
+      'server.judge',
+    );
+    expect(recovered.verdict).toBe('GO');
+    expect(
+      check({ ...healthy, judge_llm: judge({ provider: 'mock' }) }, 'server.judge'),
+    ).toMatchObject({ verdict: 'WARN' });
+    expect(check({ ...healthy, judge_llm: judge({ p95_ms: 9_000 }) }, 'server.judge').verdict).toBe(
+      'WARN',
+    );
+  });
+
+  it('cached_ruling on is a WARN that says how to turn it off; off is GO', () => {
+    const on = check(
+      { ...healthy, toggles: { cached_ruling: true, cached_ruling_source: 'runtime' } },
+      'server.cached_ruling',
+    );
+    expect(on).toMatchObject({ verdict: 'WARN' });
+    expect(on.detail).toMatch(/ON \(runtime\)/);
+    expect(on.fix).toMatch(/"cached_ruling": false/);
+    expect(check({ ...healthy, toggles: off }, 'server.cached_ruling').verdict).toBe('GO');
+  });
+});
+
+describe('demo-check --warmup: POST /v1/demo/warmup', () => {
+  const body = (over: Partial<WarmupBody['checks']> = {}, modes: WarmupBody['modes'] = {}) => ({
+    ok: true,
+    modes: { llm: 'live', cached_ruling: false, markets_feed: 'live', ...modes },
+    notes: [],
+    checks: {
+      judge: {
+        ok: true,
+        ms: 2_400,
+        error: null,
+        provider: 'live',
+        model: 'anthropic/claude-sonnet-5-5',
+        claim_result: 'UNCLEAR',
+      },
+      rpc: { ok: true, ms: 140, error: null, rpc: 'https://x.quiknode.pro' },
+      gemini: {
+        ok: true,
+        ms: 300,
+        error: null,
+        feed_mode: 'live',
+        current: { event_ticker: 'BTC05M2611211505', lockable: true, refusal: null },
+      },
+      voice: { ok: true, ms: 0, error: null, missing: [] },
+      ...over,
+    },
+  });
+  const byWarm = (r: Parameters<typeof evaluateWarmup>[0]) =>
+    Object.fromEntries(evaluateWarmup(r).map((c) => [c.id, c.verdict]));
+
+  it('not requested: nothing; all good: GO per dependency', () => {
+    expect(evaluateWarmup(null)).toEqual([]);
+    expect(byWarm(ok(body()))).toEqual({
+      'warmup.judge': 'GO',
+      'warmup.rpc': 'GO',
+      'warmup.gemini': 'GO',
+      'warmup.voice': 'GO',
+    });
+    const j = evaluateWarmup(ok(body()))[0]!;
+    expect(j.detail).toBe('anthropic/claude-sonnet-5-5 answered in 2400 ms (UNCLEAR)');
+  });
+
+  it('a failed judge is NO-GO, unless cached_ruling is on (WARN); a failed RPC is NO-GO', () => {
+    const failed = {
+      judge: { ok: false, ms: 10_000, error: 'timeout: deadline', provider: 'live' },
+    };
+    expect(byWarm(ok(body(failed)))['warmup.judge']).toBe('NO-GO');
+    expect(byWarm(ok(body(failed, { cached_ruling: true })))['warmup.judge']).toBe('WARN');
+    const rpc = byWarm(ok(body({ rpc: { ok: false, ms: 10, error: 'HTTP 429' } })));
+    expect(rpc['warmup.rpc']).toBe('NO-GO');
+    expect(byWarm(ok(body({ rpc: { ok: true, ms: 2_000, error: null } })))['warmup.rpc']).toBe(
+      'WARN',
+    );
+  });
+
+  it('mock LLM, the REPLAY feed, no contract and a voice judge not set up are WARNs', () => {
+    const w = byWarm(
+      ok(
+        body({
+          judge: { ok: true, ms: 1, error: null, provider: 'mock', model: 'anthropic/mock/x' },
+          gemini: {
+            ok: true,
+            ms: 1,
+            error: null,
+            feed_mode: 'replay',
+            current: { event_ticker: 'REPLAY-BTC05M2611211505', lockable: true, refusal: null },
+          },
+          voice: { ok: false, ms: 0, error: 'not ready: ELEVENLABS_API_KEY', missing: ['x'] },
+        }),
+      ),
+    );
+    expect(w).toEqual({
+      'warmup.judge': 'WARN',
+      'warmup.rpc': 'GO',
+      'warmup.gemini': 'WARN',
+      'warmup.voice': 'WARN',
+    });
+    const none = evaluateWarmup(
+      ok(body({ gemini: { ok: false, ms: 5, error: 'no BTC 5-minute contract', current: null } })),
+    ).find((c) => c.id === 'warmup.gemini')!;
+    expect(none).toMatchObject({ verdict: 'WARN' });
+    expect(none.detail).toMatch(/no BTC 5-minute contract/);
+  });
+
+  it('429 is a WARN with the retry; 404 and unreachable are WARNs (demo.health says the rest)', () => {
+    const limited = evaluateWarmup({ status: 429, body: null, retryAfter: '7' });
+    expect(limited).toEqual([
+      expect.objectContaining({
+        id: 'warmup',
+        verdict: 'WARN',
+        detail: expect.stringMatching(/retry in 7 s/),
+      }),
+    ]);
+    expect(evaluateWarmup({ status: 404, body: null })[0]!.verdict).toBe('WARN');
+    expect(evaluateWarmup({ error: 'ECONNREFUSED' })[0]!.verdict).toBe('WARN');
   });
 });
 
