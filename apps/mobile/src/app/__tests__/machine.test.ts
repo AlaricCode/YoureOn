@@ -357,4 +357,13 @@ describe('app event exhaustiveness', () => {
     const s = appReducer(signedIn(ME_A, DEVICE_CAM), { type: 'judge_cam', on: true });
     expect(selectRoute(s, null)).toBe('judgeCam');
   });
+
+  it("a judge-cam device of A never shows A's negotiate / terms screens", () => {
+    let s = appReducer(signedIn(ME_A, DEVICE_CAM), { type: 'judge_cam', on: true });
+    s = appReducer(s, { type: 'bet_opened', bet_id: BET });
+    const m = fromSnapshot(snapshot({ state: 'AWAITING_AUTHORIZATIONS' }));
+    expect(m.my_party).toBe('A');
+    expect(selectRoute(s, m)).toBe('judgeCam');
+    expect(selectRoute(s, fromSnapshot(snapshot({ state: 'PAID' })))).toBe('payout');
+  });
 });

@@ -344,6 +344,21 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     return undefined;
   }, [state, betId]);
 
+  // At RULED the GG card needs appeal_deadline (BetSnapshot.deadlines) if chain.BetResolved
+  // hasn't arrived yet; also pick up a concede SignRequest we may have missed.
+  const needDeadline = state === 'RULED' && bet?.appeal_deadline === null;
+  useEffect(() => {
+    if (!needDeadline || !betId) return;
+    let live = true;
+    rt.api.getBet(betId).then(
+      (s) => live && void rt.hub.adopt(s),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [rt, needDeadline, betId]);
+
   // ---- actions -----------------------------------------------------------------------------
   async function joinRoom(code: string): Promise<boolean> {
     try {
@@ -481,7 +496,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   };
 
   const voice =
-    VOICE_ENABLED && bet && me === 'A' && !isOver(bet.state)
+    VOICE_ENABLED && !app.judgeCam && bet && me === 'A' && !isOver(bet.state)
       ? (voiceVars.current.get(bet.bet_id) ?? null)
       : null;
 
