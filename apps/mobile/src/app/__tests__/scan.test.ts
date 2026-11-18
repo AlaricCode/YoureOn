@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bytesToEmbedding, FaceMatchResponse, type FaceMatchRequest } from '@youre-on/shared/face';
 
-import type { FaceEmbedder } from '../../enroll/embedder';
+import { createLazyEmbedder, type FaceEmbedder } from '../../enroll/embedder';
 import type { DetectedFace } from '../../enroll/flow';
 import { SCAN_MISS_COPY } from '../../screens/copy';
 import { checkCopy } from '../../ui/copyRule';
@@ -271,6 +271,23 @@ describe('runScan', () => {
     expect(
       await runScan({ embedder: f.embedder, faceMatch: async () => matched, now: Date.now }, 'u'),
     ).toEqual({ kind: 'miss', miss: 'failed' });
+  });
+
+  it('face natives that fail to load are a "Try again" miss, never a crash, and send nothing', async () => {
+    const e = createLazyEmbedder(() => {
+      throw new Error('NitroModules: FaceDetectorFactory is not registered');
+    });
+    let calls = 0;
+    const deps = {
+      embedder: e,
+      faceMatch: async () => {
+        calls++;
+        return matched;
+      },
+      now: Date.now,
+    };
+    expect(await runScan(deps, 'u')).toEqual({ kind: 'miss', miss: 'failed' });
+    expect(calls).toBe(0);
   });
 
   it('maps server errors to misses', async () => {

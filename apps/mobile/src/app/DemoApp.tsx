@@ -35,8 +35,8 @@ import { betView, myResult, type BetView } from '../bets/view';
 import { feel } from '../device/feedback';
 import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createServerFaceApi, type FaceStatus } from '../enroll/api';
+import { createLazyEmbedder } from '../enroll/embedder';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
-import { getNativeEmbedder } from '../face/native';
 import type { Balance } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
 import {
@@ -110,6 +110,8 @@ const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
 /** EXPO_PUBLIC_FACE=off hides face enrollment and the face scan (the room list still works). */
 const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
 const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
+/** The face natives load on first use, never at app start (see createLazyEmbedder). */
+const loadFaceEmbedder = () => import('../face/native').then((m) => m.getNativeEmbedder());
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
@@ -186,8 +188,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   );
   const signupApi = useMemo(() => createServerSignupApi(rt.sessions), [rt]);
   const faceApi = useMemo(() => createServerFaceApi(rt.client), [rt]);
-  /** The on-device embedder (the model loads on first use; the scan screen warms it up). */
-  const embedder = useMemo(() => (FACE_ENABLED ? getNativeEmbedder() : null), []);
+  /** The on-device embedder (its natives and the model load on first use; the scan screen
+   *  warms it up). */
+  const embedder = useMemo(() => (FACE_ENABLED ? createLazyEmbedder(loadFaceEmbedder) : null), []);
+  /** A face screen crashed (e.g. a native module missing from the build): face is off until
+   *  the app restarts, and challenges go through the room list. */
+  const [faceBroken, setFaceBroken] = useState(false);
+  const faceOn = FACE_ENABLED && !faceBroken;
   const [faceStatus, setFaceStatus] = useState<FaceStatus | null>(null);
   /** Where enrollment returns to: home after the signup offer, else face settings. */
   const enrollFrom = useRef<'signup' | 'settings'>('settings');
@@ -511,6 +518,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       overlay: enrollFrom.current === 'signup' ? 'none' : 'faceSettings',
     });
 
+  /** The backstop for a face screen that throws while rendering: turn face off, go home (the
+   *  room list), and say so briefly. */
+  const faceCrashed = (where: 'scan' | 'enroll') => (message: string) => {
+    console.warn(`[yo] face ${where}`, message);
+    setFaceBroken(true);
+    const line = t(COPY.scan.unavailable);
+    setAlert(line);
+    setTimeout(() => setAlert((cur) => (cur === line ? null : cur)), 4_000);
+    dispatch({ type: 'overlay', overlay: 'none' });
+  };
+
   async function joinRoom(code: string): Promise<boolean> {
     try {
       const r = await rt.api.joinRoom(code);
@@ -676,7 +694,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             api={signupApi}
             onSignedUp={() => {
               // The session listener moves on to home; enrollment is offered first (skippable).
-              if (!FACE_ENABLED) return;
+              if (!faceOn) return;
               enrollFrom.current = 'signup';
               dispatch({ type: 'overlay', overlay: 'enroll' });
             }}
@@ -729,9 +747,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               if (id) void rt.api.leaveRoom(id).catch(() => undefined);
             }}
             onScan={
-              FACE_ENABLED && app.room
-                ? () => dispatch({ type: 'overlay', overlay: 'scan' })
-                : undefined
+              faceOn && app.room ? () => dispatch({ type: 'overlay', overlay: 'scan' }) : undefined
             }
             onChallenge={challengeFromList}
             onHistory={() => undefined}
@@ -763,26 +779,28 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         const room = app.room;
         if (!room || !embedder) return waiting;
         return (
-          <ScanScreen
-            onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
-            scan={(url) =>
-              runScan(
-                {
-                  embedder,
-                  faceMatch: (req) => rt.api.faceMatch(room.room_id, req),
-                  now: () => rt.clock.now(),
-                },
-                url,
-              )
-            }
-            onChallenge={challengeByFace}
-            members={app.members
-              .filter((m) => m.user.user_id !== app.me?.user_id && m.online)
-              .map(toPreviewUser)}
-            onPickMember={challengeFromList}
-            onPickList={() => dispatch({ type: 'overlay', overlay: 'none' })}
-            onOpen={() => void embedder.prewarm?.().catch(() => undefined)}
-          />
+          <PanelErrorBoundary name="Face scan" onError={faceCrashed('scan')}>
+            <ScanScreen
+              onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
+              scan={(url) =>
+                runScan(
+                  {
+                    embedder,
+                    faceMatch: (req) => rt.api.faceMatch(room.room_id, req),
+                    now: () => rt.clock.now(),
+                  },
+                  url,
+                )
+              }
+              onChallenge={challengeByFace}
+              members={app.members
+                .filter((m) => m.user.user_id !== app.me?.user_id && m.online)
+                .map(toPreviewUser)}
+              onPickMember={challengeFromList}
+              onPickList={() => dispatch({ type: 'overlay', overlay: 'none' })}
+              onOpen={() => void embedder.prewarm?.().catch(() => undefined)}
+            />
+          </PanelErrorBoundary>
         );
       }
       case 'faceSettings':
@@ -794,6 +812,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               dispatch({ type: 'overlay', overlay: 'profile' });
             }}
             onSetUp={() => {
+              if (!faceOn) return;
               enrollFrom.current = 'settings';
               dispatch({ type: 'overlay', overlay: 'enroll' });
             }}
@@ -801,16 +820,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         );
       case 'enroll':
         return embedder ? (
-          <FaceEnrollFlow
-            api={faceApi}
-            embedder={embedder}
-            onDone={() => {
-              refreshFace();
-              leaveEnroll();
-            }}
-            onSkip={leaveEnroll}
-            onExit={leaveEnroll}
-          />
+          <PanelErrorBoundary name="Face enrollment" onError={faceCrashed('enroll')}>
+            <FaceEnrollFlow
+              api={faceApi}
+              embedder={embedder}
+              onDone={() => {
+                refreshFace();
+                leaveEnroll();
+              }}
+              onSkip={leaveEnroll}
+              onExit={leaveEnroll}
+            />
+          </PanelErrorBoundary>
         ) : (
           waiting
         );
