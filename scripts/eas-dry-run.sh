@@ -20,7 +20,8 @@
 #
 # Usage: scripts/eas-dry-run.sh [--profile preview] [--out DIR] [--linked] [--worker-node]
 #   --profile      eas.json build profile whose env is used (default: preview)
-#   --out          work directory, wiped first (default: $TMPDIR/youre-on-eas-dry-run)
+#   --out          work directory, wiped first, so it must be new, empty or an earlier run's
+#                  (default: $TMPDIR/youre-on-eas-dry-run)
 #   --linked       pretend `eas init` ran (fake extra.eas.projectId), so EAS Update is on
 #   --worker-node  run npm with Node 22.23.4 + npm 10.9.9 like the EAS worker (fetched via npm)
 # Needs: Xcode (xcodebuild), CocoaPods, node + npm, network for npm/pods. Takes 5-20 minutes.
@@ -32,9 +33,46 @@ WORKER_NPM="10.9.9"
 FAKE_TEAM="ABCDE12345"
 FAKE_PROJECT="00000000-0000-4000-8000-000000000000"
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MARKER=".youre-on-eas-dry-run"   # written into --out, so a later run knows it may wipe it
+
+# The path with //, ., .. and a trailing slash resolved, then the symlinks of the part that
+# exists (pwd -P), so the checks below see the directory rm -rf would actually remove.
+# Builtins only, no globbing, bash 3.2 compatible.
+canon() {
+  local s="$1/" part p="" rest=""
+  while [[ -n "$s" ]]; do
+    part="${s%%/*}"
+    s="${s#*/}"
+    case "$part" in
+      '' | .) ;;
+      ..) p="${p%/*}" ;;
+      *) p="$p/$part" ;;
+    esac
+  done
+  while [[ -n "$p" && ! -d "$p" ]]; do
+    rest="/${p##*/}$rest"
+    p="${p%/*}"
+  done
+  if [[ -n "$p" ]]; then p="$(cd "$p" && pwd -P)"; fi
+  p="${p%/}$rest"
+  printf '%s\n' "${p:-/}"
+}
+# True when $1 is $2 or one of its ancestors (both canonical).
+covers() { [[ "$1" == / || "$2/" == "$1/"* ]]; }
+# True when the directory $1 has no entries, dotfiles included.
+is_empty_dir() {
+  local e
+  for e in "$1"/* "$1"/.*; do
+    case "${e##*/}" in . | ..) continue ;; esac
+    if [[ -e "$e" || -L "$e" ]]; then return 1; fi
+  done
+  return 0
+}
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 profile="preview"
-out="${TMPDIR:-/tmp}/youre-on-eas-dry-run"
+default_out="${TMPDIR:-/tmp}/youre-on-eas-dry-run"
+out="$default_out"
 linked=0
 worker_node=0
 while [[ $# -gt 0 ]]; do
@@ -43,12 +81,31 @@ while [[ $# -gt 0 ]]; do
     --out) out="$2"; shift 2 ;;
     --linked) linked=1; shift ;;
     --worker-node) worker_node=1; shift ;;
-    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0"; exit 0 ;;
     *) echo "eas-dry-run: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-[[ "$out" == /* && "$out" != "/" && "$out" != "$root"* ]] \
-  || { echo "eas-dry-run: --out must be an absolute path outside the repo" >&2; exit 64; }
+
+# --out is wiped (rm -rf) before the build, so refuse anything that could hold someone's files:
+# a relative path, the repo or anything inside it, an ancestor of the repo, $HOME or $TMPDIR, a
+# top-level directory, a file, and a non-empty directory that is neither the default nor an
+# earlier run's (marked with $MARKER).
+refuse() { echo "eas-dry-run: $*" >&2; exit 64; }
+[[ "$out" == /* ]] || refuse "--out must be an absolute path outside the repo: $out"
+out="$(canon "$out")"
+if [[ "$out" != /*/* ]] || covers "$root" "$out" || covers "$out" "$root" \
+  || covers "$out" "$(canon "${HOME:-/}")" || covers "$out" "$(canon "${TMPDIR:-/tmp}")"; then
+  refuse "--out must be an absolute path outside the repo, below a top-level directory, and" \
+    "not \$HOME, \$TMPDIR or an ancestor of them or of the repo (it is wiped): $out"
+fi
+if [[ -L "$out" || (-e "$out" && ! -d "$out") ]]; then
+  refuse "--out is not a directory: $out"
+fi
+if [[ -d "$out" && "$out" != "$(canon "$default_out")" && ! -f "$out/$MARKER" ]] \
+  && ! is_empty_dir "$out"; then
+  refuse "refusing to wipe $out: it is not empty and has no $MARKER from an earlier run." \
+    "Pick a new or empty directory."
+fi
 for tool in git node npm pod xcodebuild plutil; do
   command -v "$tool" >/dev/null || { echo "eas-dry-run: $tool not found" >&2; exit 1; }
 done
@@ -67,6 +124,7 @@ profile_json="$(cd "$root/apps/mobile" && node "$eas_cli/bin/run" config --eas-j
 
 rm -rf "$out"
 mkdir -p "$out"
+: >"$out/$MARKER"
 build="$out/build"
 
 phase "PREPARE_PROJECT"
