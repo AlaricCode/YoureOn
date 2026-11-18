@@ -342,12 +342,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     typedDispatch({ type: 'init', bet_id: bet.bet_id, bName: opponentName, typed: typedForced });
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
 
-  const voiceFailed = useCallback((id: string) => {
-    // Unmounts JudgeVoice (the session is already ended) and opens the typed form.
-    setVoiceFailedBet(id);
-    setJudgeSpeaking(false);
-    typedDispatch({ type: 'open' });
-  }, []);
+  const voiceFailed = useCallback(
+    (id: string) => {
+      // Unmounts JudgeVoice (the session is already ended) and opens the typed form, unless
+      // the bet is already over (a failure in the closing tail has nothing left to type).
+      setVoiceFailedBet(id);
+      setJudgeSpeaking(false);
+      if (!isOver(rt.hub.get(id)?.state ?? null)) typedDispatch({ type: 'open' });
+    },
+    [rt],
+  );
 
   const submitTyped = async () => {
     if (!bet || !canSubmit(typed) || typed.bet_id !== bet.bet_id) return;
