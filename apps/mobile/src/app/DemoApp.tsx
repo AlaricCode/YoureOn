@@ -75,7 +75,7 @@ import {
 } from './machine';
 import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
-import { parseDeepLink } from './deepLink';
+import { demoLinkLives, parseDeepLink } from './deepLink';
 import { attemptStartAlert, createJudgeCamSync, deviceRoleRequest } from './judgeCam';
 import { RESUME_LIMIT, resumable } from './resume';
 import { importSafely } from './importSafely';
@@ -418,6 +418,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   // An alert belongs to the screen it was raised on: a new screen starts without one (it used
   // to follow into the next screens as a toast that never cleared).
   useEffect(() => setAlert(null), [route]);
+  // A link's demo-claim token dies with the Demo account screen (./deepLink demoLinkLives).
+  useEffect(() => {
+    if (!demoLinkLives(route)) setDemoLink(null);
+  }, [route]);
   const me: Party | null =
     bet?.my_party ??
     (bet && app.me

@@ -1,7 +1,8 @@
 import { demoClaimQr, roomQrPayload } from '@youre-on/shared/api';
 import { describe, expect, it } from 'vitest';
 
-import { parseDeepLink } from '../deepLink';
+import { demoLinkLives, parseDeepLink } from '../deepLink';
+import type { Route } from '../machine';
 
 const TOKEN = `yo_dc_${'A'.repeat(43)}`;
 
@@ -39,5 +40,17 @@ describe('parseDeepLink', () => {
       'dev.youreon.app://room/UBC26X',
     ])
       expect(parseDeepLink(url), String(url)).toBeNull();
+  });
+});
+
+describe('demoLinkLives', () => {
+  it('keeps the token on the Demo account screen and while a cold start boots', () => {
+    expect(demoLinkLives('demoClaim')).toBe(true);
+    expect(demoLinkLives('boot')).toBe(true);
+  });
+
+  it('drops it on any other screen (a claim closes the screen without Back or Done)', () => {
+    const others: Route[] = ['signup', 'home', 'profile', 'history', 'incoming', 'negotiate'];
+    for (const r of others) expect(demoLinkLives(r)).toBe(false);
   });
 });
