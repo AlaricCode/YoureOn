@@ -353,10 +353,6 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         if (restored === 'send_phone') void camSync.off();
         return restored;
       });
-    // Re-join the last room (a convenience; the server's room_members row is the truth). A
-    // restored judge cam then re-binds itself to that room on the server, which may hold another
-    // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
-    // room comes from the join, not from appRef (a render behind right after it).
     // A step the server could not answer here (offline at a cold start) runs again once the
     // socket is live (./resume createLiveRetry): it used to wait for the next restart, with the
     // phone on home, room-less, and its open bet stranded.
@@ -366,6 +362,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       const code = await S.getItemAsync(LAST_ROOM_KEY);
       return !code || !live || (await joinRoomId(code)) !== null;
     });
+    // Re-join the last room (a convenience; the server's room_members row is the truth). A
+    // restored judge cam then re-binds itself to that room on the server, which may hold another
+    // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
+    // room comes from the join, not from appRef (a render behind right after it).
     void cam
       .then((restored) =>
         rejoinAndRebind({
