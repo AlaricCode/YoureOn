@@ -83,6 +83,15 @@ name: sim-preview
 - runFlow:
     file: preview-screen.yaml
     env:
+      KEY: historyLoading
+# First load: skeleton rows (one element reading "Loading"), not a spinner.
+- assertVisible:
+    id: history-loading
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
       KEY: profile
 - tapOn:
     id: preview-menu
@@ -118,6 +127,12 @@ name: sim-preview
     file: preview-screen.yaml
     env:
       KEY: termsTheyFirst
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: termsLocked
 - tapOn:
     id: preview-menu
 - runFlow:

@@ -26,6 +26,8 @@ describe('spec sentences are contract copy', () => {
     fill.challengeName('Jake'),
     fill.holdToLock('$5'),
     fill.holdToLock('$6.20'),
+    fill.swipeToLock('$5'),
+    fill.swipeToLock('$6.20'),
     fill.youreIn('Jake'),
     fill.theyreIn('Jake'),
     fill.headToHead(4, 7, 'Jake', signedUsd('-7000000')),

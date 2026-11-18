@@ -14,6 +14,8 @@ import { otherParty, type Party } from '@youre-on/shared/primitives';
 import type { RulingOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type Terms } from '@youre-on/shared/terms';
 
+import { signedMicroToUsd } from '../ui/money';
+
 export interface EdgeCaseView {
   question: string;
   answer: string;
@@ -172,13 +174,7 @@ export const appealVerdict = (
 export const canConcede = (result: MyResult, appealDeadlineMs: number, nowMs: number): boolean =>
   result === 'lost' && nowMs < appealDeadlineMs + 1000;
 
-/** "+$5", "−$7.00", "$0" from a signed micro-USDC string (head-to-head net). */
+/** "+$5.00", "−$7.00", "$0.00" from a signed micro-USDC string (ui/money: one result format). */
 export function signedUsd(signedMicro: string): string {
-  const neg = signedMicro.startsWith('-');
-  const abs = neg ? signedMicro.slice(1) : signedMicro;
-  if (/^0+$/.test(abs)) return '$0';
-  const n = BigInt(abs);
-  const cents = (n % 1_000_000n) / 10_000n;
-  const usd = `$${n / 1_000_000n}.${cents.toString().padStart(2, '0')}`;
-  return `${neg ? '−' : '+'}${usd}`;
+  return signedMicroToUsd(signedMicro);
 }

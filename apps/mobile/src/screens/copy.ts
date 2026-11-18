@@ -94,6 +94,8 @@ export const COPY = {
     backHome: ['Back home', 'label'],
     review: ['Review terms', 'label'],
     continue: ['Continue', 'label'],
+    /** A tap on a swipe control (the lock, GG): it does not commit, it shows this. */
+    swipeHint: ['Swipe up', 'label'],
   },
   live: {
     title: ['Bet', 'label'],
@@ -232,6 +234,7 @@ export const fill = {
   challenged: (name: string) => `${name} challenged you`,
   challengeName: (name: string) => `Challenge ${name}?`,
   holdToLock: (amount: string) => `Hold to lock in ${amount}`,
+  swipeToLock: (amount: string) => `Swipe up to lock in ${amount}`,
   youreIn: (name: string) => `You're in. Waiting for ${name}…`,
   theyreIn: (name: string) => `${name} is in`,
   headToHead: (w: number, l: number, name: string, net: string) =>

@@ -83,7 +83,7 @@ import { Label, PrimaryButton } from '../ui/kit';
 import { setConnectionStatus } from '../ui/connection';
 import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
-import { palette } from '../ui/tokens';
+import { half, palette, radius, space } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
 import { WalletError } from '../wallet/wallet';
 import {
@@ -119,7 +119,7 @@ import {
   waitingForAcceptMarket,
   type MarketStakeUsd,
 } from './marketTerms';
-import { HISTORY_LIMIT, historyFrom } from './history';
+import { balanceSeries, HISTORY_LIMIT, historyFrom, netCents } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { demoLinkLives, parseDeepLink } from './deepLink';
 import {
@@ -1141,6 +1141,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const result =
     outcome && me ? (bet?.state === 'VOIDED' ? 'void' : myResult(outcome, me)) : 'void';
   const balanceCents = balance ? Number(BigInt(balance.usdc) / 10_000n) : 0;
+  // Home's sparkline and delta come from the settled history the app already holds (loaded when
+  // History opens); no extra request. Hidden until there is history. No caption: the list is
+  // capped at HISTORY_LIMIT, so "all time" would not be true.
+  const homeSeries = balance ? balanceSeries(balanceCents, history.items) : null;
+  const homeChange = balance && history.items.length ? { cents: netCents(history.items) } : null;
   const waiting = <Loading failed={false} onRetry={() => undefined} />;
 
   const screen = (() => {
@@ -1189,6 +1194,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <HomeScreen
             name={app.me?.display_name ?? ''}
             balanceCents={balanceCents}
+            series={homeSeries}
+            change={homeChange}
             pending={false}
             inBetsUsd={balance && balance.in_escrow !== '0' ? balance.in_escrow_display : null}
             room={app.room ? { code: app.room.code, name: app.room.name } : null}
@@ -1586,8 +1593,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   })();
 
+  // One light status bar for the whole app: every screen, moments included, sits on black.
   return (
     <View style={styles.root}>
+      <StatusBar style="light" />
       {screen}
       {voice && voiceBet ? (
         <PanelErrorBoundary
@@ -1618,10 +1627,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       ) : null}
       {alert && route !== 'ruling' && route !== 'terms' ? (
         <View style={styles.toast} pointerEvents="none">
-          <Label variant="small">{alert}</Label>
+          <Label variant="labelMedium">{alert}</Label>
         </View>
       ) : null}
-      <StatusBar style="light" />
     </View>
   );
 }
@@ -1650,14 +1658,16 @@ function wonBet(b: BetModel): boolean {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  // A raised pill above the home indicator: #0F0F11 fill, no outline, white text.
   toast: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 40,
+    left: space.page,
+    right: space.page,
+    bottom: space.x5,
     alignItems: 'center',
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: palette.background,
+    paddingVertical: half.x15,
+    paddingHorizontal: space.x3,
+    borderRadius: radius.pill,
+    backgroundColor: palette.surface,
   },
 });

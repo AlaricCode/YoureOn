@@ -5,7 +5,7 @@ import type { z } from 'zod/v4';
 
 import { createYoApi } from '../../net/api';
 import { createClock, type ApiClient } from '../../net/signedFetch';
-import { HISTORY_LIMIT, historyFrom, historyItemOf } from '../history';
+import { balanceSeries, HISTORY_LIMIT, historyFrom, historyItemOf, netCents } from '../history';
 import { ME_B, snapshot } from './fixtures';
 
 /** A GET /v1/me/bets item for party A, parsed like the app does. */
@@ -150,5 +150,28 @@ describe('historyFrom', () => {
 
   it('is empty for no bets', () => {
     expect(historyFrom([])).toEqual([]);
+  });
+});
+
+describe('balance sparkline series (Home)', () => {
+  const row = (net: string) => ({
+    bet_id: net,
+    title: 'x',
+    opponent: 'y',
+    net,
+    outcome: 'won' as const,
+    settled_at: '',
+  });
+
+  it('walks back from the balance through each net, oldest first, ending at the balance', () => {
+    // Newest first: +$5, then -$3, then a refund.
+    const items = [row('5000000'), row('-3000000'), row('0')];
+    expect(balanceSeries(2_000, items)).toEqual([1_800, 1_800, 1_500, 2_000]);
+    expect(netCents(items)).toBe(200);
+  });
+
+  it('is empty with no settled bets', () => {
+    expect(balanceSeries(2_000, [])).toEqual([]);
+    expect(netCents([])).toBe(0);
   });
 });
