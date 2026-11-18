@@ -22,7 +22,7 @@ import {
 } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import type { RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
+import type { BetSnapshot, RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 
 import { extractFrames, readClip } from '../attempt/capture';
@@ -76,6 +76,7 @@ import {
 import { HISTORY_LIMIT, historyFrom } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
 import { deviceRoleRequest } from './judgeCam';
+import { RESUME_LIMIT, resumable } from './resume';
 import { importSafely } from './importSafely';
 import { getRuntime, type Runtime } from './runtime';
 import {
@@ -91,6 +92,8 @@ import {
 } from './typedTerms';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
+/** This phone is the room's judge cam (the server keeps the role across an app restart too). */
+const JUDGE_CAM_KEY = 'youreon.judgecam.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
 /** A voice SDK that throws while it loads falls back to typed terms (the boundary below). */
@@ -209,12 +212,35 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     rt.ws.start();
     rt.wallet.getPublicKey().then(setWalletKey, () => setWalletKey(null));
     refreshBalance();
-    // Re-join the last room (a convenience; the server's room_members row is the truth).
+    let live = true;
+    // Re-join the last room (a convenience; the server's room_members row is the truth), and
+    // come back as the judge cam if this phone was one.
     void import('expo-secure-store').then(async (SecureStore) => {
       const code = await SecureStore.getItemAsync(LAST_ROOM_KEY).catch(() => null);
       if (code && !appRef.current.room) void joinRoom(code);
+      const cam = await SecureStore.getItemAsync(JUDGE_CAM_KEY).catch(() => null);
+      if (live && cam === '1') dispatch({ type: 'judge_cam', on: true });
     });
-    return () => rt.ws.stop();
+    // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
+    void (async () => {
+      let open: BetSnapshot[];
+      try {
+        open = resumable((await rt.api.myBets('active', RESUME_LIMIT)).items);
+      } catch {
+        return; // offline: the bet's own pushes or the next sign-in bring it back
+      }
+      for (const snap of open) {
+        if (!live) return;
+        if (!rt.hub.has(snap.bet_id)) await rt.hub.restore(snap);
+        rt.ws.subscribe(snap.bet_id);
+      }
+      const newest = open[0];
+      if (live && newest) dispatch({ type: 'bet_opened', bet_id: newest.bet_id });
+    })();
+    return () => {
+      live = false;
+      rt.ws.stop();
+    };
   }, [app.auth, userId, rt]);
 
   // ---- socket status, presence -------------------------------------------------------------
@@ -487,11 +513,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return;
       }
       dispatch({ type: 'judge_cam', on });
+      const remember = (v: boolean) =>
+        void import('expo-secure-store')
+          .then((S) => (v ? S.setItemAsync(JUDGE_CAM_KEY, '1') : S.deleteItemAsync(JUDGE_CAM_KEY)))
+          .catch(() => undefined);
+      remember(on);
       rt.api.setDeviceRole(req.role, req.roomId).catch((e: unknown) => {
         console.warn('[yo] device role', e);
         // Off stays off on screen; the Profile row can send it again.
         if (!on) return;
         dispatch({ type: 'judge_cam', on: false });
+        remember(false);
         setHomeNote(homeErrorLabel('judgeCam', e));
       });
     },
@@ -809,6 +841,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             captions={captions}
             speaking={captions.at(-1)?.who === 'judge'}
             hasMic={me === 'A' && VOICE_ENABLED}
+            voice={VOICE_ENABLED}
             micMuted={view !== null}
             draft={view}
             typed={
