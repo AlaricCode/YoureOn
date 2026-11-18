@@ -64,7 +64,7 @@ import { renderSignCard } from '@youre-on/shared/sign-card';
 import { betIdToBytes, type Party } from '@youre-on/shared/primitives';
 import { payout, Ruling, toOnchainOutcome, type OnchainOutcome } from '@youre-on/shared/ruling';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
-import type { BetState } from '@youre-on/shared/bet-state';
+import { BetState } from '@youre-on/shared/bet-state';
 import { recordLine, type PairRecord, type PayoutVia } from '@youre-on/shared/gg';
 import { judgeCue } from '../bets/cues';
 import { partyOf, type BetRow } from '../bets/snapshot';
@@ -773,10 +773,13 @@ export class PayoutService {
   private loserOrThrow(bet: BetRow, userId: string): Party {
     const party = partyOf(bet, userId);
     if (!party) throw new HttpError('NOT_A_PARTY', "You're not in this bet.");
-    if (bet.state !== 'RULED')
-      throw new HttpError(bet.state > 'RULED' ? 'STATE_MOVED_ON' : 'INVALID_STATE', undefined, {
+    if (bet.state !== 'RULED') {
+      // Enum order, not string order: 'APPEALED' / 'PAID' sort before 'RULED' as strings.
+      const after = BetState.options.indexOf(bet.state) > BetState.options.indexOf('RULED');
+      throw new HttpError(after ? 'STATE_MOVED_ON' : 'INVALID_STATE', undefined, {
         state: bet.state,
       });
+    }
     if (bet.outcome !== 'party_a' && bet.outcome !== 'party_b')
       throw new HttpError('CONCEDE_NOT_ALLOWED', 'There is no winner to pay.');
     const loser: Party = bet.outcome === 'party_a' ? 'B' : 'A';
