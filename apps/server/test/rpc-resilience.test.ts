@@ -6,7 +6,9 @@ import {
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   SolanaError,
   type Base64EncodedWireTransaction,
+  type Rpc,
   type RpcTransport,
+  type SolanaRpcApi,
 } from '@solana/kit';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -19,8 +21,10 @@ import {
   PreflightError,
   rpcErrorText,
   RpcStats,
+  rpcChainClient,
   RpcTimeoutError,
   TxFailedError,
+  wireOf,
   withRpcRetry,
   type ChainClient,
   type SigStatus,
@@ -303,5 +307,71 @@ describe('confirmSent: a failing status poll is "unknown", not a failure', () =>
       lastValidBlockHeight: 100n,
     }).catch((e: unknown) => e);
     expect((err as TxFailedError).kind).toBe('timeout');
+  });
+});
+
+describe('rpcChainClient.send: a preflight "rejection" of our own landed tx is not a rejection', () => {
+  const fakeRpc = (o: { sendErr?: unknown; status?: unknown; statusErr?: boolean }) => {
+    const calls: string[] = [];
+    const rpc = {
+      sendTransaction: () => ({
+        send: async () => {
+          calls.push('send');
+          if (o.sendErr) throw o.sendErr;
+          return 'sig';
+        },
+      }),
+      getSignatureStatuses: (_s: unknown, cfg: unknown) => ({
+        send: async () => {
+          calls.push(`status ${JSON.stringify(cfg)}`);
+          if (o.statusErr) throw new Error('HTTP 503');
+          return { value: [o.status ?? null] };
+        },
+      }),
+    } as unknown as Rpc<SolanaRpcApi>;
+    return { rpc, calls };
+  };
+  const preflight = (err: unknown) =>
+    Object.assign(new Error('Transaction simulation failed'), { context: { err, logs: ['l1'] } });
+  const wire = async () => {
+    const fp = await generateKeyPairSigner();
+    const ix = {
+      programAddress: 'ComputeBudget111111111111111111111111111111' as never,
+      data: new Uint8Array([1]),
+    };
+    const built = await buildBlockhashTx(fake(), fp.address, [ix], { signers: [fp], label: 't' });
+    return wireOf(built.tx);
+  };
+  const client = (rpc: Rpc<SolanaRpcApi>) => rpcChainClient('http://127.0.0.1:1', rpc);
+
+  it('AlreadyProcessed (the retried send of a tx that landed): resolves; the poll decides', async () => {
+    const f = fakeRpc({
+      sendErr: preflight('AlreadyProcessed'),
+      status: { err: null, confirmationStatus: 'confirmed', slot: 5n },
+    });
+    await expect(client(f.rpc).send(await wire(), false)).resolves.toBeUndefined();
+    expect(f.calls).toEqual(['send', 'status {"searchTransactionHistory":true}']);
+  });
+
+  it('an unknown signature: a real rejection -> PreflightError with the logs', async () => {
+    const err = { InstructionError: [2, { Custom: 1 }] };
+    const f = fakeRpc({ sendErr: preflight(err) });
+    const e = await client(f.rpc)
+      .send(await wire(), false)
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(PreflightError);
+    expect((e as PreflightError).err).toEqual(err);
+    expect((e as PreflightError).logs).toEqual(['l1']);
+  });
+
+  it('the status check failing too: still a PreflightError (never a silent success)', async () => {
+    const f = fakeRpc({ sendErr: preflight('BlockhashNotFound'), statusErr: true });
+    await expect(client(f.rpc).send(await wire(), false)).rejects.toBeInstanceOf(PreflightError);
+  });
+
+  it('a transport error is passed through untouched (no status lookup)', async () => {
+    const f = fakeRpc({ sendErr: fetchFailed('ECONNRESET') });
+    await expect(client(f.rpc).send(await wire(), false)).rejects.toThrow('fetch failed');
+    expect(f.calls).toEqual(['send']);
   });
 });

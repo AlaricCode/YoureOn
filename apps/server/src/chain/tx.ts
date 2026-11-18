@@ -23,6 +23,7 @@ import {
   getBase64Encoder,
   getI64Decoder,
   getSignatureFromTransaction,
+  getTransactionDecoder,
   getTransactionEncoder,
   isSolanaError,
   partiallySignTransaction,
@@ -161,6 +162,13 @@ export function redactUrl(url: string): string {
 
 const jsonSafe = (v: unknown): string =>
   JSON.stringify(v, (_k, x: unknown) => (typeof x === 'bigint' ? x.toString() : x));
+
+/** The tx id (first signature) of base64 wire bytes. */
+export function signatureOfWire(wire: Base64EncodedWireTransaction): Signature {
+  return getSignatureFromTransaction(
+    getTransactionDecoder().decode(getBase64Encoder().encode(wire)),
+  );
+}
 
 /** Pulls `logs` / the simulation error out of a kit SolanaError (preflight failure). */
 function preflightDetails(e: unknown): { err: unknown; logs: string[] } | null {
@@ -571,8 +579,20 @@ export function rpcChainClient(
           .send();
       } catch (e) {
         const d = preflightDetails(e);
-        if (d) throw new PreflightError(`preflight rejected: ${jsonSafe(d.err)}`, d.err, d.logs);
-        throw e;
+        if (!d) throw e;
+        // A rejection can be our OWN earlier attempt: the transport retries a send whose first
+        // try timed out after the node got it, and the re-simulation then fails (AlreadyProcessed,
+        // or a durable nonce it advanced itself). Callers treat PreflightError as "nothing landed"
+        // (the lock would be cancelled and its nonce revoked), so ask the chain first: a known
+        // signature is not a rejection, and the caller's status poll takes it from here.
+        const sig = signatureOfWire(wire);
+        const st = await kit
+          .getSignatureStatuses([sig], { searchTransactionHistory: true })
+          .send()
+          .then((r) => r.value[0] ?? null)
+          .catch(() => null);
+        if (st) return;
+        throw new PreflightError(`preflight rejected: ${jsonSafe(d.err)}`, d.err, d.logs);
       }
     },
     async signatureStatus(sig, o) {

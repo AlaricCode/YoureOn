@@ -1120,7 +1120,14 @@ export class PayoutService {
         height ??= await rt.client.blockHeight();
         const lvbh = row.last_valid_block_height;
         const old = row.sent_at ? nowMs - row.sent_at.getTime() > 10 * 60_000 : true;
-        if (lvbh != null ? height > lvbh : old) dead = 'expired';
+        // Known dead only if a second status read (after the height read) is still empty: a tx
+        // that landed in the last valid block would otherwise be reverted and paid out twice
+        // over (the program refuses the second payout, but the DB would flap).
+        if (
+          (lvbh != null ? height > lvbh : old) &&
+          (await rt.client.signatureStatus(row.signature, { searchHistory: true })) === null
+        )
+          dead = 'expired';
       }
       if (!landed && !dead) continue; // still in flight
       const onchain = await readBetAccount(rt, row.bet_id);
