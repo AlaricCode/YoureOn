@@ -395,44 +395,81 @@ code,
 }
 
 /* ---- Beat 6: the live Gemini market bet ---------------------------------------------------- */
+/* The card is already full, so the panel is a compact strip: the header (with the live line),
+   then who holds which side next to the three numbers, then Gemini's result on one row. It
+   takes the room of the terms card's stakes chips (the same stakes, sides and Up %), and the
+   moment's QR gives up a little height. */
 .market {
   flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3em;
-  padding: 0.6em 0.9em;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.25em 1.6em;
+  padding: 0.35em 0.9em;
   border: 1px solid var(--chain);
   border-radius: calc(var(--radius) * 0.75);
 }
 .market-head,
-.market-sides {
+.market-status {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3em 1em;
+  gap: 0.2em 0.9em;
   align-items: baseline;
+  margin: 0;
 }
 .market-head .muted {
-  font-size: 0.8em;
+  font-size: 0.75em;
+}
+.market-live {
+  margin-left: auto;
+  font-weight: 700;
+}
+.market-head .countdown {
+  font-size: 0.9em;
 }
 .market-sides {
-  font-size: 1.1em;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0 0.9em;
+  align-items: baseline;
   font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.market-sides > .muted {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
 }
 .market .odds-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .market .odds-grid .num {
   font-size: 1.15em;
-}
-.market p {
-  margin: 0;
+  white-space: nowrap;
 }
 .market-result {
-  font-size: 1.2em;
+  font-size: 1.1em;
   font-weight: 800;
 }
 .market-evidence {
-  font-size: 0.8em;
+  font-size: 0.75em;
+}
+.card:has(.market) {
+  gap: 0.6em;
+}
+.card:has(.market) .terms .stakes {
+  display: none;
+}
+.card:has(.market) .qr-card .qr {
+  height: 20vh;
+}
+/* once the judge has ruled, the moment shows Gemini's result big (the verdict, the reason with
+   the line and the settlement price): the panel keeps only its header and the evidence line */
+.card:has(.moment.phase-ruling, .moment.phase-paid) .market :is(.market-sides, .odds-grid),
+.card:has(.moment.phase-ruling, .moment.phase-paid) .market-result {
+  display: none;
 }
 .replay-badge.inline {
   position: static;
