@@ -1,0 +1,84 @@
+# iOS Simulator build only (no camera, no ML Kit face detector): the face screens of the real
+# app open and fail in place, never taking the app down.
+#   1. Home > "Scan a face": the scan screen says "No camera" and "Pick from list" goes back to
+#      the room list (the list challenge still works).
+#   2. Profile > Face matching > Set up face: consent first (Continue only once ticked), then the
+#      camera step, whose capture panel needs the detector the simulator build leaves out; back
+#      out to Face matching and Profile.
+# No server writes except GET /v1/face/consent and GET /v1/face/status. Signed in, in a room.
+#   maestro --device <udid> test e2e/maestro/sim-face.yaml
+appId: dev.youreon.app
+name: sim-face
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- tapOn:
+    id: home-scan
+- extendedWaitUntil:
+    visible: No camera
+    timeout: 10000
+- takeScreenshot: 26-scan-no-camera
+- tapOn: Pick from list
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000
+- tapOn:
+    id: home-profile
+- tapOn:
+    id: profile-face
+- extendedWaitUntil:
+    visible: Set up face
+    timeout: 10000
+- takeScreenshot: 27-face-settings
+- tapOn: Set up face
+- extendedWaitUntil:
+    visible:
+      id: enroll-consent
+    timeout: 15000
+- assertVisible:
+    id: enroll-continue
+    enabled: false
+- tapOn:
+    id: enroll-consent
+- assertVisible:
+    id: enroll-continue
+    enabled: true
+- tapOn:
+    id: enroll-continue
+- extendedWaitUntil:
+    visible: Register face
+    timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertVisible:
+    id: enroll-done
+    enabled: false
+- takeScreenshot: 28-enroll-camera-step
+- tapOn:
+    id: step-back
+- extendedWaitUntil:
+    visible:
+      id: enroll-consent
+    timeout: 5000
+- tapOn:
+    id: step-back
+- extendedWaitUntil:
+    visible: Set up face
+    timeout: 10000
+# Face matching's own header (StepHeader): step-back.
+- tapOn:
+    id: step-back
+- extendedWaitUntil:
+    visible:
+      id: profile-face
+    timeout: 10000
+- tapOn:
+    id: top-back
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 10000

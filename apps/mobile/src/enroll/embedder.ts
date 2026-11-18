@@ -209,11 +209,14 @@ export const PREVIEW_FACE: DetectedFace = {
 
 /**
  * The stand-in. `detect` is the real detector in the preview app (so the head-turn prompts
- * work on a phone) and a fixed face in tests.
+ * work on a phone), loaded on first use (a build without ML Kit, the simulator's, fails only the
+ * capture), and a fixed face in tests.
  */
 export function createPreviewEmbedder(
   seed = 0x5e6ad2,
-  detect: (url: string) => readonly DetectedFace[] = () => [PREVIEW_FACE],
+  detect: (url: string) => readonly DetectedFace[] | Promise<readonly DetectedFace[]> = () => [
+    PREVIEW_FACE,
+  ],
 ): FaceEmbedder {
   const base = new Float32Array(FACE_MODEL.dim);
   const r = rng(seed);
@@ -221,7 +224,7 @@ export function createPreviewEmbedder(
   return {
     preview: true,
     async open(photoUrl) {
-      const faces = detect(photoUrl);
+      const faces = await detect(photoUrl);
       return {
         faces,
         width: faces[0]?.frameWidth ?? PREVIEW_FACE.frameWidth,

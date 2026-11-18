@@ -99,7 +99,8 @@ export function createServerKeeper(
   keeper.register(settlementTask(chain));
   // The only best-effort RPC poller: after every money sweep, so a throttled RPC delays nothing.
   keeper.register(streamGapsTask(chain));
-  // Every 10 min: one chain.unhealthy line when anything needs a human. Its first run (the boot
+  // Every 10 min: one chain.unhealthy line when the chain or money path needs a human (judge
+  // warnings alone never count: chain/health.ts chainNeedsAttention). Its first run (the boot
   // pass) is skipped: boot-reconcile already logged chain.boot_health.
   let booted = false;
   keeper.register({

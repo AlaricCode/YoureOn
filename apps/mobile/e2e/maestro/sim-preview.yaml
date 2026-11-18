@@ -1,7 +1,8 @@
 # Every screen of the stand-in design preview (diagnostics > App preview), opened in turn and
 # screenshotted: the only way to render the terms card, live, ruling, redo, payout, hearing,
 # appeal and market screens without locking a real bet. Catches any screen that crashes or
-# throws on the simulator. The list is src/preview/PreviewApp.tsx MENU.
+# throws on the simulator. The list is src/preview/PreviewApp.tsx MENU, in order; each entry
+# runs preview-screen.yaml (open, check, screenshot preview-<key>) and then the checks below it.
 #   maestro --device <udid> test e2e/maestro/sim-preview.yaml   (signed in, on home)
 appId: dev.youreon.app
 name: sim-preview
@@ -21,335 +22,257 @@ name: sim-preview
 - tapOn: App preview
 - extendedWaitUntil:
     visible:
-      id: menu-signup
+      id: menu-launch
     timeout: 10000
-- scrollUntilVisible:
-    element:
-      id: menu-signup
-    direction: DOWN
-- tapOn:
-    id: menu-signup
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-signup
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: launch
+# The in-app splash repeats the native one (ui/brand SplashView).
+- assertVisible:
+    id: splash
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-enroll
-    direction: DOWN
-- tapOn:
-    id: menu-enroll
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-enroll
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: launchFailed
+- assertVisible:
+    id: splash-retry
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-faceSettings
-    direction: DOWN
-- tapOn:
-    id: menu-faceSettings
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-faceSettings
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: signup
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-homeNoRoom
-    direction: DOWN
-- tapOn:
-    id: menu-homeNoRoom
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-homeNoRoom
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: enroll
+# Consent first: nothing is captured until it is ticked.
+- assertVisible:
+    id: enroll-skip
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-home
-    direction: DOWN
-- tapOn:
-    id: menu-home
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-home
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: faceSettings
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-history
-    direction: DOWN
-- tapOn:
-    id: menu-history
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-history
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: homeNoRoom
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-profile
-    direction: DOWN
-- tapOn:
-    id: menu-profile
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-profile
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: home
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-scan
-    direction: DOWN
-- tapOn:
-    id: menu-scan
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-scan
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: history
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-incoming
-    direction: DOWN
-- tapOn:
-    id: menu-incoming
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-incoming
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: profile
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-negotiate
-    direction: DOWN
-- tapOn:
-    id: menu-negotiate
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-negotiate
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: scan
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-terms
-    direction: DOWN
-- tapOn:
-    id: menu-terms
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-terms
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: incoming
+- assertVisible:
+    id: incoming-accept
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-termsTheyFirst
-    direction: DOWN
-- tapOn:
-    id: menu-termsTheyFirst
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-termsTheyFirst
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: negotiate
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-endDeclined
-    direction: DOWN
-- tapOn:
-    id: menu-endDeclined
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-endDeclined
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: terms
+- assertVisible:
+    id: terms-hold
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-endExpired
-    direction: DOWN
-- tapOn:
-    id: menu-endExpired
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-endExpired
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: termsTheyFirst
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-endFailed
-    direction: DOWN
-- tapOn:
-    id: menu-endFailed
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-endFailed
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: endDeclined
+- assertVisible: Declined. Nothing moved.
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-endChanged
-    direction: DOWN
-- tapOn:
-    id: menu-endChanged
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-endChanged
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: endExpired
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-live
-    direction: DOWN
-- tapOn:
-    id: menu-live
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-live
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: endFailed
+- assertVisible: Couldn't lock it. Nothing moved.
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-judgeCam
-    direction: DOWN
-- tapOn:
-    id: menu-judgeCam
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-judgeCam
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: endChanged
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-rulingWon
-    direction: DOWN
-- tapOn:
-    id: menu-rulingWon
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-rulingWon
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: live
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-rulingLost
-    direction: DOWN
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: liveSelf
+# The two-phone fallback: no judge cam, so the non-performer's own phone has Start and films
+# (attempt.started names it the recorder). No back arrow on its camera: not a mode to leave.
+- assertVisible:
+    id: live-start
 - tapOn:
-    id: menu-rulingLost
+    id: live-start
+- extendedWaitUntil:
+    visible: Judge cam
+    timeout: 5000
+- assertNotVisible:
+    id: top-back
 - waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-rulingLost
+    timeout: 2000
+- takeScreenshot: preview-selfCam
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-rulingVoid
-    direction: DOWN
-- tapOn:
-    id: menu-rulingVoid
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-rulingVoid
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: judgeCam
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-redo
-    direction: DOWN
-- tapOn:
-    id: menu-redo
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-redo
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: rulingWon
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-payoutWon
-    direction: DOWN
-- tapOn:
-    id: menu-payoutWon
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-payoutWon
-- tapOn:
-    id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-payoutLost
-    direction: DOWN
-- tapOn:
-    id: menu-payoutLost
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-payoutLost
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: rulingLost
+# Beat 5: the loser gets GG and "I appeal!" inside the window.
+- assertVisible:
+    id: ruling-gg
+- assertVisible:
+    id: ruling-appeal
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-payoutReverted
-    direction: DOWN
-- tapOn:
-    id: menu-payoutReverted
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-payoutReverted
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: rulingVoid
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-hearing
-    direction: DOWN
-- tapOn:
-    id: menu-hearing
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-hearing
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: redo
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-appeal
-    direction: DOWN
-- tapOn:
-    id: menu-appeal
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-appeal
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: payoutWon
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-termsMarket
-    direction: DOWN
-- tapOn:
-    id: menu-termsMarket
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-termsMarket
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: payoutLost
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-market
-    direction: DOWN
-- tapOn:
-    id: menu-market
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-market
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: payoutReverted
 - tapOn:
     id: preview-menu
-- scrollUntilVisible:
-    element:
-      id: menu-demo
-    direction: DOWN
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: hearing
 - tapOn:
-    id: menu-demo
-- waitForAnimationToEnd:
-    timeout: 3000
-- takeScreenshot: preview-demo
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: appeal
+# The three-model panel votes, then the result stays up until Continue.
+- extendedWaitUntil:
+    visible: Ruling stands
+    timeout: 8000
+- assertVisible: Claude
+- assertVisible: GPT
+- assertVisible: Gemini
+- takeScreenshot: preview-appeal-result
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: marketPanel
+# Beat 6: Up or Down, a stake, Gemini's odds and the split.
+- assertVisible:
+    id: market-side-UP
+- assertVisible:
+    id: market-side-DOWN
+- assertVisible:
+    id: market-send
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: termsMarket
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: market
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: demo
 - tapOn:
     id: preview-menu

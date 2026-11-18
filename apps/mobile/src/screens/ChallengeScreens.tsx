@@ -628,12 +628,24 @@ function MarketPanel({
   const now = useNow(500);
   const q = market.quote;
   const frozen = market.sending || market.confirming;
+  // The card (and a re-quote's "Odds moved") lands under the odds, below the fold on an iPhone 17
+  // Pro: "Lock it in" sat under a card cut off mid-claim, or with only its "Draft terms" label
+  // showing. Scroll it into view whenever it is there and the content grows.
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const hasCard = draftCard !== null;
   const upPct = q?.upPct ?? null;
   return (
     <Screen>
       <TopBar onBack={market.onClose} title={t(COPY.market.panel)} tag={tag} />
       <Page>
-        <ScrollView style={styles.flex} contentContainerStyle={styles.form}>
+        <ScrollView
+          ref={scroll}
+          style={styles.flex}
+          contentContainerStyle={styles.form}
+          onContentSizeChange={() => {
+            if (hasCard) scroll.current?.scrollToEnd({ animated: true });
+          }}
+        >
           <View style={styles.sides} accessibilityRole="radiogroup">
             {(['UP', 'DOWN'] as const).map((side) => {
               const on = market.side === side;

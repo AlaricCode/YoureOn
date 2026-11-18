@@ -273,10 +273,17 @@ build, but installing it everywhere keeps all phones on one build.
   bundle ID, so they replace each other on a phone and keep the wallet. The free-team build
   (`dev.youreon.app`) shares nothing with them: after switching from it, claim the demo
   accounts again (step 5).
-- **iOS Simulator:** on an Apple-silicon Mac, a simulator build does not link. The face
-  detector's ML Kit frameworks (`MLImage`, `MLKitFaceDetection`) ship only x86_64 and
-  arm64-device slices, so `ld` reports "building for 'iOS-simulator', but linking in object file
-  … MLImage … built for 'iOS'". Use a phone.
+- **iOS Simulator:** the face detector's ML Kit frameworks (`MLImage`, `MLKitFaceDetection`)
+  ship only x86_64 and arm64-device slices, so a plain simulator build does not link on an
+  Apple-silicon Mac ("building for 'iOS-simulator', but linking in object file … MLImage … built
+  for 'iOS'"). `apps/mobile/scripts/sim-build.sh` builds one without the detector
+  (`YO_IOS_SIMULATOR=1`, see `apps/mobile/react-native.config.js`): everything but the camera,
+  ML Kit, Face ID hardware and the voice SDK's audio runs. Point it at a local server
+  (`apps/mobile/.env.local`), then drive it with the Maestro flows in `apps/mobile/e2e/maestro`
+  (`two-phones.sh` for Beats 1-2 on two simulators, `sim-preview.yaml` for every screen,
+  `sim-diagnostics.yaml`, `sim-face.yaml`, the `resume-*` restarts, `judge-cam*.yaml`,
+  `market-terms.yaml`, `lock-no-chain.yaml` for a local server only). After a simulator build,
+  a device build needs the device pods back: `(cd apps/mobile/ios && pod install)`.
 
 ### 9. Troubleshooting
 

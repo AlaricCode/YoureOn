@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BetHub } from '../betHub';
 import { appReducer, initialApp, selectRoute } from '../machine';
-import { resumable } from '../resume';
+import { createLiveRetry, resumable } from '../resume';
 import { BET, DEVICE_A, envelope, ev, ME_A, ME_B, ROOM, snapshot, stateEv } from './fixtures';
 
 const invited = (seq: number) => ev('bet.invited', { challenger: ME_A, room_id: ROOM }, seq);
@@ -111,5 +111,79 @@ describe('resumable', () => {
     const open = item({ bet_id: '33333333-3333-4333-8333-333333333333', state: 'RULED' });
     expect(resumable([over, { nope: 1 }, open]).map((s) => s.state)).toEqual(['RULED']);
     expect(resumable([])).toEqual([]);
+  });
+});
+
+describe('createLiveRetry: a sign-in step that could not reach the server runs again once it can', () => {
+  // Seen on the simulator: A restarted mid-bet while the server was unreachable. The room rejoin
+  // and GET /v1/me/bets failed and nothing tried again: with the server back, A sat on home with
+  // no room and no bet while B waited on the terms.
+  function step(results: boolean[]) {
+    let calls = 0;
+    const gates: (() => void)[] = [];
+    const fn = () =>
+      new Promise<boolean>((resolve) => {
+        const r = results[calls++] ?? true;
+        gates.push(() => resolve(r));
+      });
+    const settle = async () => {
+      gates.shift()?.();
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+    };
+    return { fn, calls: () => calls, settle };
+  }
+
+  it('failed at sign-in: runs again on the next live socket, then never again', async () => {
+    const s = step([false, true]);
+    const r = createLiveRetry(s.fn);
+    void r.run();
+    await s.settle();
+    expect(r.pending).toBe(true);
+    r.onLive();
+    expect(s.calls()).toBe(2);
+    await s.settle();
+    expect(r.pending).toBe(false);
+    r.onLive();
+    expect(s.calls()).toBe(2);
+  });
+
+  it('done at sign-in: a live socket runs nothing', async () => {
+    const s = step([true]);
+    const r = createLiveRetry(s.fn);
+    void r.run();
+    await s.settle();
+    r.onLive();
+    expect(s.calls()).toBe(1);
+  });
+
+  it('live arrives while the failing run is still out: it runs again right after', async () => {
+    const s = step([false, true]);
+    const r = createLiveRetry(s.fn);
+    void r.run();
+    r.onLive(); // the socket came back before the failed request answered
+    expect(s.calls()).toBe(1);
+    await s.settle();
+    expect(s.calls()).toBe(2);
+    await s.settle();
+    expect(r.pending).toBe(false);
+  });
+
+  it('markPending (the step ran elsewhere and failed); stop() ends it for good', () => {
+    const s = step([true]);
+    const r = createLiveRetry(s.fn);
+    r.markPending();
+    r.stop();
+    r.onLive();
+    expect(s.calls()).toBe(0);
+    const t = createLiveRetry(s.fn);
+    t.markPending();
+    t.onLive();
+    expect(s.calls()).toBe(1);
+  });
+
+  it('a step that throws counts as not done', async () => {
+    const r = createLiveRetry(() => Promise.reject(new Error('offline')));
+    await r.run();
+    expect(r.pending).toBe(true);
   });
 });

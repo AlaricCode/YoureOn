@@ -111,7 +111,8 @@ async function toItem(
   const paid = mine === 'A' ? row.payout_a : row.payout_b;
   return {
     ...snap,
-    title: snap.envelope?.presentation.title ?? 'Challenge',
+    // The terms' title; else the row's own (a seed-h2h row has no terms: "Demo history: ...").
+    title: snap.envelope?.presentation.title ?? row.title ?? 'Challenge',
     opponent: mine === 'A' ? snap.party_b : snap.party_a,
     my_stake: stake?.toString() ?? null,
     my_payout: paid?.toString() ?? null,

@@ -24,7 +24,7 @@ import type { AppDeps } from '../context';
 import { readBetAccount } from '../lock/common';
 import { lifecycleOf } from '../lock/runtime';
 import { resolveDue } from '../payout/resolve-due';
-import { chainHealth, healthLine } from './health';
+import { chainHealth, logHealthReport } from './health';
 
 /** Post-lock, non-terminal states and the onchain statuses each may legitimately show. */
 const EXPECTED: Partial<Record<BetState, ReadonlyArray<BetStatus | null>>> = {
@@ -141,7 +141,6 @@ export async function bootReconcile(deps: Deps, nowMs: number): Promise<BootReco
     errors: report.errors.length,
   });
   const health = await step('health', () => chainHealth(deps));
-  if (health)
-    deps.log[health.warnings.length ? 'warn' : 'info']('chain.boot_health', healthLine(health));
+  if (health) logHealthReport(deps.log, health, { boot: true });
   return report;
 }

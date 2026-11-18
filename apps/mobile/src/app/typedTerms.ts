@@ -18,6 +18,8 @@ import {
   type TypedStakeUsd,
 } from '@youre-on/shared/judge/typed-terms';
 
+import type { TermsEnvelope } from '@youre-on/shared/terms';
+
 import type { YoApi } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
 import { COPY, t } from '../screens/copy';
@@ -43,13 +45,32 @@ export interface TypedState {
   proposedHash: string | null;
 }
 
+/**
+ * The card already on screen when the form opens on a bet: after a restart mid-bet (the bet came
+ * back from its event log, but this form's state did not), so "Lock it in" can confirm it.
+ */
+export interface ShownTypedCard {
+  terms_hash: string;
+  claim: string;
+  stakeUsd: TypedStakeUsd;
+}
+
 export type SubmitOutcome =
   | { kind: 'proposed'; terms_hash: string; code: string }
   | { kind: 'draft' | 'refused' | 'error'; note: string };
 
 export type TypedEvent =
-  /** A new bet on screen: reset (typed = start in the form: voice off, or already failed). */
-  | { type: 'init'; bet_id: string; bName: string; typed: boolean }
+  /**
+   * A new bet on screen: reset (typed = start in the form: voice off, or already failed). With a
+   * card already shown (a restart), the form starts on it: sent, ready to confirm.
+   */
+  | {
+      type: 'init';
+      bet_id: string;
+      bName: string;
+      typed: boolean;
+      shown?: ShownTypedCard | null;
+    }
   /** "Type it instead", or the voice session failed. */
   | { type: 'open' }
   /** Back to the judge (only offered while voice is available). */
@@ -78,6 +99,16 @@ export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
   switch (e.type) {
     case 'init':
       if (s.bet_id === e.bet_id) return e.typed && s.mode === 'voice' ? { ...s, mode: 'typed' } : s;
+      if (e.typed && e.shown)
+        return {
+          ...initialTyped,
+          bet_id: e.bet_id,
+          mode: 'typed',
+          claim: e.shown.claim.slice(0, MAX_CLAIM),
+          stakeUsd: e.shown.stakeUsd,
+          phase: 'sent',
+          proposedHash: e.shown.terms_hash,
+        };
       return {
         ...initialTyped,
         bet_id: e.bet_id,
@@ -110,6 +141,25 @@ export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
     case 'confirm_failed':
       return s.phase === 'confirming' ? { ...s, phase: 'sent', note: e.note } : s;
   }
+}
+
+/**
+ * The card on screen, as the typed form would have sent it: a camera bet with even stakes the
+ * form offers. Anything else (a market card, odd stakes) is not adopted: the form starts fresh.
+ */
+export function typedCardOf(
+  env: Pick<TermsEnvelope, 'terms' | 'terms_hash'> | null | undefined,
+): ShownTypedCard | null {
+  if (!env || env.terms.market !== null || env.terms.type === 'real_world') return null;
+  const { a, b } = env.terms.stakes;
+  if (a !== b) return null;
+  const micro = BigInt(a);
+  if (micro % 1_000_000n !== 0n) return null;
+  const usd = Number(micro / 1_000_000n);
+  const stakeUsd = TYPED_STAKES_USD.find((x) => x === usd);
+  return stakeUsd === undefined
+    ? null
+    : { terms_hash: env.terms_hash, claim: env.terms.claim, stakeUsd };
 }
 
 export const canSubmit = (s: TypedState): boolean =>
