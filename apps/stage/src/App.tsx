@@ -30,6 +30,7 @@ import {
 } from './connection';
 import { marketView, type MarketView } from './market';
 import { previewState } from './preview';
+import { previewMarketState } from './preview-market';
 
 const STORE_KEY = 'yo-stage-config';
 export const REPLAY_BEATS = [1, 2, 3, 4, 5, 6] as const;
@@ -540,10 +541,23 @@ export function App() {
       return null;
     }
   });
+  // ?preview=market: the Beat 6 sample (a Gemini bet through its clock to Gemini's result).
+  const [previewKind] = useState(() => {
+    try {
+      return new URLSearchParams(globalThis.location?.search ?? '').get('preview');
+    } catch {
+      return null;
+    }
+  });
   const previewSlot = preview === null ? 0 : Math.floor(now / 2000);
   const pv = useMemo(
-    () => (preview === null ? null : previewState(preview, previewSlot * 2000)),
-    [preview, previewSlot],
+    () =>
+      preview === null
+        ? null
+        : previewKind === 'market'
+          ? previewMarketState(preview, previewSlot * 2000)
+          : previewState(preview, previewSlot * 2000),
+    [preview, previewKind, previewSlot],
   );
 
   useEffect(() => () => conn.current?.stop(), []);
