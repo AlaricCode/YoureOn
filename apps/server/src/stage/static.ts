@@ -11,6 +11,7 @@
 //   GET /stage/<route>       SPA fallback: index.html for extension-less paths
 //   GET /stage/<file>        anything else in dist (replay/beat{n}.mp4 …): 5 min, byte ranges
 //                            (Safari will not play a <video> without them)
+// Conditional GETs (If-Modified-Since) answer 304, so reloads over a hotspot stay cheap.
 // Precompressed .br / .gz siblings (written by the stage's Vite build) are sent when the client
 // accepts them. A missing file is a plain 404 envelope that is never cached.
 import { statSync } from 'node:fs';
@@ -66,6 +67,23 @@ function cacheControlFor(relPath: string): string {
   if (relPath.startsWith('/assets/')) return STAGE_CACHE.immutable;
   if (relPath === '/' || relPath.endsWith('.html')) return STAGE_CACHE.html;
   return STAGE_CACHE.file;
+}
+
+/**
+ * A full 200 whose Last-Modified is not newer than the client's If-Modified-Since becomes a 304
+ * (the stream serveStatic opened is cancelled). serveStatic sends Last-Modified but never
+ * answers a conditional GET, so without this every reload re-downloads index.html and, once
+ * their 5 minutes are up, the REPLAY clips: over a phone hotspot that matters.
+ */
+function notModified(req: Request, res: Response): Response {
+  const since = Date.parse(req.headers.get('if-modified-since') ?? '');
+  const modified = Date.parse(res.headers.get('last-modified') ?? '');
+  if (res.status !== 200 || !Number.isFinite(since) || !Number.isFinite(modified)) return res;
+  if (Math.floor(modified / 1000) > Math.floor(since / 1000)) return res;
+  void res.body?.cancel().catch(() => undefined);
+  const headers = new Headers(res.headers);
+  for (const h of ['content-length', 'content-encoding', 'content-type']) headers.delete(h);
+  return new Response(null, { status: 304, headers });
 }
 
 function finish(res: Response, cacheControl: string): Response {
@@ -125,14 +143,14 @@ export function stageStatic(o: StageStaticOptions = {}): RouteModule {
 
         const path = rel(c);
         const hit = await tryServe(files, c);
-        if (hit) return finish(hit, cacheControlFor(path));
+        if (hit) return finish(notModified(c.req.raw, hit), cacheControlFor(path));
         if (path.startsWith('/assets/') || looksLikeFile(path))
           throw new HttpError('NOT_FOUND', 'Not found.', undefined, {
             headers: { 'Cache-Control': STAGE_CACHE.missing },
           });
         const page = await tryServe(index, c);
         if (!page) throw new HttpError('NOT_FOUND', 'Not found.');
-        return finish(page, STAGE_CACHE.html);
+        return finish(notModified(c.req.raw, page), STAGE_CACHE.html);
       });
     },
   };
