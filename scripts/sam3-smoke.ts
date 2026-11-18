@@ -1,12 +1,17 @@
 #!/usr/bin/env -S npx tsx
-// SAM 3.1 smoke test: sample a clip exactly as the phone does (the shared judge sampler: 12
-// frames, 4 lead-in + 8 in the last ~1.2 s, each fit to 512 px), send them to the SAM 3.1
-// endpoint on Modal (services/sam3/modal_app.py) with a text prompt, and print what it found on
-// each frame plus the timings. The landing crop is left out: it is a different view of the last
-// frame, not part of the sequence SAM tracks through.
+// SAM 3.1 smoke test, for any challenge: sample frames from a clip, send them to the SAM 3.1
+// endpoint on Modal (services/sam3/modal_app.py) with one or more text prompts naming what to
+// find, and print what it found on each frame, the per-object tracks (measurements only, no
+// verdict) and the timings. Frames are fit to 512 px like the phone's.
+//   --sampling uniform  n frames spread evenly over the clip (default)
+//   --sampling judge    the phone's attempt sampler (packages/shared/src/judge/frames.ts: 4 lead-in
+//                       frames, the rest packed into the last ~1.2 s), i.e. what the server holds
+//                       for a real attempt. The landing crop is left out: it is a different view
+//                       of the last frame, not part of the sequence SAM tracks through.
 //
-//   npm run sam3-smoke -- --clip bottle_flip_1.MOV [--prompt "water bottle"] [--frames 12]
-//       [--url https://...modal.run] [--save-frames <dir>] [--json out.json]
+//   npm run sam3-smoke -- --clip <video> --prompt "<thing>" [--prompt "<other thing>"]
+//       [--sampling uniform|judge] [--frames 12] [--url https://...modal.run]
+//       [--save-frames <dir>] [--json out.json]
 //
 // Env: SAM3_URL (or --url), SAM3_API_TOKEN (the bearer token; also read from
 // ~/.config/youre-on/sam3.env). Needs ffmpeg on PATH. Each call is billed GPU time on Modal; the
@@ -27,21 +32,46 @@ import {
 const DEFAULT_URL = 'https://loganstaples--youre-on-sam3.us-east.modal.run';
 const TOKEN_FILE = join(homedir(), '.config', 'youre-on', 'sam3.env');
 
-const USAGE = `usage: npm run sam3-smoke -- --clip <video> [--prompt "water bottle"] [--frames 12]
-  [--url <endpoint>] [--save-frames <dir>] [--json <file>]
+const MAX_PROMPTS = 4;
+
+const USAGE = `usage: npm run sam3-smoke -- --clip <video> --prompt "<thing>" [--prompt ...] (1-${MAX_PROMPTS})
+  [--sampling uniform|judge] [--frames 12] [--url <endpoint>] [--save-frames <dir>] [--json <file>]
 Env: SAM3_URL, SAM3_API_TOKEN (else ${TOKEN_FILE}). Needs ffmpeg.`;
 
+type Box = [number, number, number, number];
 interface SamObject {
   id: number;
   score?: number;
-  box_xyxy: [number, number, number, number] | null;
+  box_xyxy: Box | null;
+  box_all_xyxy: Box | null;
+  components: number;
   mask_area: number;
+}
+interface TrackEnd {
+  index: number;
+  mask_area: number;
+  box_xyxy: Box;
+  aspect_h_over_w: number | null;
+}
+interface SamTrack {
+  id: number;
+  frames: number[];
+  missing: number[];
+  max_score: number;
+  first: TrackEnd;
+  last: TrackEnd;
+}
+interface SamResult {
+  prompt: string;
+  frames: { index: number; objects: SamObject[] }[];
+  tracks: SamTrack[];
+  timing_ms: Record<string, number>;
 }
 interface SamReply {
   model: string;
+  rev: string;
   gpu: string;
-  prompt: string;
-  frames: { index: number; objects: SamObject[] }[];
+  results: SamResult[];
   timing_ms: Record<string, number>;
   boot_ms: Record<string, number>;
 }
@@ -94,9 +124,16 @@ function pngSize(png: Buffer): { width: number; height: number } {
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
 
-function sample(clip: string, n: number, saveDir: string | null) {
+/** n instants spread evenly from the first frame to just before the end. */
+function uniformTimesMs(durationMs: number, n: number): number[] {
+  const last = Math.max(0, durationMs - 80); // a still at the very end can come back empty
+  return Array.from({ length: n }, (_, i) => Math.round(n === 1 ? 0 : (last * i) / (n - 1)));
+}
+
+function sample(clip: string, n: number, sampling: 'uniform' | 'judge', saveDir: string | null) {
   const duration_ms = durationMs(clip);
-  const times = judgeFrameTimesMs(duration_ms, n);
+  const times =
+    sampling === 'judge' ? judgeFrameTimesMs(duration_ms, n) : uniformTimesMs(duration_ms, n);
   const dir = mkdtempSync(join(tmpdir(), 'yo-sam3-'));
   try {
     const src = pngSize(still(clip, times.at(-1)!, null, join(dir, 'full.png')));
@@ -121,7 +158,8 @@ async function main() {
   const { values } = parseArgs({
     options: {
       clip: { type: 'string' },
-      prompt: { type: 'string', default: 'water bottle' },
+      prompt: { type: 'string', multiple: true },
+      sampling: { type: 'string', default: 'uniform' },
       frames: { type: 'string', default: String(JUDGE_FRAMES) },
       url: { type: 'string' },
       'save-frames': { type: 'string' },
@@ -129,25 +167,29 @@ async function main() {
       help: { type: 'boolean', short: 'h' },
     },
   });
-  if (values.help || !values.clip) {
+  const prompts = (values.prompt ?? []).map((p) => p.trim()).filter(Boolean);
+  if (values.help || !values.clip || prompts.length === 0 || prompts.length > MAX_PROMPTS) {
     console.log(USAGE);
     process.exit(values.help ? 0 : 1);
   }
+  if (values.sampling !== 'uniform' && values.sampling !== 'judge')
+    throw new Error(`--sampling must be uniform or judge, got ${values.sampling}`);
+  const sampling = values.sampling;
   const url = (values.url ?? process.env['SAM3_URL'] ?? DEFAULT_URL).replace(/\/$/, '');
-  const s = sample(values.clip, Number(values.frames), values['save-frames'] ?? null);
+  const s = sample(values.clip, Number(values.frames), sampling, values['save-frames'] ?? null);
   const kb = s.frames.reduce((a, f) => a + f.bytes.length, 0) / 1024;
   console.log(
     `clip ${values.clip}: ${s.duration_ms} ms, ${s.src.width}x${s.src.height} -> ${s.frames.length} frames ` +
       `at ${s.fit.width}x${s.fit.height} (${kb.toFixed(0)} KB total)`,
   );
-  console.log(`frame times (ms): ${s.frames.map((f) => f.t_ms).join(' ')}`);
+  console.log(`${sampling} sampling, frame times (ms): ${s.frames.map((f) => f.t_ms).join(' ')}`);
 
   const t0 = performance.now();
   const res = await fetch(`${url}/segment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
     body: JSON.stringify({
-      prompt: values.prompt,
+      prompts,
       frames: s.frames.map((f) => f.bytes.toString('base64')),
     }),
     signal: AbortSignal.timeout(600_000),
@@ -159,22 +201,36 @@ async function main() {
     );
   const r = (await res.json()) as SamReply;
 
-  console.log(`\n${r.model} on ${r.gpu}, prompt "${r.prompt}"`);
-  for (const f of r.frames) {
-    const objs = f.objects
-      .map(
-        (o) =>
-          `#${o.id} ${o.score?.toFixed(2) ?? '?'} box=${o.box_xyxy?.join(',') ?? '-'} area=${o.mask_area}`,
-      )
-      .join('  ');
-    console.log(
-      `  frame ${String(f.index).padStart(2)} @${String(s.frames[f.index]?.t_ms).padStart(5)} ms: ${objs || '(nothing)'}`,
-    );
+  console.log(`\n${r.model} on ${r.gpu} (rev ${r.rev})`);
+  const box = (b: Box | null) => (b ? b.join(',') : '-');
+  for (const res of r.results) {
+    console.log(`\nprompt "${res.prompt}"`);
+    for (const f of res.frames) {
+      const objs = f.objects
+        .map((o) => {
+          const blobs = o.components > 1 ? ` blobs=${o.components} all=${box(o.box_all_xyxy)}` : '';
+          return `#${o.id} ${o.score?.toFixed(2) ?? '?'} box=${box(o.box_xyxy)} area=${o.mask_area}${blobs}`;
+        })
+        .join('  ');
+      const t = String(s.frames[f.index]?.t_ms).padStart(5);
+      console.log(`  frame ${String(f.index).padStart(2)} @${t} ms: ${objs || '(nothing)'}`);
+    }
+    const found = res.frames.filter((f) => f.objects.some((o) => o.mask_area > 0)).length;
+    console.log(`  found on ${found}/${res.frames.length} frames; ${res.tracks.length} track(s):`);
+    for (const t of res.tracks) {
+      const end = (e: TrackEnd) =>
+        `frame ${e.index} box=${box(e.box_xyxy)} ${e.box_xyxy[2] - e.box_xyxy[0]}x${e.box_xyxy[3] - e.box_xyxy[1]} h/w=${e.aspect_h_over_w ?? '-'} area=${e.mask_area}`;
+      const gaps = t.missing.length ? ` missing ${t.missing.join(',')}` : '';
+      console.log(
+        `    #${t.id} frames ${t.frames[0]}-${t.frames.at(-1)}${gaps}, best ${t.max_score.toFixed(2)}`,
+      );
+      console.log(`       first: ${end(t.first)}`);
+      console.log(`       last:  ${end(t.last)}`);
+    }
+    console.log(`  timing (ms): ${JSON.stringify(res.timing_ms)}`);
   }
-  const found = r.frames.filter((f) => f.objects.some((o) => o.mask_area > 0)).length;
-  console.log(`\nfound on ${found}/${r.frames.length} frames`);
   console.log(
-    `server timing (ms): ${JSON.stringify(r.timing_ms)}  boot (ms): ${JSON.stringify(r.boot_ms)}`,
+    `\nserver total: ${r.timing_ms['total']} ms; boot (ms): ${JSON.stringify(r.boot_ms)}`,
   );
   console.log(`round trip: ${roundTrip} ms (includes any cold start and upload)`);
   if (values.json) writeFileSync(values.json, JSON.stringify(r, null, 2));
