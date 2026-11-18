@@ -122,9 +122,12 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
     ]) {
       expect(names, name).toContain(name);
     }
-    // Free Apple Personal Team signing: no aps-environment entitlement, so the
-    // expo-notifications config plugin stays out (APNs is on the cut line).
-    expect(names).not.toContain('expo-notifications');
+    // Free Apple Personal Team signing: no aps-environment entitlement (APNs is on the cut line;
+    // local notifications need none). Leaving the plugin out is NOT enough: prebuild applies
+    // expo-notifications automatically whenever it is installed, and its default adds
+    // aps-environment. Listing it with remote notifications off is what removes the entitlement
+    // (easConfig.test.ts checks the evaluated config).
+    expect(pluginOptions('expo-notifications')).toEqual({ enableRemoteNotifications: false });
     expect(new Set(names).size).toBe(names.length);
   });
 
