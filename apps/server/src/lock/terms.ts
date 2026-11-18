@@ -175,7 +175,10 @@ export async function persistEvaluation(
       };
 
     if (evaluation.kind === 'refused') {
-      const envs = await cancelRefused(tx, bet, evaluation.refusal, now, o.requestId);
+      // The voice judge already spoke the quip from the propose_terms reply: the cue only
+      // informs it (contextual update). Typed / demo refusals have it spoken.
+      const speak = o.source !== 'propose_terms';
+      const envs = await cancelRefused(tx, bet, evaluation.refusal, now, o.requestId, speak);
       return { res: { kind: 'refused' } as PersistResult, bet, envs };
     }
 
@@ -305,6 +308,7 @@ async function cancelRefused(
   refusal: GuardrailRefusal,
   now: number,
   requestId?: string,
+  speak = true,
 ): Promise<BetEventEnvelope[]> {
   const [row] = await tx
     .update(bets)
@@ -330,7 +334,14 @@ async function cancelRefused(
     await appendBetEvent(tx, {
       bet_id: bet.id,
       type: 'judge.cue',
-      payload: judgeCue('REFUSED', { category: refusal.category }, `Say: ${refusal.quip}`),
+      payload: speak
+        ? judgeCue('REFUSED', { category: refusal.category }, `Say: ${refusal.quip}`)
+        : judgeCue(
+            'REFUSED',
+            { category: refusal.category },
+            'You already said the refusal. Do not repeat it.',
+            false,
+          ),
       now,
     }),
   ];
