@@ -5,9 +5,10 @@
 //
 //   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>&demo=<DEMO_ADMIN_TOKEN>
 //
-// connects with no typing (config.ts); ?preview plays a sample bet with no server (preview.ts).
-// A ruled Gemini bet's evidence chain is fetched and re-checked here (verify.ts), and the
-// projector says whether it verified.
+// connects with no typing (config.ts); ?preview plays a sample bet with no server (preview.ts),
+// ?preview=gemini walks one Gemini bet (Beat 6) through its clock to Gemini's result
+// (preview-market.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
+// (verify.ts), and the projector says whether it verified.
 // Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, H help.
 import {
   useCallback,
@@ -50,6 +51,7 @@ import {
 import { seedBet } from './seed';
 import { fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
+import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import { settlementFetches, verifyEvidence, type Verification } from './verify';
 import {
@@ -302,9 +304,22 @@ export function App() {
   const { health, error: healthError } = useDemoHealth(live);
   const [previewStart] = useState(() => Date.now());
 
+  // ?preview=gemini: the Beat 6 sample, rebuilt once per slot (it replays every tick so far)
+  const marketPreview = launch.preview === MARKET_PREVIEW;
+  const marketSlot = marketPreview ? Math.floor(now / MARKET_PREVIEW_SLOT_MS) : 0;
+  const marketPv = useMemo(
+    () =>
+      marketPreview ? previewMarketState(previewStart, marketSlot * MARKET_PREVIEW_SLOT_MS) : null,
+    [marketPreview, previewStart, marketSlot],
+  );
   const pv = useMemo(
-    () => (launch.preview === null ? null : previewAt(previewStart, now, launch.preview || null)),
-    [launch.preview, previewStart, now],
+    () =>
+      launch.preview === null
+        ? null
+        : marketPv
+          ? { state: marketPv, now }
+          : previewAt(previewStart, now, launch.preview || null),
+    [launch.preview, marketPv, previewStart, now],
   );
   const shown = pv ? pv.state : state;
   const shownNow = pv ? pv.now : now;
