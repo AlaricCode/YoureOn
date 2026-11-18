@@ -95,7 +95,12 @@ describeDb('realtime over Postgres', () => {
     expect(e2.seq).toBe(2);
     expect(await b.next((f) => f.seq === 2)).toEqual(e2);
 
-    const rows = await ctx.deps.db.select().from(betEvents).where(eq(betEvents.bet_id, betId));
+    // ORDER BY: without it Postgres may return the rows in either order (a flaky failure).
+    const rows = await ctx.deps.db
+      .select()
+      .from(betEvents)
+      .where(eq(betEvents.bet_id, betId))
+      .orderBy(betEvents.seq);
     expect(rows.map((r) => [r.seq, r.type, r.source])).toEqual([
       [1, 'bet.invited', 'server'],
       [2, 'bet.state', 'server'],

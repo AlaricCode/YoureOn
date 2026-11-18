@@ -18,6 +18,7 @@ import { meRoutes } from './me/routes';
 import { demoRoutes } from './demo/routes';
 import { judgeRoutes } from './judge/routes';
 import { stageRoutes } from './stage/routes';
+import { stageStaticRoutes } from './stage/static';
 import { marketsRoutes } from './markets/routes';
 import { marketBetRoutes } from './markets/bet-routes';
 import { faceRoutes } from './face/routes';
@@ -41,4 +42,6 @@ export const routeModules: RouteModule[] = [
   marketsRoutes,
   marketBetRoutes,
   faceRoutes,
+  // GET / and /stage/*: the built projector page (apps/stage/dist), same-origin with the API.
+  stageStaticRoutes,
 ];

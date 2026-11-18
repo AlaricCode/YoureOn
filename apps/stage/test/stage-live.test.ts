@@ -4,7 +4,17 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { apiSessions, createDb, rooms, runMigrations, type DbHandle } from '@youre-on/db';
+import {
+  apiSessions,
+  attemptFrames,
+  attempts,
+  bets,
+  createDb,
+  rooms,
+  runMigrations,
+  users,
+  type DbHandle,
+} from '@youre-on/db';
 import {
   createDeps,
   loadEnv,
@@ -12,10 +22,29 @@ import {
   startServer,
   type RunningServer,
 } from '@youre-on/server';
-import { fetchBetSnapshot, fetchStageToken, StageConnection, type WsLike } from '../src/connection';
+import {
+  fetchBetSnapshot,
+  fetchFrame,
+  fetchStageToken,
+  openStageSession,
+  StageConnection,
+  type WsLike,
+} from '../src/connection';
+import { fetchDemoHealth, healthItems } from '../src/health';
 import { applyFrame, initialTicker, type TickerState } from '../src/ticker';
 
 const DB_URL = process.env.DATABASE_URL;
+const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+/** A fresh 32-byte key in base58 (a unique wallet_pubkey for the users rows). */
+function randomPubkey(): string {
+  let n = BigInt(`0x${randomBytes(32).toString('hex')}`);
+  let s = '';
+  while (n > 0n) {
+    s = B58[Number(n % 58n)]! + s;
+    n /= 58n;
+  }
+  return s;
+}
 const d = DB_URL ? describe : describe.skip;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -25,12 +54,19 @@ d('stage client <-> server /v1/ws (DB)', () => {
   let wsUrl: string;
   let base: string;
   const STAGE_KEY = 'stage-live-test-key';
+  const DEMO_ADMIN_TOKEN = 'stage-live-demo-token';
 
   beforeAll(async () => {
     await runMigrations(DB_URL!);
     db = createDb({ url: DB_URL!, max: 2 });
     const { deps } = createDeps({
-      env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: DB_URL, STAGE_KEY }),
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: DB_URL,
+        STAGE_KEY,
+        DEMO_MODE: 'true',
+        DEMO_ADMIN_TOKEN,
+      }),
       dbHandle: db,
       rateLimit: false,
     });
@@ -56,7 +92,7 @@ d('stage client <-> server /v1/ws (DB)', () => {
     });
     return token;
   }
-  async function newRoom() {
+  async function newRoomWithCode() {
     const code = Array.from(randomBytes(6), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join(
       '',
     );
@@ -64,8 +100,9 @@ d('stage client <-> server /v1/ws (DB)', () => {
       .insert(rooms)
       .values({ code, name: 'stage test' })
       .returning({ id: rooms.id });
-    return r!.id;
+    return { id: r!.id, code };
   }
+  const newRoom = async () => (await newRoomWithCode()).id;
   function connect(token: string, roomId: string) {
     let state: TickerState = initialTicker;
     const conn = new StageConnection({
@@ -109,6 +146,85 @@ d('stage client <-> server /v1/ws (DB)', () => {
     // a bet of another room (or none) is invisible to this stage token
     await expect(fetchBetSnapshot(base, token, randomUUID())).rejects.toThrow(/404/);
     c.conn.stop();
+  });
+
+  it('the room code from phone A opens a session for that room; the demo key reads the health strip', async () => {
+    const { id, code } = await newRoomWithCode();
+    const s = await openStageSession({
+      serverUrl: base,
+      roomId: code.toLowerCase(),
+      stageKey: STAGE_KEY,
+    });
+    expect(s.room_id).toBe(id);
+    expect(s.scopes).toEqual(['stage', 'demo']);
+    expect(s.lock_signer).toBe('phones'); // the test server's LOCK_SIGNER default
+    expect(Date.parse(s.expires_at!)).toBeGreaterThan(Date.now());
+    const c = connect(s.token, s.room_id);
+    await expect.poll(() => c.get().status, { timeout: 3000 }).toBe('open');
+    c.conn.stop();
+
+    // the stage's schema reads the server's real /v1/demo/health (no chain configured in tests)
+    const h = await fetchDemoHealth(base, DEMO_ADMIN_TOKEN);
+    expect(h.chain_configured).toBe(false);
+    expect(typeof h.db_ms).toBe('number');
+    expect(healthItems(h)[0]).toMatchObject({ key: 'sol', value: 'no chain', level: 'bad' });
+    await expect(fetchDemoHealth(base, 'wrong-key')).rejects.toThrow(/demo key or DEMO_MODE/);
+  });
+
+  it("the evidence JPEGs come through the server's frame route with the stage token", async () => {
+    const roomId = await newRoom();
+    const [a, b] = await db.db
+      .insert(users)
+      .values([
+        // bets_parties_attested: both parties active and attested 18+
+        ...['Logan', 'Jake'].map((display_name) => ({
+          display_name,
+          wallet_pubkey: randomPubkey(),
+          age_attested_18plus: true,
+          attested_at: new Date(),
+        })),
+      ])
+      .returning({ id: users.id });
+    const [bet] = await db.db
+      .insert(bets)
+      .values({
+        room_id: roomId,
+        party_a_id: a!.id,
+        party_b_id: b!.id,
+        mint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+      })
+      .returning({ id: bets.id });
+    const [att] = await db.db
+      .insert(attempts)
+      .values({
+        bet_id: bet!.id,
+        attempt_no: 1,
+        recorded_by_user_id: a!.id,
+        max_ms: 15_000,
+        go_at: new Date(),
+      })
+      .returning({ id: attempts.id });
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 7, 7, 0xff, 0xd9]);
+    await db.db.insert(attemptFrames).values({
+      attempt_id: att!.id,
+      idx: 0,
+      t_ms: 0,
+      sha256: createHash('sha256').update(jpeg).digest('hex'),
+      bytes: jpeg,
+    });
+    const token = await stageToken(roomId);
+    const blob = await fetchFrame(base, token, bet!.id, 1, 0);
+    expect(Buffer.from(await blob.arrayBuffer())).toEqual(jpeg);
+    expect(blob.type).toBe('image/jpeg');
+    await expect(fetchFrame(base, token, bet!.id, 1, 1)).rejects.toThrow('frame 1: HTTP 404');
+    // the snapshot of the same bet is readable too (the stage seeds its card from it)
+    await expect(fetchBetSnapshot(base, token, bet!.id)).resolves.toMatchObject({
+      party_a: { display_name: 'Logan' },
+      party_b: { display_name: 'Jake' },
+    });
+    // a stage token of another room sees nothing
+    const other = await stageToken(await newRoom());
+    await expect(fetchFrame(base, other, bet!.id, 1, 0)).rejects.toThrow('HTTP 404');
   });
 
   it('another room -> 4403, final (no reconnect); a bad token -> 4401, final', async () => {
