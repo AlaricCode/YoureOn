@@ -50,7 +50,9 @@ import { PREVIEW_HEALTH, previewAt } from './preview';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import {
   initialReplays,
+  liveBetInProgress,
   preloadReplays,
+  replayProgress,
   replaySrc,
   REPLAY_BEATS,
   type ReplayStatus,
@@ -171,7 +173,8 @@ function usePaidMoment(bet: BetView | null, now: number): boolean {
   return shown !== null && shown === key;
 }
 
-function useReplays(enabled: boolean): ReplayStatus {
+/** `hold.current`: a live beat is on, so the downloads wait (and one in flight is aborted). */
+function useReplays(enabled: boolean, hold: { readonly current: boolean }): ReplayStatus {
   const [s, setS] = useState<ReplayStatus>(initialReplays);
   useEffect(() => {
     if (!enabled || typeof fetch !== 'function' || typeof URL.createObjectURL !== 'function')
@@ -188,6 +191,7 @@ function useReplays(enabled: boolean): ReplayStatus {
           return u;
         },
         cancelled: () => cancelled,
+        paused: () => hold.current,
         onChange: (beat, state, url) =>
           setS((prev) => ({
             clips: { ...prev.clips, [beat]: state },
@@ -200,6 +204,7 @@ function useReplays(enabled: boolean): ReplayStatus {
       clearTimeout(t);
       for (const u of urls) URL.revokeObjectURL(u);
     };
+    // hold is a ref: reading it does not restart the download
   }, [enabled]);
   return s;
 }
@@ -242,6 +247,18 @@ function toggleFullscreen() {
   }
 }
 
+/** The connect form's REPLAY line: how many clips are in memory yet. */
+function ReplayLine({ replays, off }: { replays: ReplayStatus; off: boolean }) {
+  const p = replayProgress(replays);
+  if (off) return <p className="muted small">REPLAY clips: not preloaded (?nopreload)</p>;
+  return (
+    <p className={`small ${p.state === 'done' && p.ready === p.present ? 'good' : 'muted'}`}>
+      REPLAY clips: {p.ready}/{p.present} in memory
+      {p.state === 'loading' ? ' · downloading…' : p.state === 'done' ? '' : ' · waiting…'}
+    </p>
+  );
+}
+
 export function App() {
   const [launch] = useState(readLaunch);
   const [form, setForm] = useState<FormState>(() => initialForm(launch));
@@ -262,7 +279,10 @@ export function App() {
   const framesAsked = useRef(new Set<string>());
   const frameUrls = useRef<string[]>([]);
   const now = useNow(state.clockOffsetMs);
-  const replays = useReplays(!launch.noPreload);
+  // the REPLAY downloads hold while a live bet is on (the hotspot is the phones' first)
+  const holdReplays = useRef(false);
+  holdReplays.current = liveBetInProgress(state, now - (state.clockOffsetMs ?? 0));
+  const replays = useReplays(!launch.noPreload, holdReplays);
   const { health, error: healthError } = useDemoHealth(live);
   const [previewStart] = useState(() => Date.now());
 
@@ -663,6 +683,7 @@ export function App() {
               </p>
             )}
           </form>
+          <ReplayLine replays={replays} off={launch.noPreload} />
           <p className="muted small">
             Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}
             <a href="?preview">open the preview</a>

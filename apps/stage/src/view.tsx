@@ -42,7 +42,7 @@ import { marketView, type MarketView } from './market';
 import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from './phase';
 import { qrSvg } from './qr';
 import { healthItems, type DemoHealth, type HealthItem } from './health';
-import { BEAT_TITLES, presentCount, readyCount, type ReplayStatus } from './replays';
+import { BEAT_TITLES, replayProgress, type ReplayStatus } from './replays';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -1103,12 +1103,13 @@ export function HealthStrip({
   if (health) items.push(...healthItems(health));
   if (error) items.unshift({ key: 'err', label: 'Health', value: error, level: 'bad' });
   if (replays) {
-    const present = presentCount(replays);
-    const ready = readyCount(replays);
+    const { ready, present, state } = replayProgress(replays);
     items.push({
       key: 'replay',
       label: 'REPLAY',
-      value: `${ready}/${present} cached`,
+      value: `${ready}/${present} cached${
+        state === 'loading' ? ' · loading' : state === 'paused' ? ' · paused (live bet)' : ''
+      }`,
       level: present === 0 ? 'warn' : ready === present ? 'ok' : 'idle',
     });
   }
