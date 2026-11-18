@@ -281,7 +281,9 @@ export function NegotiateScreen({
   hasMic: boolean;
   micMuted: boolean;
   /** The proposed terms, once the judge reads them back; null while still negotiating. */
-  draft: Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> | null;
+  draft:
+    | (Pick<BetView, 'claim' | 'myStakeUsd' | 'theirStakeUsd'> & Partial<Pick<BetView, 'mySide'>>)
+    | null;
   /** Only on A's phone (only A sets the terms). */
   typed?: TypedTermsPanel | undefined;
   /** Only on A's phone, with the Gemini relay on: Beat 6. */
@@ -306,7 +308,9 @@ export function NegotiateScreen({
         {typing ? null : <DotsLabel text={t(COPY.negotiate.readBack)} variant="small" />}
       </View>
       <DataText variant="labelStrong">{draft.claim}</DataText>
-      <DataText muted>{`${draft.myStakeUsd} vs ${draft.theirStakeUsd}`}</DataText>
+      <DataText muted>
+        {`${draft.myStakeUsd} vs ${draft.theirStakeUsd}${draft.mySide ? ` · you ${draft.mySide}` : ''}`}
+      </DataText>
     </Card>
   ) : null;
 
