@@ -104,3 +104,76 @@ fee is committed and the nonce advance is not.
 These figures come from one local node with default 400 ms slots, so they show only the local
 slot time, not devnet. The < 2 s target (ESCROW §8.4) still needs the devnet re-run (TASKS §6.2
 "Budget" row, D3-L3).
+
+## 2026-11-18: live devnet
+
+The first numbers from the deployed stack: the server on Fly (`youre-on`, https://youre-on.fly.dev,
+one machine in `dfw`) with Neon Postgres, against the devnet escrow
+`BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp` (Config PDA
+`FYF8BZaszwttYxSsnXXdtf75YQUhAMwYDNK73eNzDoz`), deployed from `devnet-launch` at `edc3613`.
+Server config from `fly.toml`: `LLM_PROVIDER=live`, `ALLOW_SPEND=true`, `CACHED_RULING=false`,
+`JUDGE_MODEL` unset (default `claude-sonnet-5-5`). No QuickNode Stream yet (key pending), so the
+chain events reached the server through the `rpc_poll` fallback, over a non-QuickNode devnet RPC.
+No iPhone was involved: the iPhone build is pending. The numbers come from the team's live runs;
+their exact command lines are not recorded here. The driver for this path is
+`npm run cp1-drive -- --base-url https://youre-on.fly.dev --through paid [--gg]`.
+
+### Results
+
+| Measure                        | Result                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------- |
+| Soak                           | **10/10 runs passed**: 5 settled by `finalize`, 5 by GG (`concede`)                    |
+| Terms confirm → `LOCKED`       | **4.0–4.6 s** (n = 11; today's run 4,531 ms)                                           |
+| A full bet, end to end         | **18–28 s**: GG about 19 s; finalize about 26 s, which includes the 10 s appeal window |
+| Live ruling, Claude Sonnet 5.5 | **2.8–4.0 s** per attempt                                                              |
+| Timeout-refund keeper          | Settled a stranded bet on boot                                                         |
+
+- **Confirm → LOCKED is not the BRIEF §6 span.** It starts at the terms confirm, so it includes the
+  nonce lease, building and simulating the lock, both signatures, the send and the confirmation.
+  The BRIEF §6 target ("second on-phone authorization → lock confirmed < 2 s") needs a phone and is
+  still to be measured.
+- **Ruling.** The 2.8–4.0 s is the model call per attempt. The BRIEF §6 target (attempt → ruling
+  < 4 s) also counts the frame upload from the judge cam, which needs a phone and is not measured
+  here.
+
+### Sample transactions (Explorer, devnet)
+
+| What                               | Signature                                                                                                                                                                                                                            |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Atomic lock                        | [`3Dq7rQ9h1b1PdVEwfEsQzqT9C2Lc9GXz73zWbqG4eysTJ1bj3CTJyK3E5A4dDfYkKBoLAHWzQmFT51GwmXrHgU9q`](https://explorer.solana.com/tx/3Dq7rQ9h1b1PdVEwfEsQzqT9C2Lc9GXz73zWbqG4eysTJ1bj3CTJyK3E5A4dDfYkKBoLAHWzQmFT51GwmXrHgU9q?cluster=devnet) |
+| `resolve`                          | [`4LLGESFAjhRXZ79AgcCBvUuxB4fp91iduMRfshCRR1vAyHy1J637kkBUQBiwybJUgJ2vEx8EvNrCdFkbcTsKVvft`](https://explorer.solana.com/tx/4LLGESFAjhRXZ79AgcCBvUuxB4fp91iduMRfshCRR1vAyHy1J637kkBUQBiwybJUgJ2vEx8EvNrCdFkbcTsKVvft?cluster=devnet) |
+| `finalize`                         | [`3AzeFcB97yfdUWDeM4VCodbb7n8ktgo6MHkkxgJU27dt2vC9c53uscZdA85ZMgppc8fzEdfPncNaWrbPdGKUhUFg`](https://explorer.solana.com/tx/3AzeFcB97yfdUWDeM4VCodbb7n8ktgo6MHkkxgJU27dt2vC9c53uscZdA85ZMgppc8fzEdfPncNaWrbPdGKUhUFg?cluster=devnet) |
+| `timeout_refund` (keeper, on boot) | [`2dvcUpmFNiE76aRqRoGCUKrLTAYywAfFSkuZnkEQKP6CVyTVYnHMj53HXa2egLnY42U7sQqhgoLq5WqFC2JxmXzx`](https://explorer.solana.com/tx/2dvcUpmFNiE76aRqRoGCUKrLTAYywAfFSkuZnkEQKP6CVyTVYnHMj53HXa2egLnY42U7sQqhgoLq5WqFC2JxmXzx?cluster=devnet) |
+
+### Program build
+
+`programs/escrow/target/deploy/escrow.so` from the lead's `anchor build` has sha256
+`826f0874b350743c8f6fcd99f2bd57bc472b618e8a5846593fb26e9843b9e67a` (446,552 bytes), the same as
+the deployed program. Rebuilt from `edc3613` in a separate worktree with
+`cargo build-sbf --arch v3 --tools-version v1.57` (cargo-build-sbf 4.0.0, platform-tools v1.57,
+Rust 1.89.0, macOS arm64): the same sha256, byte for byte. With the defaults (`--arch v0`,
+platform-tools v1.53) the bytes differ, so pass both flags (`anchor build` does).
+
+### Test counts at `edc3613`
+
+| Suite                                                          | Count                                |
+| -------------------------------------------------------------- | ------------------------------------ |
+| Server (`npm test -w @youre-on/server`)                        | 658                                  |
+| Mobile (`npm test -w @youre-on/mobile`)                        | 827, 1 skipped                       |
+| Shared (`npm test -w @youre-on/shared`)                        | 259                                  |
+| Database (`npm test -w @youre-on/db`)                          | 26                                   |
+| Escrow, TS LiteSVM (`npm run test:escrow -w @youre-on/shared`) | 23, 1 skipped                        |
+| Escrow, Rust LiteSVM matrix (`cargo test`)                     | 167                                  |
+| Stage (`npm test -w @youre-on/stage`)                          | TBD: the stage suite is being merged |
+
+Re-run on branch `docs/submission` (at `edc3613`, local Postgres 17, the `escrow.so` above): server
+658, shared 259, db 26, escrow TS 23 + 1 skipped, Rust matrix 167, all green. Mobile gave 826 + 2
+skipped there, because that checkout has no face-model `.tflite` (gitignored; `scripts/face-model.sh`
+rebuilds it), so the model test skips too; with the model present it is 827 + 1 skipped.
+
+### Beat 6 (Gemini BTC 5-minute closer)
+
+> **TODO (Beat 6 live run):** not measured yet. Record a live Gemini round end to end on the deployed
+> server: quote → lock → `AWAITING_MARKET` → Gemini settles → `resolve` → GG or `finalize`, with the
+> contract ticker, the odds, expiry → settled, settled → `resolve` confirmed, and the Explorer links.
+> Driver: `npm run cp1-drive -- --base-url https://youre-on.fly.dev --market up --through paid [--gg]`.
