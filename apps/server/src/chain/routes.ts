@@ -125,20 +125,19 @@ export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
           d.log.warn('chain.name_hint_mismatch', { count: batch.hintMismatches });
 
         const deliveryId = deliveryIdOf(c, batch);
+        // block time (1 s resolution) -> webhook, for the newest block of the batch
+        let newestBlockS: number | null = null;
+        for (const e of batch.events)
+          if (e.block_time_s !== null && (newestBlockS === null || e.block_time_s > newestBlockS))
+            newestBlockS = e.block_time_s;
         try {
           const r = await ingestChainEvents(d, projector, batch.events, { deliveryId });
-          const blockTimes = batch.events
-            .map((e) => e.block_time_s)
-            .filter((t): t is number => t !== null);
           d.log.info('chain.delivery', {
             delivery_id: deliveryId,
             ...r,
             in_batch_duplicates: batch.duplicates,
             rejected: batch.rejected.length,
-            // block time (1 s resolution) -> webhook, the newest block of the batch
-            block_to_webhook_ms: blockTimes.length
-              ? d.now() - Math.max(...blockTimes) * 1000
-              : null,
+            block_to_webhook_ms: newestBlockS === null ? null : d.now() - newestBlockS * 1000,
           });
           return c.json(
             {

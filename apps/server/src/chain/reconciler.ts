@@ -6,19 +6,27 @@
 //
 // rpc_poll is a DEGRADED mode. The Stream stays the normal source: its copy stamps
 // chain_txs.stream_seen_at (then the tx is never polled), whichever copy arrives second is a
-// dedupe no-op, and every chain.* event says which source observed it (observed_via), so the
-// stage can tell them apart. Without a Stream at all (the QuickNode key is pending, a paused or
-// out-of-credits Stream) this keeps the projection (onchain_status, chain_ack, payouts, the
-// chain-wins reconcile of missed confirms) and the stage's chain ticker working.
+// dedupe no-op (a late Stream copy backfills the block position, ingest.ts), and every chain.*
+// event says which source observed it (observed_via), so the stage can tell them apart. Without a
+// Stream at all (the QuickNode key is pending, a paused or out-of-credits Stream) this keeps the
+// projection (onchain_status, chain_ack, payouts, the chain-wins reconcile of missed confirms) and
+// the stage's chain ticker working.
 //
-// Bounded: only server-sent txs (chain_txs with a signature, never nonce advances), sent between
-// STREAM_FALLBACK_MS and RPC_POLL_MAX_AGE_MS ago, with no chain_events row yet, at most
-// RPC_POLL_BATCH getTransaction calls per tick, and a per-signature backoff while one is not
-// found. Anything the server did not send (a permissionless finalize / timeout_refund by someone
-// else) only arrives through the Stream (or the startup sweep, which is not built yet).
+// Bounded: only server-sent txs (chain_txs with a signature and a sent_at, never nonce advances;
+// any status, since a lock marked expired / failed that landed after all is still ours), sent
+// between STREAM_FALLBACK_MS and RPC_POLL_MAX_AGE_MS ago, with no chain_events row yet, at most
+// RPC_POLL_BATCH getTransaction calls per tick, and a per-signature backoff (excluded in SQL, so
+// backed-off rows never starve newer ones). Anything the server did not send (a permissionless
+// finalize / timeout_refund by someone else) only arrives through the Stream (the startup sweep
+// over getSignaturesForAddress(bet_pda) is not built).
 //
 // Oldest first: each tx is its own delivery, and the projector fans a delivery out in arrival
 // order, so polling in send order keeps the chain.* events of one bet in chain order.
+//
+// Second pass, retryRejected: bets whose projection is parked ('projection_rejected' /
+// 'projector_failed': a CHECK, trigger or projector bug refused the bets write) are re-folded
+// every REFOLD_RETRY_MS, so a fix by hand or a redeploy completes them even when no later event
+// will ever arrive. A retry that is still rejected only logs (the first rejection was audited).
 import {
   and,
   asc,
@@ -30,14 +38,15 @@ import {
   lte,
   ne,
   notExists,
+  notInArray,
   sql,
 } from 'drizzle-orm';
 import { chainEvents, chainTxs } from '@youre-on/db';
 import { STREAM_FALLBACK_MS } from '@youre-on/shared/constants';
 import type { AppDeps } from '../context';
 import { eventAuthorityAddress } from './filter-config';
-import { ingestChainEvents } from './ingest';
-import { createChainProjector, type ChainProjector } from './projector';
+import { ingestChainEvents, publishFanout, refoldParkedInTx } from './ingest';
+import { APPLY_ERROR, createChainProjector, type ChainProjector } from './projector';
 import { eventsFromRpcTransaction } from './streams';
 import type { ChainRuntime } from './tx';
 
@@ -45,7 +54,11 @@ import type { ChainRuntime } from './tx';
 export const RPC_POLL_MAX_AGE_MS = 30 * 60_000;
 /** getTransaction calls per keeper tick. */
 export const RPC_POLL_BATCH = 10;
+/** How often one bet's rejected projection is retried. */
+export const REFOLD_RETRY_MS = 60_000;
 const BACKOFF_MAX_MS = 60_000;
+/** Bets re-folded per tick by retryRejected. */
+const REFOLD_BATCH = 5;
 
 export interface ReconcileResult {
   polled: number;
@@ -54,6 +67,8 @@ export interface ReconcileResult {
   published: number;
   /** getTransaction found nothing yet (still in flight, or never landed). */
   missing: number;
+  /** Bets whose parked projection was retried. */
+  refolded: number;
 }
 
 export interface StreamGapOptions {
@@ -61,12 +76,14 @@ export interface StreamGapOptions {
   fallbackMs?: number;
   maxAgeMs?: number;
   batch?: number;
+  refoldRetryMs?: number;
 }
 
 type Deps = Pick<AppDeps, 'db' | 'hub' | 'now' | 'log'>;
 
 export class StreamGapReconciler {
   private readonly backoff = new Map<string, { at: number; delay: number }>();
+  private readonly refoldAt = new Map<string, number>();
   private authority: Promise<string> | null = null;
   private readonly projector: ChainProjector;
 
@@ -85,15 +102,22 @@ export class StreamGapReconciler {
     this.backoff.set(sig, { at: nowMs + delay, delay });
   }
 
-  /** One pass. A no-op when the chain is not configured or the client cannot getTransaction. */
+  /** One pass: gap-fill from getTransaction, then retry parked projections. */
   async run(deps: Deps, rt: ChainRuntime | null, nowMs: number): Promise<ReconcileResult> {
-    const out: ReconcileResult = { polled: 0, ingested: 0, published: 0, missing: 0 };
+    const out: ReconcileResult = { polled: 0, ingested: 0, published: 0, missing: 0, refolded: 0 };
+    await this.fillGaps(deps, rt, nowMs, out);
+    out.refolded = await this.retryRejected(deps, nowMs);
+    return out;
+  }
+
+  private async fillGaps(deps: Deps, rt: ChainRuntime | null, nowMs: number, out: ReconcileResult) {
     const client = rt?.client;
-    if (!client?.transaction) return out;
+    if (!client?.transaction) return;
     const fallback = this.o.fallbackMs ?? STREAM_FALLBACK_MS;
     const maxAge = this.o.maxAgeMs ?? RPC_POLL_MAX_AGE_MS;
     const batch = this.o.batch ?? RPC_POLL_BATCH;
     for (const [sig, b] of this.backoff) if (b.at < nowMs - maxAge) this.backoff.delete(sig);
+    const waiting = [...this.backoff].filter(([, b]) => b.at > nowMs).map(([sig]) => sig);
 
     const rows = await deps.db
       .select({ signature: chainTxs.signature, kind: chainTxs.kind, bet_id: chainTxs.bet_id })
@@ -103,9 +127,9 @@ export class StreamGapReconciler {
           isNotNull(chainTxs.signature),
           isNull(chainTxs.stream_seen_at),
           ne(chainTxs.kind, 'nonce_advance'),
-          inArray(chainTxs.status, ['sent', 'confirmed']),
           lte(chainTxs.sent_at, new Date(nowMs - fallback)),
           gte(chainTxs.sent_at, new Date(nowMs - maxAge)),
+          waiting.length ? notInArray(chainTxs.signature, waiting) : undefined,
           notExists(
             deps.db
               .select({ one: sql`1` })
@@ -115,13 +139,10 @@ export class StreamGapReconciler {
         ),
       )
       .orderBy(asc(chainTxs.sent_at))
-      .limit(batch * 4);
+      .limit(batch);
 
     for (const r of rows) {
-      if (out.polled >= batch) break;
       const sig = r.signature!;
-      const b = this.backoff.get(sig);
-      if (b && b.at > nowMs) continue;
       out.polled++;
       try {
         const tx = await client.transaction(sig);
@@ -156,6 +177,43 @@ export class StreamGapReconciler {
         deps.log.warn('chain.rpc_poll_failed', { bet_id: r.bet_id, kind: r.kind, err });
       }
     }
-    return out;
+  }
+
+  /** Re-folds bets whose projection is parked as rejected / failed (see the header). */
+  async retryRejected(deps: Deps, nowMs: number): Promise<number> {
+    const every = this.o.refoldRetryMs ?? REFOLD_RETRY_MS;
+    const maxAge = this.o.maxAgeMs ?? RPC_POLL_MAX_AGE_MS;
+    for (const [bet, at] of this.refoldAt) if (at < nowMs - maxAge) this.refoldAt.delete(bet);
+    const waiting = [...this.refoldAt].filter(([, at]) => at > nowMs).map(([bet]) => bet);
+    const rows = await deps.db
+      .selectDistinct({ bet_id: chainEvents.bet_id })
+      .from(chainEvents)
+      .where(
+        and(
+          isNotNull(chainEvents.bet_id),
+          inArray(chainEvents.apply_error, [
+            APPLY_ERROR.projectionRejected,
+            APPLY_ERROR.projectorFailed,
+          ]),
+          gte(chainEvents.received_at, new Date(nowMs - maxAge)),
+          waiting.length ? notInArray(chainEvents.bet_id, waiting) : undefined,
+        ),
+      )
+      .limit(REFOLD_BATCH);
+    let n = 0;
+    for (const { bet_id } of rows) {
+      const betId = bet_id!;
+      this.refoldAt.set(betId, nowMs + every);
+      try {
+        const fan = await deps.db.transaction((tx) =>
+          refoldParkedInTx(tx, this.projector, [betId], nowMs, deps.log),
+        );
+        publishFanout(deps, fan);
+        n++;
+      } catch (err) {
+        deps.log.warn('chain.refold_failed', { bet_id: betId, err });
+      }
+    }
+    return n;
   }
 }

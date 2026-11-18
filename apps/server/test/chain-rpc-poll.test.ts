@@ -149,18 +149,40 @@ describe('eventsFromRpcTransaction = filter.js + parseStreamDelivery', () => {
           };
         },
       }),
+      getBlock: (slot: bigint, cfg: { transactionDetails: string; rewards: boolean }) => ({
+        send: async () => {
+          expect([slot, cfg.transactionDetails, cfg.rewards]).toEqual([
+            519_807_091n,
+            'none',
+            false,
+          ]);
+          if (blockGone) throw new Error('Block not available for slot');
+          return { blockHeight: 400_118_207n, blockTime: 1_795_284_425n };
+        },
+      }),
     };
+    let blockGone = false;
     const client = rpcChainClient('https://rpc.example', rpc as never);
     const got = (await client.transaction!(tx.transaction.signatures[0]!))!;
     expect(asked).toEqual([1, 0]);
-    expect(got).toEqual(asRpc(tx));
-    expect(eventsFromRpcTransaction(got, ea).events.map((e) => e.event_name)).toEqual([
-      'BetResolved',
-    ]);
+    expect(got).toEqual({ ...asRpc(tx), blockHeight: 400_118_207 });
+    // the rows carry the block height (attribution orders by it), not a tx index
+    expect(
+      eventsFromRpcTransaction(got, ea).events.map((e) => [
+        e.event_name,
+        e.block_height,
+        e.tx_index,
+        e.slot,
+      ]),
+    ).toEqual([['BetResolved', 400_118_207, null, 519_807_091]]);
+    // no block (pruned / skipped): still usable, just without a height
+    blockGone = true;
+    expect((await client.transaction!(tx.transaction.signatures[0]!))!.blockHeight).toBeNull();
+    blockGone = false;
     // remembered: the next call goes straight to 0
     reject1 = false;
     await client.transaction!(tx.transaction.signatures[0]!);
-    expect(asked).toEqual([1, 0, 0]);
+    expect(asked).toEqual([1, 0, 0, 0]);
     // any other RPC error is not swallowed
     const failing = rpcChainClient('https://rpc.example', {
       getTransaction: () => ({
@@ -170,7 +192,15 @@ describe('eventsFromRpcTransaction = filter.js + parseStreamDelivery', () => {
       }),
     } as never);
     await expect(failing.transaction!(randomSig())).rejects.toThrow(/fetch failed/);
-    expect(isTxVersionParamError(new Error('Invalid params: bad'))).toBe(true);
+    // only an invalid-params error about the version parameter downgrades the client
+    expect(isTxVersionParamError(new Error('Invalid params: bad signature'))).toBe(false);
+    expect(
+      isTxVersionParamError(
+        Object.assign(new Error('JSON-RPC error'), {
+          context: { __code: -32602, __serverMessage: 'invalid maxSupportedTransactionVersion' },
+        }),
+      ),
+    ).toBe(true);
     expect(isTxVersionParamError(new Error('429 Too Many Requests'))).toBe(false);
   });
 
