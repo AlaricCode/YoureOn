@@ -14,11 +14,11 @@ import { splitPot } from '@youre-on/shared/gemini';
 
 import { initialLock, lockReducer, type EndReason } from '../bets/lock';
 import { betView, myResult } from '../bets/view';
+import { importSafely } from '../app/importSafely';
 import { authorizeOwner } from '../device/authorize';
 import { feel } from '../device/feedback';
 import { createPreviewFaceApi } from '../enroll/api';
 import { createPreviewEmbedder } from '../enroll/embedder';
-import { detectFacesInPhoto } from '../face/native';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
 import {
   IncomingScreen,
@@ -97,7 +97,15 @@ const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
 
 export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const faceApi = useMemo(() => createPreviewFaceApi({ delayMs: 600 }), []);
-  const embedder = useMemo(() => createPreviewEmbedder(undefined, detectFacesInPhoto), []);
+  // The face natives load on first use: a static import made the whole preview fail to load
+  // in a build without the ML Kit detector (the simulator's); now only the capture step does.
+  const embedder = useMemo(
+    () =>
+      createPreviewEmbedder(undefined, (url) =>
+        importSafely(() => import('../face/native')).then((m) => m.detectFacesInPhoto(url)),
+      ),
+    [],
+  );
   const signupApi = useMemo(() => createPreviewSignupApi({ delayMs: 600 }), []);
 
   const [route, setRoute] = useState<Route>('menu');

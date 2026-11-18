@@ -87,6 +87,18 @@ describe('app start', () => {
     expect(files.filter((f) => f.endsWith('.tflite'))).toEqual([]);
   });
 
+  // The design preview (diagnostics > App preview) loads lazily, but as one module graph: a face
+  // native reached statically from it fails the whole preview, which is the only way to render
+  // the terms card, ruling, appeal and market screens without a real bet. The simulator build
+  // leaves the ML Kit detector out (react-native.config.js), so there it never loaded at all.
+  it('the design preview reaches none of the face natives statically either', () => {
+    const preview = bootGraph(join(APP_ROOT, 'src/preview/PreviewApp.tsx'));
+    const previewFiles = [...preview.files].map((f) => relative(APP_ROOT, f));
+    expect(previewFiles).toContain('src/screens/PlayScreens.tsx');
+    expect(FACE_NATIVE_PACKAGES.filter((p) => preview.packages.has(p))).toEqual([]);
+    expect(FACE_NATIVE_MODULES.filter((m) => previewFiles.includes(m))).toEqual([]);
+  });
+
   it('the walker does see a static import of the face natives', () => {
     // The check above would catch DemoApp importing src/face/native directly.
     expect(
