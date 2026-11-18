@@ -1,9 +1,14 @@
 // Stage laptop routes (API-CONTRACT §1.3 "Stage and demo", §2.14, §2.17):
-//   POST /v1/stage/session {stage_key, room_id} -> 201 StageSessionResponse (scope `stage`, plus
-//        `demo` when DEMO_MODE=true). 404 unless STAGE_KEY is configured. The key is compared in
-//        constant time; 10/min per client IP.
+//   POST /v1/stage/session {stage_key, room_id | room_code} -> 201 StageSessionResponse (scope
+//        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code phone A shows (or
+//        its QR payload). 404 unless STAGE_KEY is configured. The key is compared in constant
+//        time; 10/min per client IP. Also says who signs the lock (LOCK_SIGNER), so the
+//        projector words the signature slots truthfully ('server': custodial demo keys).
 //   GET  /v1/bets/:bet_id -> BetSnapshot, for a party of the bet or a stage session of its room
 //        (cold start / resync).
+//   GET  /v1/bets/:bet_id/attempts/:n/frames/:idx -> the evidence JPEG the judge was sent (the
+//        frames live in Postgres until object storage lands, so attempt.evidence carries no
+//        frame_urls); same readers as the snapshot. Immutable (content-addressed by sha256).
 // Also fans the Gemini relay's snapshots out as `stage.market` to every room that has a live
 // stage session (§3.1; ≤ 2/s: the relay polls every 2 s).
 import { timingSafeEqual } from 'node:crypto';
@@ -11,8 +16,16 @@ import type { Context } from 'hono';
 import type { HttpBindings } from '@hono/node-server';
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
-import { apiSessions, betEvents, bets, rooms, type Db } from '@youre-on/db';
-import { BetSnapshot } from '@youre-on/shared/api';
+import {
+  apiSessions,
+  attemptFrames,
+  attempts,
+  betEvents,
+  bets,
+  rooms,
+  type Db,
+} from '@youre-on/db';
+import { BetSnapshot, parseRoomCode } from '@youre-on/shared/api';
 import { AppealResult } from '@youre-on/shared/appeal';
 import { BetState } from '@youre-on/shared/bet-state';
 import { HearingRuling } from '@youre-on/shared/hearing';
@@ -34,16 +47,34 @@ export const STAGE_SESSION_BUCKET = { limit: 10, windowMs: 60_000 } as const;
 /** How long the list of stage rooms (for stage.market fan-out) is cached. */
 export const STAGE_ROOMS_TTL_MS = 15_000;
 
-export const StageSessionRequest = z.object({
-  stage_key: z.string().min(1).max(256),
-  room_id: Uuid,
-});
+/**
+ * Exactly one of `room_id` and `room_code`: the presenter can type the 6-char code phone A shows
+ * (or paste its youreon://room/ QR payload) instead of the room's uuid.
+ */
+export const StageSessionRequest = z
+  .object({
+    stage_key: z.string().min(1).max(256),
+    room_id: Uuid.optional(),
+    room_code: z.string().max(64).optional(),
+  })
+  .superRefine((b, ctx) => {
+    if ((b.room_id === undefined) === (b.room_code === undefined))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['room_id'],
+        message: 'exactly one of room_id, room_code',
+      });
+    else if (b.room_code !== undefined && parseRoomCode(b.room_code) === null)
+      ctx.addIssue({ code: 'custom', path: ['room_code'], message: 'not a room code' });
+  });
 export const StageSessionResponse = z.object({
   token: z.string(),
   session_id: Uuid,
   room_id: Uuid,
   scopes: z.array(z.enum(['stage', 'demo'])),
   expires_at: z.string(),
+  /** Additive: 'server' = the server signs the lock as demo-a / demo-b (lock/service.ts). */
+  lock_signer: z.enum(['phones', 'server']),
 });
 export type StageSessionResponse = z.infer<typeof StageSessionResponse>;
 
@@ -175,13 +206,14 @@ export const stageRoutes: RouteModule = {
       deps.rateLimit?.take('stage_session', clientIp(c), STAGE_SESSION_BUCKET);
       const body = await readBody(c, StageSessionRequest);
       if (!stageKeyMatches(body.stage_key, expected)) {
-        deps.log.warn('stage.session_denied', { room_id: body.room_id });
+        deps.log.warn('stage.session_denied', { room_id: body.room_id ?? null });
         throw new HttpError('AUTH_REQUIRED', 'Wrong stage key.');
       }
+      const code = body.room_code !== undefined ? parseRoomCode(body.room_code) : null;
       const [room] = await deps.db
         .select({ id: rooms.id })
         .from(rooms)
-        .where(eq(rooms.id, body.room_id))
+        .where(code !== null ? eq(rooms.code, code) : eq(rooms.id, body.room_id!))
         .limit(1);
       if (!room) throw new HttpError('NOT_FOUND', 'No such room.');
 
@@ -207,8 +239,57 @@ export const stageRoutes: RouteModule = {
         room_id: room.id,
         scopes,
         expires_at: expires_at.toISOString(),
+        lock_signer: deps.env.LOCK_SIGNER,
       };
       return c.json(out, 201);
+    });
+
+    app.use('/v1/bets/:bet_id/attempts/*', stageCors(deps.env));
+    app.get('/v1/bets/:bet_id/attempts/:n/frames/:idx', requireSession, async (c) => {
+      const id = BetId.safeParse(c.req.param('bet_id'));
+      if (!id.success) throw validationError(id.error);
+      const n = Number(c.req.param('n'));
+      const idx = Number(c.req.param('idx'));
+      if (
+        !Number.isInteger(n) ||
+        n < 1 ||
+        n > 32_767 ||
+        !Number.isInteger(idx) ||
+        idx < 0 ||
+        idx > 23
+      )
+        throw new HttpError('NOT_FOUND', 'No such frame.');
+      const [row] = await deps.db.select().from(bets).where(eq(bets.id, id.data)).limit(1);
+      if (!row || !canRead(c.get('auth'), row)) throw new HttpError('NOT_FOUND', 'No such bet.');
+      const [f] = await deps.db
+        .select({
+          bytes: attemptFrames.bytes,
+          sha256: attemptFrames.sha256,
+          mime: attemptFrames.mime,
+        })
+        .from(attemptFrames)
+        .innerJoin(attempts, eq(attempts.id, attemptFrames.attempt_id))
+        .where(
+          and(
+            eq(attempts.bet_id, id.data),
+            eq(attempts.attempt_no, n),
+            isNull(attempts.purged_at),
+            eq(attemptFrames.idx, idx),
+          ),
+        )
+        .limit(1);
+      if (!f) throw new HttpError('NOT_FOUND', 'No such frame.');
+      const headers = {
+        ETag: `"${f.sha256}"`,
+        'Cache-Control': 'private, max-age=86400, immutable',
+        'X-Content-Type-Options': 'nosniff',
+      };
+      if (c.req.header('if-none-match') === headers.ETag)
+        return new Response(null, { status: 304, headers });
+      return new Response(new Uint8Array(f.bytes), {
+        status: 200,
+        headers: { ...headers, 'Content-Type': f.mime, 'Content-Length': String(f.bytes.length) },
+      });
     });
 
     app.get('/v1/bets/:bet_id', requireSession, async (c) => {

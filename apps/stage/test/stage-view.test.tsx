@@ -13,11 +13,13 @@ import {
   applyFrame,
   emptyBet,
   explorerTx,
+  framesOf,
   initialTicker,
   type TickerAction,
   type TickerState,
 } from '../src/ticker';
 import { fetchBetSnapshot, fetchMarket, StageConnection, type WsLike } from '../src/connection';
+import { replayUrl } from '../src/replays';
 
 const vector = <T,>(name: string): T =>
   (
@@ -224,14 +226,21 @@ describe('bet card state', () => {
     expect(html).toContain('Logan');
     expect(html).toContain('Jake');
     expect(html).toContain('water bottle flip');
-    expect(html).toContain(b.terms_code!);
-    expect(html).toContain('Face ID');
-    expect(html).toContain('Passcode');
-    expect(html).toContain('1 tx · 3 signatures');
+    expect(html).toContain(`${b.terms_code!.slice(0, 4)}·${b.terms_code!.slice(4)}`);
+    expect(html).toContain('1 transaction · 3 signatures');
     expect(html).toContain(explorerTx(SIG_LOCK).replace(/&/g, '&amp;'));
     expect(html).toContain('Jake wins');
     expect(html).toContain('https://x.test/f5.jpg'); // the first cited frame
     expect(html).toContain('Appeal window 0:08');
+    expect(html).toContain('WINNER');
+
+    // while locking, each player shows how they authorized
+    const locking = renderToString(
+      <BetCard bet={run(fullBet().slice(0, 4)).bets[BET]!} now={now} />,
+    );
+    expect(locking).toContain('✓ <!-- -->Face ID');
+    expect(locking).toContain('✓ <!-- -->Passcode');
+    expect(locking).toContain('Locking both stakes in one transaction');
   });
 
   it('a REST snapshot seeds names / auth / lock on cold start; events still win', () => {
@@ -442,6 +451,285 @@ describe('bet card state', () => {
     expect(s.bets[BET]!.state).toBe('FINALIZED');
   });
 
+  it('evidence frames: fetched JPEGs fill in by index; a new attempt starts empty', () => {
+    seq = 0;
+    const evidence = {
+      schema_version: 1,
+      kind: 'camera',
+      bet_id: BET,
+      attempt_no: 2,
+      clip_sha256: '6d'.repeat(32),
+      clip_bytes: 1000,
+      mime: 'video/mp4',
+      duration_ms: 4000,
+      recorded_by: 'A',
+      recorded_at: '2026-11-21T18:06:00.000Z',
+      frames: [0, 1, 2].map((i) => ({ index: i, t_ms: i * 500, sha256: 'ab'.repeat(32) })),
+    };
+    let s = run([
+      ev('attempt.started', {
+        attempt_no: 2,
+        performer: 'B',
+        max_ms: 15000,
+        recorder_device_id: '00000000-0000-4000-8000-0000000000d1',
+        go_at: '2026-11-21T18:05:58.000Z',
+      }),
+      ev('attempt.evidence', { evidence, frame_urls: [] }),
+    ]);
+    const b = s.bets[BET]!;
+    expect(b.evidence).toEqual({ attempt_no: 2, frames: 3 });
+    expect(framesOf(s, b)).toEqual(['', '', '']);
+    s = applyFrame(s, { kind: 'frame_blob', bet_id: BET, attempt_no: 2, idx: 1, url: 'blob:f1' });
+    expect(framesOf(s, s.bets[BET]!)).toEqual(['', 'blob:f1', '']);
+    // a blob for another attempt is not shown for this one
+    s = applyFrame(s, { kind: 'frame_blob', bet_id: BET, attempt_no: 1, idx: 0, url: 'blob:old' });
+    expect(framesOf(s, s.bets[BET]!)).toEqual(['', 'blob:f1', '']);
+    const html = renderToString(<StageView state={s} now={0} />);
+    expect(html).toContain('src="blob:f1"');
+    expect(html.match(/class="loading"/g)).toHaveLength(2);
+    // server-sent frame_urls win
+    expect(framesOf(s, { ...s.bets[BET]!, frame_urls: ['https://x.test/a.jpg'] })).toEqual([
+      'https://x.test/a.jpg',
+    ]);
+    s = run(
+      [
+        ev('attempt.started', {
+          attempt_no: 3,
+          performer: 'B',
+          max_ms: 15000,
+          recorder_device_id: '00000000-0000-4000-8000-0000000000d1',
+          go_at: '2026-11-21T18:07:00.000Z',
+        }),
+      ],
+      s,
+    );
+    expect(s.bets[BET]!.evidence).toBeNull();
+    expect(framesOf(s, s.bets[BET]!)).toEqual([]);
+  });
+
+  it('Beat 5: hearing turns, the three panel votes as they land, and the appeal result', () => {
+    const hearing = '00000000-0000-4000-8000-0000000000e1';
+    const appeal = '00000000-0000-4000-8000-0000000000e2';
+    const vote = (
+      seat: number,
+      provider: string,
+      outcome: string,
+      confidence: number,
+      status = 'ok',
+    ) => ({
+      schema_version: 1,
+      appeal_id: appeal,
+      bet_id: BET,
+      seat,
+      provider,
+      model: `${provider}/m`,
+      status,
+      outcome,
+      confidence,
+      reason: status === 'ok' ? 'Lands upright.' : '',
+      counted_as: status === 'ok' && outcome !== 'REDO' ? outcome : 'ABSTAIN',
+      latency_ms: 2100,
+      created_at: '2026-11-21T18:08:00.000Z',
+    });
+    const votes = [
+      vote(0, 'anthropic', 'B_WINS', 0.9),
+      vote(1, 'openai', 'A_WINS', 0.7),
+      vote(2, 'google', 'REDO', 0, 'timeout'),
+    ];
+    const frames = [
+      ...fullBet(),
+      ev('hearing.opened', {
+        hearing_id: hearing,
+        trigger: 'contested',
+        order: ['A', 'B'],
+        turn_ms: 10000,
+      }),
+      ev('hearing.turn_open', {
+        hearing_id: hearing,
+        turn_index: 0,
+        party: 'A',
+        closes_at: '2026-11-21T18:07:30.000Z',
+      }),
+    ];
+    let s = run(frames);
+    expect(s.dropped).toBe(0);
+    expect(s.bets[BET]!.hearing).toEqual({
+      hearing_id: hearing,
+      open: { party: 'A', closes_at: '2026-11-21T18:07:30.000Z' },
+      turns: [],
+    });
+    s = run(
+      [
+        ev('hearing.turn', {
+          turn: {
+            schema_version: 1,
+            turn_id: '00000000-0000-4000-8000-0000000000e3',
+            hearing_id: hearing,
+            bet_id: BET,
+            turn_index: 0,
+            party: 'A',
+            started_at: '2026-11-21T18:07:20.000Z',
+            ended_at: '2026-11-21T18:07:30.000Z',
+            duration_ms: 10000,
+            transcript: 'It wobbled off the base!',
+            transcript_sha256: 'cd'.repeat(32),
+            stt: 'elevenlabs',
+          },
+        }),
+        ev('chain.BetAppealed', {
+          ...meta('2'.repeat(88)),
+          bet_id: BET,
+          appellant: PK.a,
+          original_outcome: 'PartyB',
+          appeal_resolve_deadline: 1795284800,
+          ts: 1795284440,
+        }),
+        ev('appeal.vote', { vote: votes[0] }),
+        ev('appeal.vote', { vote: votes[2] }),
+      ],
+      s,
+    );
+    expect(s.dropped).toBe(0);
+    const b = s.bets[BET]!;
+    expect(b.hearing?.open).toBeNull();
+    expect(b.hearing?.turns).toEqual([{ party: 'A', transcript: 'It wobbled off the base!' }]);
+    expect(b.appealed).toBe(true);
+    expect(b.votes.map((v) => [v.seat, v.counted_as])).toEqual([
+      [0, 'B_WINS'],
+      [2, 'ABSTAIN'],
+    ]);
+    let html = renderToString(<BetCard bet={b} now={0} />).replace(/<!-- -->/g, '');
+    expect(html).toContain('APPEAL · THREE-MODEL PANEL');
+    expect(html).toContain(
+      '<li class="vote cast"><span class="who">Claude</span><span class="what">Jake · 90%</span>',
+    );
+    expect(html).toContain(
+      '<li class="vote pending"><span class="who">Seat 2</span><span class="what">deliberating…</span>',
+    );
+    expect(html).toContain(
+      '<li class="vote abstain"><span class="who">Gemini</span><span class="what">abstains</span>',
+    );
+    s = run(
+      [
+        ev('appeal.vote', { vote: votes[1] }),
+        ev('appeal.result', {
+          result: {
+            schema_version: 1,
+            appeal_id: appeal,
+            bet_id: BET,
+            appellant: 'A',
+            original_outcome: 'B_WINS',
+            original_ruling_hash: 'ab'.repeat(32),
+            votes,
+            tally: { A_WINS: 1, B_WINS: 1, ABSTAIN: 1 },
+            final_outcome: 'B_WINS',
+            decided_by: 'upheld_no_majority',
+            flipped: false,
+            evidence_hash: '6d'.repeat(32),
+            frame_hashes: [],
+            terms_hash: envelope.terms_hash,
+            created_at: '2026-11-21T18:08:10.000Z',
+          },
+          ruling_hash: 'ef'.repeat(32),
+        }),
+      ],
+      s,
+    );
+    expect(s.dropped).toBe(0);
+    html = renderToString(<BetCard bet={s.bets[BET]!} now={0} />).replace(/<!-- -->/g, '');
+    expect(html).toContain('Ruling stands · Jake wins');
+    expect(html).toContain('(1-1, 1 abstain)');
+    expect(html).toContain('<span class="who">GPT</span><span class="what">Logan · 70%</span>');
+  });
+
+  it('a hearing in progress (contested REDO) shows whose turn it is and the clock', () => {
+    const b = {
+      ...emptyBet(BET),
+      state: 'HEARING',
+      names: { A: 'Logan', B: 'Jake' },
+      hearing: {
+        hearing_id: '00000000-0000-4000-8000-0000000000e1',
+        open: { party: 'B' as const, closes_at: '2026-11-21T18:07:30.000Z' },
+        turns: [{ party: 'A' as const, transcript: 'It wobbled!' }],
+      },
+    };
+    const html = renderToString(
+      <BetCard bet={b} now={Date.parse('2026-11-21T18:07:24.000Z')} />,
+    ).replace(/<!-- -->/g, '');
+    expect(html).toContain('HEARING · EACH SIDE ARGUES');
+    expect(html).toContain('Jake argues · <span class="countdown">0:06</span>');
+    expect(html).toContain('<b>Logan:</b> “It wobbled!”');
+  });
+
+  it('edge moments: declined, offline, lock failed, cancelled, refund', () => {
+    const base = { ...emptyBet(BET), names: { A: 'Logan', B: 'Jake' } };
+    const t = (b: typeof base, presence: Record<string, boolean> | null = null) =>
+      renderToString(<BetCard bet={b} now={0} presence={presence} />).replace(/<!-- -->/g, '');
+    expect(t({ ...base, invite: 'declined' })).toContain('Jake declined.');
+    const ids = {
+      A: '00000000-0000-4000-8000-0000000000a1',
+      B: '00000000-0000-4000-8000-0000000000b1',
+    };
+    const offline = t({ ...base, user_ids: ids }, { [ids.A]: true, [ids.B]: false });
+    expect(offline).toContain('<span class="status bad">offline</span>');
+    expect(offline).toContain('<span class="status muted">online</span>');
+    const failed = t({
+      ...base,
+      state: 'AWAITING_LOCK',
+      lock: {
+        kind: 'atomic_lock',
+        signature: '',
+        signers: 3,
+        status: 'failed',
+        onchain: false,
+        slot: null,
+        error: 'BlockhashNotFound',
+        sent_at: null,
+        onchain_at: null,
+      },
+    });
+    expect(failed).toContain('The lock didn&#x27;t go through');
+    expect(failed).toContain('Couldn&#x27;t lock it. Nothing moved.');
+    expect(failed).toContain('failed: BlockhashNotFound');
+    const cancelled = t({ ...base, state: 'CANCELLED', auth_count: 1 });
+    expect(cancelled).toContain('<p class="big bad">Cancelled</p>');
+    const refund = t({
+      ...base,
+      state: 'VOIDED',
+      payout: { to_a: '5000000', to_b: '5000000', event: 'BetRefunded', signature: '3'.repeat(88) },
+    });
+    expect(refund).toContain('REFUNDED');
+    expect(refund).toContain('Logan</span><span class="amt">+$5');
+  });
+
+  it('captions: the judge (partial, then final) and the players (party.line)', () => {
+    seq = 0;
+    const u = '00000000-0000-4000-8000-0000000000c1';
+    let s = run([ev('judge.line', { utterance_id: u, text: 'Jake, does the cap', final: false })]);
+    expect(s.bets[BET]!.caption).toMatchObject({ speaker: 'judge', final: false });
+    expect(s.bets[BET]!.last_judge_line).toBeNull();
+    s = run(
+      [ev('judge.line', { utterance_id: u, text: 'Jake, does the cap count?', final: true })],
+      s,
+    );
+    expect(s.bets[BET]!.caption).toMatchObject({ text: 'Jake, does the cap count?', final: true });
+    expect(s.bets[BET]!.last_judge_line).toBe('Jake, does the cap count?');
+    s = run(
+      [
+        ev('party.line', {
+          party: 'B',
+          utterance_id: u.replace('c1', 'c2'),
+          text: 'Nope.',
+          final: true,
+        }),
+      ],
+      s,
+    );
+    expect(s.bets[BET]!.caption).toMatchObject({ speaker: 'B', text: 'Nope.' });
+    const html = renderToString(<BetCard bet={s.bets[BET]!} now={0} />);
+    expect(html).toContain('<span class="label player">Player B</span> <!-- -->Nope.');
+  });
+
   it('tx.failed on the lock shows the error; market.tick does not steal the focus', () => {
     seq = 0;
     let s = run([
@@ -453,9 +741,11 @@ describe('bet card state', () => {
       signers: 3,
     });
     const other = '0b8e5d2c-9a41-4f37-b6e2-5c1d0a9f8e73';
+    const before = s.events.length;
     s = applyFrame(s, frame({ ...ev('market.tick', { snapshot: snap() }), bet_id: other }));
     expect(s.focusBetId).toBe(BET);
-    expect(s.events.at(-1)?.type).toBe('market.tick');
+    expect(s.events).toHaveLength(before); // not a ticker row
+    expect(s.bets[other]).toBeDefined(); // but the bet is known (the App seeds it)
   });
 });
 
@@ -490,7 +780,7 @@ describe('odds widget', () => {
     expect(html).toContain('$64,389.60');
     expect(html).toContain('$64,379.76');
     expect(html).toContain('2:49');
-    expect(html).toContain('Up <!-- -->$6.10');
+    expect(html.replace(/<!-- -->/g, '')).toContain('Up $6.10 · Down $3.90');
     expect(html).toContain('fair stakes');
   });
 
@@ -534,14 +824,15 @@ describe('stage layout', () => {
     const html = renderToString(<StageView state={s} now={T} />);
     expect(html).toContain('Logan');
     expect(html).toContain('BTC 5-min');
-    expect(html).toContain('chain.BetResolved');
+    expect(html).toContain('<code>BetResolved</code>');
     expect(html).toContain(explorerTx(SIG_RESOLVE).replace(/&/g, '&amp;'));
   });
 
   it('REPLAY overlay is labelled and points at public/replay/beat{n}.mp4', () => {
-    const html = renderToString(<ReplayOverlay beat={3} onClose={() => {}} />);
-    expect(html).toContain('REPLAY · beat <!-- -->3');
-    expect(html).toContain('/replay/beat3.mp4');
+    const html = renderToString(<ReplayOverlay beat={3} src={replayUrl(3)} onClose={() => {}} />);
+    expect(html.replace(/<!-- -->/g, '')).toContain('REPLAY · Beat 3 · Lock it in');
+    expect(html).toContain('src="/replay/beat3.mp4"');
+    expect(replayUrl(3, '/stage/')).toBe('/stage/replay/beat3.mp4');
   });
 
   it('helpers', () => {
