@@ -31,6 +31,7 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
   type Address,
+  type Base58EncodedBytes,
   type Base64EncodedWireTransaction,
   type Blockhash,
   type Instruction,
@@ -106,6 +107,22 @@ export interface ChainClient {
   /** Sum of every token account of `owner` for `mint` (API-CONTRACT §2.14). */
   tokenBalanceByOwner(owner: Address, mint: Address): Promise<bigint>;
   lamports(addr: Address): Promise<bigint>;
+  /**
+   * getProgramAccounts with memcmp filters (base58 bytes), at `confirmed`. Optional: the orphan
+   * escrow sweep (src/payout/refund.ts) skips itself when the client cannot list accounts.
+   */
+  programAccounts?(
+    program: Address,
+    filters: readonly MemcmpFilter[],
+  ): Promise<Array<{ address: Address; account: RawAccount }>>;
+  /** p50 / p95 / errors over the last N calls (GET /v1/demo/health); absent on bare fakes. */
+  rpcStats?(): RpcStatsSnapshot;
+}
+
+/** A getProgramAccounts memcmp filter: `bytes` is base58. */
+export interface MemcmpFilter {
+  offset: number;
+  bytes: string;
 }
 
 /** The RPC rejected the tx at preflight (nothing landed, no fee). */
@@ -156,39 +173,262 @@ function preflightDetails(e: unknown): { err: unknown; logs: string[] } | null {
   return null;
 }
 
-/** HTTP statuses worth retrying: rate limits (devnet public RPC, QuickNode plan caps) and 5xx. */
-export function isRetriableRpcError(e: unknown): boolean {
-  if (!isSolanaError(e, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)) return false;
-  const status = e.context.statusCode;
-  return status === 429 || status >= 500;
+/** One RPC attempt took longer than its per-attempt budget (the transport aborted it). */
+export class RpcTimeoutError extends Error {
+  constructor(
+    readonly method: string,
+    readonly ms: number,
+    options?: { cause?: unknown },
+  ) {
+    super(`RPC ${method} timed out after ${ms} ms`, options);
+    this.name = 'RpcTimeoutError';
+  }
 }
+
+/** Node / undici socket-level failures: the request may not have reached the RPC at all. */
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CLOSED',
+]);
+
+/** A fetch-level network failure (`TypeError: fetch failed` with a socket code in its cause chain). */
+export function isNetworkError(e: unknown): boolean {
+  for (let cur: unknown = e, depth = 0; cur && depth < 5; depth++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string' && NETWORK_ERROR_CODES.has(code)) return true;
+    if (cur instanceof TypeError && cur.message === 'fetch failed') return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Worth retrying: rate limits (devnet public RPC, QuickNode plan caps), 408 / 5xx, a per-attempt
+ * timeout, or a socket-level failure. JSON-RPC errors (a preflight rejection, a bad param) come
+ * back as HTTP 200 and never reach this check, so they are never retried.
+ */
+export function isRetriableRpcError(e: unknown): boolean {
+  if (e instanceof RpcTimeoutError) return true;
+  if (isSolanaError(e, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)) {
+    const status = e.context.statusCode;
+    return status === 429 || status === 408 || status >= 500;
+  }
+  return isNetworkError(e);
+}
+
+/** Per-attempt RPC timeout (a hung socket must not stall a sweep or a confirm loop). */
+export const RPC_ATTEMPT_TIMEOUT_MS = 10_000;
+/** Total time one logical RPC request may take, retries and backoff included. */
+export const RPC_REQUEST_BUDGET_MS = 25_000;
 
 export interface RetryOptions {
   /** Total tries per request (default 6: about 0.25 + 0.5 + 1 + 2 + 4 s of backoff). */
   attempts?: number;
   baseMs?: number;
+  /** Per-attempt timeout (default RPC_ATTEMPT_TIMEOUT_MS); 0 disables it. */
+  timeoutMs?: number;
+  /** No new attempt starts once this much time has passed (default RPC_REQUEST_BUDGET_MS). */
+  budgetMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** Records every logical request (method, total ms, ok) for GET /v1/demo/health. */
+  stats?: RpcStats;
+}
+
+/** The JSON-RPC method of a transport payload ('?' when the payload has none, e.g. a batch). */
+function methodOf(payload: unknown): string {
+  const m = (payload as { method?: unknown } | null)?.method;
+  return typeof m === 'string' ? m : '?';
+}
+
+/** One attempt with a timeout signal merged into the caller's (an abort by the caller wins). */
+async function attemptWithTimeout(
+  inner: RpcTransport,
+  config: Parameters<RpcTransport>[0],
+  timeoutMs: number,
+) {
+  if (timeoutMs <= 0) return inner(config);
+  const timer = AbortSignal.timeout(timeoutMs);
+  const signal = config.signal ? AbortSignal.any([config.signal, timer]) : timer;
+  try {
+    return await inner({ ...config, signal });
+  } catch (e) {
+    if (timer.aborted && !config.signal?.aborted)
+      throw new RpcTimeoutError(methodOf(config.payload), timeoutMs, { cause: e });
+    throw e;
+  }
 }
 
 /**
- * Wraps an RPC transport so a 429 / 5xx is retried with exponential backoff and jitter. Safe for
- * every call the server makes: reads are idempotent, and sendTransaction re-sends the same signed
- * bytes (same signature), so a retry can never double-spend.
+ * Wraps an RPC transport so each attempt has a timeout and a retriable failure (429 / 408 / 5xx,
+ * timeout, socket error) is retried with exponential backoff and jitter, within a total budget.
+ * Safe for every call the server makes: reads are idempotent, and sendTransaction re-sends the
+ * same signed bytes (same signature), so a retry can never double-spend.
  */
 export function withRpcRetry(inner: RpcTransport, o: RetryOptions = {}): RpcTransport {
   const attempts = o.attempts ?? 6;
   const baseMs = o.baseMs ?? 250;
+  const timeoutMs = o.timeoutMs ?? RPC_ATTEMPT_TIMEOUT_MS;
+  const budgetMs = o.budgetMs ?? RPC_REQUEST_BUDGET_MS;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const now = o.now ?? Date.now;
   return (async (config: Parameters<RpcTransport>[0]) => {
+    const t0 = now();
+    const method = methodOf(config.payload);
     for (let i = 0; ; i++) {
       try {
-        return await inner(config);
+        const res = await attemptWithTimeout(inner, config, timeoutMs);
+        o.stats?.record({ method, ms: now() - t0, ok: true, attempts: i + 1, at: now() });
+        return res;
       } catch (e) {
-        if (i >= attempts - 1 || !isRetriableRpcError(e)) throw e;
-        await sleep(baseMs * 2 ** i + Math.floor(Math.random() * baseMs));
+        const backoff = baseMs * 2 ** i + Math.floor(Math.random() * baseMs);
+        const giveUp =
+          i >= attempts - 1 ||
+          !isRetriableRpcError(e) ||
+          config.signal?.aborted ||
+          now() - t0 + backoff > budgetMs;
+        if (giveUp) {
+          o.stats?.record({
+            method,
+            ms: now() - t0,
+            ok: false,
+            attempts: i + 1,
+            at: now(),
+            error: rpcErrorText(e),
+          });
+          throw e;
+        }
+        await sleep(backoff);
       }
     }
   }) as RpcTransport;
+}
+
+/** A short, token-free description of an RPC failure (never the URL). */
+export function rpcErrorText(e: unknown): string {
+  if (isSolanaError(e, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR))
+    return `HTTP ${e.context.statusCode}`;
+  if (e instanceof RpcTimeoutError) return e.message;
+  if (isNetworkError(e)) {
+    for (let cur: unknown = e, d = 0; cur && d < 5; d++) {
+      const code = (cur as { code?: unknown }).code;
+      if (typeof code === 'string') return `network ${code}`;
+      cur = (cur as { cause?: unknown }).cause;
+    }
+    return 'network error';
+  }
+  return String((e as Error)?.message ?? e)
+    .replace(/https?:\/\/\S+/g, '<url>')
+    .slice(0, 120);
+}
+
+// ---------------------------------------------------------------------------------------------
+// RPC call statistics (GET /v1/demo/health: p50 / p95 over the last N calls)
+
+export interface RpcCallSample {
+  method: string;
+  /** Total wall time of the logical request, retries and backoff included. */
+  ms: number;
+  ok: boolean;
+  attempts: number;
+  /** ms epoch when it finished. */
+  at: number;
+  error?: string;
+}
+
+export interface RpcStatsSnapshot {
+  /** Samples in the window (at most `size`). */
+  calls: number;
+  /** Every request since boot. */
+  total: number;
+  errors: number;
+  /** Requests that needed more than one attempt (in the window). */
+  retried: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  max_ms: number | null;
+  last_error: { at: string; method: string; error: string } | null;
+  /** The slowest methods in the window, by p95. */
+  by_method: Array<{ method: string; calls: number; errors: number; p95_ms: number }>;
+}
+
+/** Nearest-rank percentile of an ascending array (p in [0, 1]). */
+export function percentile(sorted: readonly number[], p: number): number | null {
+  if (!sorted.length) return null;
+  const rank = Math.min(sorted.length, Math.max(1, Math.ceil(p * sorted.length)));
+  return sorted[rank - 1]!;
+}
+
+/** A ring buffer of the last `size` RPC requests. */
+export class RpcStats {
+  private readonly ring: RpcCallSample[] = [];
+  private next = 0;
+  private totalCalls = 0;
+  private lastError: RpcCallSample | null = null;
+  constructor(readonly size = 200) {}
+
+  record(s: RpcCallSample): void {
+    this.totalCalls++;
+    if (!s.ok) this.lastError = s;
+    if (this.ring.length < this.size) this.ring.push(s);
+    else this.ring[this.next] = s;
+    this.next = (this.next + 1) % this.size;
+  }
+
+  snapshot(): RpcStatsSnapshot {
+    const ms = this.ring.map((s) => s.ms).sort((a, b) => a - b);
+    const per = new Map<string, { ms: number[]; errors: number }>();
+    for (const s of this.ring) {
+      const m = per.get(s.method) ?? { ms: [], errors: 0 };
+      m.ms.push(s.ms);
+      if (!s.ok) m.errors++;
+      per.set(s.method, m);
+    }
+    const by_method = [...per.entries()]
+      .map(([method, m]) => ({
+        method,
+        calls: m.ms.length,
+        errors: m.errors,
+        p95_ms: Math.round(
+          percentile(
+            [...m.ms].sort((a, b) => a - b),
+            0.95,
+          ) ?? 0,
+        ),
+      }))
+      .sort((a, b) => b.p95_ms - a.p95_ms)
+      .slice(0, 6);
+    const round = (v: number | null) => (v === null ? null : Math.round(v));
+    return {
+      calls: this.ring.length,
+      total: this.totalCalls,
+      errors: this.ring.filter((s) => !s.ok).length,
+      retried: this.ring.filter((s) => s.attempts > 1).length,
+      p50_ms: round(percentile(ms, 0.5)),
+      p95_ms: round(percentile(ms, 0.95)),
+      max_ms: round(ms.at(-1) ?? null),
+      last_error: this.lastError
+        ? {
+            at: new Date(this.lastError.at).toISOString(),
+            method: this.lastError.method,
+            error: this.lastError.error ?? 'error',
+          }
+        : null,
+      by_method,
+    };
+  }
 }
 
 /** createSolanaRpc with the retrying transport. */
@@ -196,16 +436,105 @@ export function createRetryingSolanaRpc(url: string, o?: RetryOptions): Rpc<Sola
   return createSolanaRpcFromTransport(withRpcRetry(createDefaultRpcTransport({ url }), o));
 }
 
+/**
+ * Wraps a ChainClient so every call is timed into `stats` (any client: the RPC one, LiteSVM in
+ * tests). The RPC client records at the transport instead (per JSON-RPC method), so
+ * chainRuntimeFromEnv does not double-wrap it.
+ */
+export function instrumentChainClient(
+  client: ChainClient,
+  stats: RpcStats,
+  now: () => number = Date.now,
+): ChainClient {
+  const timed =
+    <A extends unknown[], R>(method: string, fn: (...a: A) => Promise<R>) =>
+    async (...a: A): Promise<R> => {
+      const t0 = now();
+      try {
+        const r = await fn(...a);
+        stats.record({ method, ms: now() - t0, ok: true, attempts: 1, at: now() });
+        return r;
+      } catch (e) {
+        // A preflight rejection is an answer, not an RPC failure.
+        const ok = e instanceof PreflightError;
+        stats.record({
+          method,
+          ms: now() - t0,
+          ok,
+          attempts: 1,
+          at: now(),
+          ...(ok ? {} : { error: rpcErrorText(e) }),
+        });
+        throw e;
+      }
+    };
+  const c = client;
+  return {
+    ...c,
+    label: c.label,
+    assertSafeCluster: timed('getGenesisHash', () => c.assertSafeCluster()),
+    latestBlockhash: timed('getLatestBlockhash', () => c.latestBlockhash()),
+    simulate: timed('simulateTransaction', (w: Base64EncodedWireTransaction, r: boolean) =>
+      c.simulate(w, r),
+    ),
+    send: timed('sendTransaction', (w: Base64EncodedWireTransaction, s: boolean) => c.send(w, s)),
+    signatureStatus: timed('getSignatureStatuses', (sig: string, o?: { searchHistory?: boolean }) =>
+      c.signatureStatus(sig, o),
+    ),
+    blockHeight: timed('getBlockHeight', () => c.blockHeight()),
+    getAccount: timed('getAccountInfo', (a: Address) => c.getAccount(a)),
+    tokenBalanceByOwner: timed('getTokenAccountsByOwner', (o: Address, m: Address) =>
+      c.tokenBalanceByOwner(o, m),
+    ),
+    lamports: timed('getBalance', (a: Address) => c.lamports(a)),
+    ...(c.programAccounts
+      ? {
+          programAccounts: timed('getProgramAccounts', (p: Address, f: readonly MemcmpFilter[]) =>
+            c.programAccounts!(p, f),
+          ),
+        }
+      : {}),
+    rpcStats: () => stats.snapshot(),
+  };
+}
+
 /** The real client over a kit RPC (QuickNode devnet in production, a local validator in e2e). */
 export function rpcChainClient(
   url: string,
-  rpc: Rpc<SolanaRpcApi> = createRetryingSolanaRpc(url),
+  rpc?: Rpc<SolanaRpcApi>,
+  stats: RpcStats = new RpcStats(),
 ): ChainClient {
+  rpc ??= createRetryingSolanaRpc(url, { stats });
+  const kit = rpc;
   let cluster: Promise<'devnet' | 'localnet'> | null = null;
   return {
     label: redactUrl(url),
+    rpcStats: () => stats.snapshot(),
+    async programAccounts(program, filters) {
+      const res = await kit
+        .getProgramAccounts(program, {
+          commitment: 'confirmed',
+          encoding: 'base64',
+          filters: filters.map((f) => ({
+            memcmp: {
+              offset: BigInt(f.offset),
+              bytes: f.bytes as Base58EncodedBytes,
+              encoding: 'base58' as const,
+            },
+          })),
+        })
+        .send();
+      return res.map((r) => ({
+        address: r.pubkey,
+        account: {
+          owner: r.account.owner,
+          lamports: r.account.lamports,
+          data: new Uint8Array(getBase64Encoder().encode(r.account.data[0])),
+        },
+      }));
+    },
     assertSafeCluster() {
-      cluster ??= rpc
+      cluster ??= kit
         .getGenesisHash()
         .send()
         .then((g) => {
@@ -216,11 +545,11 @@ export function rpcChainClient(
       return cluster;
     },
     async latestBlockhash() {
-      const { value } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
+      const { value } = await kit.getLatestBlockhash({ commitment: 'confirmed' }).send();
       return { blockhash: value.blockhash, lastValidBlockHeight: value.lastValidBlockHeight };
     },
     async simulate(wire, replaceRecentBlockhash) {
-      const { value } = await rpc
+      const { value } = await kit
         .simulateTransaction(wire, {
           encoding: 'base64',
           sigVerify: false,
@@ -232,7 +561,7 @@ export function rpcChainClient(
     },
     async send(wire, skipPreflight) {
       try {
-        await rpc
+        await kit
           .sendTransaction(
             wire,
             skipPreflight
@@ -247,7 +576,7 @@ export function rpcChainClient(
       }
     },
     async signatureStatus(sig, o) {
-      const { value } = await rpc
+      const { value } = await kit
         .getSignatureStatuses(
           [sig as Signature],
           o?.searchHistory ? { searchTransactionHistory: true } : undefined,
@@ -257,10 +586,10 @@ export function rpcChainClient(
       return st ? { err: st.err, confirmationStatus: st.confirmationStatus, slot: st.slot } : null;
     },
     async blockHeight() {
-      return rpc.getBlockHeight({ commitment: 'confirmed' }).send();
+      return kit.getBlockHeight({ commitment: 'confirmed' }).send();
     },
     async getAccount(addr) {
-      const { value } = await rpc
+      const { value } = await kit
         .getAccountInfo(addr, { commitment: 'confirmed', encoding: 'base64' })
         .send();
       if (!value) return null;
@@ -271,7 +600,7 @@ export function rpcChainClient(
       };
     },
     async tokenBalanceByOwner(owner, mint) {
-      const { value } = await rpc
+      const { value } = await kit
         .getTokenAccountsByOwner(
           owner,
           { mint },
@@ -288,7 +617,7 @@ export function rpcChainClient(
       return sum;
     },
     async lamports(addr) {
-      const { value } = await rpc.getBalance(addr, { commitment: 'confirmed' }).send();
+      const { value } = await kit.getBalance(addr, { commitment: 'confirmed' }).send();
       return value;
     },
   };
@@ -540,9 +869,23 @@ export async function confirmSent(
   const t0 = now();
   let processedAt: number | null = null;
   let lastSend = now();
+  let pollErrors = 0;
+  let lastPollError: string | null = null;
   for (;;) {
-    const st = await client.signatureStatus(signature);
-    if (st) {
+    // A failed status poll is "unknown", never a tx failure: keep polling until the timeout
+    // (the transport already retried; the tx may well land meanwhile).
+    let st: SigStatus | null = null;
+    let polled = true;
+    try {
+      st = await client.signatureStatus(signature);
+    } catch (e) {
+      polled = false;
+      pollErrors++;
+      lastPollError = rpcErrorText(e);
+    }
+    if (!polled) {
+      // fall through to the timeout check
+    } else if (st) {
       if (st.err)
         throw new TxFailedError(
           `tx ${signature} failed onchain: ${jsonSafe(st.err)}`,
@@ -557,14 +900,29 @@ export async function confirmSent(
       if (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')
         return { signature, processedAt, confirmedAt: now(), slot: st.slot };
     } else if (now() - lastSend >= resendMs) {
-      if (o.lastValidBlockHeight != null && (await client.blockHeight()) > o.lastValidBlockHeight)
-        throw new TxFailedError(`tx ${signature} expired unconfirmed`, signature, null, 'expired');
+      if (o.lastValidBlockHeight != null) {
+        const height = await client.blockHeight().catch(() => null);
+        // The status poll ran before the height read: ask once more, so a tx that landed in
+        // the last valid block is never reported dead (a caller may rebuild a dead tx).
+        if (
+          height !== null &&
+          height > o.lastValidBlockHeight &&
+          (await client.signatureStatus(signature).catch(() => undefined)) === null
+        )
+          throw new TxFailedError(
+            `tx ${signature} expired unconfirmed`,
+            signature,
+            null,
+            'expired',
+          );
+      }
       lastSend = now();
       await client.send(wire, true).catch(() => {}); // the status poll decides
     }
     if (now() - t0 > timeoutMs)
       throw new TxFailedError(
-        `tx ${signature} not confirmed after ${timeoutMs} ms`,
+        `tx ${signature} not confirmed after ${timeoutMs} ms` +
+          (pollErrors ? ` (${pollErrors} status poll error(s), last: ${lastPollError})` : ''),
         signature,
         null,
         'timeout',
