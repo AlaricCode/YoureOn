@@ -1,7 +1,9 @@
 // Chain health for the pitch (GET /v1/demo/health, the keeper's 'chain-health' log line, the boot
 // line, scripts/demo-check.ts): balances, the nonce pool, RPC latency and errors, the keeper,
-// transactions and bets that are stuck, orphan escrow, the Stream and the Gemini relay, plus a
-// list of warnings with one fix hint each. `ok` is false when any warning is critical.
+// transactions and bets that are stuck, orphan escrow, the Stream and the Gemini relay, the demo
+// toggles and the judge (LLM) health (judge/stats.ts: last success / failure, p50 / p95, in
+// memory since boot), plus a list of warnings with one fix hint each. `ok` is false when any
+// warning is critical.
 //
 // Read-only. RPC reads run in parallel and each is time-boxed by the transport (src/chain/tx.ts),
 // so the report answers within a few seconds even when the RPC is in trouble (that is a warning).
@@ -15,6 +17,8 @@ import type { AppDeps } from '../context';
 import type { KeeperStatus } from '../keeper/keeper';
 import { lifecycleOf } from '../lock/runtime';
 import { APPEAL_FAMILY, LOCKED_FAMILY, type OrphanSummary } from '../payout/refund';
+import { togglesOf, type DemoTogglesView } from '../demo/toggles';
+import { judgeHealth, type JudgeHealth } from '../judge/stats';
 import { ataOf, rpcErrorText, tokenAmount, type ChainRuntime, type RpcStatsSnapshot } from './tx';
 
 export const HEALTH = {
@@ -94,6 +98,12 @@ export interface ChainHealthReport {
   escrow: OrphanSummary | null;
   stream: { last_delivery_at: string | null; events_last_hour: number };
   markets: { last_ok_at: string | null; last_error: string | null } | null;
+  /** The demo runtime toggles (demo/toggles.ts; POST /v1/demo/toggles). */
+  toggles: DemoTogglesView;
+  /** The judge's vision calls since boot (judge/stats.ts; the warm-up counts). */
+  judge_llm: JudgeHealth;
+  /** = judge_llm.last_ok_at (API-CONTRACT §2.17 `llm_last_ok`). */
+  llm_last_ok: string | null;
   /** Which build answers (Fly sets these at runtime; null locally). */
   build: { image: string | null; machine: string | null; region: string | null };
 }
@@ -138,7 +148,8 @@ async function walletOf(rt: ChainRuntime, owner: Address): Promise<WalletHealth>
 
 /** The full report (see the header). Never throws for chain trouble: that becomes a warning. */
 export async function chainHealth(
-  deps: Pick<AppDeps, 'db' | 'env' | 'now' | 'hub' | 'log' | 'keeper' | 'markets'>,
+  deps: Pick<AppDeps, 'db' | 'env' | 'now' | 'hub' | 'log' | 'keeper' | 'markets'> &
+    Partial<Pick<AppDeps, 'providers'>>,
 ): Promise<ChainHealthReport> {
   const nowMs = deps.now();
   const warnings: HealthWarning[] = [];
@@ -426,6 +437,31 @@ export async function chainHealth(
         `${recent.length} keeper error(s) in 10 min (last: ${recent[0]!.task}: ${recent[0]!.error}).`,
       );
   }
+  // ---- the judge (LLM) and the toggles ----
+  const toggles = togglesOf(deps).view(deps.env);
+  const judgeLlm = judgeHealth(deps);
+  const warmupHint = 'POST /v1/demo/warmup (npm run demo-check -- --warmup)';
+  if (!judgeLlm.last_ok_at)
+    warn(
+      'judge_no_success',
+      'warn',
+      `No judge (LLM) success since boot${
+        judgeLlm.last_error ? ` (last failure: ${judgeLlm.last_error})` : ''
+      }: ${warmupHint}.`,
+    );
+  else if (judgeLlm.last_error_at && judgeLlm.last_error_at > judgeLlm.last_ok_at)
+    warn(
+      'judge_failing',
+      'warn',
+      `The judge's last call failed (${judgeLlm.last_error}, ${judgeLlm.last_error_source}): ${warmupHint}, or POST /v1/demo/toggles {"cached_ruling": true}.`,
+    );
+  if (toggles.cached_ruling)
+    warn(
+      'cached_ruling_on',
+      'warn',
+      `cached_ruling is on (${toggles.cached_ruling_source}): every ruling is the stored verdict (model cache/demo-bottle@1). POST /v1/demo/toggles {"cached_ruling": false} for the live judge.`,
+    );
+
   if (stuckTx.length)
     warn(
       'txs_stuck',
@@ -492,6 +528,9 @@ export async function chainHealth(
     markets: deps.markets
       ? { last_ok_at: iso(deps.markets.lastOkAt), last_error: deps.markets.lastError }
       : null,
+    toggles,
+    judge_llm: judgeLlm,
+    llm_last_ok: judgeLlm.last_ok_at,
     build: {
       image: process.env['FLY_IMAGE_REF'] ?? null,
       machine: process.env['FLY_MACHINE_ID'] ?? null,
