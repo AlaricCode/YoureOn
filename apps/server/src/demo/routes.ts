@@ -9,6 +9,7 @@
 //                                        (no voice_conversation_id needed). Body: optional
 //                                        propose_terms args (the LLM projection) overriding the fixture.
 //   POST /v1/demo/bets/:bet_id/confirm   the confirm_terms step (freeze + LockService.start).
+//   GET  /v1/demo/bets/:bet_id           state + chain_txs summary (scripts/cp1-drive.ts polls it).
 import { desc, inArray, sql } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { auditLog, bets, chainTxs, noncePool } from '@youre-on/db';
@@ -214,6 +215,42 @@ export const demoRoutes: RouteModule = {
           terms_hash: after.terms_hash,
           code: displayCode(after.terms_hash),
           say: reply.say,
+        },
+        200,
+      );
+    });
+
+    app.get('/v1/demo/bets/:bet_id', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const betId = betIdParam(c.req.param('bet_id'));
+      const bet = await readBet(deps.db, betId);
+      if (!bet) throw new HttpError('NOT_FOUND', 'No such bet.');
+      const txs = await deps.db
+        .select({
+          id: chainTxs.id,
+          kind: chainTxs.kind,
+          status: chainTxs.status,
+          signature: chainTxs.signature,
+          err: chainTxs.err,
+          sent_at: chainTxs.sent_at,
+          rpc_confirmed_at: chainTxs.rpc_confirmed_at,
+        })
+        .from(chainTxs)
+        .where(sql`${chainTxs.bet_id} = ${betId}`)
+        .orderBy(chainTxs.built_at);
+      return c.json(
+        {
+          bet_id: bet.id,
+          state: bet.state,
+          end_reason: bet.end_reason,
+          onchain_status: bet.onchain_status,
+          onchain_pending: bet.onchain_pending,
+          pending_sig: bet.pending_sig,
+          terms_hash: bet.terms_hash,
+          party_a_wallet: bet.party_a_wallet,
+          party_b_wallet: bet.party_b_wallet,
+          appeal_deadline: bet.appeal_deadline,
+          chain_txs: txs,
         },
         200,
       );
