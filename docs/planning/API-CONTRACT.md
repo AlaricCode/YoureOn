@@ -479,6 +479,7 @@ Server timers:
   - Effects: state `CONCEDED` (pending_tx). Then `bet.state` again when `rpc_processed_at` is set; **the winner's phone plays the payout animation and haptics on that frame** (SCHEMAS §9.2). `PAID` follows on `chain.BetConceded`.
   - Errors: `NOT_LOSER`, `CONCEDE_NOT_ALLOWED`, `STATE_MOVED_ON` (finalize or appeal landed first), `SIGN_REQUEST_EXPIRED`, `MESSAGE_MISMATCH`.
   - Idem: `(bet_id, 'concede')`.
+  - Built: GG and the appeal are mutually exclusive. Once the loser's appeal is filed (its `chain_txs` row signed / sent, the bet still `RULED` until it confirms), GET and POST answer `STATE_MOVED_ON {reason:'appeal_in_flight'}`, and nothing is sent or shown as `CONCEDED`. The check runs under the bet lock, in the same transaction that moves the bet to `CONCEDED`; the appeal's filing checks `RULED` under that lock, so whichever commits first wins. A failed appeal clears it (GG works again until finalize).
 
 ### 2.11 Hearing turns (Beat 5)
 
