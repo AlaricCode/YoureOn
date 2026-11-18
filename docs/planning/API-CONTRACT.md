@@ -198,7 +198,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 | `face/enrollment` writes | 5/h | user | |
 | `POST /v1/bets` | 6/min, ≤ 3 pre-lock bets per user | user | spam challenges |
 | lock authorization / decline | 10/min | bet + device | |
-| attempts + frames | 6/min | bet | |
+| attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing |
 | appeal | 3/h | user | ESCROW TM-L9 |
 | markets | 60/min | user | Gemini limit is 120 req/min with no headers (FINDINGS §7), so the server caches |
 | everything else | 120/min | session | |

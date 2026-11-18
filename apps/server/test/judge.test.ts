@@ -22,6 +22,7 @@ import { JUDGE_TIMEOUT_MS } from '../src/judge/prompt';
 import { buildRuling, cachedVerdict, CACHED_RULING_MODEL, type Judged } from '../src/judge/ruling';
 import { createJudgeRoutes, MAX_FRAME_BYTES } from '../src/judge/routes';
 import { loadFinalTerms } from '../src/judge/terms';
+import { RateLimiter } from '../src/http/rate-limit';
 import { buildApp } from '../src/app';
 import { Keeper } from '../src/keeper';
 import {
@@ -878,6 +879,31 @@ describeDb('judge pipeline (DB)', () => {
     replies = [met()];
     expect((await uploadFrames(CAM, betId, 1)).status).toBe(202);
     await judge.idle();
+  });
+
+  it("a stranger's attempts / frames calls spend none of the bet's 6/min bucket (auth-03)", async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    ctx.deps.rateLimit = new RateLimiter(); // the suite runs without one
+    try {
+      // C is signed in but not in the bet; bet ids are public onchain.
+      for (let i = 0; i < 8; i++) {
+        const r = await post(C, `/v1/bets/${betId}/attempts`, { attempt_no: 1 });
+        expect(r.status).toBe(403);
+        expect((await uploadFrames(C, betId, 1)).status).toBe(404); // no attempt 1 yet
+      }
+      expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+      for (let i = 0; i < 8; i++) {
+        const r = await uploadFrames(C, betId, 1);
+        expect(r.status).toBe(403);
+        expect(r.json!.error.details).toMatchObject({ reason: 'not_recorder' });
+      }
+      replies = [met()];
+      expect((await uploadFrames(CAM, betId, 1)).status).toBe(202);
+      await judge.idle();
+    } finally {
+      ctx.deps.rateLimit = null;
+    }
   });
 
   // ---- REDO and MAX_REDOS ----
