@@ -133,16 +133,28 @@ async function flySecretsImport(app: string, token: string): Promise<void> {
   console.log(
     `setting the Fly secret ${TOKEN_ENV} on ${app} (fly secrets import; machines restart)`,
   );
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn('fly', ['secrets', 'import', '-a', app], {
-      stdio: ['pipe', 'inherit', 'inherit'],
+  const runWith = (bin: string) =>
+    new Promise<void>((resolve, reject) => {
+      const child = spawn(bin, ['secrets', 'import', '-a', app], {
+        stdio: ['pipe', 'inherit', 'inherit'],
+      });
+      child.on('error', reject);
+      child.on('exit', (code) =>
+        code === 0 ? resolve() : reject(new Error(`${bin} secrets import exited ${code}`)),
+      );
+      child.stdin.on('error', () => {}); // the CLI exiting early surfaces through 'exit'
+      child.stdin.end(`${TOKEN_ENV}=${token}\n`);
     });
-    child.on('error', (e) => reject(new Error(`fly CLI: ${e.message}`)));
-    child.on('exit', (code) =>
-      code === 0 ? resolve() : reject(new Error(`fly secrets import exited ${code}`)),
-    );
-    child.stdin.end(`${TOKEN_ENV}=${token}\n`);
-  });
+  try {
+    await runWith('fly');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    await runWith('flyctl').catch((e2: NodeJS.ErrnoException) => {
+      throw new Error(
+        e2.code === 'ENOENT' ? 'neither fly nor flyctl is on PATH' : `flyctl: ${e2.message}`,
+      );
+    });
+  }
 }
 
 function securityNotes(base: string, flyApp: string, file: string) {
