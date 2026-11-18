@@ -15,6 +15,9 @@ export type Route =
   | 'demoClaim'
   | 'home'
   | 'profile'
+  | 'scan'
+  | 'faceSettings'
+  | 'enroll'
   | 'incoming'
   | 'negotiate'
   | 'terms'
@@ -35,8 +38,11 @@ export interface AppState {
   auth: 'booting' | 'signedOut' | 'signedIn';
   me: UserRef | null;
   deviceId: string | null;
-  /** A screen opened over home (profile, demo claim). */
-  overlay: 'none' | 'profile' | 'demoClaim';
+  /**
+   * A screen opened over home: profile, demo claim, the face scan (Beat 1), face settings, or
+   * face enrollment (offered right after signup, or from face settings).
+   */
+  overlay: Overlay;
   room: RoomInfo | null;
   members: readonly RoomMember[];
   activeBetId: string | null;
@@ -47,6 +53,8 @@ export interface AppState {
   /** The server is unreachable / the socket is down. */
   offline: boolean;
 }
+
+export type Overlay = 'none' | 'profile' | 'demoClaim' | 'scan' | 'faceSettings' | 'enroll';
 
 export type AppEvent =
   | { type: 'booted'; me: UserRef | null; deviceId: string | null }
@@ -92,13 +100,26 @@ export function appReducer(
       // are not theirs; carrying them over makes the socket subscribe to subs it may not see.
       if (s.me && s.me.user_id !== e.me.user_id)
         return { ...initialApp, auth: 'signedIn', me: e.me, deviceId: e.deviceId };
-      return { ...s, auth: 'signedIn', me: e.me, deviceId: e.deviceId, overlay: 'none' };
+      // Face enrollment offered by the signup screen survives the session landing.
+      return {
+        ...s,
+        auth: 'signedIn',
+        me: e.me,
+        deviceId: e.deviceId,
+        overlay: s.overlay === 'enroll' ? 'enroll' : 'none',
+      };
     case 'signed_out':
       return { ...initialApp, auth: 'signedOut' };
     case 'overlay':
       return { ...s, overlay: e.overlay };
     case 'room':
-      return { ...s, room: e.room, members: e.room ? (e.members ?? []) : [] };
+      // No room, nothing to scan: the scan screen closes with it.
+      return {
+        ...s,
+        room: e.room,
+        members: e.room ? (e.members ?? []) : [],
+        overlay: !e.room && s.overlay === 'scan' ? 'none' : s.overlay,
+      };
     case 'presence':
       return s.room?.room_id === e.room_id ? { ...s, members: e.members } : s;
     case 'bet_opened': {
@@ -166,6 +187,10 @@ export function selectRoute(app: AppState, bet: BetModel | null | undefined): Ro
   if (app.auth === 'signedOut') return app.overlay === 'demoClaim' ? 'demoClaim' : 'signup';
   if (app.overlay === 'profile') return 'profile';
   if (app.overlay === 'demoClaim') return 'demoClaim';
+  if (app.overlay === 'faceSettings') return 'faceSettings';
+  if (app.overlay === 'enroll') return 'enroll';
+  // The scan addresses a challenge in the current room; it needs one.
+  if (app.overlay === 'scan' && app.room && !app.judgeCam) return 'scan';
   if (app.activeBetId && bet) return routeForBet(app, bet);
   if (app.judgeCam) return 'judgeCam';
   return 'home';
