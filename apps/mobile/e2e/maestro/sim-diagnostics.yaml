@@ -61,8 +61,12 @@ name: sim-diagnostics
 - takeScreenshot: 23-diagnostics-expocamera
 - tapOn: Close camera
 - assertVisible: Build diagnostics
-# The stand-in design preview loads (only its face-capture step needs the detector).
+# The stand-in design preview loads (only its face-capture step needs the detector). It used to
+# import the face natives statically, so in this build it showed "App preview failed to load".
 - tapOn: App preview
-- waitForAnimationToEnd:
-    timeout: 5000
+- extendedWaitUntil:
+    visible:
+      id: menu-signup
+    timeout: 10000
+- assertNotVisible: App preview failed to load
 - takeScreenshot: 24-diagnostics-preview
