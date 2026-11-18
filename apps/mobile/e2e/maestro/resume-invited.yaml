@@ -1,0 +1,30 @@
+# Restart mid-bet, invited side: after resume-challenger.yaml on the other phone, kill and
+# relaunch this one. It comes back on the full-screen invite (the challenger comes from the
+# bet's event log), then declines it so the bet ends (nothing was locked; nothing moves).
+#   maestro --device <udid> test -e CHALLENGER="Sim B" e2e/maestro/resume-invited.yaml
+appId: dev.youreon.app
+name: resume-invited
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: incoming-accept
+    timeout: 30000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: incoming-accept
+    timeout: 30000
+- assertVisible: ${CHALLENGER} challenged you
+- takeScreenshot: 71-invited-resumed
+- tapOn:
+    id: incoming-decline
+- extendedWaitUntil:
+    visible: Declined. Nothing moved.
+    timeout: 20000
+- tapOn: Back home
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 20000
