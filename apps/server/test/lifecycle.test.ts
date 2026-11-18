@@ -26,13 +26,26 @@ import {
   getMintToCheckedInstruction,
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
-import { bets, betTermsVersions, chainTxs, noncePool } from '@youre-on/db';
-import { SignRequest, type Session } from '@youre-on/shared/api';
+import { betEvents, bets, betTermsVersions, chainTxs, noncePool } from '@youre-on/db';
+import { BetSnapshot, SignRequest, type Session } from '@youre-on/shared/api';
 import { AuthorizeRequest } from '@youre-on/shared/authorization';
-import { BetStatus, findBetPda, getBetDecoder } from '@youre-on/shared/escrow-client';
+import {
+  checkDevicePolicy,
+  type DevicePolicyDerivations,
+  type DevicePolicyPins,
+} from '@youre-on/shared/device-policy';
+import {
+  BetStatus,
+  findBetPda,
+  findConfigPda,
+  findEventAuthorityPda,
+  findVaultPda,
+  getBetDecoder,
+} from '@youre-on/shared/escrow-client';
 import { hashJcs } from '@youre-on/shared/jcs';
 import { betIdToBytes } from '@youre-on/shared/primitives';
 import type { Ruling } from '@youre-on/shared/ruling';
+import { renderSignCard } from '@youre-on/shared/sign-card';
 import {
   createPoolNonce,
   HAVE_SO,
@@ -396,10 +409,8 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     const { betId } = await lockedBetPhones();
     const row = await betRow(betId);
     const aBefore = await tokenAmount(svm.svm, (await findAta(signerA)) as never);
-    const r = await createPayoutService(ctx.deps).onRuling(
-      betId,
-      ruling(betId, row.terms_hash!, 'A_WINS'),
-    );
+    const verified = ruling(betId, row.terms_hash!, 'A_WINS'); // what ruling.issued carried
+    const r = await createPayoutService(ctx.deps).onRuling(betId, verified);
     expect(r.already).toBe(false);
     const ruled = await betRow(betId);
     expect(ruled.state).toBe('RULED');
@@ -422,6 +433,43 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     expect(req.for_parties).toEqual(['B']);
     expect(req.signers).toContain(signerB.address);
     const msg = new Uint8Array(Buffer.from(req.message_b64, 'base64'));
+
+    // The phone's device policy (shared evaluator, G1-G5 + T1-T3) over the server-built request,
+    // exactly as apps/mobile/src/app/actions.ts concede() feeds it: the card the phone renders
+    // itself from the final Terms + BetSnapshot.deadlines.appeal_deadline, and the ruling it
+    // verified from ruling.issued.
+    const policy = await ggPolicy(betId, verified);
+    expect(policy.verdict(req, msg)).toMatchObject({ ok: true, kind: 'concede', party: 'B' });
+    expect(req.card).toEqual(policy.renderedCard);
+    expect(req.ruling_ref.ruling_hash).toBe(hashJcs(verified));
+    // The tx.sign_request pushed after resolve carries the same card and passes too.
+    const pushed = (
+      await ctx.deps.db
+        .select()
+        .from(betEvents)
+        .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'tx.sign_request')))
+    ).map((e) => SignRequest.parse((e.envelope as any).payload.request));
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]!.card).toEqual(policy.renderedCard);
+    expect(
+      policy.verdict(pushed[0]!, new Uint8Array(Buffer.from(pushed[0]!.message_b64, 'base64'))),
+    ).toMatchObject({ ok: true });
+    // Negative: any card string the phone would not render itself -> refused (G2).
+    for (const tamper of [
+      { prompt_message: 'Pay Jake $0.01' },
+      { countdown_ends_at: new Date(ruled.appeal_deadline!.getTime() + 60_000).toISOString() },
+      { terms_code: 'ZZZZ' },
+    ]) {
+      expect(policy.verdict({ ...req, card: { ...req.card, ...tamper } }, msg)).toMatchObject({
+        ok: false,
+        rule: 'G2',
+      });
+    }
+    // ...and the onchain outcome name in ruling_ref is not what the phone verified (T2).
+    expect(
+      policy.verdict({ ...req, ruling_ref: { ...req.ruling_ref, outcome: 'PartyA' } }, msg),
+    ).toMatchObject({ ok: false, rule: 'T2' });
+
     const post = await signed(B, 'POST', `/v1/bets/${betId}/concede`, {
       bet_id: betId,
       kind: 'concede',
@@ -894,6 +942,65 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
         decimals: 6,
       }),
     ]);
+  }
+
+  /**
+   * The phone side of GG for `betId` (B's phone): the card B renders itself from its BetSnapshot
+   * (GET /v1/bets/:id envelope + deadlines.appeal_deadline, as apps/mobile actions.ts concede()),
+   * and a verdict function running the SHARED device policy with B's wallet key, the device
+   * clock, Kit-derived PDAs/ATAs and pins matching this SVM (fee payer, program, mint, cluster).
+   */
+  async function ggPolicy(betId: string, verified: Ruling) {
+    const snap = BetSnapshot.parse((await get(B, `/v1/bets/${betId}`)).json);
+    expect(snap.my_party).toBe('B');
+    const renderedCard = renderSignCard({
+      kind: 'concede',
+      terms: snap.envelope!.terms,
+      terms_hash: snap.envelope!.terms_hash,
+      me: 'B',
+      appeal_deadline: snap.deadlines.appeal_deadline!,
+    });
+    const idBytes = betIdToBytes(betId);
+    const pdas = {
+      bet: (await findBetPda({ betId: idBytes }))[0] as string,
+      vault: (await findVaultPda({ betId: idBytes }))[0] as string,
+      config: (await findConfigPda())[0] as string,
+    };
+    const eventAuthority = (await findEventAuthorityPda())[0] as string;
+    const atas = new Map<string, string>();
+    for (const s of [signerA, signerB]) atas.set(s.address, await findAta(s));
+    const derive: DevicePolicyDerivations = {
+      betPdas: (id) => {
+        if (id !== betId) throw new Error(`no PDAs for ${id}`);
+        return pdas;
+      },
+      eventAuthority: () => eventAuthority,
+      associatedTokenAddress: (owner, mint) => {
+        const ata = atas.get(owner);
+        if (!ata || mint !== svm.mint) throw new Error('no ATA precomputed');
+        return ata;
+      },
+    };
+    const pins: DevicePolicyPins = {
+      feePayer: rt.keys.feePayer.address,
+      programId: rt.programId,
+      mint: svm.mint,
+      tokenProgram: TOKEN_PROGRAM_ADDRESS,
+      cluster: ctx.deps.env.SOLANA_CLUSTER,
+    };
+    const verdict = (request: unknown, message: Uint8Array) =>
+      checkDevicePolicy(message, {
+        screen: 'gg',
+        request,
+        renderedCard,
+        verifiedRulingHash: hashJcs(verified),
+        verifiedRulingOutcome: verified.outcome,
+        devicePubkey: signerB.address,
+        nowSecs: Math.floor(now() / 1000),
+        derive,
+        pins,
+      });
+    return { renderedCard, verdict };
   }
 
   async function findAta(owner: KeyPairSigner) {
