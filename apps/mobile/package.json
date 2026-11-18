@@ -9,7 +9,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "doctor": "expo-doctor",
-    "postinstall": "cd ../.. && patch-package --error-on-fail"
+    "postinstall": "cd ../.. && patch-package --error-on-fail",
+    "eas-build-pre-install": "bash ../../scripts/eas-build-hook.sh pre-install",
+    "eas-build-post-install": "bash ../../scripts/eas-build-hook.sh post-install"
   },
   "dependencies": {
     "@config-plugins/react-native-webrtc": "15.0.2",
