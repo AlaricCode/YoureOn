@@ -69,10 +69,13 @@ import {
   typedTermsRequest,
 } from '@youre-on/shared/judge/typed-terms';
 import { liteSvmClient } from './litesvm-client';
+import { mkBetRow, mkLockTx, mkUser } from './chain-db';
+import { betFacts, randomSig } from './chain-fixtures';
 import {
   DB_URL,
   getChallenge,
   newKey,
+  ownDatabase,
   postJson,
   signedHeaders,
   signupBody,
@@ -144,9 +147,12 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
   };
 
   beforeAll(async () => {
+    // Its own database: the lock / payout sweeps here are global (every chain_txs row), so
+    // another file's fixture rows must not be swept, nor this file's sweeps touch theirs.
     ctx = await startTestServer({
       now,
       env: {
+        DATABASE_URL: await ownDatabase(DB_URL!, 'lifecycle'),
         DEMO_MODE: 'true',
         DEMO_ADMIN_TOKEN: ADMIN,
         ELEVENLABS_TOOL_SECRET: 'tool-secret',
@@ -633,6 +639,34 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
       declined_at: new Date(now()).toISOString(),
     });
     await lc.idle();
+  });
+
+  it('one undecodable sent lock does not stall the sweep for the others', async () => {
+    // A 'sent' atomic_lock row whose stored bytes cannot be decoded (corrupt, or written by an
+    // older build): its re-broadcast throws. The sweep logs it and goes on to the next lock.
+    const db = ctx.deps.db;
+    const [ua, ub] = [await mkUser(db, 'Bad A'), await mkUser(db, 'Bad B')];
+    const f = betFacts({ t0: Math.floor(now() / 1000) });
+    await mkBetRow(db, f, { partyA: ua, partyB: ub, state: 'AWAITING_LOCK' });
+    const badId = await mkLockTx(db, f.bet_id, randomSig(), 'sent');
+    await db
+      .update(chainTxs)
+      .set({ expires_at: new Date(now() + 300_000) })
+      .where(eq(chainTxs.id, badId));
+    const logged: string[] = [];
+    const log = ctx.deps.log;
+    ctx.deps.log = {
+      ...log,
+      error: (m: string, x?: Record<string, unknown>) => (logged.push(m), log.error(m, x)),
+    };
+    try {
+      await expect(lc.lock.sweep(now())).resolves.toBeDefined();
+    } finally {
+      ctx.deps.log = log;
+    }
+    expect(logged).toContain('lock.sweep_row_failed');
+    // tidy: the fixture row is not ours to settle
+    await db.update(chainTxs).set({ status: 'failed' }).where(eq(chainTxs.id, badId));
   });
 
   it('lock window: past expires_at the sweep expires the bet and revokes the nonce', async () => {
