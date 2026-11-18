@@ -26,7 +26,7 @@ import type { BetSnapshot, RoomMember, VoiceDynamicVariables } from '@youre-on/s
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 
 import { extractFrames, readClip } from '../attempt/capture';
-import { initialLock, lockReducer } from '../bets/lock';
+import { initialLock, lockReducer, type AuthFailure } from '../bets/lock';
 import { emptyBet, endReasonOf, lockSignals, type BetModel } from '../bets/store';
 import { betView, myResult, type BetView } from '../bets/view';
 import { feel } from '../device/feedback';
@@ -375,6 +375,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const bet: BetModel | null = app.activeBetId ? (rt.hub.get(app.activeBetId) ?? null) : null;
   const route = selectRoute(app, bet);
+  // An alert belongs to the screen it was raised on: a new screen starts without one (it used
+  // to follow into the next screens as a toast that never cleared).
+  useEffect(() => setAlert(null), [route]);
   const me: Party | null =
     bet?.my_party ??
     (bet && app.me
@@ -594,17 +597,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       feel('authorized');
       if (result.status === 'submitted') lockDispatch({ type: 'submitted' });
     } catch (e) {
-      lockDispatch({ type: 'auth_result', ok: false });
+      // The card says which (lock reducer): refused, Face ID failed, or try again.
+      lockDispatch({ type: 'auth_result', ok: false, failure: authFailureOf(e) });
       feel('failed');
-      if (e instanceof WalletError && e.code === 'POLICY_REJECTED') setAlert(t(COPY.terms.refused));
-      else if (
-        e instanceof WalletError &&
-        (e.code === 'AUTH_CANCELLED' || e.code === 'AUTH_FAILED')
-      )
-        setAlert(t(COPY.terms.faceIdFailed));
-      else if (e instanceof ApiClientError && e.code === 'STALE_LOCK_REQUEST')
+      if (e instanceof ApiClientError && e.code === 'STALE_LOCK_REQUEST')
         rt.hub.patch(req.bet_id, (m) => ({ ...m, authorizeRequest: null }));
-      else setAlert(t(COPY.app.failed));
     }
   };
 
@@ -1056,6 +1053,15 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       <StatusBar style="light" />
     </View>
   );
+}
+
+/** Why holdComplete failed, for the lock card (bets/lock AuthFailure). */
+function authFailureOf(e: unknown): AuthFailure {
+  if (e instanceof WalletError) {
+    if (e.code === 'POLICY_REJECTED') return 'policy';
+    if (e.code === 'AUTH_CANCELLED' || e.code === 'AUTH_FAILED') return 'auth';
+  }
+  return 'send';
 }
 
 /** lockSignals minus 'reset' (the card effect resets on every new lock_request_id itself). */
