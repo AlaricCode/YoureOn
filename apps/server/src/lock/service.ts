@@ -1132,6 +1132,60 @@ export class LockService {
     });
   }
 
+  /** Sweep step 2 for one 'sent' lock whose confirm loop is not running (see sweep()). */
+  private async sweepSentLock(
+    rt: ChainRuntime,
+    row: LockRow,
+    nowMs: number,
+    result: { expired: string[]; landed: string[] },
+  ): Promise<void> {
+    const st = await rt.client.signatureStatus(row.signature!, { searchHistory: true });
+    if (
+      st &&
+      !st.err &&
+      (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')
+    ) {
+      await this.onLanded(rt, row.bet_id, row.id, row.signature!, nowMs, nowMs, st.slot);
+      result.landed.push(row.bet_id);
+      return;
+    }
+    if (st?.err) {
+      const why = failureReason(st.err);
+      await this.failLock(row.bet_id, why.reason, why.party, null, { nonceAdvanced: true });
+      return;
+    }
+    if (!row.expires_at || nowMs < row.expires_at.getTime()) {
+      // Unseen and its confirm loop is gone (it timed out, or the server restarted, maybe
+      // before the first send): re-broadcast the exact signed bytes. A durable-nonce tx is
+      // valid until accept_deadline and can land at most once (its ix 0 advances the nonce),
+      // so this is always safe; the next pass sees the status. Not in the last seconds before expires_at, so a re-send
+      // never races the expire + revoke below.
+      if (!st && row.expires_at && nowMs < row.expires_at.getTime() - LOCK_RESEND_STOP_MS)
+        await this.rebroadcastLock(rt, row);
+      return;
+    }
+    // Fate unknown at expires_at. A status lookup can miss a landed tx, so the chain decides:
+    // the Bet PDA (Locked, our terms_hash) means it landed; a consumed nonce without one means
+    // it never can; otherwise expire + revoke, and the next pass settles it either way.
+    const fate = await this.lockFate(rt, row);
+    if (fate === 'landed') {
+      this.deps.log.warn('lock.landed_late', { bet_id: row.bet_id, signature: row.signature });
+      await this.onLanded(rt, row.bet_id, row.id, row.signature!, nowMs, nowMs, st?.slot ?? null);
+      result.landed.push(row.bet_id);
+      return;
+    }
+    if (await this.expire(row.bet_id, row.id, nowMs)) result.expired.push(row.bet_id);
+    if (fate === 'dead') {
+      await this.deps.db
+        .update(chainTxs)
+        .set({ status: 'expired' })
+        .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
+      await this.revokeOrRelease(row.bet_id, row.id, true);
+    } else {
+      await this.revokeOrRelease(row.bet_id, row.id, false);
+    }
+  }
+
   // ---- sweep (keeper) ---------------------------------------------------------------------
 
   /** Keeper task: expire locks past expires_at, settle sent locks, finish/retry nonce advances. */
@@ -1169,50 +1223,15 @@ export class LockService {
       .limit(25);
     for (const row of sent) {
       if (this.confirming.has(row.id) || !row.signature) continue;
-      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
-      if (
-        st &&
-        !st.err &&
-        (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')
-      ) {
-        await this.onLanded(rt, row.bet_id, row.id, row.signature, nowMs, nowMs, st.slot);
-        result.landed.push(row.bet_id);
-        continue;
-      }
-      if (st?.err) {
-        const why = failureReason(st.err);
-        await this.failLock(row.bet_id, why.reason, why.party, null, { nonceAdvanced: true });
-        continue;
-      }
-      if (!row.expires_at || nowMs < row.expires_at.getTime()) {
-        // Unseen and its confirm loop is gone (it timed out, or the server restarted, maybe
-        // before the first send): re-broadcast the exact signed bytes. A durable-nonce tx is
-        // valid until accept_deadline and can land at most once (its ix 0 advances the nonce),
-        // so this is always safe; the next pass sees the status. Not in the last seconds before expires_at, so a re-send
-        // never races the expire + revoke below.
-        if (!st && row.expires_at && nowMs < row.expires_at.getTime() - LOCK_RESEND_STOP_MS)
-          await this.rebroadcastLock(rt, row);
-        continue;
-      }
-      // Fate unknown at expires_at. A status lookup can miss a landed tx, so the chain decides:
-      // the Bet PDA (Locked, our terms_hash) means it landed; a consumed nonce without one means
-      // it never can; otherwise expire + revoke, and the next pass settles it either way.
-      const fate = await this.lockFate(rt, row);
-      if (fate === 'landed') {
-        this.deps.log.warn('lock.landed_late', { bet_id: row.bet_id, signature: row.signature });
-        await this.onLanded(rt, row.bet_id, row.id, row.signature, nowMs, nowMs, st?.slot ?? null);
-        result.landed.push(row.bet_id);
-        continue;
-      }
-      if (await this.expire(row.bet_id, row.id, nowMs)) result.expired.push(row.bet_id);
-      if (fate === 'dead') {
-        await this.deps.db
-          .update(chainTxs)
-          .set({ status: 'expired' })
-          .where(and(eq(chainTxs.id, row.id), eq(chainTxs.status, 'sent')));
-        await this.revokeOrRelease(row.bet_id, row.id, true);
-      } else {
-        await this.revokeOrRelease(row.bet_id, row.id, false);
+      try {
+        await this.sweepSentLock(rt, row, nowMs, result);
+      } catch (e) {
+        // One bad row (undecodable stored bytes, an RPC error) must not stall every other lock.
+        this.deps.log.error('lock.sweep_row_failed', {
+          bet_id: row.bet_id,
+          tx_id: row.id,
+          error: String((e as Error)?.message ?? e).slice(0, 200),
+        });
       }
     }
 
