@@ -216,6 +216,8 @@ export interface MarketTermsPanel {
     /** "$6.10 vs $3.90" (mine first) */
     split: string | null;
     lockableUntilMs: number | null;
+    /** The server's REPLAY feed (a recorded Gemini round): shown as such. */
+    replay: boolean;
   } | null;
   sending: boolean;
   confirming: boolean;
@@ -524,6 +526,7 @@ function MarketPanel({
               <DotsLabel text={t(COPY.market.pricing)} variant="small" />
             ) : q.ok ? (
               <>
+                {q.replay ? <Chip label={t(COPY.market.replay)} /> : null}
                 <InfoRow label={t(COPY.market.split)} value={q.split ?? '—'} />
                 <InfoRow label={t(COPY.market.line)} value={q.strikeUsd ?? '—'} />
                 <InfoRow label={t(COPY.market.price)} value={q.priceUsd ?? '—'} />

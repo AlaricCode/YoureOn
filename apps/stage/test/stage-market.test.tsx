@@ -194,6 +194,35 @@ describe('Beat 6 on the stage', () => {
     expect(out).not.toContain('Waiting for Gemini');
   });
 
+  it('a bet on the REPLAY feed is labelled REPLAY', () => {
+    seq = 0;
+    const replayTerms = {
+      ...terms,
+      market: {
+        ...terms.market,
+        eventTicker: 'REPLAY-BTC05M2611180240',
+        instrumentSymbol: 'REPLAY-GEMI-BTC05M2611180240-UP',
+      },
+    };
+    const env = { ...envelope, terms: replayTerms, terms_hash: hashJcs(replayTerms) };
+    const s = run([ev('terms.proposed', { envelope: env })]);
+    const out = html(
+      <MarketPanel bet={s.bets[BET]!} tick={null} now={Date.parse('2026-11-18T02:37:20.000Z')} />,
+    );
+    expect(out).toContain('REPLAY · recorded Gemini round');
+    // a live bet is not
+    const live = run([ev('terms.proposed', { envelope })]);
+    expect(
+      html(
+        <MarketPanel
+          bet={live.bets[BET]!}
+          tick={null}
+          now={Date.parse('2026-11-18T02:37:20.000Z')}
+        />,
+      ),
+    ).not.toContain('REPLAY');
+  });
+
   it('a voided contract reads as a refund', () => {
     seq = 0;
     const rec = record(null);

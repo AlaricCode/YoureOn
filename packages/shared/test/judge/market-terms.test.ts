@@ -4,6 +4,7 @@ import { evaluateProposeTerms } from '../../src/judge/reply';
 import {
   callOf,
   expiryLabel,
+  isReplayTicker,
   marketClaim,
   marketReadback,
   marketSideOf,
@@ -29,6 +30,22 @@ describe('market terms (Beat 6)', () => {
     expect(marketClaim(EXPIRY)).toBe(
       "Gemini's BTC 5-minute contract expiring 02:40 UTC resolves UP.",
     );
+  });
+
+  it('a REPLAY-feed contract gets a REPLAY claim', () => {
+    expect(isReplayTicker('REPLAY-BTC05M2611190045')).toBe(true);
+    expect(isReplayTicker('BTC05M2611190045')).toBe(false);
+    expect(marketClaim(EXPIRY, 'REPLAY-BTC05M2611180240')).toBe(
+      'REPLAY: a recorded Gemini BTC 5-minute round, ending 02:40 UTC, resolves UP.',
+    );
+    expect(
+      marketTermsArgs({
+        side: 'UP',
+        amount_usd: '5',
+        expiry: EXPIRY,
+        eventTicker: 'REPLAY-BTC05M2611180240',
+      }).claim,
+    ).toMatch(/^REPLAY: /);
   });
 
   it('the request is lenient on extra keys but needs a side and an amount', () => {

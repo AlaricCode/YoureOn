@@ -37,6 +37,7 @@ import { Ruling, GEMINI_SETTLEMENT_MODEL } from '@youre-on/shared/ruling';
 import { Terms } from '@youre-on/shared/terms';
 import type { Ruling as RulingT } from '@youre-on/shared/ruling';
 import { createGeminiClient } from '../src/markets/gemini';
+import { createReplayClient, createRoutedClient } from '../src/markets/replay';
 import { MarketService } from '../src/markets/service';
 import {
   installSettlement,
@@ -788,6 +789,67 @@ describeDb(
       } finally {
         ctx.deps.markets = saved;
       }
+    });
+
+    it('REPLAY feed (Gemini down): POST /v1/demo/gemini replay -> a labelled bet settles from the recording', async () => {
+      // the relay as server.ts builds it: live Gemini (here: down) routed with the replay
+      g.routes.set(EVENTS_PATH, 500);
+      markets = new MarketService({
+        client: createRoutedClient({
+          live: createGeminiClient({ fetch: g.fetch }),
+          replay: createReplayClient({ now }),
+        }),
+        now,
+        log: silentLogger,
+      });
+      ctx.deps.markets = markets;
+      markets.onSnapshot((snap) => svc.onSnapshot(snap));
+      expect(await markets.refresh()).toBeNull();
+      expect(markets.lastError).toMatch(/HTTP 500/);
+
+      const admin = { 'X-YO-Demo-Key': 'demo-admin-closer' };
+      const sw = await postJson(ctx.base, '/v1/demo/gemini', { feed: 'replay' }, admin);
+      expect(sw.status).toBe(200);
+      expect(sw.json).toMatchObject({
+        feed: 'replay',
+        current: { lockable: true, market: { eventTicker: 'REPLAY-BTC05M2611180240' } },
+      });
+      expect((await postJson(ctx.base, '/v1/demo/gemini', { feed: 'replay' })).status).toBe(404);
+
+      const { betId, res } = await lockedBet('DOWN');
+      expect(res.quote.market).toMatchObject({
+        eventTicker: 'REPLAY-BTC05M2611180240',
+        instrumentSymbol: 'REPLAY-GEMI-BTC05M2611180240-UP',
+        side: 'NO',
+      });
+      const terms = Terms.parse(
+        JSON.parse(
+          (
+            await ctx.deps.db
+              .select()
+              .from(betTermsVersions)
+              .where(eq(betTermsVersions.terms_hash, res.terms_hash))
+          )[0]!.canonical_json,
+        ),
+      );
+      expect(terms.claim).toBe(
+        'REPLAY: a recorded Gemini BTC 5-minute round, ending 02:40 UTC, resolves UP.',
+      );
+
+      clock.t = T0240 + 6_000;
+      expect(await svc.check(betId)).toBe('settled');
+      const r = ruled.at(-1)!.ruling;
+      expect(r).toMatchObject({ bet_id: betId, outcome: 'A_WINS' }); // DOWN, as recorded
+      expect(r.reason).toMatch(/^Replay of a recorded round\. Gemini settled DOWN/);
+      const [row] = await settlementRows(betId);
+      const record = GeminiSettlementRecord.parse(JSON.parse(row!.evidence_canonical!));
+      expect(record.source_url).toBe(
+        'replay://gemini/v1/prediction-markets/events/REPLAY-BTC05M2611180240',
+      );
+      // back to live
+      expect(
+        (await postJson(ctx.base, '/v1/demo/gemini', { feed: 'live' }, admin)).json,
+      ).toMatchObject({ feed: 'live' });
     });
 
     it('a bet that left AWAITING_MARKET (e.g. RULED) is skipped and forgotten', async () => {

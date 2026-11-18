@@ -24,6 +24,14 @@ import { Hex32 } from '../primitives';
 import { MarketRef, Stakes, type Terms } from '../terms';
 import type { ProposeTermsProjection } from './propose-terms';
 
+/**
+ * Tickers of the server's REPLAY feed (a recorded real Gemini round replayed onto the current
+ * window when Gemini's API is down): every surface says so.
+ */
+export const REPLAY_TICKER_PREFIX = 'REPLAY-';
+export const isReplayTicker = (eventTicker: string): boolean =>
+  eventTicker.startsWith(REPLAY_TICKER_PREFIX);
+
 export const marketTermsPath = (betId: string) =>
   `/v1/bets/${encodeURIComponent(betId)}/terms/market`;
 
@@ -82,8 +90,10 @@ export function expiryLabel(expiryIso: string): string {
 }
 
 /** SCHEMAS §2.6 claim: always about UP (YES); `yes_party` says who holds it. */
-export const marketClaim = (expiryIso: string): string =>
-  `Gemini's BTC 5-minute contract expiring ${expiryLabel(expiryIso)} resolves UP.`;
+export const marketClaim = (expiryIso: string, eventTicker = ''): string =>
+  isReplayTicker(eventTicker)
+    ? `REPLAY: a recorded Gemini BTC 5-minute round, ending ${expiryLabel(expiryIso)}, resolves UP.`
+    : `Gemini's BTC 5-minute contract expiring ${expiryLabel(expiryIso)} resolves UP.`;
 
 export const MARKET_SUCCESS = 'Gemini settles this contract YES.';
 export const MARKET_FAILURE = 'Gemini settles this contract NO.';
@@ -98,10 +108,12 @@ export function marketTermsArgs(i: {
   side: MarketCall;
   amount_usd: string;
   expiry: string;
+  /** The contract's eventTicker (a REPLAY- ticker makes a REPLAY claim). */
+  eventTicker?: string;
 }): ProposeTermsProjection {
   return {
     type: 'real_world',
-    claim: marketClaim(i.expiry),
+    claim: marketClaim(i.expiry, i.eventTicker),
     performer: 'none',
     yes_party: i.side === 'UP' ? 'A' : 'B',
     attempts: { count: 1, rule: 'single' },

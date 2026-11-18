@@ -99,6 +99,12 @@ export function settlementOutcome(
 
 /** The spoken / displayed ruling reason (≤ 280 chars, normalized text). */
 export function settlementReason(record: GeminiSettlementRecord, d: SettlementDecision): string {
+  const reason = liveReason(record, d);
+  // the server's REPLAY feed (a recorded round replayed when Gemini's API is down) says so
+  return record.source_url.startsWith('replay:') ? `Replay of a recorded round. ${reason}` : reason;
+}
+
+function liveReason(record: GeminiSettlementRecord, d: SettlementDecision): string {
   const c = record.contract;
   if (d.outcome === 'VOID')
     return d.why === 'invalid'
