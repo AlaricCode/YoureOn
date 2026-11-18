@@ -8,6 +8,8 @@
 // Retries (each at most once, with the SAME Idempotency-Key, so a write is never duplicated):
 //   401 CLOCK_SKEW      -> re-sync the clock from details.server_time, re-sign, resend.
 //   401 SESSION_EXPIRED -> silent re-login with the device key (no prompt), re-sign, resend.
+//   401 AUTH_REQUIRED   -> the same (the server forgot the token: DB reseed, revoked session).
+//   A refresh that finds the device unknown signs out (session.ts), so the app goes to signup.
 // Pure TS (fetch, clock, keys injected): tested in node.
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { ApiError, HDR, requestSigningString } from '@youre-on/shared/api';
@@ -235,11 +237,17 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
       const idem = opts.idempotencyKey ?? deps.uuid();
 
       let res = await once(method, path, auth, body, idem);
+      let refreshed = false;
       for (let retry = 0; retry < 2 && res.status === 401 && auth !== 'none'; retry++) {
         const err = await toError(res);
         if (err.code === 'CLOCK_SKEW' && typeof err.details?.server_time === 'string') {
           deps.clock.sync(err.details.server_time);
-        } else if (err.code === 'SESSION_EXPIRED' && deps.refreshSession) {
+        } else if (
+          (err.code === 'SESSION_EXPIRED' || err.code === 'AUTH_REQUIRED') &&
+          deps.refreshSession &&
+          !refreshed
+        ) {
+          refreshed = true;
           if (!(await deps.refreshSession())) throw err;
         } else {
           throw err;

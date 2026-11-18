@@ -79,7 +79,7 @@ export interface SessionManager {
   /** Stored session if still valid, else a silent login; null = this phone must sign up. */
   restore(): Promise<Session | null>;
   signup(fields: SignupFields): Promise<Session>;
-  /** null when the device key isn't registered (sign up first). */
+  /** null when the device key isn't registered (sign up first); that also clears the session. */
   login(): Promise<Session | null>;
   demoClaim(claimToken: string): Promise<Session>;
   signOut(): Promise<void>;
@@ -136,7 +136,15 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
       ),
     );
 
-  const login = async (): Promise<Session | null> => {
+  // Single flight: parallel 401s (and the socket's 4401) share one re-login.
+  let loggingIn: Promise<Session | null> | null = null;
+  const login = (): Promise<Session | null> => {
+    loggingIn ??= doLogin().finally(() => {
+      loggingIn = null;
+    });
+    return loggingIn;
+  };
+  const doLogin = async (): Promise<Session | null> => {
     const ch = await challenge();
     try {
       const s = await d.api.request('POST', '/v1/auth/session', {
@@ -155,8 +163,12 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
         e instanceof ApiClientError &&
         e.code === 'SIGNATURE_INVALID' &&
         e.details?.reason === 'unknown_device'
-      )
+      ) {
+        // The server no longer knows this phone (DB reseeded between rehearsals): drop the
+        // stored session so the app goes back to signup / demo claim instead of a dead home.
+        await set(null);
         return null;
+      }
       throw e;
     }
   };

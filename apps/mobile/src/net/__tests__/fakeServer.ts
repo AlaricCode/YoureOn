@@ -216,5 +216,10 @@ export function createFakeServer(o: {
     devices,
     skewOnce: () => (skewNext = true),
     expireOnce: () => (expireNext = true),
+    /** A DB reseed: every token unknown (AUTH_REQUIRED); with devices too, logins are unknown_device. */
+    reseed: (o2: { devices?: boolean } = {}) => {
+      sessions.clear();
+      if (o2.devices) devices.clear();
+    },
   };
 }
