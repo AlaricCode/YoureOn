@@ -120,6 +120,12 @@ export interface BetView {
   attempt_no: number | null;
   performer: PartyKey | null;
   frame_urls: string[];
+  /**
+   * The latest attempt.evidence: which attempt and how many frames. The server sends no
+   * frame_urls yet (frames live in Postgres), so the page fetches each JPEG with its bearer
+   * (GET /v1/bets/:id/attempts/:n/frames/:idx) into TickerState.frameBlobs.
+   */
+  evidence: { attempt_no: number; frames: number } | null;
   ruling: RulingView | null;
   /** BetResolved.ts: when the appeal window opened (unix s). */
   resolved_at: number | null;
@@ -177,6 +183,8 @@ export interface TickerState {
   snapshots: Record<string, BetSnapshot>;
   /** The bet with the most recent activity: what the big card shows. */
   focusBetId: string | null;
+  /** Fetched evidence JPEGs as object URLs: `${bet_id}:${attempt_no}` -> idx -> url. */
+  frameBlobs: Record<string, Record<number, string>>;
   dropped: number;
   errors: string[];
 }
@@ -197,6 +205,7 @@ export const initialTicker: TickerState = {
   history: {},
   snapshots: {},
   focusBetId: null,
+  frameBlobs: {},
   dropped: 0,
   errors: [],
 };
@@ -255,6 +264,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     attempt_no: null,
     performer: null,
     frame_urls: [],
+    evidence: null,
     ruling: null,
     resolved_at: null,
     appeal_deadline: null,
@@ -395,9 +405,17 @@ export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
         attempt_no: e.payload.attempt_no,
         performer: e.payload.performer,
         frame_urls: [],
+        evidence: null,
       };
     case 'attempt.evidence':
-      return { ...v, frame_urls: e.payload.frame_urls };
+      return {
+        ...v,
+        frame_urls: e.payload.frame_urls,
+        evidence: {
+          attempt_no: e.payload.evidence.attempt_no,
+          frames: e.payload.evidence.frames.length,
+        },
+      };
     case 'ruling.issued':
       return { ...v, ruling: rulingView(e.payload) };
     case 'chain.BetResolved':
@@ -594,7 +612,8 @@ export type TickerAction =
   | { kind: 'market'; snapshot: GeminiMarketSnapshot | null; receivedAt: number }
   | { kind: 'error'; message: string }
   /** A new connection (another room): forget every bet, event and market point. */
-  | { kind: 'reset' };
+  | { kind: 'reset' }
+  | { kind: 'frame_blob'; bet_id: string; attempt_no: number; idx: number; url: string };
 
 function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: number): TickerState {
   if (!snap) return { ...s, market: null };
@@ -607,6 +626,13 @@ function withMarket(s: TickerState, snap: GeminiMarketSnapshot | null, at: numbe
 
 export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   if (a.kind === 'reset') return initialTicker;
+  if (a.kind === 'frame_blob') {
+    const key = frameKey(a.bet_id, a.attempt_no);
+    return {
+      ...s,
+      frameBlobs: { ...s.frameBlobs, [key]: { ...s.frameBlobs[key], [a.idx]: a.url } },
+    };
+  }
   if (a.kind === 'status')
     return {
       ...s,
@@ -720,6 +746,18 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
     focusBetId: e.bet_id,
     lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
   };
+}
+
+export const frameKey = (betId: string, attemptNo: number) => `${betId}:${attemptNo}`;
+
+/**
+ * The frames to show for a bet: the event's frame_urls when the server sent them, else the
+ * JPEGs fetched so far for its latest evidence ('' for one still loading).
+ */
+export function framesOf(s: Pick<TickerState, 'frameBlobs'>, b: BetView): string[] {
+  if (b.frame_urls.length || !b.evidence) return b.frame_urls;
+  const got = s.frameBlobs[frameKey(b.bet_id, b.evidence.attempt_no)] ?? {};
+  return Array.from({ length: b.evidence.frames }, (_, i) => got[i] ?? '');
 }
 
 /** Bets seen in events but not yet seeded from REST (the App fetches each once). */

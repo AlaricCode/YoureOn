@@ -61,6 +61,26 @@ export async function fetchBetSnapshot(
   );
 }
 
+/** GET /v1/bets/:id/attempts/:n/frames/:idx (apps/server/src/stage/routes.ts): one JPEG. */
+export const framePath = (betId: string, attemptNo: number, idx: number) =>
+  `/v1/bets/${encodeURIComponent(betId)}/attempts/${attemptNo}/frames/${idx}`;
+
+/** An evidence frame with the stage bearer (an <img> cannot send one), as a Blob. */
+export async function fetchFrame(
+  serverUrl: string,
+  token: string,
+  betId: string,
+  attemptNo: number,
+  idx: number,
+  doFetch: typeof fetch = fetch,
+): Promise<Blob> {
+  const res = await doFetch(new URL(framePath(betId, attemptNo, idx), serverUrl).toString(), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`frame ${idx}: HTTP ${res.status}`);
+  return res.blob();
+}
+
 const MarketCurrentLite = z.object({ market: GeminiMarketSnapshot.nullable() });
 
 /** §2.13 GET /v1/markets/btc5m/current: the odds widget's first frame before stage.market. */

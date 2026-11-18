@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   explorerTx,
+  framesOf,
   type BetView,
   type PartyKey,
   type TickerEvent,
@@ -322,7 +323,7 @@ export function FrameStrip({ urls, cited }: { urls: string[]; cited: number[] })
     <ol className="frames" aria-label="evidence frames">
       {urls.slice(0, 12).map((u, i) => (
         <li key={i} className={cited.includes(i) ? 'cited' : undefined}>
-          <img src={u} alt={`frame ${i}`} loading="eager" />
+          {u ? <img src={u} alt={`frame ${i}`} loading="eager" /> : <span className="loading" />}
         </li>
       ))}
     </ol>
@@ -1131,7 +1132,7 @@ export function StageView({
         <div className="left">
           {bet ? (
             <BetCard
-              bet={bet}
+              bet={{ ...bet, frame_urls: framesOf(state, bet) }}
               now={now}
               market={mv}
               presence={state.presence?.online_by_user ?? null}
