@@ -9,10 +9,19 @@
 // No simulated Face ID here (that lives in src/preview only). Party screens never show chain
 // words: server text that reaches a screen goes through ui/copyRule first.
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import type { RoomMember } from '@youre-on/shared/api';
+import type { RoomMember, VoiceDynamicVariables } from '@youre-on/shared/api';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 
 import { extractFrames, readClip } from '../attempt/capture';
@@ -20,6 +29,7 @@ import { initialLock, lockReducer } from '../bets/lock';
 import { emptyBet, endReasonOf, lockSignals, type BetModel } from '../bets/store';
 import { betView, myResult, type BetView } from '../bets/view';
 import { feel } from '../device/feedback';
+import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import type { Balance } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
 import { IncomingScreen, NegotiateScreen, type Caption } from '../screens/ChallengeScreens';
@@ -59,6 +69,9 @@ import {
 import { getRuntime, type Runtime } from './runtime';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
+/** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
+const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
+const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
@@ -131,6 +144,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [rt],
   );
   const signupApi = useMemo(() => createServerSignupApi(rt.sessions), [rt]);
+  /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
+  const voiceVars = useRef(new Map<string, VoiceDynamicVariables>());
 
   const refreshBalance = useCallback(() => {
     rt.api.balance().then(setBalance, () => undefined);
@@ -465,6 +480,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     refreshBalance();
   };
 
+  const voice =
+    VOICE_ENABLED && bet && me === 'A' && !isOver(bet.state)
+      ? (voiceVars.current.get(bet.bet_id) ?? null)
+      : null;
+
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
 
@@ -539,6 +559,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               if (!room) return;
               rt.api.createBet(room.room_id, u.user_id).then(
                 (r) => {
+                  voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
                   rt.hub.adopt(r.bet);
                   rt.ws.subscribe(r.bet.bet_id);
                   dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
@@ -722,6 +743,23 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   return (
     <View style={styles.root}>
       {screen}
+      {voice && bet ? (
+        <PanelErrorBoundary
+          key={bet.bet_id}
+          name="voice"
+          onError={(m) => console.warn('[yo] voice', m)}
+        >
+          <Suspense fallback={null}>
+            <JudgeVoice
+              rt={rt}
+              betId={bet.bet_id}
+              dynamicVariables={voice}
+              startAttempt={(n) => rt.api.startAttempt(bet.bet_id, n).then(() => undefined)}
+              onShowTermsCard={() => undefined}
+            />
+          </Suspense>
+        </PanelErrorBoundary>
+      ) : null}
       {alert && route !== 'ruling' && route !== 'terms' ? (
         <View style={styles.toast} pointerEvents="none">
           <Label variant="small">{alert}</Label>
