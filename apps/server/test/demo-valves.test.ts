@@ -333,6 +333,9 @@ run('demo valves: toggles, warmup, judge health, seeded head-to-head (HTTP + Lit
       cached_ruling: false,
       cached_ruling_source: 'env',
       cached_ruling_env: false,
+      checks: true,
+      checks_source: 'env',
+      checks_env: false,
       updated_at: null,
     });
     const audits0 = (await audits('demo.toggle')).length;

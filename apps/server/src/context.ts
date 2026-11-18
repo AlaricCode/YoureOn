@@ -14,6 +14,7 @@ import type { Providers } from './providers/types';
 import type { StageVoice } from './stage/voice';
 import type { Ruling } from '@youre-on/shared/ruling';
 import type { ReplayFoulSource } from './replay/fouls';
+import type { SamClient } from './judge/sam';
 
 /** Who is calling, after `requireSession` (bearer) or the WS hello. */
 export interface AuthContext {
@@ -70,6 +71,11 @@ export interface AppDeps {
    * Absent = no foul replay is ever shown (GET /v1/bets/:bet_id/replay serves the win).
    */
   replayFouls?: ReplayFoulSource;
+  /**
+   * The SAM 3.1 service (src/judge/sam.ts) for the camera checks: built by createDeps when
+   * SAM3_URL and SAM3_API_TOKEN are set. Absent = no camera checks (judge/camera-checks.ts).
+   */
+  sam?: SamClient;
 }
 
 export type AppVariables = {

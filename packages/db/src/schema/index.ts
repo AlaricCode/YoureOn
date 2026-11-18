@@ -11,3 +11,4 @@ export * from './lifecycle';
 export * from './judge';
 export * from './markets';
 export * from './face';
+export * from './camera-checks';

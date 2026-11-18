@@ -107,6 +107,27 @@ export const EnvSchema = z.object({
    * webhook's critical path, so the stronger model.
    */
   CHECKS_MODEL: z.preprocess(unset, str.default('claude-opus-5-5')),
+  /**
+   * Camera checks (SAM 3.1, judge/sam.ts + judge/camera-checks.ts): the kill switch. Off by
+   * default. Checks run only when this is true, SAM3_URL and SAM3_API_TOKEN are set, and the
+   * runtime toggle POST /v1/demo/toggles {"checks": false} has not turned them off. Non-binding:
+   * the spec is never in the hashed Terms, and a check can only turn a decisive verdict into REDO.
+   */
+  CHECKS_ENABLED: z.preprocess(unset, boolStr.default(false)),
+  /** The deployed SAM 3.1 service (services/sam3/modal_app.py), e.g. https://<ws>--sam3-…modal.run. */
+  SAM3_URL: opt(z.url()),
+  /** Bearer token for POST /segment (secret; never logged). */
+  SAM3_API_TOKEN: opt(str),
+  /**
+   * The SAM deadline per attempt, retry included, from the start of the ruling job. SAM runs in
+   * parallel with the vision call (JUDGE_TIMEOUT_MS 10 s), so the default 10 s never makes a
+   * ruling wait longer than the judge's own budget; a late SAM is 'unavailable' (no veto). Capped
+   * at 15 s, under STUCK_JUDGING_MS (20 s).
+   */
+  SAM_TIMEOUT_MS: z.preprocess(
+    unset,
+    z.coerce.number().int().min(1000).max(15_000).default(10_000),
+  ),
   /** Demo fallback (ARCHITECTURE §7.2 cached_ruling): rule from a stored verdict, no LLM call. */
   CACHED_RULING: z.preprocess(unset, boolStr.default(false)),
   // --- Solana / QuickNode (secret)
