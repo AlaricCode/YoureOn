@@ -8,6 +8,9 @@
 //                   calling the model (env CACHED_RULING is the default). Each such ruling has
 //                   `model` CACHED_RULING_MODEL ('cache/demo-bottle@1', shared isCachedRuling), so
 //                   the stage can label it.
+//   checks          camera checks (judge/camera-checks.ts) on/off at runtime. Default on; it can
+//                   only switch OFF what env allows: checks run only with CHECKS_ENABLED=true and
+//                   SAM3_URL + SAM3_API_TOKEN set (the env kill switch always wins).
 //
 // Every change is audited ('demo.toggle'); the current values are in GET /v1/demo/health
 // `toggles`. The other §2.17 toggles are not here: the Gemini fallback is POST /v1/demo/gemini
@@ -16,6 +19,8 @@
 import { z } from 'zod/v4';
 import type { Env } from '../env';
 
+type ToggleEnv = Pick<Env, 'CACHED_RULING' | 'CHECKS_ENABLED'>;
+
 /**
  * Strict on purpose (unlike the tolerant §1.4 bodies): a typo such as {"cached": true} must be a
  * 422, not a 200 that leaves the fallback off while the operator thinks it is on.
@@ -23,6 +28,8 @@ import type { Env } from '../env';
 export const DemoTogglesRequest = z.strictObject({
   /** true / false = runtime value; null = back to env CACHED_RULING. */
   cached_ruling: z.boolean().nullable().optional(),
+  /** false = camera checks off now; true / null = back on (still needs env CHECKS_ENABLED). */
+  checks: z.boolean().nullable().optional(),
 });
 export type DemoTogglesRequest = z.infer<typeof DemoTogglesRequest>;
 
@@ -36,6 +43,11 @@ export interface DemoTogglesView {
   cached_ruling_source: ToggleSource;
   /** env CACHED_RULING: what a restart (or `cached_ruling: null`) goes back to. */
   cached_ruling_env: boolean;
+  /** The checks toggle (default true). Checks also need env CHECKS_ENABLED + SAM3_URL/TOKEN. */
+  checks: boolean;
+  checks_source: ToggleSource;
+  /** env CHECKS_ENABLED (the kill switch the toggle can never override). */
+  checks_env: boolean;
   /** The last POST /v1/demo/toggles that set something (ISO), or null. */
   updated_at: string | null;
 }
@@ -49,6 +61,7 @@ export interface ToggleChange {
 
 export class DemoToggles {
   private cachedRuling: boolean | null = null;
+  private checks: boolean | null = null;
   private updatedAt: number | null = null;
 
   /** The effective cached_ruling: the runtime value, else env CACHED_RULING (read at call time). */
@@ -56,8 +69,13 @@ export class DemoToggles {
     return this.cachedRuling ?? env.CACHED_RULING;
   }
 
+  /** The checks toggle: the runtime value, else on (env CHECKS_ENABLED gates it separately). */
+  checksOn(): boolean {
+    return this.checks ?? true;
+  }
+
   /** Applies the toggles named in `req`; one change per named toggle (even when unchanged). */
-  apply(req: DemoTogglesRequest, env: Pick<Env, 'CACHED_RULING'>, nowMs: number): ToggleChange[] {
+  apply(req: DemoTogglesRequest, env: ToggleEnv, nowMs: number): ToggleChange[] {
     const out: ToggleChange[] = [];
     if (req.cached_ruling !== undefined) {
       const from = this.cachedRulingOn(env);
@@ -69,15 +87,28 @@ export class DemoToggles {
         source: req.cached_ruling === null ? 'env' : 'runtime',
       });
     }
+    if (req.checks !== undefined) {
+      const from = this.checksOn();
+      this.checks = req.checks;
+      out.push({
+        toggle: 'checks',
+        from,
+        to: this.checksOn(),
+        source: req.checks === null ? 'env' : 'runtime',
+      });
+    }
     if (out.length) this.updatedAt = nowMs;
     return out;
   }
 
-  view(env: Pick<Env, 'CACHED_RULING'>): DemoTogglesView {
+  view(env: ToggleEnv): DemoTogglesView {
     return {
       cached_ruling: this.cachedRulingOn(env),
       cached_ruling_source: this.cachedRuling === null ? 'env' : 'runtime',
       cached_ruling_env: env.CACHED_RULING,
+      checks: this.checksOn(),
+      checks_source: this.checks === null ? 'env' : 'runtime',
+      checks_env: env.CHECKS_ENABLED,
       updated_at: this.updatedAt === null ? null : new Date(this.updatedAt).toISOString(),
     };
   }
