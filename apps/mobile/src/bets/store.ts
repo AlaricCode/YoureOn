@@ -20,6 +20,7 @@ import type { RealtimeEvent } from '@youre-on/shared/realtime';
 import type { Ruling } from '@youre-on/shared/ruling';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
 
+import { emptyOdds, oddsReducer, type OddsState } from '../app/odds';
 import type { EndReason, LockEvent } from './lock';
 
 export interface AttemptInfo {
@@ -70,6 +71,8 @@ export interface BetModel {
   appealVotes: readonly AppealVote[];
   /** Beat 5: the panel's decision (appeal.result, or BetSnapshot.appeal on a resync). */
   appealResult: AppealResult | null;
+  /** Odds offers and agreement (odds.* events, app/odds). */
+  odds: OddsState;
 }
 
 export const emptyBet = (bet_id: string, my_party: Party | null = null): BetModel => ({
@@ -104,6 +107,7 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   settlement: null,
   appealVotes: [],
   appealResult: null,
+  odds: emptyOdds,
 });
 
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
@@ -254,6 +258,10 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
     }
     case 'appeal.result':
       return { ...base, appealResult: e.payload.result, appealVotes: e.payload.result.votes };
+    case 'odds.offered':
+    case 'odds.answered':
+    case 'odds.agreed':
+      return { ...base, odds: oddsReducer(m.odds, e) };
     default:
       return base;
   }

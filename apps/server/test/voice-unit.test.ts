@@ -301,6 +301,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       'tool:propose_terms:create',
       'tool:confirm_terms:create',
       'tool:get_market_odds:create',
+      'tool:suggest_odds:create',
       'tool:request_attempt:create',
       'tool:show_terms_card:create',
       'tool:cue:create',
@@ -419,6 +420,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         `PATCH /v1/convai/tools/${r.tool_ids.propose_terms}`,
         `PATCH /v1/convai/tools/${r.tool_ids.confirm_terms}`,
         `PATCH /v1/convai/tools/${r.tool_ids.get_market_odds}`,
+        `PATCH /v1/convai/tools/${r.tool_ids.suggest_odds}`,
       ].sort(),
     );
     expect(store.secrets[0]._value).toBe('new');
@@ -454,7 +456,9 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
         'conversation_config.agent.prompt.prompt',
       ]),
     );
+    // get_market_odds and (odds) suggest_odds
     expect(store.writes).toEqual([
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       `PATCH /v1/convai/agents/${before.agent_id}`,
     ]);
@@ -481,6 +485,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     const plan = dryRunPlan(OPTS);
     expect(plan.map((a) => `${a.method} ${a.path}`)).toEqual([
       'POST /v1/convai/secrets',
+      'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',
       'POST /v1/convai/tools',

@@ -112,9 +112,15 @@ async function toItem(
   return {
     ...snap,
     // The terms' title; else the row's own (a seed-h2h row has no terms: "Demo history: ...").
-    title: snap.envelope?.presentation.title ?? row.title ?? 'Challenge',
+    // Seed rows keep their labelled title ("Demo history: ..."), even with a terms row.
+    title:
+      (row.is_seed ? row.title : null) ??
+      snap.envelope?.presentation.title ??
+      row.title ??
+      'Challenge',
     opponent: mine === 'A' ? snap.party_b : snap.party_a,
     my_stake: stake?.toString() ?? null,
+    their_stake: (mine === 'A' ? row.stake_b : row.stake_a)?.toString() ?? null,
     my_payout: paid?.toString() ?? null,
     outcome: row.outcome ? FROM_PG[row.outcome] : null,
     settled_at: row.settled_at?.toISOString() ?? null,

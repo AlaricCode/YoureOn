@@ -13,6 +13,7 @@ import {
   type ElObjectProperty,
 } from './propose-terms';
 import type { ElReasoningEffort, ElTtsModel } from './el-enums';
+import { SUGGEST_ODDS_BODY_SCHEMA, SUGGEST_ODDS_DESCRIPTION } from './suggest-odds';
 import {
   ASR_KEYWORDS,
   buildJudgePrompt,
@@ -48,7 +49,12 @@ export const TOOL_SECRET_NAME = 'yo-tool-secret';
 export const AGENT_TAGS = ['youre-on'];
 
 export type WebhookToolName =
-  'propose_terms' | 'confirm_terms' | 'open_hearing' | 'file_appeal' | 'get_market_odds';
+  | 'propose_terms'
+  | 'confirm_terms'
+  | 'open_hearing'
+  | 'file_appeal'
+  | 'get_market_odds'
+  | 'suggest_odds';
 export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
 
 /**
@@ -62,6 +68,8 @@ export const DEFAULT_WEBHOOK_TOOLS: readonly WebhookToolName[] = [
   'propose_terms',
   'confirm_terms',
   'get_market_odds',
+  // Odds (apps/server/src/odds/voice-tool.ts, POST /el/tools/suggest_odds).
+  'suggest_odds',
 ];
 export const CLIENT_TOOLS: readonly ClientToolName[] = [
   'request_attempt',
@@ -136,6 +144,11 @@ export const WEBHOOK_TOOL_SPECS: Record<WebhookToolName, WebhookSpec> = {
       },
       ['asset', 'horizon', 'a_side', 'amount_usd'],
     ),
+  },
+  suggest_odds: {
+    description: SUGGEST_ODDS_DESCRIPTION,
+    pre_tool_speech: 'force',
+    body: SUGGEST_ODDS_BODY_SCHEMA,
   },
 };
 

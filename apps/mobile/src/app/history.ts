@@ -4,6 +4,7 @@
 // POST /v1/demo/seed-h2h, no on-chain footprint) are titled "Demo history", never like a real bet.
 // Pure TS: tested in node.
 import { MeBetItem } from '@youre-on/shared/api';
+import { formatUsd } from '@youre-on/shared/money';
 
 import type { HistoryItem } from '../preview/data';
 import { COPY, t } from '../screens/copy';
@@ -40,6 +41,9 @@ export function historyItemOf(b: MeBetItem): HistoryItem | null {
   const net = stake === null ? 0n : (payout ?? (b.state === 'VOIDED' ? stake : 0n)) - stake;
   const outcome: HistoryItem['outcome'] =
     b.state === 'VOIDED' || net === 0n ? 'void' : net > 0n ? 'won' : 'lost';
+  // A bet at odds shows both stakes ("$5 vs $15", mine first); an even one does not.
+  const theirs = b.their_stake ?? null;
+  const odds = b.my_stake !== null && theirs !== null && BigInt(theirs) !== stake;
   return {
     bet_id: b.bet_id,
     title: titleOf(b),
@@ -47,6 +51,9 @@ export function historyItemOf(b: MeBetItem): HistoryItem | null {
     net: net.toString(),
     outcome,
     settled_at: b.settled_at ?? '',
+    ...(odds && b.my_stake !== null && theirs !== null
+      ? { stakes: `${formatUsd(b.my_stake)} vs ${formatUsd(theirs)}` }
+      : {}),
   };
 }
 

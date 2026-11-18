@@ -37,6 +37,7 @@ import type {
   VoiceDynamicVariables,
 } from '@youre-on/shared/api';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { agreedFor } from '@youre-on/shared/odds';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 import { formatPrice } from '@youre-on/shared/settlement';
 
@@ -148,9 +149,12 @@ import {
   TYPED_STAKES_USD,
   typedCardOf,
   typedReducer,
+  typedStakes,
   waitingForAccept,
   type TypedStakeUsd,
 } from './typedTerms';
+import { oddsApply, oddsSettled } from './odds';
+import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /**
@@ -594,6 +598,27 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       shown: typedCardOf(bet.envelope),
     });
   }, [negotiating, bet?.bet_id, opponentName, typedForced]);
+  // ---- odds (both phones): offers, counters, the judge's suggestion (../odds/useOdds) --------
+  const oddsTheirName =
+    (me === 'A' ? bet?.party_b?.display_name : bet?.party_a?.display_name) ?? '';
+  const oddsPanel = useOddsPanel({ api: rt.api, bet, me, theirName: oddsTheirName });
+  const typedOdds = useTypedOdds({
+    api: rt.api,
+    bet,
+    typed,
+    dispatch: typedDispatch,
+    theirName: opponentName,
+    enabled: negotiating && typed.mode === 'typed',
+  });
+  const oddsOk = bet?.envelope ? oddsSettled(bet.odds, bet.envelope.terms) : true;
+  // Agreed odds that differed from A's typed card recompose it (new hash): the form adopts it.
+  useEffect(() => {
+    if (!negotiating || !bet?.envelope) return;
+    const terms = bet.envelope.terms;
+    const agreed = oddsApply(terms) && !bet.odds.open && agreedFor(bet.odds, terms.stakes);
+    const shown = agreed ? typedCardOf(bet.envelope) : null;
+    if (shown) typedDispatch({ type: 'odds_agreed', shown });
+  }, [negotiating, bet?.envelope?.terms_hash, bet?.odds.agreed.length]);
 
   // ---- Bet on Bitcoin (A only, Beat 6): reset per bet; poll Gemini's odds while it is open ----
   useEffect(() => {
@@ -662,9 +687,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const submitTyped = async () => {
     if (!bet || !canSubmit(typed) || typed.bet_id !== bet.bet_id) return;
     typedDispatch({ type: 'submit' });
+    const picked = typedStakes(typed);
     const outcome = await submitTypedTerms(
       { api: rt.api },
-      { betId: bet.bet_id, claim: typed.claim, stakeUsd: typed.stakeUsd, bName: opponentName },
+      {
+        betId: bet.bet_id,
+        claim: typed.claim,
+        stakeUsd: typed.stakeUsd,
+        bName: opponentName,
+        stakes: picked.ok ? picked.stakes : undefined,
+      },
     );
     typedDispatch({ type: 'submitted', outcome });
     if (outcome.kind !== 'proposed') feel('failed');
@@ -673,7 +705,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const confirmTyped = async () => {
     const hash = bet?.envelope?.terms_hash ?? null;
     // Gated on B's accept too: an early tap would get a 409 replayed for this key for 24h.
-    if (!bet || !hash || !canConfirm(typed, hash, bet.inviteAnswer)) return;
+    if (!bet || !hash || !canConfirm(typed, hash, bet.inviteAnswer, oddsOk)) return;
     typedDispatch({ type: 'confirm' });
     const keyName = `confirm:${bet.bet_id}:${hash}`;
     const r = await confirmTypedTerms(
@@ -1372,11 +1404,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                       typed,
                       bet?.envelope?.terms_hash ?? null,
                       bet?.inviteAnswer ?? null,
+                      oddsOk,
                     ),
                     waitingFor: waitingForAccept(
                       typed,
                       bet?.envelope?.terms_hash ?? null,
                       bet?.inviteAnswer ?? null,
+                      oddsOk,
                     )
                       ? names.theirName
                       : null,
@@ -1387,9 +1421,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     onStake: (usd) => typedDispatch({ type: 'stake', usd: usd as TypedStakeUsd }),
                     onSubmit: () => void submitTyped(),
                     onConfirm: () => void confirmTyped(),
+                    odds: typedOdds,
                   }
                 : undefined
             }
+            odds={oddsPanel}
             market={
               negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id
                 ? {

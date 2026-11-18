@@ -251,6 +251,7 @@ Legend: **B** = bearer; **S** = signed write (§1.3); **U** = unauthenticated; *
 | 2.14 | `GET /v1/me/balance` · `GET /v1/me/bets` · `GET /v1/bets/:bet_id` · `GET /v1/bets/:bet_id/events` · `GET /v1/users/:user_id/head-to-head` | B | reads, resync |
 | 2.15 | `PUT /v1/devices/current/push` · `PATCH /v1/devices/current` | S | push token, device role |
 | 2.17 | `POST /v1/stage/session` · `/v1/demo/*` | stage key / demo | stage and demo controls |
+| 2.19 | `POST /v1/bets/:bet_id/odds/offer` · `POST …/odds/:offer_id/accept` · `POST …/odds/:offer_id/withdraw` · `POST …/odds/suggest` | S | odds offers / counters, the judge's suggested odds |
 
 ### 2.1 Auth and profile
 
@@ -384,7 +385,7 @@ Flows are in §1.3.
   - Before `TERMS_PROPOSED` the call returns `409 TERMS_NOT_FINAL`.
   - The client **must** recompute `hashJcs(envelope.terms)` and compare it to `envelope.terms_hash`; `TermsEnvelope.parse` does this (SCHEMAS §2.3).
 
-There is no REST endpoint for editing terms. Edits are spoken, and the judge calls `propose_terms` again. After `AWAITING_AUTHORIZATIONS` any change cancels the bet and continues on a new `bet_id` with `supersedes_bet_id` (SCHEMAS §9.2).
+Odds (unequal stakes) are agreed with the §2.19 offer routes; an accepted offer can recompose the card (a new version). There is no other REST endpoint for editing terms. Edits are spoken, and the judge calls `propose_terms` again. After `AWAITING_AUTHORIZATIONS` any change cancels the bet and continues on a new `bet_id` with `supersedes_bet_id` (SCHEMAS §9.2).
 
 ### 2.8 Authorization: atomic lock (D2, D3)
 
@@ -531,7 +532,7 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 
 - **`GET /v1/me/balance`** returns `{wallet_pubkey, usdc: MicroUsdc, usdc_display, in_escrow: MicroUsdc, in_escrow_display, as_of, source:'rpc'}`. `usdc` is the sum of `getTokenAccountsByOwner(mint)` (ESCROW §5.2: payouts may land in a fallback account). The result is cached 2 s and invalidated on this user's terminal events.
 - **`GET /v1/me/bets?status=active|settled&cursor&limit`** returns `{items: BetSummary[], next_cursor}`. `BetSummary = {bet_id, title, opponent: UserRef, my_party, state, my_stake, my_payout|null, outcome: OnchainOutcome|null, settled_at|null, is_seed}`.
-  - Built (`apps/server/src/me/bets.ts`): `title` is the terms' `presentation.title`, else the bet row's own `title` (a `seed-h2h` row has no terms: "Demo history: …", §2.17), else "Challenge".
+  - Built (`apps/server/src/me/bets.ts`): `title` is a `seed-h2h` row's own `title` ("Demo history: …", §2.17, even now that seed rows carry a terms row), else the terms' `presentation.title`, else the bet row's `title`, else "Challenge". Additive (odds): `their_stake: MicroUsdc|null` (the opponent's stake, for "$5 vs $15").
 - **`GET /v1/bets/:bet_id`** (B+P or stage) returns `BetSnapshot` (§2.18), the full current state used for cold start and resync.
 - **`GET /v1/bets/:bet_id/events?after=<seq>&limit=200`** returns `{events: RealtimeEvent[], last_seq}`, replayed from `bet_events` (DATA-MODEL §5.19). This is the gap-recovery endpoint SCHEMAS §10.1 refers to.
 - **`GET /v1/users/:user_id/head-to-head`** returns `HeadToHead = {wins, losses, pushes, net: SignedMicroUsdc, net_display: "−$7.00", last_settled_at|null, includes_seed}`, from the DATA-MODEL §7.1 view with the caller as `user_a`. No row means 0-0-0.
@@ -563,7 +564,7 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `POST /v1/demo/toggles {cached_ruling?, gemini_fallback?, voice_fallback?, face_pick_list?}` | The remaining ARCHITECTURE §7.2 toggles; every replay is labelled REPLAY on stage. **Built: `cached_ruling` only** (`apps/server/src/demo/toggles.ts`), body `{cached_ruling?: boolean \| null}`, strict (an unknown key is 422, so a typo can't leave a fallback off). It is a runtime value the judge reads per call, no restart; env `CACHED_RULING` is the boot default and `null` goes back to it. Answers `{ok, toggles, changed: [{toggle, from, to, source}]}`; each named toggle is audited `demo.toggle`. `GET /v1/demo/toggles` returns `{cached_ruling, cached_ruling_source: 'env'\|'runtime', cached_ruling_env, updated_at}`. A cached ruling has `Ruling.model = 'cache/demo-bottle@1'` (shared `CACHED_RULING_MODEL` / `isCachedRuling`), which the stage can label. The others are elsewhere: the Gemini fallback is `POST /v1/demo/gemini {feed: 'live'\|'replay'}`, the voice fallback is the phone's "Type it instead", the face pick list is the phone's room list. |
 | `POST /v1/demo/timers {draft_idle_s, hearing_turn_s, finalize_delay_s}` | Offchain timers only. Onchain windows are snapshotted from `Config` and can't change per bet (ESCROW I11). |
 | `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch (FINDINGS §3.8). **Built** (`apps/server/src/demo/warmup.ts`), no bet and no money: one live judge call through `deps.providers.llm` with the real prompt and output schema on a stored 16×16 JPEG (`judge/fixtures/warmup-16px.jpg`; it ignores `cached_ruling`), `getLatestBlockhash` on the server's RPC, one poll of the Gemini relay and its current contract (no WS: the relay polls REST, §7.3), and voice readiness (config only: a pre-minted token would open a billed session, so none is minted; no panel, it is cut). 200 `{ok, at, modes: {llm, judge_model, cached_ruling, markets_feed, lock_signer}, notes[], checks: {judge, rpc, gemini, voice}}`, each check `{ok, ms, error, …}`; `notes` say when a check hit a mock, the REPLAY feed or the cached ruling. One per 10 s per server: 429 `RATE_LIMITED` + `Retry-After`. Audited `demo.warmup`. |
-| `POST /v1/demo/seed-h2h {a_wins?, b_wins?}` | **Built** (`apps/server/src/demo/seed-h2h.ts`): the DATA-MODEL §11 SQL fallback as a route. Replaces the `is_seed` history between demo-a and demo-b (the users holding the demo wallets) with `a_wins + b_wins` settled bets, default 4-7 (each 0..30); `{0, 0}` clears it. Demo reset keeps them. 200 `{ok, a, b, a_wins, b_wins, replaced, inserted, head_to_head: {a_vs_b, b_vs_a}}`; 409 `INVALID_STATE {reason:'demo_player_missing', party}` before a demo wallet has an account. Audited `demo.seed_h2h`. |
+| `POST /v1/demo/seed-h2h {a_wins?, b_wins?, records?}` | **Built** (`apps/server/src/demo/seed-h2h.ts`): the DATA-MODEL §11 SQL fallback as a route. Replaces the `is_seed` history between demo-a and demo-b (the users holding the demo wallets) with `a_wins + b_wins` settled bets, default 4-7 (each 0..30); `{0, 0}` clears it. Demo reset keeps them. Odds rehearsal: `records: [{player: 'a'\|'b', category: 'bottle_flip'\|'throw', made: 0..30, missed: 0..30}]` (≤ 3) makes that player the performer of `made + missed` of those rows (made = the performer won), for the judge's history-grounded odds (§2.19); they count toward the head-to-head, so a's made + b's missed ≤ `a_wins` and b's made + a's missed ≤ `b_wins` (else 422 `VALIDATION_FAILED`); the other rows rotate titles of other categories. Every seed row now has a real composed terms row (`bet_terms_versions`, final, `source_tool 'seed'`). Example: `{"a_wins": 4, "b_wins": 12, "records": [{"player": "b", "category": "bottle_flip", "made": 10, "missed": 2}]}`. 200 `{ok, a, b, a_wins, b_wins, replaced, inserted, head_to_head: {a_vs_b, b_vs_a}, performer_stats: PerformerStats[]}`; 409 `INVALID_STATE {reason:'demo_player_missing', party}` before a demo wallet has an account. Audited `demo.seed_h2h`. |
 | `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}`. Built (`apps/server/src/chain/health.ts`) with more: also `toggles` (as `GET /v1/demo/toggles`), `judge_llm` (`{provider, model, cached_ruling, calls, failures, last_ok_at, last_ok_ms, last_ok_source, last_ok_model, last_error_at, last_error, last_error_source, window, p50_ms, p95_ms}`, in memory since boot; the warm-up counts) and `llm_last_ok` (= `judge_llm.last_ok_at`). `stream` is `{last_delivery_at, events_last_hour, rpc_poll_last_hour}` (no `status`: that is QuickNode's, read by `scripts/demo-check.ts`): Stream deliveries only (`chain_events.source = 'stream'`, or `chain_txs.stream_seen_at` for a tx `rpc_poll` stored first); `rpc_poll_last_hour` is additive. Warning `stream_silent` (`warn`): `QN_STREAM_SECURITY_TOKEN` is set and server escrow txs (not `nonce_advance`) were sent in the last 10 min (older than 60 s) with no Stream delivery in that time; a dropped send (still `sent`, in `inflight.stuck`) can also trigger it. Judge warnings (level `warn`): `judge_no_success` (no judge success since boot), `judge_failing` (the last call failed after the last success), `cached_ruling_on`. They stay in `warnings`, but alone they never turn the server's health log lines into a WARN (`chain.boot_health` stays info, and the keeper's 10-minute `chain.unhealthy` is not logged): those lines mean a chain or money-path problem (`chain/health.ts` `chainNeedsAttention`). The projector polls it with its own stage token (scope `demo` under `DEMO_MODE`), so `#demo=` is optional in the stage URL. |
 
 **Stage audio** (stage token only; a phone session or no stage scope gets `404`; §4.5). The ElevenLabs key stays on the server; the stage fetches the bytes with its bearer and plays them through its own AudioContext.
@@ -636,6 +637,27 @@ export const BetSnapshot = z.object({
 });
 ```
 
+### 2.19 Odds (offers, counters, the judge's suggestion)
+
+Odds are unequal stakes on a skill bet: `Terms.stakes.a / .b`, at most 10:1, each within `MIN_STAKE..max_stake` (SCHEMAS §2.1, §3.5). Offers are consent objects in the bet's log (`odds.offered` / `odds.answered` / `odds.agreed`, §3.4) folded by the shared `foldOdds`. Rules (`apps/server/src/odds/service.ts`):
+
+- **Auto-offer.** A composed skill card with unequal stakes that are not yet agreed opens an offer (from A for typed terms, from the judge for voice / demo terms) unless the open offer already has those stakes; a differing open offer is superseded. Even cards open nothing; Gemini (market) bets never have offers.
+- **One open offer.** A new offer while your own is open supersedes it (keeping its parent); while someone else's or the judge's is open, it counters it (`parent_id` = it).
+- **Who accepts.** An A or B offer: the other party (the author counts as accepted). A judge offer: both, one tap each. Agreed = both accepted. If the card's stakes differ, the card is recomposed with them in the same transaction (`proposalOf(card)` with the new stakes, the deadline length kept; a new version, `terms.proposed`, a new `terms_hash`; `source_tool 'odds'`), then `odds.agreed {terms_hash}`.
+- **Confirm gate.** `confirm_terms` and `POST …/terms/confirm` are refused while unequal skill stakes are not agreed or any offer is open: `ODDS_PENDING` (typed: 409 `INVALID_STATE {reason:'odds_pending'}` "Waiting on the odds."), audited `terms.confirm_refused {reason:'odds_pending'}`. Agreement is of a stakes pair, so a re-proposal with the same stakes (an edge-case edit) needs no new consent. Both still hold to lock the final card.
+- **After the freeze** (AWAITING_AUTHORIZATIONS and later) every odds route answers 409 `INVALID_STATE {reason:'locked'}` "Terms are locked in."
+
+All routes: S, the caller must be party A or B (`NOT_A_PARTY` otherwise), one per-(bet, user) bucket (`TYPED_TERMS_BUCKET`, 12/min, key `odds`). Every transaction locks the bet row.
+
+| Route | Body → 200 | Errors |
+|---|---|---|
+| `POST /v1/bets/:bet_id/odds/offer` | `{stakes_usd: {a, b}}` or `{ratio: '1:1'\|'3:2'\|'2:1'\|'3:1'\|'5:1'\|'10:1', favored: 'A'\|'B'\|null, base_usd}` (the underdog stakes `base_usd`, the favourite base × ratio) → `OddsOfferResponse {offer: OddsOffer, agreed: false, terms_hash}`; `judge.cue ODDS_OFFERED` / `ODDS_COUNTERED` (spoken) | 422 `VALIDATION_FAILED {issue: {code: ODDS_TOO_LONG \| STAKE_ABOVE_MAX \| STAKE_BELOW_MIN \| AMBIGUOUS}}`; 409 `INSUFFICIENT_FUNDS {party}` "Jake can't cover $15." (a soft check of the wallet's USDC; skipped when the RPC is down; the lock preflight stays the hard check); 409 `INVALID_STATE {reason: no_terms \| locked \| market_bet}` |
+| `POST /v1/bets/:bet_id/odds/:offer_id/accept` | `{n}` (the offer number the phone showed) → `{offer, agreed, terms_hash}` (`terms_hash` = the card both now confirm) | 409 `INVALID_STATE {reason: not_open \| own_offer \| stale \| already_accepted \| no_terms}`; `INSUFFICIENT_FUNDS` as above |
+| `POST /v1/bets/:bet_id/odds/:offer_id/withdraw` | `{}` → `{offer}` (the author; either party may dismiss the judge's) | 409 `not_open`; 403 `NOT_A_PARTY {reason:'not_author'}` |
+| `POST /v1/bets/:bet_id/odds/suggest` | `{base_usd?, claim?, performer?, attempts?}` (the claim fields only while DRAFTING, party A only; TERMS_PROPOSED reads the card; the base defaults to the smaller stake, else $5) → `OddsSuggestResponse {offer, say}`: a judge offer with `suggestion` | 422 `{fix:'NO_CLAIM'\|'AMBIGUOUS'}`; 409 as above |
+
+**The judge's suggestion** (`apps/server/src/odds/suggest.ts`, the same engine as the `suggest_odds` tool, §4.3). It is grounded in the performer's record (`odds/stats.ts`: settled bets incl. labelled seed history; the challenge category of each final card's claim): overall W–L, made / tries as the performer of this kind of bet, recent results and streak, the head-to-head with this opponent. All numbers are computed in code (SCHEMAS §3.5): a shrunk rate (prior 4 tries at the category base rate: bottle flip 25 %, throw 40 %, other 50 %), the attempt rule, clamped to 10:1, the fair ratio and its band of ladder rungs, and `stakesFor` for each rung. With `LLM_PROVIDER=live` (ALLOW_SPEND) and some history, Claude (`ODDS_LLM_MODEL`, default `claude-opus-5-5`, effort low, 3 s deadline, structured output `{ratio ∈ band, reason ≤ 140}`) writes one sentence and picks a rung of the band; a rung outside it becomes the nearest, and a reason quoting any number not in the facts becomes the template. Spend off, timeout, error or refusal: the nearest rung + the template (`source 'template'`); no history: the category default (`'default'`). Cached per (bet, card hash or draft claim, base, stats) for 10 min; asking again while that judge offer is open returns it with no new event. It is only an offer: both accept, then both hold.
+
 ---
 
 ## 3. Server → client realtime
@@ -701,6 +723,9 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | `tx.sign_request` **NEW** | `{request: SignRequest}` | RULED rpc-confirmed (`concede` + `appeal`, loser); rebuilt concede/appeal requests. Never the lock. Built: `LOCK_SIGNER=phones`, decisive rulings only, `concede` first then `appeal` (camera bets; no appeal request for a Gemini bet); under the custodial signer nothing is pushed and the phone GETs on the tap. |
 | `terms.authorized` | `{party, method, authorized_at, count}` | each accepted `PartyAuthorization` (`count` 2 = the lock is being sent) |
 | `terms.declined` | `{party}` | §2.5, §2.8 decline |
+| `odds.offered` **NEW** | `{offer: OddsOffer}` (SCHEMAS §3.5) | §2.19: an auto-offer, an offer / counter, a judge suggestion (TERMS_PROPOSED; a voice suggestion also in DRAFTING) |
+| `odds.answered` **NEW** | `{offer_id, party, answer: accepted\|countered\|withdrawn\|superseded, by_offer_id}` | §2.19 |
+| `odds.agreed` **NEW** | `{offer_id, stakes: {a, b}, ratio_label, terms_hash}` | both accepted (after any recomposed `terms.proposed`) |
 | `judge.line` / `party.line` | SCHEMAS | relayed from A's phone (§2.6) |
 | `judge.cue` **NEW** | `{cue: JudgeCueName, text, speak: boolean}` | see §4.5; one per voice-worthy transition |
 | `attempt.started` | `{attempt_no, performer, max_ms}` **+ NEW** `recorder_device_id`, `go_at` | → ATTEMPT |
@@ -799,7 +824,8 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
                     "items": { "type": "object", "required": ["question", "answer"], "properties": {
                       "question": { "type": "string", "description": "The edge case, e.g. 'Does landing on the cap count?'" },
                       "answer":   { "type": "string", "description": "The rule, e.g. 'No. Only upright on its base counts.'" } } } },
-    "amount_usd":  { "type": "string", "description": "Spoken stake per person in dollars, e.g. '5' or '5.20'. Real_world: the even-money amount." },
+    "amount_usd":  { "type": "string", "description": "Party A's (the challenger's) stake in dollars, e.g. '15'. When stakes are even, the stake per person, e.g. '5' or '5.20'. Real_world: the even-money amount." },
+    "stake_b_usd": { "type": "string", "description": "Party B's stake in dollars when the odds are not even, e.g. '5'. Empty or omitted = same as amount_usd. Real_world: empty." },
     "market_side": { "type": "string", "enum": ["YES", "NO", "none"], "description": "real_world only: A's side, YES = Bitcoin finishes at or above the line. Otherwise 'none'." },
     "deadline_minutes": { "type": "integer", "description": "Minutes to finish the attempt; 0 means the default 10; max 45." }
   }
@@ -810,7 +836,7 @@ Mapping to `TermsProposal`:
 
 - run `normText` on every string;
 - `performer: 'none'` → `null`;
-- `amount = parseUsd(amount_usd)`;
+- `amount = parseUsd(amount_usd)`; `amount_b = stake_b_usd` empty / omitted / equal → `null`, else `parseUsd` (AMBIGUOUS otherwise; real_world must leave it empty). `stake_b_usd` is **not** in `required`, so an agent synced before it keeps working. Each side is checked against the cap and the pair against 10:1 (`ODDS_TOO_LONG` "Ten to one, tops. Pick shorter odds.");
 - `evidence_source = type === 'skill' ? 'camera' : 'gemini'`;
 - `market_query = real_world ? {asset:'BTC', horizon:'5m', a_side: market_side} : null`;
 - `deadline_minutes: 0` → `null`;
@@ -836,6 +862,8 @@ Responses (≤ 300 B):
 {"ok":false,"refused":"alcohol_drugs","say":"Chugging contests? I judge bottle flips, not livers. Pick something else.","next":"end"}
 ```
 
+With odds the reply adds `"odds":"tap_accept"` and the stake sentence names both: `"… Logan puts in fifteen, Jake puts in five; winner takes twenty."` The judge then tells both to tap Accept (§2.19); `[EVENT] ODDS_AGREED` tells it when.
+
 `say` is a server template over `Terms`, so the spoken read-back matches the card word for word. `next` is advisory: `ask` (≤ 2 questions total), `readback`, or `end`.
 
 #### `confirm_terms` (`pre_tool_speech: "off"`)
@@ -851,6 +879,21 @@ Responses (≤ 300 B):
 {"ok":true,"code":"0586·0f0a","say":"Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do."}
 {"ok":false,"fix":"NOT_PROPOSED","say":"Nothing to confirm yet. What's the bet?"}
 {"ok":false,"fix":"INVITE_PENDING","say":"Jake has to accept the challenge on their phone first."}
+{"ok":false,"fix":"ODDS_PENDING","say":"Odds first. Both of you tap Accept on your phones."}
+```
+
+`ODDS_PENDING` (§2.19): unequal stakes not yet accepted on both phones, or an odds offer open. Audited, never replayed; when both accept, `judge.cue ODDS_AGREED` is spoken so the judge calls `confirm_terms` again.
+
+#### `suggest_odds` (`pre_tool_speech: "force"`)
+
+- Params: ids + `claim: string`, `performer: enum ["A","B"]`, `attempts: {count, rule}`, `base_usd: string` ("Per-person amount being discussed").
+- The same prelude as `propose_terms` (secret, the per-conversation bucket, the 10 s dedupe, the binding check, `WRONG_BET` audited), then the §2.19 suggestion engine: in TERMS_PROPOSED it reads the card (the params are ignored), in DRAFTING it uses the params (the offer has `terms_hash: null`; accepting it waits for a card). The judge speaks `say` itself, so the `ODDS_OFFERED` cue is a contextual update.
+- Responses (< 300 B):
+
+```json
+{"ok":true,"ratio":"2:1","a":"$5","b":"$10","pct":69,"say":"Jake is 10 for 12 on bottle flips, and 12-4 against Logan. I'd make it two to one: Logan puts in five, Jake puts in ten. Both agree?"}
+{"ok":false,"fix":"NO_CLAIM","say":"What's the bet? I need the claim before I set odds."}
+{"ok":false,"fix":"NOT_DRAFTING","say":"These terms are already frozen. No new odds now."}
 ```
 
 #### `open_hearing` (`pre_tool_speech: "off"`)
@@ -918,6 +961,8 @@ Grammar:
 | `LOCK_FAILED` | `[EVENT] LOCK_FAILED reason=insufficient_funds party=Jake :: Say the lock failed and nothing moved.` |
 | `DECLINED` / `EXPIRED` / `REFUSED` | `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` |
 | `INVITE_ACCEPTED` | `[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.` (only after a refused `INVITE_PENDING` for the same terms) |
+| `ODDS_OFFERED` / `ODDS_COUNTERED` | `[EVENT] ODDS_OFFERED name=Logan ratio="3 to 1" :: Say Logan offers 3 to 1: Logan fifteen, Jake five. Jake taps Accept or Counter.` Spoken for an offer from a phone (a typed card, an offer, the Suggest button: "Say this word for word: <the suggestion>"); a contextual update when the voice judge proposed or suggested it |
+| `ODDS_AGREED` | `[EVENT] ODDS_AGREED a=fifteen b=five :: Say the odds are agreed: Logan fifteen, Jake five. Then call confirm_terms again.` Spoken only after a voiced `confirm_terms` was refused `ODDS_PENDING`; otherwise a contextual update "… Keep these stakes in every propose_terms call." |
 | `ATTEMPT_ARMED` (context) | `[EVENT] ATTEMPT_ARMED attempt=1 performer=Jake :: Stay quiet while the camera counts down.` |
 | `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan he can tap GG.` |
 | `REDO` | `[EVENT] REDO attempt=2 max=3 why=unclear :: Say "Run it back" and call request_attempt with attempt_no 2.` |
@@ -1417,3 +1462,4 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 - **2026-11-18 (Beat 5 appeal, built without the hearing).** §2.12 gains "Built" notes: the exact GET / POST error set (`SIGNATURE_INVALID` for a signature that does not verify, as concede; the program's 6024 → `APPEAL_WINDOW_CLOSED`), the bucket spent only by an accepted filing, idempotent repeats, the filing written before the send, the failed-appeal path, the decision once all three votes are in (the `AppealResult` carries three votes), finalize skipping an appeal in flight, the `appeal-sweep` keeper task. §2.17 adds `POST /v1/demo/bets/:bet_id/appeal` (custodial, `LOCK_SIGNER=server`). §3.4 pins the push order (concede then appeal) and the built event order; `appeal_decided` push is not sent. §7.2 describes the built panel (abstentions, no 0.8 floor on votes).
 - **2026-11-18, the stage voice (feat/stage-voice):** §2.17 gains the stage audio routes (`GET /v1/stage/audio`, `/v1/stage/tts/:clip_id`, `/v1/stage/sfx/:kind`) and says `GET /v1/demo/health` takes the stage token alone. §3.1 gains the `stage.voice` control frame (stage sessions only) and `stage.cue.audio_url`. §4.5: the TTS route is `/v1/stage/tts/:clip_id` (content-addressed: sha256 of voice, model and text), not `:vote_id`, because the same route also voices the rulings and payouts; the stage voice table and the browser fallback after 800 ms are new. §2.6 / §4.4: the cue clips are live with the key (`SFX_PROVIDER=auto`). §4.5 "One judge at a time": in a bet a voice judge hosts (a relayed `judge.line`), the stage leaves the ruling and the payout to A's phone (no `stage.voice`, no browser voice), so the hall never hears both.
 - **2026-11-19, wave-3 review minors (fix/minors-server):** §2.10: GG is refused with `STATE_MOVED_ON {reason:'appeal_in_flight'}` once the loser's appeal is filed (signed / sent, the bet still `RULED`), so GG and the appeal are mutually exclusive. §2.12: the 3/h bucket token is taken last in the filing's own transaction and given back on a preflight refusal. §2.14: a `seed-h2h` row's `title` is its own ("Demo history: …"). §2.17: the judge / toggle health warnings alone never make the health log lines a WARN. §4.5: a REDO reason that already says "Run it back" is not prefixed again.
+- **2026-11-18 (odds, feat/odds):** new §2.19 (offer / accept / withdraw / suggest routes, the protocol rules, the history-grounded suggestion), §2.0 index row. §2.7 note. §2.14 `their_stake`, seed titles. §2.17 `seed-h2h` `records` + `performer_stats`, seed rows carry terms rows. §3.4 `odds.offered`, `odds.answered`, `odds.agreed`. §4.3 `propose_terms` `stake_b_usd` (optional, additive), the odds read-back and `odds: 'tap_accept'`, `confirm_terms` `ODDS_PENDING`, the new `suggest_odds` webhook tool. §4.5 cues `ODDS_OFFERED`, `ODDS_COUNTERED`, `ODDS_AGREED`.

@@ -178,6 +178,7 @@ export function requoteProposal(t: Terms): TermsProposal {
     edge_cases: t.edge_cases,
     evidence_source: t.evidence_source,
     amount: (pot / 2n).toString(),
+    amount_b: null,
     market_query: { asset: 'BTC', horizon: '5m', a_side: t.market.side },
     deadline_minutes: null,
   };
