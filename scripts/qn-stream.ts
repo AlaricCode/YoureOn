@@ -69,6 +69,7 @@ options
   --fly-app <app>      create/resume: set the Fly secret ${TOKEN_ENV} first (fly secrets import)
   --paused             create: leave the Stream paused
   --replace            create: delete an existing Stream with the same name first
+  --quicknode-token    create: let QuickNode generate the token (fallback), then save + verify it
   --skip-probe         create/resume: do not check the webhook first
   --probe-wait <s>     keep probing up to <s> seconds (default 0; 120 with --fly-app)
   --dry-run            print the request(s) and send nothing (no API key needed)
@@ -88,6 +89,7 @@ const OPTIONS = {
   'fly-app': { type: 'string' },
   paused: { type: 'boolean' },
   replace: { type: 'boolean' },
+  'quicknode-token': { type: 'boolean' },
   'skip-probe': { type: 'boolean' },
   'probe-wait': { type: 'string' },
   'dry-run': { type: 'boolean' },
@@ -190,6 +192,7 @@ async function cmdCreate(v: Values) {
     name: v.name,
     paused: v.paused,
     replace: v.replace,
+    quicknodeToken: v['quicknode-token'],
     skipProbe: v['skip-probe'],
     probeWaitSecs: v['probe-wait'] === undefined ? undefined : Number(v['probe-wait']),
   });

@@ -88,13 +88,14 @@ export function webhookUrlOf(base: string): string {
  */
 export async function buildCreateBody(o: {
   baseUrl: string;
-  token: string;
+  /** null: omit security_token (QuickNode then generates one and returns it). */
+  token: string | null;
   status?: 'active' | 'paused';
   name?: string;
   filterJs?: string;
   template?: Record<string, unknown>;
 }): Promise<StreamBody> {
-  assertToken(o.token);
+  if (o.token !== null) assertToken(o.token);
   const t = (o.template ?? JSON.parse(readFileSync(STREAM_TEMPLATE_PATH, 'utf8'))) as Record<
     string,
     unknown
@@ -109,7 +110,7 @@ export async function buildCreateBody(o: {
     destination_attributes: {
       ...(t.destination_attributes as unknown as WebhookAttributes),
       url: webhookUrlOf(o.baseUrl),
-      security_token: o.token,
+      ...(o.token === null ? {} : { security_token: o.token }),
     },
     status: o.status ?? 'active',
   };
@@ -255,7 +256,7 @@ export function writeTokenFile(path: string, token: string): void {
   chmodSync(path, 0o600);
 }
 
-export type TokenSource = 'env' | 'file' | 'generated';
+export type TokenSource = 'env' | 'file' | 'generated' | 'quicknode';
 
 /** env QN_STREAM_SECURITY_TOKEN, else the token file, else a new token written to the file. */
 export function resolveToken(
@@ -446,6 +447,12 @@ export interface CreateOptions {
   skipProbe?: boolean;
   /** default 0; 120 when flyApp is set (the machines restart after a secret change). */
   probeWaitSecs?: number;
+  /**
+   * Let QuickNode generate the token (send none), then save the returned one, set the Fly secret
+   * (with flyApp) and probe before activating. A fallback in case a client-supplied token is ever
+   * refused on create.
+   */
+  quicknodeToken?: boolean;
   /** For tests: the filter source to upload (default: the regenerated filter.js). */
   filterJs?: string;
 }
@@ -462,23 +469,35 @@ export async function createStream(
 ): Promise<{ id: string; stream: Record<string, unknown>; tokenFingerprint: string }> {
   const call = (r: QnRequest) => qnCall(io.fetch, io.apiKey, r);
   const flyApp = o.flyApp ?? DEFAULT_FLY_APP;
-  const tok = resolveToken(io.env, o.tokenFile)!;
-  io.log(tokenLine(tok.source, tok.token, o.tokenFile));
-  if (o.flyApp) {
+  const setSecret = async (token: string) => {
+    if (!o.flyApp) return;
     if (!io.flyImport) throw new Error('--fly-app needs the fly CLI');
-    await io.flyImport(o.flyApp, tok.token);
-  }
-  if (!o.skipProbe) {
-    const p = await probeUntil(io, o.baseUrl, tok.token, o.probeWaitSecs ?? (o.flyApp ? 120 : 0));
+    await io.flyImport(o.flyApp, token);
+  };
+  const verified = async (token: string): Promise<boolean> => {
+    if (o.skipProbe) return true;
+    const p = await probeUntil(io, o.baseUrl, token, o.probeWaitSecs ?? (o.flyApp ? 120 : 0));
     io.log(`webhook probe: ${probeAdvice(p, flyApp, o.tokenFile)}`);
-    if (!p.ok && !o.paused)
+    return p.ok;
+  };
+
+  // 1. our token on the server first (so nothing the Stream sends is ever rejected)
+  let ours: string | null = null;
+  if (!o.quicknodeToken) {
+    const tok = resolveToken(io.env, o.tokenFile)!;
+    io.log(tokenLine(tok.source, tok.token, o.tokenFile));
+    await setSecret(tok.token);
+    if (!(await verified(tok.token)) && !o.paused)
       throw new Error(
         'the server does not verify this token yet: fix that first (or create it --paused, or --skip-probe)',
       );
+    ours = tok.token;
   }
+
+  // 2. one Stream per name, created PAUSED
   const body = await buildCreateBody({
     baseUrl: o.baseUrl,
-    token: tok.token,
+    token: ours,
     status: 'paused',
     name: o.name,
     filterJs: o.filterJs,
@@ -497,8 +516,23 @@ export async function createStream(
   const id = typeof created['id'] === 'string' ? created['id'] : '';
   if (!id) throw new Error(`create returned no id: ${JSON.stringify(redact(created))}`);
   io.log(`created ${id} (paused)`);
+
+  // 3. the token the Stream will sign with must be the one the server verifies
   const returned = tokenOf(created);
-  if (returned && returned !== tok.token) {
+  let token = ours;
+  if (o.quicknodeToken) {
+    if (!returned)
+      throw new Error(`QuickNode returned no security_token for ${id}; it stays paused`);
+    writeTokenFile(o.tokenFile, returned);
+    io.log(tokenLine('quicknode', returned, o.tokenFile));
+    await setSecret(returned);
+    token = returned;
+    if (!(await verified(returned)) && !o.paused)
+      throw new Error(
+        `the server does not verify the Stream's token yet; ${id} stays paused. ` +
+          `Set it (fly secrets import -a ${flyApp} < ${o.tokenFile}), then: npm run qn-stream -- resume ${id}`,
+      );
+  } else if (returned && returned !== ours) {
     // QuickNode replaced our token: keep theirs (the Stream signs with it) and stay paused.
     writeTokenFile(o.tokenFile, returned);
     throw new Error(
@@ -507,12 +541,14 @@ export async function createStream(
         `then: npm run qn-stream -- resume ${id}`,
     );
   }
+
+  // 4. deliver
   if (!o.paused) {
     await call(req.activate(id));
     io.log(`activated ${id}`);
   }
   const stream = (await call(req.get(id))) as Record<string, unknown>;
-  return { id, stream, tokenFingerprint: fingerprint(tok.token) };
+  return { id, stream, tokenFingerprint: fingerprint(token!) };
 }
 
 /** Activates `id` after proving the server verifies its token (unless skipProbe). */
