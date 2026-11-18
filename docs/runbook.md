@@ -231,15 +231,15 @@ https://youre-on.fly.dev/stage/?room=<CODE>#key=<STAGE_KEY>
 - A reload of the same tab comes back to the same card without the URL (session storage).
 - Never open `?preview` during the pitch: it is sample data.
 
-| Key       | Does                                               |
-| --------- | -------------------------------------------------- |
-| `F`       | Full screen                                        |
-| `M`       | Mute / unmute (the first key press unlocks audio)  |
-| `V`       | Judge voice off / on (sounds keep playing)         |
-| `Q`       | QR of the latest lock or payout on Solana Explorer |
-| `H` / `?` | Key help                                           |
-| `1`–`6`   | REPLAY clip of that beat                           |
-| `Esc`     | Close any overlay                                  |
+| Key       | Does                                                                                   |
+| --------- | -------------------------------------------------------------------------------------- |
+| `F`       | Full screen                                                                            |
+| `M`       | Mute / unmute (the first key press unlocks audio); muting cuts off the line being said |
+| `V`       | Judge voice off / on (sounds keep playing); off cuts off the line being said           |
+| `Q`       | QR of the latest lock or payout on Solana Explorer                                     |
+| `H` / `?` | Key help                                                                               |
+| `1`–`6`   | REPLAY clip of that beat                                                               |
+| `Esc`     | Close any overlay                                                                      |
 
 The bottom strip shows demo health: fee-payer SOL, free nonces, RPC and DB latency, and how many
 REPLAY clips are cached. The ticker header says "via QuickNode Streams" only for events the Stream
