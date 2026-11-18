@@ -74,6 +74,7 @@ import {
   confirmSent,
   cosignTx,
   customErrorCode,
+  isBlockhashNotFound,
   messageB64,
   PreflightError,
   SimulationError,
@@ -117,6 +118,8 @@ export const FINALIZE_DELAY_MS = 1_000;
 export const CONCEDE_REBUILD_MS = 20_000;
 /** A recent blockhash lives ~60 s on devnet; the sign request stops a bit earlier. */
 export const SIGN_REQUEST_TTL_MS = 50_000;
+/** Wait before rebuilding a resolve whose blockhash the RPC node did not know. */
+export const BLOCKHASH_RETRY_MS = 500;
 /** CONCEDED / FINALIZED this long with no payout in flight counts as stranded. */
 export const STRANDED_GRACE_MS = 30_000;
 
@@ -185,6 +188,21 @@ export class PayoutService {
   // ---- resolve ----------------------------------------------------------------------------
 
   async onRuling(betId: string, input: Ruling | HearingRuling): Promise<RuledResult> {
+    try {
+      return await this.resolveOnce(betId, input);
+    } catch (err) {
+      // A lagging RPC node rejected the fresh blockhash at preflight: nothing landed (send()
+      // checked), the row is retired, so one immediate rebuild beats waiting for resolve-due.
+      if (!isBlockhashNotFound(err)) throw err;
+      this.deps.log.warn('payout.resolve_blockhash_retry', { bet_id: betId });
+      // A slot later, so getLatestBlockhash hands out a newer one (the same blockhash would
+      // rebuild the very same bytes).
+      await new Promise((r) => setTimeout(r, BLOCKHASH_RETRY_MS));
+      return this.resolveOnce(betId, input);
+    }
+  }
+
+  private async resolveOnce(betId: string, input: Ruling | HearingRuling): Promise<RuledResult> {
     const ruling = PayoutRuling.parse(input);
     if (ruling.bet_id !== betId)
       throw new Error(`ruling is for bet ${ruling.bet_id}, not ${betId}`);
