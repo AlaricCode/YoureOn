@@ -4,6 +4,8 @@
 // as the contract prints them. Some of these routes are still being built server-side.
 import {
   AuthorizationResult,
+  BET_EVENTS_LIMIT,
+  betEventsPath,
   BetSnapshot,
   CreateBetResponse,
   CreateRoomResponse,
@@ -36,7 +38,11 @@ import {
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
 import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
-import { RealtimeEvent } from '@youre-on/shared/realtime';
+import {
+  BetEventsResponse,
+  parseRealtimeEvent,
+  type RealtimeEvent,
+} from '@youre-on/shared/realtime';
 import { z } from 'zod/v4';
 
 import { boundaryFor, buildMultipart } from './multipart';
@@ -76,11 +82,47 @@ export const FramesResponse = z.object({
 });
 /** §2.10 POST /v1/bets/:id/concede -> 202 */
 export const SubmittedResponse = z.object({ status: z.literal('submitted'), signature: Signature });
-/** §2.14 GET /v1/bets/:id/events */
-export const BetEventsResponse = z.object({
-  events: z.array(z.unknown()),
-  last_seq: z.number().int(),
-});
+/**
+ * §2.14 GET /v1/bets/:id/events: the shared BetEventsResponse with its events left unparsed, so
+ * one envelope this build can't read is dropped on its own (SCHEMAS §10.1) instead of failing
+ * the page.
+ */
+export const BetEventsPage = BetEventsResponse.extend({ events: z.array(z.unknown()) });
+
+/** One page of a bet's log, as BetHub reads it (../app/betHub BetHubApi). */
+export interface BetEventsRead {
+  /** The envelopes that parse, in the order sent (seq order). */
+  events: RealtimeEvent[];
+  /** The bet's newest seq when the page was read. */
+  last_seq: number;
+  /**
+   * The highest seq the page held, dropped envelopes included (`after` for an empty page): the
+   * next page starts here, and a seq at or below it that is not in `events` is not coming.
+   */
+  through: number;
+}
+
+const seqOf = (raw: unknown): number | null => {
+  const seq = (raw as { seq?: unknown } | null)?.seq;
+  return typeof seq === 'number' && Number.isInteger(seq) ? seq : null;
+};
+
+/** Parses a BetEventsPage read after `after`: keeps the RealtimeEvents, notes the rest. */
+export function readBetEventsPage(
+  page: z.infer<typeof BetEventsPage>,
+  after: number,
+  log: (msg: string, extra?: unknown) => void = () => undefined,
+): BetEventsRead {
+  let through = after;
+  const events: RealtimeEvent[] = [];
+  for (const raw of page.events) {
+    through = Math.max(through, seqOf(raw) ?? through);
+    const p = parseRealtimeEvent(raw);
+    if (p.ok) events.push(p.event);
+    else log('events.drop_event', (raw as { type?: unknown } | null)?.type);
+  }
+  return { events, last_seq: page.last_seq, through };
+}
 
 /** §2.13 GET /v1/markets/btc5m/quote -> {result (ok only; refusals are 409), snapshot} */
 export const MarketQuoteResponse = z.object({
@@ -163,16 +205,16 @@ export function createYoApi(c: ApiClient) {
 
     // §2.14 reads / resync
     getBet: (betId: string) => c.request('GET', bet(betId), { schema: BetSnapshot }),
-    /** Events after `after`; entries that fail RealtimeEvent parse are dropped (§10.1). */
-    async getBetEvents(betId: string, after: number) {
-      const r = await c.request('GET', `${bet(betId)}/events?after=${after}&limit=200`, {
-        schema: BetEventsResponse,
+    /**
+     * One page of the bet's log after `after` (≤ 200 envelopes); entries that fail RealtimeEvent
+     * parse are dropped (§10.1). BetHub pages on to `last_seq`. A server without the route
+     * answers 404: the caller falls back to GET /v1/bets/:id.
+     */
+    async getBetEvents(betId: string, after: number, limit = BET_EVENTS_LIMIT) {
+      const page = await c.request('GET', betEventsPath(betId, after, limit), {
+        schema: BetEventsPage,
       });
-      const events = r.events.flatMap((e) => {
-        const p = RealtimeEvent.safeParse(e);
-        return p.success ? [p.data] : [];
-      });
-      return { events, last_seq: r.last_seq };
+      return readBetEventsPage(page, after);
     },
 
     // typed terms (Beat 2 without the voice judge; party A only)
