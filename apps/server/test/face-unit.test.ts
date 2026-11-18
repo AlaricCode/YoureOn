@@ -9,7 +9,7 @@ import { DEV_KEK_ID, faceConfigOf, parseKey32, resolveFaceConfig } from '../src/
 import { issueMatchTicket, verifyMatchTicketWithKey } from '../src/face/ticket';
 import { atRestAad, openAtRest, openRequestEmbedding, sealAtRest } from '../src/face/vault';
 import { verifyMatchTicket } from '../src/bets/match-ticket';
-import { oneInFlight } from '../src/face/routes';
+import { faceMatchGate, oneInFlight } from '../src/face/routes';
 import { testEnv } from './helpers';
 
 const KEY_B64 = Buffer.alloc(32, 7).toString('base64');
@@ -298,5 +298,43 @@ describe('face-match: one in flight per user', () => {
       }),
     ).rejects.toThrow('boom');
     expect(await guard('u1', async () => 'after')).toBe('after');
+  });
+});
+
+describe('face-match gate: the 30/min token is spent only by calls that run', () => {
+  it('a concurrent call refused as one-at-a-time takes no token', async () => {
+    const taken: string[] = [];
+    const gate = faceMatchGate((u) => void taken.push(u));
+    let release!: () => void;
+    const slow = gate('u1', () => new Promise<string>((r) => (release = () => r('first'))));
+    await Promise.resolve();
+    for (let i = 0; i < 3; i++) {
+      await expect(gate('u1', async () => 'second')).rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        details: { bucket: 'face-match/in-flight' },
+      });
+    }
+    expect(taken).toEqual(['u1']);
+    release();
+    expect(await slow).toBe('first');
+    expect(await gate('u1', async () => 'again')).toBe('again');
+    expect(taken).toEqual(['u1', 'u1']);
+  });
+
+  it('an empty bucket refuses before the work runs, and frees the guard', async () => {
+    let left = 1;
+    const gate = faceMatchGate(() => {
+      if (left-- <= 0) throw new HttpError('RATE_LIMITED', undefined, { bucket: 'face-match' });
+    });
+    let ran = 0;
+    const work = async () => ++ran;
+    expect(await gate('u1', work)).toBe(1);
+    await expect(gate('u1', work)).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      details: { bucket: 'face-match' },
+    });
+    expect(ran).toBe(1);
+    // Not stuck "in flight": the next refusal is the bucket again, not "One scan at a time".
+    await expect(gate('u1', work)).rejects.toMatchObject({ details: { bucket: 'face-match' } });
   });
 });
