@@ -1,9 +1,9 @@
 // DATA-MODEL §5.6 bets (core columns) and §5.19 bet_events.
 //
-// Migration 0000 carries the core of `bets`. Deliberately NOT here yet, because they need
-// tables that later streams add (they come with that stream's migration):
+// Migration 0000 carries the core of `bets`. Columns that need later tables came with that
+// stream's migration:
 //   - gemini_market_id (FK gemini_markets), pricing_snapshot_id (FK market_snapshots),
-//     CHECK bets_gemini_market and index bets_market_idx  -> Gemini stream (§5.16)
+//     CHECK bets_gemini_market and index bets_market_idx  -> Gemini closer, migration 0007 (§5.16)
 //   (bet_events.chain_event_id FK -> chain_events landed with the Streams migration 0003, §5.9)
 import { sql } from 'drizzle-orm';
 import {
@@ -39,6 +39,7 @@ import { tstz } from './types';
 import { rooms } from './rooms';
 import { users } from './users';
 import { chainEvents } from './chain';
+import { geminiMarkets, marketSnapshots } from './markets';
 
 const micro = () => bigint({ mode: 'bigint' });
 
@@ -72,10 +73,16 @@ export const bets = pgTable(
     terms_hash: text(),
     bet_pda: text().unique('bets_bet_pda_uq'),
     vault: text().unique('bets_vault_uq'),
+    /** The Gemini contract of a real_world bet (required when evidence_source = 'gemini'). */
+    gemini_market_id: uuid().references((): AnyPgColumn => geminiMarkets.id),
     a_position: marketSide(),
     odds_p: numeric({ precision: 3, scale: 2 }),
     odds_source: text(),
     quoted_at: tstz(),
+    /** The binding quote's snapshot (the one fairStakes priced odds_p from). */
+    pricing_snapshot_id: bigint({ mode: 'bigint' }).references(
+      (): AnyPgColumn => marketSnapshots.id,
+    ),
     a_authorized_at: tstz(),
     b_authorized_at: tstz(),
     a_authorization_method: authorizationMethod(),
@@ -171,6 +178,12 @@ export const bets = pgTable(
           END
         END)`),
     ),
+    check(
+      'bets_gemini_market',
+      sql.raw(`evidence_source IS DISTINCT FROM 'gemini'
+        OR (gemini_market_id IS NOT NULL AND a_position IS NOT NULL
+            AND outcome IS DISTINCT FROM 'split')`),
+    ),
     check('bets_redo_cap', sql`redo_count BETWEEN 0 AND 3`),
     check('bets_odds_source', sql`odds_source IS NULL OR odds_source IN ('mid','last_in_spread')`),
     check('bets_odds_p_range', sql`odds_p IS NULL OR odds_p BETWEEN 0 AND 1`),
@@ -203,6 +216,9 @@ export const bets = pgTable(
     index('bets_pending_idx')
       .on(t.updated_at)
       .where(sql`onchain_pending IS NOT NULL`),
+    index('bets_market_idx')
+      .on(t.gemini_market_id)
+      .where(sql`gemini_market_id IS NOT NULL`),
     index('bets_h2h_idx')
       .on(t.party_a_id, t.party_b_id)
       .where(sql.raw(`onchain_status = 'settled'`)),
