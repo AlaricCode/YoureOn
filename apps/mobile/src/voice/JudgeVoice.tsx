@@ -7,7 +7,8 @@
 //   token:   POST /v1/voice/tokens {purpose:'terms', bet_id} (server holds the API key)
 //   start:   startSession({conversationToken, dynamicVariables, clientTools})
 //   tools:   ./judgeTools (request_attempt, show_terms_card, cue)
-//   cues:    judge.cue for this bet -> sendUserMessage / sendContextualUpdate (verbatim)
+//   cues:    judge.cue for this bet -> sendUserMessage / sendContextualUpdate (verbatim),
+//            through an outbox that never throws and waits for the session (judgeTools)
 //   lines:   onMessage -> local captions + batched POST /v1/bets/:id/voice/lines (stage)
 import { ConversationProvider, useConversation } from '@elevenlabs/react-native';
 import { useEffect, useMemo, useRef } from 'react';
@@ -17,9 +18,11 @@ import type { VoiceDynamicVariables } from '@youre-on/shared/api';
 import type { Runtime } from '../app/runtime';
 import {
   ATTEMPT_CUES,
+  createCueOutbox,
   createLineBatcher,
   cueAction,
   judgeClientTools,
+  type CueSink,
   type VoiceLine,
 } from './judgeTools';
 
@@ -53,6 +56,19 @@ function Session({
 }: JudgeVoiceProps) {
   const canAttempt = useRef(false);
   const seq = useRef(0);
+  const convRef = useRef<CueSink | null>(null);
+  // The SDK's send calls throw while there is no live conversation; cues wait here instead.
+  const outbox = useMemo(
+    () =>
+      createCueOutbox(
+        () => {
+          if (!convRef.current) throw new Error('no conversation yet');
+          return convRef.current;
+        },
+        (m, x) => console.warn(`[yo] ${m}`, x ?? ''),
+      ),
+    [],
+  );
   const batcher = useMemo(
     () =>
       createLineBatcher(async (lines: VoiceLine[]) => {
@@ -95,39 +111,51 @@ function Session({
         at: new Date(rt.clock.now()).toISOString(),
       });
     },
-    onStatusChange: (s) => onStatus?.(String((s as { status?: unknown }).status ?? s)),
+    onStatusChange: (s) => {
+      const status = String((s as { status?: unknown }).status ?? s);
+      onStatus?.(status);
+      if (status === 'connected') outbox.flush();
+    },
     onError: (e) => {
       console.warn('[yo] voice error', e);
       onFailed?.('session');
     },
   });
-  const convRef = useRef(conv);
+  const controls = useRef(conv);
+  controls.current = conv;
   convRef.current = conv;
 
-  // Mint and start once per bet; end on unmount.
+  // Mint and start once per bet; end on unmount. Neither may throw out of here.
   useEffect(() => {
     let live = true;
+    const failed = (reason: 'token' | 'session', e: unknown) => {
+      console.warn(`[yo] voice ${reason} failed`, e);
+      if (live) onFailed?.(reason);
+    };
     rt.api.voiceToken(betId).then(
       (tok) => {
         if (!live) return;
-        convRef.current.startSession({
-          conversationToken: tok.conversation_token,
-          dynamicVariables: dynamicVariables as unknown as Record<string, string>,
-          clientTools: tools,
-        });
+        try {
+          const started: unknown = controls.current.startSession({
+            conversationToken: tok.conversation_token,
+            dynamicVariables: dynamicVariables as unknown as Record<string, string>,
+            clientTools: tools,
+          });
+          void Promise.resolve(started).catch((e: unknown) => failed('session', e));
+        } catch (e) {
+          failed('session', e);
+        }
       },
-      (e: unknown) => {
-        console.warn('[yo] voice token failed', e);
-        if (live) onFailed?.('token');
-      },
+      (e: unknown) => failed('token', e),
     );
     return () => {
       live = false;
       batcher.flush();
       try {
-        convRef.current.endSession();
+        const ended: unknown = controls.current.endSession();
+        void Promise.resolve(ended).catch(() => undefined);
       } catch {
-        // already closed
+        // never started, or already closed
       }
     };
     // Once per bet: the token is single-use.
@@ -140,11 +168,9 @@ function Session({
         if (!e || e.bet_id !== betId || e.type !== 'judge.cue') return;
         if (ATTEMPT_CUES.has(e.payload.cue)) canAttempt.current = true;
         if (e.payload.cue === 'ATTEMPT_ARMED') canAttempt.current = false;
-        const a = cueAction(e.payload);
-        if (a.send === 'user') convRef.current.sendUserMessage(a.text);
-        else convRef.current.sendContextualUpdate(a.text);
+        outbox.push(cueAction(e.payload));
       }),
-    [rt, betId],
+    [rt, betId, outbox],
   );
 
   return null;

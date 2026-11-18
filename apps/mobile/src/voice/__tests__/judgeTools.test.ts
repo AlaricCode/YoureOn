@@ -1,7 +1,15 @@
 import { CLIENT_TOOLS } from '@youre-on/shared/judge/el-config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createLineBatcher, cueAction, judgeClientTools, type VoiceLine } from '../judgeTools';
+import {
+  createCueOutbox,
+  createLineBatcher,
+  CUE_QUEUE_MAX,
+  cueAction,
+  judgeClientTools,
+  type CueSink,
+  type VoiceLine,
+} from '../judgeTools';
 
 describe('judge client tools (API-CONTRACT §4.4)', () => {
   const make = (o: { can?: boolean; fail?: string } = {}) => {
@@ -76,5 +84,97 @@ describe('transcript batcher', () => {
     b.add(line(3));
     b.flush();
     expect(posts).toHaveLength(2);
+  });
+});
+
+describe('cue outbox (the voice session may not be there)', () => {
+  /** A stand-in for the SDK controls: throws like it does while there is no conversation. */
+  function fakeSession() {
+    const sent: string[] = [];
+    let live = false;
+    const sink: CueSink = {
+      sendUserMessage(t) {
+        if (!live) throw new Error('No active conversation. Call startSession() first.');
+        sent.push(`user:${t}`);
+      },
+      sendContextualUpdate(t) {
+        if (!live) throw new Error('No active conversation. Call startSession() first.');
+        sent.push(`context:${t}`);
+      },
+    };
+    return { sink, sent, connect: () => (live = true), drop: () => (live = false) };
+  }
+
+  it('sends straight through a live session', () => {
+    const s = fakeSession();
+    s.connect();
+    const o = createCueOutbox(() => s.sink);
+    o.push({ send: 'user', text: '[EVENT] LOCKED' });
+    o.push({ send: 'context', text: '[EVENT] ATTEMPT_ARMED' });
+    expect(s.sent).toEqual(['user:[EVENT] LOCKED', 'context:[EVENT] ATTEMPT_ARMED']);
+    expect(o.pending).toBe(0);
+  });
+
+  it('never throws without a session (the crash: token refused, then B declined)', () => {
+    const s = fakeSession();
+    const logs: string[] = [];
+    const o = createCueOutbox(
+      () => s.sink,
+      (m) => logs.push(m),
+    );
+    expect(() => o.push({ send: 'user', text: '[EVENT] DECLINED' })).not.toThrow();
+    expect(s.sent).toEqual([]);
+    expect(o.pending).toBe(1);
+    expect(logs).toEqual(['voice.cue_deferred']);
+  });
+
+  it('holds cues until the session connects, then sends them in order', () => {
+    const s = fakeSession();
+    const o = createCueOutbox(() => s.sink);
+    o.push({ send: 'context', text: 'a' });
+    o.push({ send: 'user', text: 'b' });
+    o.flush(); // still not connected: nothing lost
+    expect(o.pending).toBe(2);
+    s.connect();
+    o.flush();
+    expect(s.sent).toEqual(['context:a', 'user:b']);
+    expect(o.pending).toBe(0);
+  });
+
+  it('keeps the order: a new cue waits behind older ones', () => {
+    const s = fakeSession();
+    const o = createCueOutbox(() => s.sink);
+    o.push({ send: 'user', text: 'first' });
+    s.connect();
+    o.push({ send: 'user', text: 'second' });
+    expect(s.sent).toEqual([]);
+    o.flush();
+    expect(s.sent).toEqual(['user:first', 'user:second']);
+  });
+
+  it('keeps only the newest CUE_QUEUE_MAX while disconnected', () => {
+    const s = fakeSession();
+    const o = createCueOutbox(() => s.sink);
+    for (let i = 0; i < CUE_QUEUE_MAX + 3; i++) o.push({ send: 'context', text: String(i) });
+    expect(o.pending).toBe(CUE_QUEUE_MAX);
+    s.connect();
+    o.flush();
+    expect(s.sent[0]).toBe('context:3');
+    expect(s.sent).toHaveLength(CUE_QUEUE_MAX);
+  });
+
+  it('a session that drops mid-flush keeps the rest for the next connect', () => {
+    const s = fakeSession();
+    let n = 0;
+    const o = createCueOutbox(() => {
+      if (++n === 3) s.drop();
+      return s.sink;
+    });
+    o.push({ send: 'user', text: 'x' }); // n=1, not live: queued
+    o.push({ send: 'user', text: 'y' });
+    s.connect();
+    o.flush(); // n=2 sends x; n=3 drops before y
+    expect(s.sent).toEqual(['user:x']);
+    expect(o.pending).toBe(1);
   });
 });

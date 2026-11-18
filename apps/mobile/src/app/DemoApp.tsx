@@ -699,8 +699,14 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     refreshBalance();
   };
 
+  // The session is gone once voice failed for this bet: unmount it (typed terms take over).
   const voice =
-    VOICE_ENABLED && !app.judgeCam && bet && me === 'A' && !isOver(bet.state)
+    VOICE_ENABLED &&
+    !app.judgeCam &&
+    bet &&
+    me === 'A' &&
+    !isOver(bet.state) &&
+    voiceFailedBet !== bet.bet_id
       ? (voiceVars.current.get(bet.bet_id) ?? null)
       : null;
 
