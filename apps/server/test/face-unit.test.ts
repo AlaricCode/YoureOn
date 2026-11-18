@@ -9,6 +9,7 @@ import { DEV_KEK_ID, faceConfigOf, parseKey32, resolveFaceConfig } from '../src/
 import { issueMatchTicket, verifyMatchTicketWithKey } from '../src/face/ticket';
 import { atRestAad, openAtRest, openRequestEmbedding, sealAtRest } from '../src/face/vault';
 import { verifyMatchTicket } from '../src/bets/match-ticket';
+import { oneInFlight } from '../src/face/routes';
 import { testEnv } from './helpers';
 
 const KEY_B64 = Buffer.alloc(32, 7).toString('base64');
@@ -273,5 +274,29 @@ describe('match tickets', () => {
       ok: false,
       reason: 'missing',
     });
+  });
+});
+
+describe('face-match: one in flight per user', () => {
+  it('refuses a concurrent second call for the same key with 429, and frees the key after', async () => {
+    const guard = oneInFlight();
+    let release!: () => void;
+    const slow = guard('u1', () => new Promise<string>((r) => (release = () => r('first'))));
+    await expect(guard('u1', async () => 'second')).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      headers: { 'Retry-After': '1' },
+    });
+    // Another user is not affected.
+    expect(await guard('u2', async () => 'other')).toBe('other');
+    release();
+    expect(await slow).toBe('first');
+    expect(await guard('u1', async () => 'again')).toBe('again');
+    // A failure frees the key too.
+    await expect(
+      guard('u1', async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+    expect(await guard('u1', async () => 'after')).toBe('after');
   });
 });

@@ -46,8 +46,8 @@ export const FACE_MATCH_BUCKET = { limit: 30, windowMs: 60_000 } as const;
 export const FACE_ENROLL_BUCKET = { limit: 5, windowMs: 60 * 60_000 } as const;
 
 export function createFaceRoutes(): RouteModule {
-  /** Users with a face-match request in flight (§1.7 "1 in flight"). */
-  const inFlight = new Set<string>();
+  /** §1.7 face-match "1 in flight" per user. */
+  const oneAtATime = oneInFlight();
 
   const consent = (): FaceConsentResponse => ({
     consent_version: FACE_CONSENT_VERSION,
@@ -102,20 +102,30 @@ export function createFaceRoutes(): RouteModule {
       app.post('/v1/rooms/:room_id/face-match', requireSignedRequest, async (c) => {
         const me = appAuth(c);
         deps.rateLimit?.take('face-match', me.user_id, FACE_MATCH_BUCKET);
-        if (inFlight.has(me.user_id)) throw busy();
-        inFlight.add(me.user_id);
-        try {
+        return oneAtATime(me.user_id, async () => {
           const body = await readBody(c, FaceMatchRequest);
           return c.json(await matchInRoom(deps, me.user_id, roomIdOf(c), body), 200);
-        } finally {
-          inFlight.delete(me.user_id);
-        }
+        });
       });
     },
   };
 }
 
 const roomIdOf = (c: Context<AppEnv>): string => c.req.param('room_id') ?? '';
+
+/** Runs one call per key at a time; a second concurrent call is 429 RATE_LIMITED (Retry-After 1). */
+export function oneInFlight() {
+  const keys = new Set<string>();
+  return async <T>(key: string, f: () => Promise<T>): Promise<T> => {
+    if (keys.has(key)) throw busy();
+    keys.add(key);
+    try {
+      return await f();
+    } finally {
+      keys.delete(key);
+    }
+  };
+}
 
 const busy = () =>
   new HttpError(
