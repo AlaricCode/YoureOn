@@ -22,7 +22,7 @@ import { createPreviewEmbedder } from '../embedder';
 const face = (yawAngle: number, pitchAngle = 0, width = 300): DetectedFace => ({
   yawAngle,
   pitchAngle,
-  bounds: { width, height: width },
+  bounds: { x: 0, y: 0, width, height: width },
   frameWidth: 1000,
 });
 
@@ -155,11 +155,13 @@ describe('preview embedder', () => {
       ['left', 25],
       ['right', -25],
     ] as const) {
+      const still = await e.open('file:///x.jpg');
       shots.push({
         prompt: p,
         yawAngle: yaw,
-        embedding: await e.embed('file:///x.jpg', face(yaw)),
+        embedding: await still.embed(face(yaw)),
       });
+      still.close();
     }
     expect(checkSeries(shots)).toBeNull();
   });

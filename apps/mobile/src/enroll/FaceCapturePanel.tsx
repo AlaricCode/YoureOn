@@ -2,21 +2,17 @@
 // the camera asks for access the moment the step shows; a bubble at the top gives the prompt
 // ("Look ahead", "Turn left"…); a tick flashes after each good photo; a bad photo gets a red
 // fix-it line and is simply retaken; after the last photo the bubble says "Checking…" while the
-// series is checked and sent. Photos are deleted right after they are read: only the averaged
-// embedding leaves the phone.
+// series is checked and sent. Photos (and the embedder's upright copies) are deleted right after
+// they are read: only the averaged embedding leaves the phone.
 import { File } from 'expo-file-system';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Linking, StyleSheet, View } from 'react-native';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
-import {
-  createImageFaceDetector,
-  type ImageFaceDetector,
-} from 'react-native-vision-camera-face-detector';
 
 import { CheckBadge, Label, QuietButton, ShutterButton, Stage, StageBubble } from '../ui/kit';
 import { motion, palette, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi } from './api';
-import type { FaceEmbedder } from './embedder';
+import type { FaceEmbedder, FaceStill } from './embedder';
 import {
   averageEmbedding,
   buildEnrollmentRequest,
@@ -68,16 +64,6 @@ export function FaceCapturePanel({
   /** The person has answered the system prompt at least once (or it can no longer be shown). */
   const [answered, setAnswered] = useState(false);
   const flash = useRef(new Animated.Value(0)).current;
-
-  const detectorRef = useRef<ImageFaceDetector | null>(null);
-  const detector = useCallback(() => {
-    detectorRef.current ??= createImageFaceDetector({
-      performanceMode: 'accurate',
-      runLandmarks: true,
-      runClassifications: false,
-    });
-    return detectorRef.current;
-  }, []);
 
   const ask = useCallback(async () => {
     setRequesting(true);
@@ -148,11 +134,14 @@ export function FaceCapturePanel({
     setBusy(true);
     onAlert(null);
     let url: string | null = null;
+    let still: FaceStill | null = null;
     try {
       const prompt = prompts[shots.length] ?? 'ahead';
       const photo = await photoOutput.capturePhotoToFile({ enableShutterSound: false }, {});
       url = toFileUrl(photo.filePath);
-      const check = checkShot(prompt, detector().detectFaces(url));
+      // An upright copy, the faces in it, and an embed() over the same pixels.
+      still = await embedder.open(url);
+      const check = checkShot(prompt, still.faces);
       if (!check.ok) {
         // Keep the photos so far; just retake this one.
         onAlert(problemLabel(prompt, check.problem));
@@ -161,8 +150,10 @@ export function FaceCapturePanel({
       const shot: Shot = {
         prompt,
         yawAngle: check.face.yawAngle,
-        embedding: await embedder.embed(url, check.face),
+        embedding: await still.embed(check.face),
       };
+      still.close();
+      still = null;
       const next = [...shots, shot];
       if (next.length < SHOTS) {
         setShots(next);
@@ -188,6 +179,7 @@ export function FaceCapturePanel({
     } catch (e) {
       restart(e instanceof FaceApiError ? enrollErrorLabel(e.code) : 'Try again');
     } finally {
+      still?.close();
       if (url) {
         try {
           new File(url).delete();
@@ -203,7 +195,6 @@ export function FaceCapturePanel({
     prompts,
     shots,
     photoOutput,
-    detector,
     embedder,
     api,
     consent,

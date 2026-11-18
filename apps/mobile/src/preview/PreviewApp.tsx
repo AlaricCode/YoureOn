@@ -14,6 +14,7 @@ import { authorizeOwner } from '../device/authorize';
 import { feel } from '../device/feedback';
 import { createPreviewFaceApi } from '../enroll/api';
 import { createPreviewEmbedder } from '../enroll/embedder';
+import { detectFacesInPhoto } from '../face/native';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
 import {
   IncomingScreen,
@@ -87,7 +88,7 @@ const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
 
 export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const faceApi = useMemo(() => createPreviewFaceApi({ delayMs: 600 }), []);
-  const embedder = useMemo(() => createPreviewEmbedder(), []);
+  const embedder = useMemo(() => createPreviewEmbedder(undefined, detectFacesInPhoto), []);
   const signupApi = useMemo(() => createPreviewSignupApi({ delayMs: 600 }), []);
 
   const [route, setRoute] = useState<Route>('menu');
@@ -367,12 +368,29 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return (
           <ScanScreen
             onBack={() => go('home')}
-            match={async () => {
+            scan={async () => {
+              // Stand-in: no model, no server. Every scan finds Jake.
               await new Promise((r) => setTimeout(r, 900));
               const jake = MEMBERS[0];
-              return jake ? { user: jake, headToHead: HEAD_TO_HEAD } : null;
+              return jake
+                ? {
+                    kind: 'found',
+                    match: {
+                      user: jake,
+                      ticket: 'preview',
+                      expiresAtMs: Date.now() + 60_000,
+                      headToHead: HEAD_TO_HEAD,
+                    },
+                  }
+                : { kind: 'miss', miss: 'no_match' };
             }}
-            onChallenge={() => {
+            onChallenge={async () => {
+              setMarket(false);
+              startNegotiation();
+              return 'ok';
+            }}
+            members={MEMBERS.filter((m) => m.online)}
+            onPickMember={() => {
               setMarket(false);
               startNegotiation();
             }}

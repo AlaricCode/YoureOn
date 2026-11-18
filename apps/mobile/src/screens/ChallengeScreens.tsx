@@ -1,17 +1,27 @@
 // Beat 1 and Beat 2 screens:
 //   ScanScreen       point the camera at a friend → "Challenge Jake?" with the head-to-head
 //                    record (TASKS D4-M1, D4-M2; ARCHITECTURE §3.1, §3.7). No confident match
-//                    shows nothing. "Pick from list" is the face_pick_list fallback (§7.1).
+//                    shows "No match" and the room list (the face_pick_list fallback, §7.1).
 //   IncomingScreen   B's full-screen "Logan challenged you" with a haptic (D1-M4, D1-M6).
 //                    Accept is not an authorization (API-CONTRACT §2.5).
 //   NegotiateScreen  the judge negotiating the terms out loud, with live captions and the draft
 //                    terms as they firm up (D2-M3; ARCHITECTURE §3.2). On A's phone, "Type it
 //                    instead" swaps the judge for a short form (claim + stake, app/typedTerms):
 //                    the card still arrives by the terms.proposed push; "Lock it in" confirms.
-import { useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { File } from 'expo-file-system';
+import { useEffect, useMemo, useReducer, useRef, useState, type ComponentRef } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
+import {
+  cameraActive,
+  initialScan,
+  scanReducer,
+  showsFallbackList,
+  type ChallengeResult,
+  type ScanMatch,
+  type ScanOutcome,
+} from '../app/scan';
 import { feel } from '../device/feedback';
 import { signedUsd, type BetView } from '../bets/view';
 import type { PreviewUser } from '../preview/data';
@@ -26,33 +36,55 @@ import {
 } from '../ui/kit';
 import { Avatar, Card, Chip, DataText, DotsLabel, Page, Screen, TopBar } from '../ui/parts';
 import { color, palette, radius, space, type } from '../ui/tokens';
-import { COPY, fill, t } from './copy';
+import { COPY, fill, SCAN_MISS_COPY, t } from './copy';
 
-export interface FaceMatch {
-  user: PreviewUser;
-  headToHead: { wins: number; losses: number; net: string };
-}
-
+/**
+ * Point the camera at someone in the room, tap the shutter: the phone embeds the face it is
+ * pointed at and the server answers with one opted-in member of this room, or nothing. The
+ * photo is deleted right after the scan. A match shows "Challenge Jake?"; the tap addresses
+ * the challenge to Jake (who still authorizes on his own phone). No match shows "No match" and
+ * the room list, so the challenge is one tap away either way.
+ */
 export function ScanScreen({
   onBack,
-  match,
+  scan,
   onChallenge,
+  members,
+  onPickMember,
   onPickList,
+  onOpen,
   tag,
 }: {
   onBack: () => void;
-  /** Runs the room-scoped match on a still (POST /v1/rooms/:id/face-match); null = no match. */
-  match: () => Promise<FaceMatch | null>;
-  onChallenge: (user: PreviewUser) => void;
+  /** Embeds the photo and runs the room-scoped match (app/scan runScan). */
+  scan: (photoUrl: string) => Promise<ScanOutcome>;
+  /** POST /v1/bets with challenge_method 'face' + the ticket; resolves how it went. */
+  onChallenge: (match: ScanMatch) => Promise<ChallengeResult>;
+  /** The fallback list: room members this phone can challenge (online, not me). */
+  members: readonly PreviewUser[];
+  /** A pick from the fallback list (challenge_method 'list'). */
+  onPickMember: (user: PreviewUser) => void;
+  /** "Pick from list": back to the room list. */
   onPickList: () => void;
+  /** Called once when the screen opens (warm the model up). */
+  onOpen?: (() => void) | undefined;
   tag?: string | undefined;
 }) {
   const permission = useCameraPermission();
   const photoOutput = usePhotoOutput({ containerFormat: 'jpeg', quality: 0.9 });
   const outputs = useMemo(() => [photoOutput], [photoOutput]);
-  const [checking, setChecking] = useState(false);
-  const [found, setFound] = useState<FaceMatch | null>(null);
+  const [state, dispatch] = useReducer(scanReducer, initialScan);
   const [asked, setAsked] = useState(false);
+  const live = useRef(true);
+  const opened = useRef(onOpen);
+
+  useEffect(() => {
+    live.current = true;
+    opened.current?.();
+    return () => {
+      live.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (permission.hasPermission || asked || !permission.canRequestPermission) return;
@@ -60,15 +92,35 @@ export function ScanScreen({
     void permission.requestPermission();
   }, [permission, asked]);
 
-  const scan = async () => {
-    setChecking(true);
+  const shoot = async () => {
+    if (state.phase !== 'idle' && state.phase !== 'found') return;
+    dispatch({ type: 'scan' });
+    let url: string | null = null;
+    let outcome: ScanOutcome;
     try {
-      // No confident match shows nothing and stores nothing (BRIEF 5e).
-      setFound(await match());
+      const photo = await photoOutput.capturePhotoToFile({ enableShutterSound: false }, {});
+      url = photo.filePath.startsWith('file://') ? photo.filePath : `file://${photo.filePath}`;
+      outcome = await scan(url);
+    } catch {
+      outcome = { kind: 'miss', miss: 'failed' };
     } finally {
-      setChecking(false);
+      // The photo is of someone else: it never outlives the scan (BRIEF 5e).
+      if (url) deletePhoto(url);
     }
+    if (live.current) dispatch({ type: 'result', outcome });
   };
+
+  const challenge = async (m: ScanMatch) => {
+    if (state.phase !== 'found') return;
+    dispatch({ type: 'challenge' });
+    const r = await onChallenge(m);
+    if (r !== 'ok' && live.current) dispatch({ type: 'challenge_failed', miss: r });
+  };
+
+  const found = state.phase === 'found' || state.phase === 'challenging' ? state.match : null;
+  const checking = state.phase === 'checking';
+  const missLine = state.miss ? t(SCAN_MISS_COPY[state.miss]) : null;
+  const fallback = showsFallbackList(state);
 
   return (
     <Screen>
@@ -79,13 +131,17 @@ export function ScanScreen({
             <Camera
               style={StyleSheet.absoluteFill}
               device="back"
-              isActive={!found}
+              isActive={cameraActive(state)}
               outputs={outputs}
             />
             <StageBubble prompt={t(COPY.scan.point)} checking={checking} />
             {!found ? (
               <View style={styles.shutterSlot}>
-                <ShutterButton onPress={() => void scan()} disabled={checking} label="Scan" />
+                <ShutterButton
+                  onPress={() => void shoot()}
+                  disabled={checking}
+                  label={t(COPY.home.scan)}
+                />
               </View>
             ) : null}
           </Stage>
@@ -107,12 +163,13 @@ export function ScanScreen({
           </Stage>
         )}
         <AlertLine
-          message={permission.hasPermission || !asked ? null : t(COPY.scan.cameraNeeded)}
+          testID="scan-alert"
+          message={permission.hasPermission || !asked ? missLine : t(COPY.scan.cameraNeeded)}
         />
         {found ? (
           <Card style={styles.matchCard}>
             <View style={styles.matchHead}>
-              <Avatar name={found.user.display_name} size={48} online={found.user.online} />
+              <Avatar name={found.user.display_name} size={48} />
               <View style={styles.flex}>
                 <DataText variant="heading">{fill.challengeName(found.user.display_name)}</DataText>
                 <DataText muted>
@@ -128,17 +185,57 @@ export function ScanScreen({
             <PrimaryButton
               testID="scan-challenge"
               label={t(COPY.home.challenge)}
-              onPress={() => onChallenge(found.user)}
+              busy={state.phase === 'challenging'}
+              onPress={() => void challenge(found)}
             />
             <View style={styles.gap} />
-            <QuietButton label={t(COPY.scan.notThem)} onPress={() => setFound(null)} />
+            <QuietButton
+              label={t(COPY.scan.notThem)}
+              disabled={state.phase === 'challenging'}
+              onPress={() => dispatch({ type: 'not_them' })}
+            />
           </Card>
+        ) : fallback ? (
+          <View style={styles.fallback}>
+            <Label variant="small" style={styles.fallbackHead}>
+              {t(COPY.scan.pickList)}
+            </Label>
+            <ScrollView style={styles.fallbackList}>
+              {members.length === 0 ? (
+                <DataText muted>{t(COPY.home.empty)}</DataText>
+              ) : (
+                members.map((m) => (
+                  <View key={m.user_id} style={styles.member}>
+                    <Avatar name={m.display_name} size={32} online={m.online} />
+                    <DataText style={styles.flex} lines={1}>
+                      {m.display_name}
+                    </DataText>
+                    <View style={styles.memberAction}>
+                      <QuietButton
+                        testID={`scan-pick-${m.user_id}`}
+                        label={t(COPY.home.challenge)}
+                        onPress={() => onPickMember(m)}
+                      />
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
         ) : (
           <QuietButton label={t(COPY.scan.pickList)} onPress={onPickList} />
         )}
       </Page>
     </Screen>
   );
+}
+
+function deletePhoto(url: string): void {
+  try {
+    new File(url).delete();
+  } catch {
+    // best effort: the OS clears the temp directory anyway
+  }
 }
 
 export function IncomingScreen({
@@ -400,6 +497,11 @@ const styles = StyleSheet.create({
   access: { alignSelf: 'stretch', paddingHorizontal: space.x3 },
   shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x2 },
   matchCard: { marginTop: space.x1 },
+  fallback: { maxHeight: 220 },
+  fallbackHead: { color: palette.textSecondary, marginBottom: space.x1 },
+  fallbackList: { flexGrow: 0 },
+  member: { flexDirection: 'row', alignItems: 'center', gap: space.x2, paddingVertical: 4 },
+  memberAction: { width: 120 },
   matchHead: { flexDirection: 'row', gap: space.x2, alignItems: 'center', marginBottom: space.x2 },
   incomingTitle: { marginTop: space.x3, textAlign: 'center' },
   footer: { flex: 0 },
