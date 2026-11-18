@@ -9,7 +9,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "doctor": "expo-doctor",
-    "postinstall": "cd ../.. && patch-package --error-on-fail"
+    "postinstall": "cd ../.. && patch-package --error-on-fail",
+    "sim:build": "./scripts/sim-build.sh",
+    "e2e:two-phones": "./e2e/maestro/two-phones.sh"
   },
   "dependencies": {
     "@config-plugins/react-native-webrtc": "15.0.2",
