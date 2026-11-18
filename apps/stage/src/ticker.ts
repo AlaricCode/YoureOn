@@ -437,6 +437,15 @@ function foldState(b: BetView, e: Extract<RealtimeEvent, { type: 'bet.state' }>)
       txs: { ...v.txs, resolve: v.txs.resolve ?? tx.signature },
     };
   }
+  // The server's own confirm of the loser's appeal (src/appeal): appealed, the window is over,
+  // without waiting for the Stream's chain.BetAppealed.
+  if (p.state === 'APPEALED' && tx?.kind === 'appeal' && !v.appealed)
+    v = {
+      ...v,
+      appealed: true,
+      appeal_deadline: null,
+      txs: { ...v.txs, appeal: v.txs.appeal ?? tx.signature },
+    };
   if (MONEY_MOVED.has(p.state) && !v.payout) {
     const paid = derivedPayout(v, p.state, tx);
     if (paid)
