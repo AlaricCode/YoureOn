@@ -1542,7 +1542,9 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
           .select({ id: bets.id })
           .from(bets)
           .where(eq(bets.state, 'RULED'));
-        if (ruled.length && args.includes('--gg') === false) {
+        if (args.includes('--appeal')) {
+          advance(0); // the appeal window is SVM-clock based: keep it on the server's clock
+        } else if (ruled.length && args.includes('--gg') === false) {
           advance(12_000);
           await lc.payout.finalizeDue(now());
         }
@@ -1637,5 +1639,24 @@ run('e2e Beats 2 -> 4 across slices (HTTP + WS + LiteSVM)', () => {
       ctx.deps.env.CACHED_RULING = false;
     }
     expect(await usdc(w[0]![1].address)).toBe(before - 1n * USDC); // A (the loser) paid B
+  }, 90_000);
+
+  it('scripts/cp1-drive.ts --through paid --appeal: the loser appeals in the window -> panel -> PAID', async () => {
+    const w = await freshWallets();
+    const before = await usdc(w[0]![1].address);
+    // CACHED_RULING: B_WINS, so A appeals; two of three vendors say NOT_MET -> flipped to A.
+    panel = { anthropic: vote('NOT_MET'), openai: vote('NOT_MET', 0.8), google: vote('MET') };
+    ctx.deps.env.CACHED_RULING = true;
+    try {
+      const { code, out } = await drive(['--through', 'paid', '--appeal'], w);
+      expect(out).toMatch(/appeal by A/);
+      expect(out).toContain('APPEALED');
+      expect(out).toMatch(/panel: A_WINS by majority \(2-1-0\), flipped/);
+      expect(out).toMatch(/PAID via resolve_appeal/);
+      expect(code, out).toBe(0);
+    } finally {
+      ctx.deps.env.CACHED_RULING = false;
+    }
+    expect(await usdc(w[0]![1].address)).toBe(before + 1n * USDC); // A won on appeal
   }, 90_000);
 });
