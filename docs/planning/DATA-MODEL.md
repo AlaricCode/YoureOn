@@ -704,6 +704,8 @@ Mapping to onchain (SCHEMAS §5.3): `A_WINS → party_a`, `B_WINS → party_b`, 
 | latency_ms | integer | Y | | |
 | created_at | timestamptz | N | now() | |
 
+Built by migration 0008 (`packages/db/src/schema/judge.ts`, 2026-11-18), with these CHECKs on top of the tables above: `appeals_decided` (`status = 'decided'` iff `decided_at`, `final_outcome`, `decided_by`, `flipped` and `result_ruling_id` are all set), `appeals_flipped` (`flipped = final_outcome <> original_outcome`), `appeal_votes_failed` (a vote that is not `ok` is `REDO`, confidence 0, reason `''`, `ABSTAIN`), seat 0..2, outcome never `VOID`, reason ≤ 280. `rulings.appeal_id` now references `appeals` (NO ACTION, so a bet delete cascades through both in one statement). A `failed` appeal (its tx never landed) is re-filed in place: `bet_id` stays UNIQUE and its votes are deleted. The stage='appeal' rulings row carries `onchain_ix = 'resolve_appeal'` from the decision on, `void_reason` = the appealed ruling's when a VOID is upheld.
+
 ### 5.16 `gemini_markets` and `market_snapshots`
 
 Field names follow the spike 05 samples (`btc5m-listing.json`, `event-…-settled.json`). Symbols come **only from the API**; they are never built by hand.
@@ -1437,3 +1439,4 @@ The original proposals, kept for the record:
   - **§8.6.** `STALE_LOCK_REQUEST` naming; client idempotency is an in-process LRU in P0 and an `api_idempotency` table in P1 (was P2).
   - **§10.** Face KEK env name is `FACE_KEK_<KEY_ID in UPPER_SNAKE>` (e.g. `FACE_KEK_2026_11_A`) plus `FACE_KEK_ACTIVE`.
   - **§11.** Demo wallets are custodial and server-generated (no `DEMO_WALLET_*` env); `seed:chain` uses those seeds; `npm run db:demo-reset` (npm workspaces, not pnpm). §13 row updated.
+- **2026-11-18 (Beat 5 appeal built, migration 0008).** §5.15 `appeals` / `appeal_votes` created as specified, plus the CHECKs listed under §5.15 and the deferred FK `rulings.appeal_id → appeals`. No new enum (0000 has them).

@@ -1017,7 +1017,7 @@ export const AppealVote = z.strictObject({
   provider: PanelProvider,
   model: z.string().min(1).max(80),
   status: z.enum(['ok', 'error', 'timeout']),
-  outcome: z.enum(['A_WINS', 'B_WINS', 'REDO']),   // toOutcome(voter's VisionVerdict, yes_party); REDO if status != ok. Never VOID.
+  outcome: z.enum(['A_WINS', 'B_WINS', 'REDO']),   // voteOutcome(voter's VisionVerdict, yes_party): toOutcome without the 0.8 floor; REDO if status != ok. Never VOID.
   confidence: Confidence,                 // 0 if status != ok
   reason: NText(280, 0),                  // "" if status != ok
   counted_as: z.enum(['A_WINS', 'B_WINS', 'ABSTAIN']),
@@ -1064,6 +1064,8 @@ export function decideAppeal(original: z.infer<typeof Appealable>, votes: { coun
 | 1/1/1, 1/0/2, 0/1/2, 0/0/3 | B_WINS | upheld_no_majority | false |
 
 **Timing:** decide as soon as 2 votes agree, or when all 3 are in or timed out. Keep streaming late votes (`appeal.vote`) to the stage view for drama, but they can't change a decided result. Submit `resolve_appeal` immediately.
+
+**Built (2026-11-18).** `voteOutcome` (`packages/shared/src/appeal.ts`) maps a vote's VisionVerdict to its side with no `REDO_BELOW` (0.8) floor: MET → the yes party, NOT_MET → the other, UNCLEAR → REDO. The vote's own floor is `PANEL_ABSTAIN_BELOW` (0.6) in `countVote`, which is what lets the example's 0.71 vote count (`toOutcome` would make it REDO, hence ABSTAIN). The server decides once all 3 votes are in or timed out (8 s each, `PANEL_VOTE_TIMEOUT_MS`), because `AppealResult.votes` holds exactly 3; two agreeing votes fix the majority either way, so only the timing differs from "decide at the second agreeing vote". `appellantsOf(outcome)` is the §5.3 loser table; `PANEL_SEATS` is the seat order.
 
 ```json
 {
@@ -1789,3 +1791,4 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
   - **§9 / §9.4.** The stale-build rejection is the API error code `STALE_LOCK_REQUEST`.
   - **§10.1.** `market.tick` comment corrected (1 Hz per gemini bet; the stage chart uses `stage.market`). Added the table of API-owned extensions (`tx.sign_request` for concede/appeal only, `judge.cue`, `hearing.turn_open`, `bet.invite_answered`, `attempt.started` fields) and the unsequenced control frames. The lock push stays `terms.authorize_request` with `AuthorizeRequest`.
   - Re-verified the §5.2 ruling hash independently (Python JCS, 1,173 B → `997ce278…5daa`; frame and clip placeholders match their commands). No TS code changed except comments.
+- **2026-11-18 (Beat 5 appeal built).** §7: `AppealVote.outcome` is `voteOutcome` (no 0.8 floor; the 0.6 floor is `countVote`'s), and the built decision timing (all three votes in; the result is unchanged). Shared helpers `voteOutcome`, `appellantsOf`, `PANEL_SEATS`, `PANEL_VOTE_TIMEOUT_MS`; API types `AppealSubmitted`, `DemoAppealRequest`.
