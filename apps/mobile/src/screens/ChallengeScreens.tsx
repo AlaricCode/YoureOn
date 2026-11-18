@@ -92,8 +92,12 @@ export function ScanScreen({
     void permission.requestPermission();
   }, [permission, asked]);
 
+  /** A scan or a challenge is running (a ref, so a double tap before the re-render is caught). */
+  const busy = useRef(false);
+
   const shoot = async () => {
-    if (state.phase !== 'idle' && state.phase !== 'found') return;
+    if (busy.current || (state.phase !== 'idle' && state.phase !== 'found')) return;
+    busy.current = true;
     dispatch({ type: 'scan' });
     let url: string | null = null;
     let outcome: ScanOutcome;
@@ -106,15 +110,21 @@ export function ScanScreen({
     } finally {
       // The photo is of someone else: it never outlives the scan (BRIEF 5e).
       if (url) deletePhoto(url);
+      busy.current = false;
     }
     if (live.current) dispatch({ type: 'result', outcome });
   };
 
   const challenge = async (m: ScanMatch) => {
-    if (state.phase !== 'found') return;
+    if (busy.current || state.phase !== 'found') return;
+    busy.current = true;
     dispatch({ type: 'challenge' });
-    const r = await onChallenge(m);
-    if (r !== 'ok' && live.current) dispatch({ type: 'challenge_failed', miss: r });
+    try {
+      const r = await onChallenge(m);
+      if (r !== 'ok' && live.current) dispatch({ type: 'challenge_failed', miss: r });
+    } finally {
+      busy.current = false;
+    }
   };
 
   const found = state.phase === 'found' || state.phase === 'challenging' ? state.match : null;
