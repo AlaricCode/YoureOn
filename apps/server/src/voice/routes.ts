@@ -4,6 +4,7 @@
 //   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //   POST /v1/bets/:bet_id/voice/lines (S, A)  transcript relay -> judge.line / party.line (./relay)
 //   POST /v1/bets/:bet_id/cues        (S, A)  `cue` client tool -> stage.cue (./relay)
+//   GET  /v1/demo/voice               (demo key) is the judge switched on? (./readiness)
 //
 // createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
 // sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
@@ -26,7 +27,9 @@ import type { AppDeps, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
+import { requireDemo } from '../demo/routes';
 import { createElevenLabsClient, UpstreamError, type ElevenLabsClient } from './elevenlabs';
+import { voiceReadiness } from './readiness';
 import { cuesHandler, LineDedupe, voiceLinesHandler } from './relay';
 import {
   confirmTermsHandler,
@@ -60,6 +63,8 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
           hint: 'ELEVENLABS_API_KEY is set but ALLOW_SPEND is not true: voice tokens are refused',
         });
       const state = o.state ?? new ToolState();
+      const readiness = voiceReadiness(deps.env, el !== null);
+      deps.log.info('voice.readiness', { ready: readiness.ready, missing: readiness.missing });
 
       app.post(VOICE_TOKENS_PATH, requireSignedRequest, async (c) => {
         const d = c.get('deps');
@@ -166,6 +171,10 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         voiceLinesHandler(o.lines ?? new LineDedupe()),
       );
       app.post('/v1/bets/:bet_id/cues', requireSignedRequest, cuesHandler());
+
+      app.get('/v1/demo/voice', requireDemo, (c) =>
+        c.json(voiceReadiness(c.get('deps').env, el !== null), 200),
+      );
     },
   };
 }
