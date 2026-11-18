@@ -792,6 +792,7 @@ export function MarketPanel({
         ? 'up'
         : 'down'
       : '';
+  // the card has no room to spare: the live line rides in the header, the result gets one row
   return (
     <section className="market" aria-label="market bet">
       <div className="market-head">
@@ -802,6 +803,11 @@ export function MarketPanel({
         <span className="muted">
           Up {pct}% · locked at Gemini {m.priceSource === 'mid' ? 'mid' : 'last trade'}
         </span>
+        {s ? null : left > 0 ? (
+          ahead && <span className="market-live">{ahead} is ahead</span>
+        ) : (
+          <span className="market-live countdown">Waiting for Gemini to settle…</span>
+        )}
       </div>
       <div className="market-sides">
         <span className={s?.contract.resolutionSide === 'yes' ? 'good' : undefined}>
@@ -834,36 +840,30 @@ export function MarketPanel({
           <span className="num">{left > 0 ? clock(left) : m.expiry.slice(11, 16)}</span>
         </div>
       </div>
-      {s ? (
-        <>
-          <p className="market-result">
-            {s.contract.status === 'invalid' ? (
-              <span className="bad">Gemini voided the contract · both stakes back</span>
-            ) : (
-              <span className="good">
-                Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
-                {s.contract.resolutionSide === 'yes' ? up : down} wins
-              </span>
-            )}
-          </p>
-          <p className="muted market-evidence">
+      {s && (
+        <p className="market-status">
+          {s.contract.status === 'invalid' ? (
+            <span className="market-result bad">Gemini voided the contract · both stakes back</span>
+          ) : (
+            <span className="market-result good">
+              Gemini settled {s.contract.resolutionSide === 'yes' ? 'UP' : 'DOWN'} ·{' '}
+              {s.contract.resolutionSide === 'yes' ? up : down} wins
+            </span>
+          )}
+          <span className="muted market-evidence">
             evidence <code>{bet.settlement!.evidence_hash.slice(0, 8)}</code> ·{' '}
             <a className="explorer" href={s.source_url} target="_blank" rel="noreferrer">
               Gemini ↗
             </a>
-          </p>
+          </span>
           {verification && (
-            <p className={`market-evidence ${verification.ok ? 'good' : 'bad'}`}>
+            <span className={`market-evidence ${verification.ok ? 'good' : 'bad'}`}>
               {verification.ok
                 ? `✓ verified: ${verifiedChain(verification)}`
                 : `✗ evidence mismatch: ${verification.failed.join(', ')}`}
-            </p>
+            </span>
           )}
-        </>
-      ) : left > 0 ? (
-        ahead && <p className="muted">{ahead} is ahead</p>
-      ) : (
-        <p className="countdown">Waiting for Gemini to settle…</p>
+        </p>
       )}
     </section>
   );
