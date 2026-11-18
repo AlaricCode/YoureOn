@@ -58,6 +58,7 @@
         }
       ],
       "expo-asset",
+      ["expo-notifications", { "enableRemoteNotifications": false }],
       "@livekit/react-native-expo-plugin",
       [
         "@config-plugins/react-native-webrtc",
