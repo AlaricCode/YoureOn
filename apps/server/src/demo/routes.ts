@@ -4,6 +4,8 @@
 //
 //   GET  /v1/demo/health                 chain health + warnings (src/chain/health.ts): balances, nonce
 //                                        pool, RPC p50/p95, keeper, stuck txs/bets, orphan escrow.
+//                                        Also open to a stage session (scope 'demo', DEMO_MODE only),
+//                                        so the projector needs no admin key for its health strip.
 //   POST /v1/demo/reset {rebalance?}     escrow of rehearsal bets returned (resolve(Refund) / exits),
 //                                        leased nonces revoked, non-seed bets deleted (cascade), the
 //                                        nonce pool re-synced (src/demo/reset.ts). Sessions, users,
@@ -25,12 +27,13 @@
 //                                        (the judge-cam phone can also use demo-claim for party a). The device then signs in with
 //                                        POST /v1/auth/session and binds itself with PATCH
 //                                        /v1/devices/current. 201 {device_id, user_id}; a repeat for
-//                                        the same user answers 200 with the same device.
+//                                        the same user answers 200 with the same device. Demo
+//                                        accounts only (demo/players.ts): 409 not_demo_user otherwise.
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { auditLog, chainTxs, devices, users } from '@youre-on/db';
-import { DemoClaimTokenRequest, type DemoClaimTokenResponse } from '@youre-on/shared/api';
+import { DemoClaimTokenRequest, HDR, type DemoClaimTokenResponse } from '@youre-on/shared/api';
 import { MAX_STAKE } from '@youre-on/shared/constants';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import { Pubkey, Uuid } from '@youre-on/shared/primitives';
@@ -45,7 +48,9 @@ import { readBet } from '../lock/common';
 import { displayCode } from '../lock/terms';
 import { confirmAndLock, termsSink } from '../voice/tools';
 import { toolSecretOk } from '../voice/tool-auth';
+import { bearerToken, resolveSession } from '../auth/sessions';
 import { claimTokensOf, demoPartyKey } from './claim-tokens';
+import { demoWallets, isDemoPlayer } from './players';
 import { rebalanceDemoWallets } from './rebalance';
 import { DemoResetRequest, resetDemo } from './reset';
 import { realWorldEnabled } from '../markets/quote';
@@ -75,13 +80,34 @@ export const DEMO_TERMS_ARGS = {
 
 const DemoDeviceRequest = z.object({ device_pubkey: Pubkey });
 
-export const requireDemo: MiddlewareHandler<AppEnv> = async (c, next) => {
+const demoKeyOk = (c: Context<AppEnv>): boolean => {
   const env = c.get('deps').env;
-  if (
-    !env.DEMO_MODE ||
-    !env.DEMO_ADMIN_TOKEN ||
-    !toolSecretOk(c.req.header(DEMO_KEY_HEADER), [env.DEMO_ADMIN_TOKEN])
-  )
+  return (
+    env.DEMO_MODE &&
+    !!env.DEMO_ADMIN_TOKEN &&
+    toolSecretOk(c.req.header(DEMO_KEY_HEADER), [env.DEMO_ADMIN_TOKEN])
+  );
+};
+
+export const requireDemo: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!demoKeyOk(c)) throw new HttpError('NOT_FOUND', 'Not found.');
+  await next();
+};
+
+/**
+ * The admin key, or the projector's own stage session: it carries the 'demo' scope only under
+ * DEMO_MODE (stage/routes.ts). For the read-only health strip, so the projector needs no
+ * all-powerful admin key in its URL fragment, history or sessionStorage.
+ */
+const requireDemoOrStage: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (demoKeyOk(c)) return next();
+  const deps = c.get('deps');
+  const token = bearerToken(c.req.header(HDR.authorization));
+  const auth =
+    deps.env.DEMO_MODE && token
+      ? await resolveSession(deps.db, token, deps.now()).catch(() => null)
+      : null;
+  if (!auth?.scopes.includes('stage') || !auth.scopes.includes('demo'))
     throw new HttpError('NOT_FOUND', 'Not found.');
   await next();
 };
@@ -116,7 +142,7 @@ function geminiHealth(deps: AppDeps) {
 export const demoRoutes: RouteModule = {
   name: 'demo',
   register(app) {
-    app.get('/v1/demo/health', requireDemo, async (c) => {
+    app.get('/v1/demo/health', requireDemoOrStage, async (c) => {
       // src/chain/health.ts: balances, nonce pool, RPC p50 / p95, keeper, stuck txs / bets,
       // orphan escrow, Stream, and `warnings` (+ `ok`: no critical warning); plus the Beat 6
       // Gemini relay and settlement keeper.
@@ -281,11 +307,17 @@ export const demoRoutes: RouteModule = {
       if (!Uuid.safeParse(userId).success) throw new HttpError('NOT_FOUND', 'No such user.');
       const body = await readBody(c, DemoDeviceRequest);
       const [user] = await deps.db
-        .select({ id: users.id, wallet_pubkey: users.wallet_pubkey })
+        .select({ id: users.id, wallet_pubkey: users.wallet_pubkey, is_demo: users.is_demo })
         .from(users)
         .where(and(eq(users.id, userId), isNull(users.deleted_at)))
         .limit(1);
       if (!user) throw new HttpError('NOT_FOUND', 'No such user.');
+      // Only the demo accounts (the judge cam is a device of demo A): a leaked admin key must
+      // not be able to add a device to a real account and sign in as it.
+      if (!isDemoPlayer(user, await demoWallets(deps)))
+        throw new HttpError('INVALID_STATE', 'Only a demo account can get a device here.', {
+          reason: 'not_demo_user',
+        });
       if (user.wallet_pubkey === body.device_pubkey)
         throw new HttpError('VALIDATION_FAILED', 'The device key must differ from the wallet.', {
           issues: [{ path: 'device_pubkey', message: 'must differ from wallet_pubkey' }],
