@@ -15,6 +15,7 @@ import { lockRoutes } from './lock/routes';
 import { payoutRoutes } from './payout/routes';
 import { meRoutes } from './me/routes';
 import { demoRoutes } from './demo/routes';
+import { judgeRoutes } from './judge/routes';
 
 export const routeModules: RouteModule[] = [
   healthRoutes,
@@ -28,5 +29,6 @@ export const routeModules: RouteModule[] = [
   payoutRoutes,
   meRoutes,
   demoRoutes,
-  // judgeRoutes, hearingRoutes, appealsRoutes, geminiRoutes, …
+  judgeRoutes,
+  // hearingRoutes, appealsRoutes, …
 ];
