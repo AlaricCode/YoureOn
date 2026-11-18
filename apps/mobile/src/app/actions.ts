@@ -13,7 +13,7 @@ import { hashJcs } from '@youre-on/shared/jcs';
 import type { Party } from '@youre-on/shared/primitives';
 import { renderSignCard } from '@youre-on/shared/sign-card';
 
-import { buildEvidence, mimeForUri } from '../attempt/frames';
+import { buildEvidence, mimeForUri, type CapturedFrame } from '../attempt/frames';
 import type { BetModel } from '../bets/store';
 import { messageBytesOf, runDevicePolicy } from '../wallet/devicePolicy';
 import type { Wallet } from '../wallet/wallet';
@@ -145,7 +145,8 @@ export async function sendAttempt(
   d: {
     api: Pick<YoApi, 'uploadFrames'>;
     readClip(uri: string): Promise<Uint8Array>;
-    extractFrames(uri: string, durationMs: number): Promise<{ t_ms: number; jpeg: Uint8Array }[]>;
+    /** 12 frames + the landing crop, last (../attempt/capture, planning D10). */
+    extractFrames(uri: string, durationMs: number): Promise<CapturedFrame[]>;
     /** server-corrected ms -> ISO */
     iso(ms: number): string;
   },

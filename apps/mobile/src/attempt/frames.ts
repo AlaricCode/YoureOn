@@ -1,50 +1,95 @@
 // Judge-cam evidence (TASKS D3-M1, API-CONTRACT §2.9, SCHEMAS §4): which instants to sample,
-// the per-frame sha256s, and the CameraEvidence record the frames upload carries. Pure TS: the
-// native capture (expo-camera recordAsync, expo-video-thumbnails, expo-image-manipulator) is in
-// ./capture.ts and hands its bytes here.
+// how each still becomes a JPEG, the per-frame sha256s, and the CameraEvidence record the frames
+// upload carries. Pure TS: the native capture (expo-camera recordAsync, expo-video-thumbnails,
+// expo-image-manipulator) is in ./capture.ts and follows capturePlan / shotTransform here.
+//
+// Planning D10, through the shared sampler (packages/shared/src/judge/frames, which the server
+// and scripts/judge-eval.ts use too): 12 frames, 4 spread over the clip and 8 in its last ~1.2 s
+// (the landing), each ≤ 512 px, then one landing crop: the last still again, its middle 80 % at
+// full resolution (≤ 1024 px), flagged `landing_crop` and sent last.
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { CameraEvidence, type EvidenceFrame } from '@youre-on/shared/evidence';
+import {
+  FRAME_MAX_PX,
+  JUDGE_FRAMES,
+  LANDING_CROP_MAX_PX,
+  MAX_FRAME_BYTES,
+  MAX_JUDGE_FRAMES,
+  MIN_JUDGE_FRAMES,
+  fitSize,
+  judgeFramesProblem,
+  judgeFrameTimesMs,
+  landingCropPlan,
+} from '@youre-on/shared/judge/frames';
 import type { Party } from '@youre-on/shared/primitives';
 
 import { sha256 } from '../wallet/noble';
 
-export const DEFAULT_FRAMES = 8;
-export const MIN_FRAMES = 8;
-export const MAX_FRAMES = 12;
-/** Max JPEG size per frame (API-CONTRACT §2.9). */
-export const MAX_FRAME_BYTES = 200 * 1024;
-export const FRAME_MAX_PX = 512;
+export {
+  FRAME_MAX_PX,
+  LANDING_CROP_MAX_PX,
+  /** Max JPEG size per frame, the landing crop included (API-CONTRACT §2.9). */
+  MAX_FRAME_BYTES,
+};
+export const DEFAULT_FRAMES = JUDGE_FRAMES;
+export const MIN_FRAMES = MIN_JUDGE_FRAMES;
+export const MAX_FRAMES = MAX_JUDGE_FRAMES;
 export const JPEG_QUALITY = 0.8;
-/** Never sample the very last ms: thumbnailers often fail at the exact end. */
-const END_GUARD_MS = 80;
 
-/**
- * "u4d4" (FINDINGS §3.3): half the frames uniform over the first 60 % of the clip, half dense
- * over the last second, so the landing is always in frame. Strictly increasing, all in range.
- */
+/** The instants to sample (planning D10): strictly increasing, all inside the clip. */
 export function frameTimesMs(durationMs: number, n = DEFAULT_FRAMES): number[] {
-  const count = Math.min(MAX_FRAMES, Math.max(MIN_FRAMES, Math.round(n)));
-  const end = Math.max(1, durationMs - END_GUARD_MS);
-  const dense = Math.floor(count / 2);
-  const uniform = count - dense;
-  const denseSpan = Math.min(1000, end * 0.4);
-  const denseStart = end - denseSpan;
-  const out: number[] = [];
-  for (let i = 0; i < uniform; i++) out.push(Math.round((denseStart * i) / uniform));
-  for (let i = 1; i <= dense; i++) out.push(Math.round(denseStart + (denseSpan * i) / dense));
-  // Strictly increasing even for very short clips.
-  for (let i = 1; i < out.length; i++)
-    if ((out[i] as number) <= (out[i - 1] as number)) out[i] = (out[i - 1] as number) + 1;
-  return out;
+  return judgeFrameTimesMs(durationMs, n);
+}
+
+export type ShotKind = 'frame' | 'landing_crop';
+
+/** One image capture.ts makes from the clip. */
+export interface Shot {
+  t_ms: number;
+  kind: ShotKind;
+}
+
+/** The stills for one clip: one per frame time, then (with `crop`) the crop of the last one. */
+export function capturePlan(durationMs: number, n = DEFAULT_FRAMES, crop = true): Shot[] {
+  const times = frameTimesMs(durationMs, n);
+  const shots: Shot[] = times.map((t_ms) => ({ t_ms, kind: 'frame' }));
+  if (crop) shots.push({ t_ms: times.at(-1) as number, kind: 'landing_crop' });
+  return shots;
+}
+
+/** What expo-image-manipulator does to a full-resolution still: crop (or not), then resize. */
+export interface ShotTransform {
+  crop: { originX: number; originY: number; width: number; height: number } | null;
+  /** null: already small enough (never scaled up). */
+  resize: { width: number; height: number } | null;
+}
+
+export function shotTransform(kind: ShotKind, width: number, height: number): ShotTransform {
+  if (kind === 'landing_crop') {
+    const p = landingCropPlan(width, height);
+    const crop = { originX: p.originX, originY: p.originY, width: p.width, height: p.height };
+    const same = p.outWidth === p.width && p.outHeight === p.height;
+    return { crop, resize: same ? null : { width: p.outWidth, height: p.outHeight } };
+  }
+  const out = fitSize(width, height, FRAME_MAX_PX);
+  return { crop: null, resize: out.width === width && out.height === height ? null : out };
+}
+
+/** One sampled JPEG; the landing crop carries the flag. */
+export interface CapturedFrame {
+  t_ms: number;
+  jpeg: Uint8Array;
+  landing_crop?: boolean | undefined;
 }
 
 export const sha256Hex = (bytes: Uint8Array): string => bytesToHex(sha256(bytes));
 
-export function hashFrames(frames: readonly { t_ms: number; jpeg: Uint8Array }[]): EvidenceFrame[] {
+export function hashFrames(frames: readonly CapturedFrame[]): EvidenceFrame[] {
   return frames.map((f, index) => ({
     index,
     t_ms: Math.max(0, Math.round(f.t_ms)),
     sha256: sha256Hex(f.jpeg),
+    ...(f.landing_crop ? { landing_crop: true as const } : {}),
   }));
 }
 
@@ -56,11 +101,14 @@ export function buildEvidence(a: {
   duration_ms: number;
   recorded_by: Party;
   recorded_at: string;
-  frames: readonly { t_ms: number; jpeg: Uint8Array }[];
+  frames: readonly CapturedFrame[];
 }): CameraEvidence {
   for (const f of a.frames)
     if (f.jpeg.length === 0 || f.jpeg.length > MAX_FRAME_BYTES)
       throw new Error(`frame size ${f.jpeg.length} out of range`);
+  // The server's D10 limits, checked here so a short extraction fails on the phone, not as a 422.
+  const problem = judgeFramesProblem(a.frames);
+  if (problem) throw new Error(problem.message);
   return CameraEvidence.parse({
     schema_version: 1,
     kind: 'camera',

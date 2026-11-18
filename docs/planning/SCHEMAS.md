@@ -632,6 +632,7 @@ export const EvidenceFrame = z.strictObject({
   index: FrameIndex,                 // position in frames[]; cited_frames point here
   t_ms: z.number().int().nonnegative(),   // offset from clip start
   sha256: Hex32,                     // of the JPEG bytes sent to the model
+  landing_crop: z.literal(true).optional(),   // D10: this image is the landing crop (the last frame again, the middle 80 % at full resolution, ≤ 1024 px); at most one, always last
 });
 export const CameraEvidence = z.strictObject({
   schema_version: z.literal(1),
@@ -642,9 +643,9 @@ export const CameraEvidence = z.strictObject({
   clip_bytes: z.number().int().positive(),
   mime: z.enum(['video/mp4', 'video/quicktime']),
   duration_ms: z.number().int().positive().max(30_000),   // = DATA-MODEL attempts CHECK; spike 02 caps one try at 6 s (5 tries ≈ 30 s)
-  recorded_by: Party,                      // whose device recorded; the demo judge-cam iPhone is a device of A (devices.role 'judge_cam', API-CONTRACT §2.9)
+  recorded_by: Party,                      // whose device recorded; the demo judge-cam iPhone is a device of A (devices.role 'judge_cam', API-CONTRACT §2.9); with two phones, the non-performer's own phone ('self')
   recorded_at: IsoUtc,
-  frames: z.array(EvidenceFrame).min(1).max(24),   // ~8 per try, always including the final frames
+  frames: z.array(EvidenceFrame).min(1).max(24),   // D10: 12 per try (8..12 accepted), 8 of them in the last ~1.2 s, + one landing crop
 });
 
 export const GeminiSettlementRecord = z.strictObject({
@@ -672,7 +673,7 @@ export const GeminiSettlementRecord = z.strictObject({
 | `camera` | `sha256(clip bytes)` = `CameraEvidence.clip_sha256` of the deciding recording |
 | `gemini` | `hashJcs(GeminiSettlementRecord)`. The record contains `bet_id` and `terms_hash`, so it is per bet, not per market (DATA-MODEL stores it on the settlement `rulings` row). |
 
-- Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: spike 02: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (spike 02 estimate).
+- Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: spike 02: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). Since D10 the build uses expo-video-thumbnails and the shared sampler `packages/shared/src/judge/frames.ts` (12 frames: 4 spread over the clip, 8 in its last ~1.2 s; plus the landing crop); the server labels the frames inside the landing window and the crop in the prompt. `landing_crop` is optional, so 8-frame records from earlier builds still parse, and an absent flag is not part of the JCS bytes. `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (spike 02 estimate).
 - The settlement record is built from the **event details endpoint** (`GET /v1/prediction-markets/events/{eventTicker}`). Confirmed by spike 05: `resolutionSide` shows there ~7.5–8.7 s after expiry, while `recently-settled` lags 26–36 s. `response_sha256` pins the exact body. What an `invalid` contract looks like is still unseen (0 of 173).
 
 ---
@@ -1789,3 +1790,4 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
   - **§9 / §9.4.** The stale-build rejection is the API error code `STALE_LOCK_REQUEST`.
   - **§10.1.** `market.tick` comment corrected (1 Hz per gemini bet; the stage chart uses `stage.market`). Added the table of API-owned extensions (`tx.sign_request` for concede/appeal only, `judge.cue`, `hearing.turn_open`, `bet.invite_answered`, `attempt.started` fields) and the unsequenced control frames. The lock push stays `terms.authorize_request` with `AuthorizeRequest`.
   - Re-verified the §5.2 ruling hash independently (Python JCS, 1,173 B → `997ce278…5daa`; frame and clip placeholders match their commands). No TS code changed except comments.
+- **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): **§4** `EvidenceFrame.landing_crop` (optional `true`; at most one, last), the `frames` comment (12 + the crop), and `recorded_by` for the two-phone fallback (`recorder:'self'`, API-CONTRACT §2.9). No hash vector changes: the field is absent on every existing record.

@@ -15,7 +15,7 @@ How the pieces fit, what talks to what, who can move money, and what happens whe
 - **Lock = one atomic transaction (D3).** `[AdvanceNonce, ComputeBudget, create_bet, accept_bet]`, fee payer = nonce authority = server hot key, durable nonce from a server pool. Both phones get the same message bytes, run the device policy, and sign at their own hold + Face ID, in either order. The server submits once at the second signature, preflight ON. Nothing moves unless both sign. Decline or expiry advances the nonce (§3.3).
 - **Two lanes.** The fast lane is the server's own `signatureSubscribe` on QuickNode RPC: `confirmed` advances LOCKED/RULED, `processed` fires the payout animation. The Streams lane is the QuickNode Stream webhook: the source of truth for money moved, writes the projection, and confirms on the stage (§5).
 - **Voice (D6).** One ElevenLabs Agent session per bet on A's phone (speakerphone). Webhook tools for terms, client tools for UI, and server results voiced through a phone-side "[EVENT]" bridge. Spoken "accept" and "I appeal!" are theatre; the phones sign.
-- **Judging.** The judge-cam iPhone extracts 8 frames on the device; Claude rules from them (model PENDING-KEY). Below 0.8 confidence → REDO, at most 2 → HEARING. Hearing: 10 s push-to-talk per side, Claude Opus. Appeal: Anthropic + OpenAI + Google vote in parallel; no majority upholds the original ruling (D7).
+- **Judging.** The judge-cam iPhone (or, with two phones, the non-performer's own) extracts 12 frames, 8 of them in the last ~1.2 s, plus one landing crop on the device (D10); Claude rules from them (model PENDING-KEY). Below 0.8 confidence → REDO, at most 2 → HEARING. Hearing: 10 s push-to-talk per side, Claude Opus. Appeal: Anthropic + OpenAI + Google vote in parallel; no majority upholds the original ruling (D7).
 - **Gemini closer.** Public REST + one WebSocket, no key. Odds come from the mid price, are bound into `terms_hash`, and must be locked between strike-known and T−120 s (by ~W+1:30). Settlement: WS `Settled` → REST confirm → `resolve` with the settlement record's hash.
 - **Targets.** Four of the five brief targets are on track **on paper only** (all E; §4). The judge's post-tool read-back (1.25–2.2 s) is marginal against 1.5 s. Atomic lock 0.70–1.39 s. Payout < 1 s only when the UI flips at `processed`.
 - **Biggest risks** (FINDINGS §4): the iOS native build path (no Mac, EAS only), voice latency PENDING-KEY, vision accuracy unmeasured (20 clips needed), the narrow Beat 6 window, devnet SOL needing a human. Every beat has a labelled pre-recorded fallback (§7).
@@ -35,7 +35,7 @@ flowchart LR
   subgraph PH["iPhones · apps/mobile (Expo SDK 58 dev build)"]
     A["A · challenger<br/>face scan, terms card, wallet,<br/>hosts the judge voice session"]
     B["B · challenged<br/>terms card, wallet, hearing PTT"]
-    JC["Judge cam on a tripod<br/>records, 8 frames, hashes"]
+    JC["Judge cam on a tripod (optional)<br/>records, 12 frames + landing crop, hashes"]
   end
   ST["apps/stage<br/>projector SPA on the laptop"]
   SH["packages/shared<br/>Zod, JCS hashing, device signing policy,<br/>Codama Kit client, chain codec"]
@@ -71,7 +71,7 @@ flowchart LR
   A -->|"HTTPS: face embedding only"| FACE
   A <-->|"HTTPS + WSS: bets, RealtimeEvent, AuthorizeRequest, signatures"| HUB
   B <-->|"HTTPS + WSS: RealtimeEvent, AuthorizeRequest, signatures, hearing clip"| HUB
-  JC -->|"HTTPS multipart: 8 JPEG frames + CameraEvidence"| HUB
+  JC -->|"HTTPS multipart: 12 JPEG frames + landing crop + CameraEvidence"| HUB
   JC -->|"HTTPS presigned PUT: clip"| OBJ
   ST <-->|"WSS: bet room events, market.tick, cues"| HUB
   ST -->|"HTTPS signed GET: frames"| OBJ
@@ -103,7 +103,7 @@ flowchart LR
 | Component | Owns | Must never | Key libs (FINDINGS) |
 |---|---|---|---|
 | `apps/mobile`, party mode (A, B) | Face enrollment + scan (on-device embedding), terms card, hold-to-confirm, Face ID gate, seed custody, device signing policy, ed25519 signing, payout UX + haptics, WS client, hearing push-to-talk. A only: the judge voice session and the voice bridge (§3.2). | Call Solana RPC, hold an RPC key, be a fee payer, sign a message that fails the policy, send face images | §3.1, §3.2, §3.4, §3.10 |
-| `apps/mobile`, judge-cam mode | Countdown, `recordAsync`, on-device frame extraction (u4d4, 8 × 512 px), frame + clip SHA-256, upload frames first, clip after. Recording never happens on A's phone, whose mic is held by WebRTC (FINDINGS §4 Beat 4). | Hold a wallet | §3.3 |
+| `apps/mobile`, judge-cam mode | Countdown, `recordAsync`, on-device frame extraction (D10: 12 × 512 px, 8 of them in the last ~1.2 s, + one landing crop ≤ 1024 px; `packages/shared/src/judge/frames.ts`), frame + clip SHA-256, upload frames first, clip after. **Two-phone fallback (2026-11-18):** with no judge cam in the room the non-performer's own phone records (`recorder:'self'`, API-CONTRACT §2.9), which is A's phone when B performs. This deviates from "recording never happens on A's phone, whose mic is held by WebRTC" (FINDINGS §4 Beat 4): the recording is video only (`mute`, no audio input), so WebRTC keeps the mic. | Hold a wallet | §3.3 |
 | `apps/server` | REST + WS hub (per-bet rooms, per-user channels, `seq`), auth, face matching, ElevenLabs tools + token minting, Terms composition + hashing, LockService (nonce pool, build, simulate, verify, co-sign, send), TxService (resolve, concede, appeal, finalize, crank), fast-lane subscriptions, Streams ingest + projector + reconciler, JudgeService (vision, hearing, panel), Gemini module, evidence presigning, push outbox, demo controls | Co-sign a message it did not build byte for byte; rebuild a message after collecting a signature; send with `skipPreflight`; log face embeddings | §3.5, §3.8, §3.9, §3.11–§3.13 |
 | `apps/stage` | One screen per bet: photos, terms card + terms code, live transcript, frame strip with cited frames, ruling, panel votes, escrow ticker with Explorer links, Gemini chart + countdown. Stage audio (gavel SFX, stingers, appeal-vote TTS). Demo control panel. | Hold any key except a read-only stage token (plus the demo admin token on the control panel) | §3.11 (chart), DATA-MODEL §8.4 |
 | `programs/escrow` | Where and when money moves: Config, Bet PDA, PDA vault, 10 instructions, `emit_cpi!` events | Take a destination argument; give any authority a withdrawal path | ESCROW §1–§7, FINDINGS §3.6 |
@@ -403,8 +403,8 @@ sequenceDiagram
   J->>J: "3-2-1, flip on GO", recordAsync avc1 720p, maxDuration 6 s
   J->>J: STOP tap about 0.5 s after the bottle rests
   S->>ST: judge stinger cue, played on the stage laptop
-  J->>J: generateThumbnailsAsync u4d4, 8 frames at 512 px, frame sha256s, clip sha256
-  J->>S: POST /v1/bets/:id/attempts/:n/frames (8 JPEG + CameraEvidence with clip_sha256)
+  J->>J: getThumbnailAsync: 12 frames at 512 px (8 in the last 1.2 s) + landing crop, frame sha256s, clip sha256
+  J->>S: POST /v1/bets/:id/attempts/:n/frames (12 JPEG + landing crop + CameraEvidence with clip_sha256)
   J-)O: presigned PUT of the clip, after the frames
   S->>ST: attempt.evidence (signed frame URLs)
   S->>C: streamed request: terms with cache_control + 8 labelled frames, VisionVerdict schema
@@ -970,3 +970,4 @@ Open items for the lead engineer (defaults in force until changed):
   - **§5.3, §6.4, §6.5, §7.2.** Authorization idempotency `(lock_request_id, party)`; kind name `atomic_lock`; ESCROW test IDs A13 + DP1–DP16; demo toggles mapped to API routes.
   - **§10.** C1–C7 and C9–C11 marked resolved, with where.
 - **2026-11-08, completeness pass** (`TRACEABILITY.md`): §9 item 15 now discloses the pre-window data artifacts (the eval clips, which stay out of git) and says the face model is regenerated in the window (timing rule; TASKS §3.2 rule 9, D0-M2).
+- **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`): summary, the §1 diagram and the `apps/mobile` row now say 12 frames + one landing crop (the shared sampler `packages/shared/src/judge/frames.ts`). The judge cam is optional: with two phones the non-performer's phone records with `recorder:'self'`, on A's phone too when B performs. That deviates from FINDINGS §4 Beat 4 ("recording never happens on A's phone"); the recording has no audio track, so the WebRTC mic is untouched.

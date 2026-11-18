@@ -62,11 +62,12 @@ just dollars.
    signs after Face ID. The
    second signature triggers one submission: both USDC stakes move into a PDA-owned vault together,
    or nothing moves. The program checks that B agreed to the same terms hash, stakes and opponent.
-4. **The attempt.** The judge cam uploads 8 frames with their SHA-256s. Claude Sonnet 5.5 returns a
-   structured verdict and two yes/no observations; if they disagree, or confidence is under 0.8,
-   it's a REDO. The server's judge key sends `resolve` with the ruling's hash (which commits to the
-   frame hashes). The loser taps GG (`concede`, instant payout) or the 10-second appeal window
-   closes and anyone can `finalize`.
+4. **The attempt.** The judge cam (or, with two phones, the non-performer's own phone) uploads 12
+   frames, 8 of them on the landing, plus a full-resolution landing crop, with their SHA-256s.
+   Claude Sonnet 5.5 returns a structured verdict and two yes/no observations; if they disagree,
+   or confidence is under 0.8, it's a REDO. The server's judge key sends `resolve` with the
+   ruling's hash (which commits to the frame hashes). The loser taps GG (`concede`, instant
+   payout) or the 10-second appeal window closes and anyone can `finalize`.
 5. **Money moved.** The program emits an Anchor event with `emit_cpi!` for every state change. A
    QuickNode Stream on Solana devnet filters our program's events out of every block and posts
    them to our webhook (HMAC-signed), which updates the bet and pushes it to both phones and the
