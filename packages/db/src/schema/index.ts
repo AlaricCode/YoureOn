@@ -7,3 +7,4 @@ export { HEX32_RE, PUBKEY_RE, TX_SIG_RE } from './checks';
 export * from './voice';
 export * from './outbox';
 export * from './chain';
+export * from './lifecycle';

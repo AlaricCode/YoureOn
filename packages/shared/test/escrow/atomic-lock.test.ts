@@ -82,7 +82,7 @@ import {
   wireSize,
   type LockArgs,
   type NonceRef,
-} from './lock-tx';
+} from '../../src/chain/lock-tx';
 import { measure } from './measure';
 
 const STAKE_A = 5n * USDC;
