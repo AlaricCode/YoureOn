@@ -214,9 +214,9 @@ export const PREVIEW_FACE: DetectedFace = {
  */
 export function createPreviewEmbedder(
   seed = 0x5e6ad2,
-  detect: (
-    url: string,
-  ) => readonly DetectedFace[] | Promise<readonly DetectedFace[]> = () => [PREVIEW_FACE],
+  detect: (url: string) => readonly DetectedFace[] | Promise<readonly DetectedFace[]> = () => [
+    PREVIEW_FACE,
+  ],
 ): FaceEmbedder {
   const base = new Float32Array(FACE_MODEL.dim);
   const r = rng(seed);

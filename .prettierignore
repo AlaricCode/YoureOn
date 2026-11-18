@@ -10,3 +10,5 @@ packages/db/migrations/meta/
 docs/reference/
 .claude/
 /migrations/
+# local smoke output (screenshots, Maestro logs); git ignores it through .git/info/exclude
+.claude-artifacts/
