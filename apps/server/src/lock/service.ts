@@ -86,6 +86,7 @@ import {
   type LifecycleDeps,
   type Tx,
 } from './common';
+import { demoWalletsOf, nonDemoPlayers } from '../demo/players';
 import { enterAwaitingMarket, settlementOf } from '../markets/settlement';
 import { acceptDeadlineFor, loadEnvelope, quoteAcceptDeadline } from './terms';
 
@@ -106,6 +107,10 @@ export const LOCK_RESEND_STOP_MS = 5_000;
  * (accept_deadline - 5 s); otherwise the quote is EXPIRED (quote_expired) without a lease.
  */
 export const MIN_LOCK_WINDOW_SECS = 5;
+/** DEMO_MODE: free nonces only a bet between two demo players may lease (assertNonceShare). */
+export const DEMO_RESERVED_NONCES = 2;
+/** DEMO_MODE: leases a non-demo bet's parties may hold at once (assertNonceShare). */
+export const NON_DEMO_LEASES_PER_USER = 1;
 
 export interface LockServiceOptions {
   deps: LifecycleDeps;
@@ -226,6 +231,9 @@ export class LockService {
       )
         return { quoteExpired: true as const };
 
+      // DEMO_MODE: a stranger's bets must not hold the pool hostage (5 nonces, 300 s leases).
+      if (this.deps.env.DEMO_MODE) await this.assertNonceShare(tx, rt, bet);
+
       // 1. lease the least-recently-advanced free nonce (DATA-MODEL §5.20 "Allocate").
       const [nonce] = await tx
         .select()
@@ -344,6 +352,34 @@ export class LockService {
     fanout(this.deps, out.bet, out.envs);
     this.deps.log.info('lock.built', { bet_id: betId, lock_request_id: out.lockId });
     return { lockId: out.lockId };
+  }
+
+  /**
+   * DEMO_MODE nonce shares: a bet that is not between two demo players (demo/players.ts) may not
+   * take one of the last DEMO_RESERVED_NONCES free nonces, and its parties may hold at most
+   * NON_DEMO_LEASES_PER_USER leases between them, so open signup can't lease the whole pool and
+   * fail every demo lock with nonce_pool_exhausted. Demo bets take any free nonce.
+   */
+  private async assertNonceShare(tx: Tx, rt: ChainRuntime, bet: BetRow): Promise<void> {
+    const parties = [bet.party_a_id, bet.party_b_id];
+    const wallets = demoWalletsOf(this.deps.env, rt);
+    if ((await nonDemoPlayers(this.deps, parties, { db: tx, wallets })).length === 0) return;
+    const [free] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(noncePool)
+      .where(eq(noncePool.status, 'free'));
+    if ((free?.n ?? 0) <= DEMO_RESERVED_NONCES) throw new HttpError('NONCE_POOL_EXHAUSTED');
+    const [held] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(noncePool)
+      .innerJoin(bets, eq(bets.id, noncePool.leased_bet_id))
+      .where(
+        and(
+          eq(noncePool.status, 'leased'),
+          or(inArray(bets.party_a_id, parties), inArray(bets.party_b_id, parties)),
+        ),
+      );
+    if ((held?.n ?? 0) >= NON_DEMO_LEASES_PER_USER) throw new HttpError('NONCE_POOL_EXHAUSTED');
   }
 
   private authorizeRequest(

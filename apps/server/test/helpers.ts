@@ -213,9 +213,12 @@ export interface SignedUp {
   session: Session;
 }
 
-export async function signUp(base: string, name = 'Jake'): Promise<SignedUp> {
+export async function signUp(
+  base: string,
+  name = 'Jake',
+  wallet: TestKey = newKey(),
+): Promise<SignedUp> {
   const device = newKey();
-  const wallet = newKey();
   const ch = await getChallenge(base, device);
   const r = await postJson(
     base,

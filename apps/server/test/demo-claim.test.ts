@@ -40,6 +40,7 @@ import {
 
 const code = (j: unknown) => ApiError.parse(j).error.code;
 const ADMIN = 'test-demo-admin-token';
+const STAGE_KEY = 'test-stage-key';
 const b58 = getBase58Decoder();
 const addr = getAddressDecoder();
 const addrEnc = getAddressEncoder();
@@ -164,6 +165,7 @@ describeDb('demo claim (API-CONTRACT §1.3, §2.17)', () => {
       env: {
         DEMO_MODE: 'true',
         DEMO_ADMIN_TOKEN: ADMIN,
+        STAGE_KEY,
         DEMO_A_SECRET_KEY: A.base58_64,
         DEMO_B_SECRET_KEY: B.json64,
       },
@@ -508,6 +510,73 @@ describeDb('demo claim (API-CONTRACT §1.3, §2.17)', () => {
     } finally {
       ctx.deps.rateLimit = saved;
     }
+  });
+
+  // ---- the admin key's reach (data-1) -------------------------------------------------------
+
+  const addDevice = (userId: string, device_pubkey: string) =>
+    postJson(
+      ctx.base,
+      `/v1/demo/users/${userId}/devices`,
+      { device_pubkey },
+      { 'X-YO-Demo-Key': ADMIN },
+    );
+
+  it('POST /v1/demo/users/:id/devices adds a device to a demo account only, never a real one', async () => {
+    const real = await signUp(ctx.base, 'Rita');
+    const refused = await addDevice(real.session.user.user_id, newKey().pubkey);
+    expect(refused.status).toBe(409);
+    expect(ApiError.parse(refused.json).error.details).toMatchObject({ reason: 'not_demo_user' });
+    expect(
+      await ctx.deps.db
+        .select()
+        .from(devices)
+        .where(eq(devices.user_id, real.session.user.user_id)),
+    ).toHaveLength(1);
+
+    // Demo A (the judge cam is a device of A) still gets one.
+    const claimed = await claim(newKey(), (await issueToken('a')).token);
+    expect(claimed.status).toBe(200);
+    const demoA = DemoClaimResponse.parse(claimed.json).user.user_id;
+    const cam = newKey();
+    expect((await addDevice(demoA, cam.pubkey)).status).toBe(201);
+    const ch = await getChallenge(ctx.base, cam);
+    const login = await postJson(ctx.base, '/v1/auth/session', loginBody(ch, cam));
+    expect(login.status).toBe(200);
+    expect((login.json as any).user.user_id).toBe(demoA);
+  });
+
+  it("GET /v1/demo/health takes the projector's stage session instead of the admin key", async () => {
+    const health = (headers: Record<string, string>) =>
+      fetch(`${ctx.base}/v1/demo/health`, { headers });
+    const u = await signUp(ctx.base, 'Host');
+    const raw = JSON.stringify({ name: 'Stage room', kind: 'session' });
+    const room = await fetch(`${ctx.base}/v1/rooms`, {
+      method: 'POST',
+      headers: signedHeaders(u, 'POST', '/v1/rooms', raw, { ts: now }),
+      body: raw,
+    });
+    expect(room.status).toBe(201);
+    const st = await postJson(ctx.base, '/v1/stage/session', {
+      stage_key: STAGE_KEY,
+      room_id: ((await room.json()) as any).room_id,
+    });
+    expect(st.status).toBe(201);
+    expect((st.json as any).scopes).toEqual(['stage', 'demo']);
+
+    expect((await health({ Authorization: `Bearer ${(st.json as any).token}` })).status).toBe(200);
+    expect((await health({ 'X-YO-Demo-Key': ADMIN })).status).toBe(200);
+    // An app session, a wrong key, nothing: the route does not exist for them.
+    expect((await health({ Authorization: `Bearer ${u.session.token}` })).status).toBe(404);
+    expect((await health({ 'X-YO-Demo-Key': 'wrong' })).status).toBe(404);
+    expect((await health({})).status).toBe(404);
+    // and the stage session opens nothing else of the demo surface
+    const reset = await fetch(`${ctx.base}/v1/demo/reset`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${(st.json as any).token}` },
+      body: '{}',
+    });
+    expect(reset.status).toBe(404);
   });
 
   // -------------------------------------------------------------------------------------------

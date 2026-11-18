@@ -31,13 +31,18 @@ import {
   QN_HEADER_NONCE,
   QN_HEADER_SIGNATURE,
   QN_HEADER_TIMESTAMP,
+  precheckQuickNodeHeaders,
   verifyQuickNodeSignature,
 } from './quicknode';
 import { parseStreamDelivery, StreamPayloadError } from './streams';
 
 export const QUICKNODE_WEBHOOK_PATH = '/webhooks/quicknode';
-/** A 5-block filtered batch is small, but an unfiltered probe can exceed 1 MiB. */
-export const QUICKNODE_BODY_LIMIT = 8 * 1024 * 1024;
+/**
+ * A filtered 5-block batch is a few KB (the Stream sends compression none). 1 MiB leaves room
+ * for a busy batch; an unfiltered probe (`test_filter --probe`) can be larger and is refused 413.
+ * The body is read only after the cheap header checks (precheckQuickNodeHeaders).
+ */
+export const QUICKNODE_BODY_LIMIT = 1024 * 1024;
 
 export { isTransientDbError } from './db-errors';
 
@@ -78,22 +83,29 @@ export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
           d.log.error('chain.webhook_unconfigured', { hint: 'set QN_STREAM_SECURITY_TOKEN' });
           throw new HttpError('NOT_FOUND');
         }
-        // Cheap rejection before buffering the body: headers present.
+        // Cheap rejection before buffering the body: headers present, timestamp fresh,
+        // signature 64 hex. Only then is the body (≤ QUICKNODE_BODY_LIMIT) read for the HMAC.
         const nonce = c.req.header(QN_HEADER_NONCE);
         const timestamp = c.req.header(QN_HEADER_TIMESTAMP);
         const signature = c.req.header(QN_HEADER_SIGNATURE);
-        const raw =
-          nonce && timestamp && signature ? new Uint8Array(await c.req.arrayBuffer()) : null;
-        const v = raw
-          ? await verifyQuickNodeSignature({
-              secret,
-              nonce,
-              timestamp,
-              signature,
-              rawBody: raw,
-              nowMs: d.now(),
-            })
-          : ({ ok: false, reason: 'missing' } as const);
+        const pre = precheckQuickNodeHeaders({
+          secret,
+          nonce,
+          timestamp,
+          signature,
+          nowMs: d.now(),
+        });
+        const v =
+          pre === null && nonce && timestamp && signature
+            ? await verifyQuickNodeSignature({
+                secret,
+                nonce,
+                timestamp,
+                signature,
+                rawBody: new Uint8Array(await c.req.arrayBuffer()),
+                nowMs: d.now(),
+              })
+            : ({ ok: false, reason: pre ?? 'missing' } as const);
         if (!v.ok) {
           // ALERT: QuickNode auto-pauses the Stream after 3 failed retries.
           d.log.error('chain.webhook_rejected', { alert: true, reason: v.reason });
