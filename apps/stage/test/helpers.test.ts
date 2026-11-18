@@ -252,11 +252,13 @@ describe('launch params', () => {
       token: 'tk',
       demo: 'dk',
       noPreload: true,
+      secretInQuery: false,
+      serverIgnored: false,
     });
     expect(parseLaunch('?preview', '').preview).toBe('');
     expect(parseLaunch('', '').preview).toBeNull();
     expect(parseLaunch('?room=%20', '#key=').room).toBeNull();
-    expect(parseLaunch('?server=https://youre-on.fly.dev', '').server).toBe(
+    expect(parseLaunch('?server=https://youre-on.fly.dev', '', { allowServer: true }).server).toBe(
       'https://youre-on.fly.dev',
     );
   });
@@ -306,7 +308,7 @@ describe('launch params', () => {
         expiresAt: '2026-11-21T03:00:00.000Z',
       };
       writeJson('session', SESSION_KEY, s);
-      expect(loadSession(now)).toEqual(s);
+      expect(loadSession(now)).toEqual({ ...s, focusBetId: null, bets: [] });
       expect(loadSession(Date.parse('2026-11-21T02:59:30.000Z'))).toBeNull(); // within a minute
       writeJson('session', SESSION_KEY, null);
       expect(loadSession(now)).toBeNull();
