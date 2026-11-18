@@ -55,6 +55,10 @@ export const CONTRACT_COPY: readonly { readonly template: string; readonly sourc
   { template: 'Challenge {name}?', source: 'TASKS D4-M1' },
   { template: '{name} is in', source: 'ARCHITECTURE §5.2' },
   { template: 'Hold to lock in {amount}', source: 'SCHEMAS §9.4' },
+  {
+    template: 'Swipe up to lock in {amount}',
+    source: 'Owner request (supersedes SCHEMAS §9.4 hold label)',
+  },
   { template: 'Declined. Nothing moved.', source: 'SCHEMAS §9.4' },
   { template: 'Expired. Nothing moved.', source: 'SCHEMAS §9.4' },
   { template: "Couldn't lock it. Nothing moved.", source: 'SCHEMAS §9.4' },

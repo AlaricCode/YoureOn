@@ -11,7 +11,7 @@ import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision
 
 import { useVisionCameraPresence } from '../device/visionCamera';
 import { CheckBadge, Label, QuietButton, ShutterButton, Stage, StageBubble } from '../ui/kit';
-import { motion, palette, space } from '../ui/tokens';
+import { half, motion, space } from '../ui/tokens';
 import { FaceApiError, type FaceApi } from './api';
 import type { FaceEmbedder, FaceStill } from './embedder';
 import {
@@ -207,7 +207,7 @@ export function FaceCapturePanel({
     return (
       <Stage style={styles.center}>
         <CheckBadge size={72} />
-        <Label variant="title" style={styles.savedLabel}>
+        <Label variant="subtitle" style={styles.savedLabel}>
           Face saved
         </Label>
       </Stage>
@@ -217,9 +217,12 @@ export function FaceCapturePanel({
   if (access !== 'granted') {
     return (
       <Stage style={styles.center}>
+        {/* Stage already gives its children the raised backdrop: the quiet pill reads on it. */}
         <View style={styles.access}>
           {access === 'asking' ? (
-            <Label style={styles.muted}>Allow camera access</Label>
+            <Label variant="body" style={styles.centered}>
+              Allow camera access
+            </Label>
           ) : access === 'denied' ? (
             <QuietButton label="Allow camera" onPress={() => void ask()} />
           ) : (
@@ -234,7 +237,11 @@ export function FaceCapturePanel({
   if (presence !== 'present') {
     return (
       <Stage style={styles.center}>
-        {presence === 'none' ? <Label style={styles.muted}>No camera</Label> : null}
+        {presence === 'none' ? (
+          <Label variant="body" style={styles.centered}>
+            No camera
+          </Label>
+        ) : null}
       </Stage>
     );
   }
@@ -245,7 +252,7 @@ export function FaceCapturePanel({
       <Camera style={StyleSheet.absoluteFill} device="front" isActive outputs={outputs} />
       <StageBubble prompt={PROMPT_LABEL[prompt]} checking={checking} />
       <Animated.View pointerEvents="none" style={[styles.flash, { opacity: flash }]}>
-        <CheckBadge size={56} fill={palette.background} />
+        <CheckBadge size={56} />
       </Animated.View>
       <View style={styles.shutterSlot}>
         <ShutterButton onPress={() => void capture()} disabled={busy} />
@@ -256,9 +263,9 @@ export function FaceCapturePanel({
 
 const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
-  savedLabel: { marginTop: space.x2 },
+  savedLabel: { marginTop: space.x2 + half.x05 },
   access: { alignSelf: 'stretch', paddingHorizontal: space.x3, alignItems: 'stretch' },
-  muted: { color: palette.textSecondary, textAlign: 'center' },
+  centered: { textAlign: 'center' },
   flash: {
     position: 'absolute',
     top: 0,
@@ -268,5 +275,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x2 },
+  shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x3 },
 });

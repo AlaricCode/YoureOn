@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -17,7 +18,6 @@ import { AlertLine, Label, PrimaryButton, QuietButton, TextField } from '../ui/k
 import {
   Avatar,
   BalanceHeader,
-  Chip,
   DataText,
   ListRow,
   OperatorHold,
@@ -27,7 +27,19 @@ import {
   StatusHero,
   TopBar,
 } from '../ui/parts';
-import { palette, space } from '../ui/tokens';
+import { historyMode, press } from '../ui/polish';
+import { PressScale } from '../ui/press';
+import { SkeletonRows } from '../ui/Skeleton';
+import {
+  TABULAR,
+  avatarSize,
+  color,
+  fontFamily,
+  fontWeight,
+  half,
+  palette,
+  space,
+} from '../ui/tokens';
 import { COPY, t } from './copy';
 
 export function HomeScreen({
@@ -49,6 +61,8 @@ export function HomeScreen({
   onTitleLongPress,
   note,
   creating = false,
+  series,
+  change,
 }: {
   name: string;
   balanceCents: number;
@@ -73,6 +87,10 @@ export function HomeScreen({
   note?: string | null | undefined;
   /** "New room" is in flight. */
   creating?: boolean | undefined;
+  /** Balance points (cents, oldest first) for the sparkline; hidden under 2 points. */
+  series?: readonly number[] | null | undefined;
+  /** Net change over those points, shown green / red under the balance; omitted when unknown. */
+  change?: { readonly cents: number; readonly caption?: string } | null | undefined;
 }) {
   const [code, setCode] = useState('');
   const [alert, setAlert] = useState<string | null>(null);
@@ -88,25 +106,34 @@ export function HomeScreen({
 
   return (
     <Screen offline={offline}>
-      <View style={styles.head}>
-        <OperatorHold style={styles.flex} onHold={onTitleLongPress}>
-          <BalanceHeader cents={balanceCents} pending={pending} inBetsUsd={inBetsUsd} />
-        </OperatorHold>
-        <Pressable
-          testID="home-profile"
-          accessibilityRole="button"
-          accessibilityLabel={t(COPY.home.profile)}
-          onPress={onProfile}
-          hitSlop={8}
-        >
-          <Avatar name={name} size={40} />
-        </Pressable>
-        {tag ? (
-          <Label variant="small" style={styles.tag}>
-            {tag}
-          </Label>
-        ) : null}
-      </View>
+      {/* The balance leads, full width, on black; your avatar sits on its "Balance" label row. The
+          operator tag (diagnostics builds only) gets a slim row above it. */}
+      {tag ? (
+        <View style={styles.top}>
+          <Label variant="small">{tag}</Label>
+        </View>
+      ) : null}
+      <OperatorHold style={styles.head} onHold={onTitleLongPress}>
+        <BalanceHeader
+          cents={balanceCents}
+          pending={pending}
+          inBetsUsd={inBetsUsd}
+          change={change ?? null}
+          series={series ?? null}
+          trailing={
+            <PressScale
+              testID="home-profile"
+              accessibilityRole="button"
+              accessibilityLabel={t(COPY.home.profile)}
+              onPress={onProfile}
+              hitSlop={8}
+              scaleTo={press.avatarScale}
+            >
+              <Avatar name={name} size={avatarSize.sm} />
+            </PressScale>
+          }
+        />
+      </OperatorHold>
       {/* The room code field sits at the bottom: keep it and "Join room" above the keyboard. */}
       <KeyboardAvoidingView
         style={styles.flex}
@@ -116,92 +143,107 @@ export function HomeScreen({
           {room ? (
             <>
               <View style={styles.roomHead}>
-                <Label variant="small">{t(COPY.home.room)}</Label>
-                <Chip testID="room-code-chip" label={room.code} />
+                <Label variant="heading">{t(COPY.home.room)}</Label>
+                {/* The code friends read out loud: plain grey text on the "Room" baseline (a pill
+                    would read as a button). */}
+                <Label testID="room-code-chip" variant="labelMedium" style={styles.codeText}>
+                  {room.code}
+                </Label>
               </View>
-              <ScrollView style={styles.flex} contentContainerStyle={styles.list}>
+              <ScrollView
+                style={styles.flex}
+                contentContainerStyle={members.length === 0 ? styles.listEmpty : styles.list}
+              >
                 {members.length === 0 ? (
                   <StatusHero mark="ring" title={t(COPY.home.empty)} />
                 ) : (
                   members.map((m) => (
                     <View key={m.user_id} style={styles.member}>
-                      <Avatar name={m.display_name} online={m.online} />
-                      <DataText style={styles.flex} lines={1}>
+                      <Avatar name={m.display_name} size={avatarSize.md} online={m.online} />
+                      <DataText variant="heading" style={[styles.flex, styles.rowTitle]} lines={1}>
                         {m.display_name}
                       </DataText>
                       {m.online ? (
-                        <View style={styles.challenge}>
-                          <QuietButton
-                            testID={`challenge-${m.user_id}`}
-                            label={t(COPY.home.challenge)}
-                            onPress={() => onChallenge(m)}
-                          />
-                        </View>
+                        // A small grey pill, not green: green stays "the one action" (Scan a face).
+                        <QuietButton
+                          small
+                          testID={`challenge-${m.user_id}`}
+                          label={t(COPY.home.challenge)}
+                          onPress={() => onChallenge(m)}
+                        />
                       ) : (
-                        <Chip label={t(COPY.home.offline)} />
+                        // Presence is the dot on the disc; the word stays, quietly, in grey.
+                        <Label variant="small">{t(COPY.home.offline)}</Label>
                       )}
                     </View>
                   ))
                 )}
               </ScrollView>
               <AlertLine testID="home-alert" message={note ?? null} />
-              {onScan ? (
-                <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
-              ) : null}
-              <View style={styles.row}>
-                <View style={styles.flex}>
-                  <QuietButton
-                    testID="home-history"
-                    label={t(COPY.home.history)}
-                    onPress={onHistory}
-                  />
-                </View>
-                <View style={styles.flex}>
-                  <QuietButton testID="room-leave" label={t(COPY.home.leave)} onPress={onLeave} />
+              <View style={styles.actions}>
+                {onScan ? (
+                  <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
+                ) : null}
+                <View style={styles.row}>
+                  <View style={styles.flex}>
+                    <QuietButton
+                      testID="home-history"
+                      label={t(COPY.home.history)}
+                      onPress={onHistory}
+                    />
+                  </View>
+                  <View style={styles.flex}>
+                    <QuietButton testID="room-leave" label={t(COPY.home.leave)} onPress={onLeave} />
+                  </View>
                 </View>
               </View>
             </>
           ) : (
             <>
-              {/* Tapping the empty space puts the keyboard away. */}
+              {/* The code field sits just under the balance (no dead black between); tapping the
+                  empty space under it puts the keyboard away. */}
+              <View style={styles.codeGroup}>
+                <TextField
+                  testID="room-code"
+                  label={t(COPY.home.roomCode)}
+                  placeholder="UBC26X"
+                  value={code}
+                  onChangeText={(v) => {
+                    setCode(v);
+                    setAlert(null);
+                  }}
+                  maxLength={12}
+                  autoCapitalize="characters"
+                  textContentType="none"
+                  onSubmitEditing={() => void join()}
+                />
+                <AlertLine testID="home-alert" message={alert ?? note ?? null} />
+              </View>
               <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />
-              <TextField
-                testID="room-code"
-                label={t(COPY.home.roomCode)}
-                placeholder="UBC26X"
-                value={code}
-                onChangeText={(v) => {
-                  setCode(v);
-                  setAlert(null);
-                }}
-                maxLength={12}
-                autoCapitalize="characters"
-                textContentType="none"
-                onSubmitEditing={() => void join()}
-              />
-              <AlertLine testID="home-alert" message={alert ?? note ?? null} />
-              <PrimaryButton
-                testID="room-join"
-                label={t(COPY.home.join)}
-                disabled={code.trim().length < 4}
-                busy={busy}
-                onPress={() => void join()}
-              />
-              <View style={styles.row}>
-                <View style={styles.flex}>
-                  <QuietButton
-                    testID="room-create"
-                    label={t(COPY.home.create)}
-                    busy={creating}
-                    onPress={onCreate}
-                  />
-                </View>
-                <View style={styles.flex}>
-                  <QuietButton
-                    testID="home-history"
-                    label={t(COPY.home.history)}
-                    onPress={onHistory}
-                  />
+              <View style={styles.actions}>
+                <PrimaryButton
+                  testID="room-join"
+                  label={t(COPY.home.join)}
+                  disabled={code.trim().length < 4}
+                  busy={busy}
+                  onPress={() => void join()}
+                />
+                <View style={styles.row}>
+                  <View style={styles.flex}>
+                    <QuietButton
+                      testID="room-create"
+                      label={t(COPY.home.create)}
+                      busy={creating}
+                      onPress={onCreate}
+                    />
+                  </View>
+                  <View style={styles.flex}>
+                    <QuietButton
+                      testID="home-history"
+                      label={t(COPY.home.history)}
+                      onPress={onHistory}
+                    />
+                  </View>
                 </View>
               </View>
             </>
@@ -229,33 +271,65 @@ export function HistoryScreen({
     lost: t(COPY.history.lost),
     void: t(COPY.history.voided),
   } as const;
+  // First load: skeleton rows. A reload with rows already shown is pull-to-refresh's spinner,
+  // so the list never blanks.
+  const { mode, refreshing } = historyMode(status, items.length);
   return (
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.history.title)} />
       <Page>
-        {status === 'loading' ? (
-          <StatusHero mark="ring" title={t(COPY.app.loading)} />
-        ) : status === 'failed' ? (
+        {mode === 'skeleton' ? (
+          <SkeletonRows />
+        ) : mode === 'error' ? (
           <>
-            <StatusHero mark="cross" title={t(COPY.app.offline)} />
-            <View style={styles.flex} />
+            <View style={styles.centre}>
+              <StatusHero mark="cross" title={t(COPY.app.offline)} />
+            </View>
             <PrimaryButton testID="history-retry" label={t(COPY.app.failed)} onPress={onRetry} />
           </>
-        ) : items.length === 0 ? (
+        ) : mode === 'empty' ? (
           <>
-            <StatusHero mark="ring" title={t(COPY.history.empty)} />
-            <View style={styles.flex} />
+            <View style={styles.centre}>
+              <StatusHero mark="ring" title={t(COPY.history.empty)} />
+            </View>
             <PrimaryButton label={t(COPY.ruling.backHome)} onPress={onBack} />
           </>
         ) : (
-          <ScrollView>
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={styles.historyList}
+            refreshControl={
+              onRetry ? (
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={onRetry}
+                  tintColor={palette.textSecondary}
+                />
+              ) : undefined
+            }
+          >
+            {/* Hairline rows: who and what on the left; the amount (tabular, green / red) over
+                the outcome on the right. */}
             {items.map((it) => (
-              <ListRow
-                key={it.bet_id}
-                left={<Avatar name={it.opponent} size={32} />}
-                title={`${it.title} · ${it.opponent}`}
-                value={`${result[it.outcome]} ${signedUsd(it.net)}`}
-              />
+              <View key={it.bet_id} style={styles.historyRow}>
+                <Avatar name={it.opponent} size={avatarSize.md} />
+                {/* The title sits on the amount's first baseline, not centred on the two lines. */}
+                <View style={styles.historyText}>
+                  <DataText variant="row" style={styles.flex} lines={1}>
+                    {`${it.title} · ${it.opponent}`}
+                  </DataText>
+                  <View style={styles.historyResult}>
+                    <DataText
+                      variant="amount"
+                      style={[styles.amount, { color: netColor[it.outcome] }]}
+                      lines={1}
+                    >
+                      {signedUsd(it.net)}
+                    </DataText>
+                    <Label variant="small">{result[it.outcome]}</Label>
+                  </View>
+                </View>
+              </View>
             ))}
           </ScrollView>
         )}
@@ -288,8 +362,10 @@ export function ProfileScreen({
       {/* Scrolls: in landscape (the judge cam on its tripod) the last rows were cut off. */}
       <ScrollView style={styles.flex} contentContainerStyle={styles.profileScroll}>
         <View style={styles.profileHead}>
-          <Avatar name={name} size={72} accent />
-          <DataText variant="title">{name}</DataText>
+          <Avatar name={name} size={avatarSize.hero} />
+          <DataText variant="figure" style={styles.profileName} lines={1}>
+            {name}
+          </DataText>
         </View>
         <Section label={t(COPY.profile.title)}>
           <ListRow title={t(COPY.profile.photo)} value={t(COPY.profile.none)} />
@@ -314,32 +390,66 @@ export function ProfileScreen({
   );
 }
 
+/** The amount's colour on the history list: money in green, money out red, a refund grey. */
+const netColor = {
+  won: color.positive,
+  lost: color.negative,
+  void: palette.textSecondary,
+} as const;
+
+/** One hairline under each row of a list. */
+const rowDivider = {
+  borderBottomWidth: StyleSheet.hairlineWidth,
+  borderBottomColor: color.divider,
+} as const;
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  head: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.page,
-    gap: space.x2,
-  },
-  tag: { position: 'absolute', top: space.x1, right: space.page },
+  centre: { flex: 1, justifyContent: 'center' },
+  /** The profile name in Geist Light 34, like the big numerals. */
+  profileName: { textAlign: 'center', letterSpacing: -0.6, fontVariant: [] },
+  top: { height: space.x4, justifyContent: 'center', paddingHorizontal: space.page },
+  head: { paddingHorizontal: space.page },
+  /** 40 pt under the sparkline (the balance block keeps 16 pt of its own below it). */
+  codeGroup: { marginTop: space.x3 },
   roomHead: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginTop: space.x1,
+    marginTop: space.x2,
+    paddingBottom: space.x1,
+    ...rowDivider,
   },
-  list: { paddingVertical: space.x1 },
+  codeText: { color: palette.textSecondary, letterSpacing: 0.5, fontVariant: TABULAR },
+  list: { paddingBottom: space.x1 },
+  listEmpty: { flexGrow: 1, justifyContent: 'center', paddingVertical: space.x3 },
   member: {
+    minHeight: space.x8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.x2,
-    paddingVertical: space.x1,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.hairline,
+    gap: half.x15 + half.x05,
+    ...rowDivider,
   },
-  challenge: { width: 120 },
-  row: { flexDirection: 'row', gap: space.x1, marginTop: space.x1 },
-  profileHead: { alignItems: 'center', gap: space.x2, marginTop: space.x2 },
+  rowTitle: { fontFamily: fontFamily.medium, fontWeight: fontWeight.medium },
+  actions: { gap: half.x15, paddingBottom: space.x1 },
+  row: { flexDirection: 'row', gap: half.x15 },
+  historyList: { paddingBottom: space.x3 },
+  historyRow: {
+    minHeight: space.x8 + space.x1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: half.x15 + half.x05,
+    ...rowDivider,
+  },
+  historyText: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: half.x15 + half.x05,
+  },
+  historyResult: { alignItems: 'flex-end', gap: 2 },
+  /** 22/400 thin numerals, tabular, like the balance. */
+  amount: { fontVariant: TABULAR, letterSpacing: -0.3, textAlign: 'right' },
+  profileHead: { alignItems: 'center', gap: space.x2, marginTop: space.x3 },
   profileScroll: { paddingHorizontal: space.page, paddingBottom: space.x4 },
 });

@@ -24,6 +24,25 @@ export const HEAD_TO_HEAD = { wins: 4, losses: 7, net: '-7000000' } as const;
 /** Starting balance and what is in escrow, as `GET /v1/me/balance` would return them. */
 export const BALANCE = { usdc: '42500000', in_escrow: '0' } as const;
 
+/**
+ * The Home sparkline in the design preview: the balance (cents) over 24 points, oldest first,
+ * ending at BALANCE ($42.50). An irregular walk with an upward drift (a few flat runs, one real
+ * dip in the middle): up overall (+$12.50), so it draws green.
+ */
+export const BALANCE_SERIES: readonly number[] = [
+  3000, 3080, 3080, 3215, 3150, 3340, 3295, 3295, 3295, 3420, 3255, 3060, 2905, 3010, 3185, 3410,
+  3375, 3560, 3560, 3735, 3690, 3905, 4030, 4250,
+];
+
+/**
+ * The market screen's price line in the design preview: 20 recent Bitcoin ticks (USD), oldest
+ * first, jittering up to the preview's starting price ($97,412.50), so it draws green.
+ */
+export const MARKET_TRAIL: readonly number[] = [
+  97268.4, 97281.9, 97274.15, 97296.8, 97310.25, 97301.6, 97289.05, 97315.7, 97338.2, 97329.45,
+  97347.9, 97362.3, 97351.15, 97368.6, 97384.95, 97372.4, 97391.8, 97404.25, 97398.1, 97412.5,
+];
+
 export interface HistoryItem {
   bet_id: string;
   title: string;
