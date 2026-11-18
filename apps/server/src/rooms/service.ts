@@ -91,7 +91,8 @@ export async function isActiveMember(
 }
 
 // ---- face_enrolled ----------------------------------------------------------------------
-// face_enrollments (DATA-MODEL §5.3) belongs to the face stream and may not exist yet. Until
+// face_enrollments (DATA-MODEL §5.3) arrived with migration 0006 (src/face). The probe below is
+// kept so a database that has not run 0006 yet still works. Until
 // it does, every member reports face_enrolled=false; once the table exists this picks it up
 // without a code change. The probe result is cached only once it is true.
 let faceTableKnown = false;

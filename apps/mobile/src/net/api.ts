@@ -26,6 +26,7 @@ import {
   TypedTermsResponse,
   type TypedTermsRequest,
 } from '@youre-on/shared/judge/typed-terms';
+import { FaceMatchResponse, type FaceMatchRequest } from '@youre-on/shared/face';
 import { VOICE_TOKENS_PATH, VoiceTokenResponse } from '@youre-on/shared/judge/voice';
 import { MicroUsdc } from '@youre-on/shared/money';
 import { IsoUtc, Party, Signature, Uuid } from '@youre-on/shared/primitives';
@@ -103,6 +104,29 @@ export function createYoApi(c: ApiClient) {
           room_id: roomId,
           opponent_user_id: opponentUserId,
           challenge_method: 'list',
+          ...(voiceConversationId ? { voice_conversation_id: voiceConversationId } : {}),
+        },
+        schema: CreateBetResponse,
+      }),
+    // §2.4 face match (Beat 1): the probe embedding only, never the photo.
+    faceMatch: (roomId: string, body: FaceMatchRequest) =>
+      c.request('POST', `/v1/rooms/${encodeURIComponent(roomId)}/face-match`, {
+        json: body,
+        schema: FaceMatchResponse,
+      }),
+    /** §2.5 challenge someone the face scan found: needs the 60 s match_ticket. */
+    createBetFromScan: (
+      roomId: string,
+      opponentUserId: string,
+      matchTicket: string,
+      voiceConversationId?: string,
+    ) =>
+      c.request('POST', '/v1/bets', {
+        json: {
+          room_id: roomId,
+          opponent_user_id: opponentUserId,
+          challenge_method: 'face',
+          match_ticket: matchTicket,
           ...(voiceConversationId ? { voice_conversation_id: voiceConversationId } : {}),
         },
         schema: CreateBetResponse,

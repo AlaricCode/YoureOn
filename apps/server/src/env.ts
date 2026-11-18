@@ -102,6 +102,10 @@ export const EnvSchema = z.object({
   MARKETS_FEED: opt(z.enum(['on', 'off'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
+  /** true = refuse `plain-v0` embeddings (API-CONTRACT §2.2); false while sealing is not built. */
+  FACE_SEAL_REQUIRED: z.preprocess(unset, boolStr.default(false)),
+  /** HMAC key for face-match tickets (src/bets/match-ticket.ts), ≥ 32 bytes. Unset = per process. */
+  MATCH_TICKET_SECRET: opt(str),
   // --- optional
   EXPO_ACCESS_TOKEN: opt(str),
 });
