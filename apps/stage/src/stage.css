@@ -394,6 +394,51 @@ code,
   letter-spacing: 0.06em;
 }
 
+/* ---- Beat 6: the live Gemini market bet ---------------------------------------------------- */
+.market {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  padding: 0.6em 0.9em;
+  border: 1px solid var(--chain);
+  border-radius: calc(var(--radius) * 0.75);
+}
+.market-head,
+.market-sides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em 1em;
+  align-items: baseline;
+}
+.market-head .muted {
+  font-size: 0.8em;
+}
+.market-sides {
+  font-size: 1.1em;
+  font-weight: 700;
+}
+.market .odds-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.market .odds-grid .num {
+  font-size: 1.15em;
+}
+.market p {
+  margin: 0;
+}
+.market-result {
+  font-size: 1.2em;
+  font-weight: 800;
+}
+.market-evidence {
+  font-size: 0.8em;
+}
+.replay-badge.inline {
+  position: static;
+  font-size: 0.55em;
+}
+
 /* ---- the moment --------------------------------------------------------------------------- */
 .moment {
   flex: 1;
@@ -824,6 +869,7 @@ code,
 .odds-grid > div {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 .odds-grid .num {
   font-size: 1.35em;
