@@ -213,6 +213,20 @@ describe('RPC-path folding rules', () => {
     expect(appealed.appeal_deadline).toBeNull();
   });
 
+  it("APPEALED with the server's appeal confirm: appealed, the countdown off, the appeal tx", () => {
+    seq = 0;
+    const b = fold(
+      ruled('B_WINS'),
+      state('RULED', 'JUDGING', pending('resolve', SIG_R), 'appeal_deadline=1795284435'),
+      state('APPEALED', 'RULED', pending('appeal', SIG), 'appealed'),
+    );
+    expect(b).toMatchObject({ appealed: true, appeal_deadline: null });
+    expect(b.txs.appeal).toBe(SIG);
+    // any other APPEALED frame (no appeal tx) leaves the view as it was
+    const other = fold(ruled('B_WINS'), state('APPEALED', 'RULED', null));
+    expect(other.appealed).toBe(false);
+  });
+
   it('PAID: the shared payout() over the stakes and the final outcome; concede and refund', () => {
     seq = 0;
     const paid = fold(ruled('B_WINS'), state('PAID', 'FINALIZED', pending('finalize', SIG)));

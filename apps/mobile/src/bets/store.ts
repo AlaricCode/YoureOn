@@ -8,6 +8,7 @@
 // envelope must carry the same terms_hash as the last terms.proposed this phone saw; otherwise
 // `termsMismatch` is set and the card refuses to sign.
 import type { BetSnapshot, SignRequest } from '@youre-on/shared/api';
+import type { AppealResult, AppealVote } from '@youre-on/shared/appeal';
 import type { AuthorizeRequest } from '@youre-on/shared/authorization';
 import type { BetState, ChainAck, OnchainStatus, PendingTx } from '@youre-on/shared/bet-state';
 import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
@@ -65,6 +66,10 @@ export interface BetModel {
   market: GeminiMarketSnapshot | null;
   /** Gemini bets: Gemini's settled result (market.settled), the ruling's evidence. */
   settlement: GeminiSettlementRecord | null;
+  /** Beat 5: the panel's votes as they stream in (appeal.vote), by seat. */
+  appealVotes: readonly AppealVote[];
+  /** Beat 5: the panel's decision (appeal.result, or BetSnapshot.appeal on a resync). */
+  appealResult: AppealResult | null;
 }
 
 export const emptyBet = (bet_id: string, my_party: Party | null = null): BetModel => ({
@@ -97,6 +102,8 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   lastCue: null,
   market: null,
   settlement: null,
+  appealVotes: [],
+  appealResult: null,
 });
 
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
@@ -121,6 +128,8 @@ export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
     appeal_deadline: s.deadlines.appeal_deadline,
     payout: s.payout,
     end_reason: s.end_reason,
+    appealResult: s.appeal ?? base.appealResult,
+    appealVotes: s.appeal ? s.appeal.votes : base.appealVotes,
   };
 }
 
@@ -238,6 +247,13 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       return { ...base, market: e.payload.snapshot };
     case 'market.settled':
       return { ...base, settlement: e.payload.record };
+    case 'appeal.vote': {
+      const v = e.payload.vote;
+      const votes = [...m.appealVotes.filter((x) => x.seat !== v.seat), v];
+      return { ...base, appealVotes: votes.sort((a, b) => a.seat - b.seat) };
+    }
+    case 'appeal.result':
+      return { ...base, appealResult: e.payload.result, appealVotes: e.payload.result.votes };
     default:
       return base;
   }
@@ -291,6 +307,15 @@ export function lockSignals(
     default:
       return [];
   }
+}
+
+/** The bet was appealed (votes or a result on this phone): the appeal screen has something to show. */
+export const isAppealed = (m: Pick<BetModel, 'appealVotes' | 'appealResult'>): boolean =>
+  m.appealResult !== null || m.appealVotes.length > 0;
+
+/** The outcome that pays: the panel's when there was one, else the ruling's (null before). */
+export function finalOutcome(m: Pick<BetModel, 'appealResult' | 'ruling'>) {
+  return m.appealResult?.final_outcome ?? m.ruling?.ruling.outcome ?? null;
 }
 
 /** Payout amount for this phone (micro-USDC), from the snapshot's payout or the Terms pot. */

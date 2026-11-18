@@ -9,13 +9,18 @@
 //   per attempt) for the stage view and later stages (hearing, appeal). frame_keys on attempts
 //   stays '{}' until the object store lands.
 // - rulings: record_canonical is the JCS of the SCHEMAS record and ruling_hash = its sha256
-//   (CHECKed). hearing_id / appeal_id have no FK yet: those tables come with their streams.
+//   (CHECKed). hearing_id has no FK yet (the hearing is cut, D-C); appeal_id -> appeals
+//   (migration 0008).
+// - appeals / appeal_votes (DATA-MODEL §5.15, migration 0008, Beat 5): one appeal per bet, three
+//   votes (one per provider). The decided AppealResult itself is the stage='appeal' rulings row
+//   (result_ruling_id): its record_canonical is what appeal_ruling_hash commits to.
 //
 // Deviations from DATA-MODEL, on purpose: attempts gains recorder / max_ms / go_at (to replay
 // the POST …/attempts 201 idempotently) and its frame CHECK compares frame_ts_ms with
 // frame_hashes (frame_keys may be empty until object storage lands).
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   index,
   integer,
@@ -29,14 +34,20 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import {
+  appealDecidedBy,
+  appealStatus,
   attemptStatus,
   chainIx,
   claimResult,
   evidenceSource,
+  panelProvider,
+  party,
   redoReason,
   rulingOutcome,
   rulingStage,
   rulingVoidReason,
+  voteCountedAs,
+  voteStatus,
 } from './enums';
 import { hex32Check } from './checks';
 import { bytea, tstz } from './types';
@@ -150,8 +161,8 @@ export const rulings = pgTable(
     attempt_id: uuid().references((): AnyPgColumn => attempts.id),
     /** FK to hearings comes with the hearing stream. */
     hearing_id: uuid(),
-    /** FK to appeals comes with the appeal stream. */
-    appeal_id: uuid(),
+    /** The appeal whose AppealResult this stage='appeal' row holds (migration 0008). */
+    appeal_id: uuid().references((): AnyPgColumn => appeals.id),
     model: text().notNull(),
     outcome: rulingOutcome().notNull(),
     claim_result: claimResult(),
@@ -221,5 +232,100 @@ export const rulings = pgTable(
     ),
     hex32Check('rulings', 'evidence_hash'),
     hex32Check('rulings', 'ruling_hash'),
+  ],
+);
+
+/**
+ * DATA-MODEL §5.15 `appeals` (migration 0008): one per bet (the program allows one appeal).
+ * filing (the loser's `appeal` tx is out) -> panel_voting (Appealed confirmed) -> decided (the
+ * AppealResult is hashed into result_ruling_id); failed = the `appeal` tx never landed (its votes
+ * are discarded). A failed row is re-filed in place (bet_id stays UNIQUE).
+ */
+export const appeals = pgTable(
+  'appeals',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    bet_id: uuid()
+      .notNull()
+      .references((): AnyPgColumn => bets.id, { onDelete: 'cascade' }),
+    /** The loser of a decisive original ruling, or either party of a VOID (onchain Refund). */
+    appellant_user_id: uuid()
+      .notNull()
+      .references((): AnyPgColumn => users.id),
+    appellant_party: party().notNull(),
+    /** The ruling `resolve` committed (bets.ruling_hash). */
+    appealed_ruling_id: uuid()
+      .notNull()
+      .references((): AnyPgColumn => rulings.id),
+    /** = SCHEMAS Appealable. */
+    original_outcome: rulingOutcome().notNull(),
+    status: appealStatus().notNull().default('filing'),
+    filed_at: tstz().notNull().defaultNow(),
+    decided_at: tstz(),
+    final_outcome: rulingOutcome(),
+    decided_by: appealDecidedBy(),
+    flipped: boolean(),
+    /** The stage='appeal' rulings row holding the hashed AppealResult. */
+    result_ruling_id: uuid().references((): AnyPgColumn => rulings.id),
+  },
+  (t) => [
+    uniqueIndex('appeals_bet_uq').on(t.bet_id),
+    check('appeals_original_outcome', sql.raw(`original_outcome IN ('A_WINS','B_WINS','VOID')`)),
+    check(
+      'appeals_final_outcome',
+      sql.raw(`final_outcome IS NULL OR final_outcome IN ('A_WINS','B_WINS','VOID')`),
+    ),
+    check(
+      'appeals_decided',
+      sql.raw(`(status = 'decided') = (decided_at IS NOT NULL AND final_outcome IS NOT NULL
+        AND decided_by IS NOT NULL AND flipped IS NOT NULL AND result_ruling_id IS NOT NULL)`),
+    ),
+    check(
+      'appeals_flipped',
+      sql.raw(`flipped IS NULL OR flipped = (final_outcome IS DISTINCT FROM original_outcome)`),
+    ),
+  ],
+);
+
+/**
+ * DATA-MODEL §5.15 `appeal_votes` (migration 0008): the three panel votes, one per seat and per
+ * provider (SCHEMAS AppealVote). A failed seat (error / timeout) is stored as REDO, confidence
+ * 0, reason '' and counts as ABSTAIN.
+ */
+export const appealVotes = pgTable(
+  'appeal_votes',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    appeal_id: uuid()
+      .notNull()
+      .references((): AnyPgColumn => appeals.id, { onDelete: 'cascade' }),
+    seat: smallint().notNull(),
+    provider: panelProvider().notNull(),
+    /** "<provider>/<model-id>". */
+    model: text().notNull(),
+    status: voteStatus().notNull(),
+    outcome: rulingOutcome().notNull(),
+    counted_as: voteCountedAs().notNull(),
+    confidence: numeric({ precision: 3, scale: 2 }).notNull(),
+    reason: text().notNull().default(''),
+    /** sha256 of the raw model text ('' when there was none). */
+    output_sha256: text().notNull(),
+    latency_ms: integer(),
+    created_at: tstz().notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('appeal_votes_seat_uq').on(t.appeal_id, t.seat),
+    uniqueIndex('appeal_votes_provider_uq').on(t.appeal_id, t.provider),
+    check('appeal_votes_seat', sql`seat BETWEEN 0 AND 2`),
+    check('appeal_votes_outcome', sql.raw(`outcome IN ('A_WINS','B_WINS','REDO')`)),
+    check('appeal_votes_confidence', sql`confidence BETWEEN 0 AND 1`),
+    check('appeal_votes_reason_len', sql`char_length(reason) <= 280`),
+    check(
+      'appeal_votes_failed',
+      sql.raw(`status = 'ok' OR (outcome = 'REDO' AND confidence = 0 AND reason = ''
+        AND counted_as = 'ABSTAIN')`),
+    ),
+    check('appeal_votes_latency', sql`latency_ms IS NULL OR latency_ms >= 0`),
+    hex32Check('appeal_votes', 'output_sha256'),
   ],
 );

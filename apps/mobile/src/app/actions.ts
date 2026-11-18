@@ -2,10 +2,16 @@
 // tested in node:
 //   lock    AuthorizeRequest -> device policy -> Face ID -> sign -> POST PartyAuthorization
 //   GG      SignRequest(concede) -> phone-rendered card + verified ruling -> Face ID -> POST
+//   appeal  SignRequest(appeal), the same gate on the 'appeal' screen -> Face ID -> POST (Beat 5)
 //   attempt clip -> frames -> sha256s -> CameraEvidence -> multipart POST …/frames
 // The wallet runs the device policy itself on the exact bytes before any prompt (ESCROW §5.0.2);
 // nothing here can ask it to sign anything else.
-import type { AuthorizationResult, PartySignature, SignRequest } from '@youre-on/shared/api';
+import type {
+  AppealSubmitted,
+  AuthorizationResult,
+  PartySignature,
+  SignRequest,
+} from '@youre-on/shared/api';
 import type { AuthorizeRequest, PartyAuthorization } from '@youre-on/shared/authorization';
 import type { DevicePolicyVerdict } from '@youre-on/shared/device-policy';
 import type { CameraEvidence } from '@youre-on/shared/evidence';
@@ -122,6 +128,54 @@ export async function concede(
     signed_at: signed.authorizedAt,
   };
   return d.api.concede(body, idempotencyKey);
+}
+
+/**
+ * "I appeal!": tap + Face ID like GG (no hold). The wallet runs the device policy on the 'appeal'
+ * screen (T1: only ComputeBudget + one `appeal` with this device in the appellant slot; T2: the
+ * ruling this phone verified, and this phone may appeal it) before any prompt.
+ */
+export async function appeal(
+  d: { wallet: Signer; api: Pick<YoApi, 'getAppeal' | 'appeal'> },
+  b: BetModel,
+  prompt: string,
+  idempotencyKey: string,
+): Promise<AppealSubmitted> {
+  const me: Party | null = b.my_party;
+  const ruling = verifiedRuling(b);
+  if (!me || !b.envelope || !ruling) throw new ActionError('NOT_READY');
+  const appealDeadline = b.appeal_deadline;
+  if (appealDeadline === null) throw new ActionError('NOT_READY');
+  const pushed = b.signRequests.appeal;
+  const req: SignRequest =
+    pushed && pushed.for_parties[0] === me ? pushed : await d.api.getAppeal(b.bet_id);
+  const renderedCard = renderSignCard({
+    kind: 'appeal',
+    terms: b.envelope.terms,
+    terms_hash: b.envelope.terms_hash,
+    me,
+    appeal_deadline: appealDeadline,
+  });
+  const signed = await d.wallet.authorizeTransaction(
+    {
+      screen: 'appeal',
+      request: req,
+      renderedCard,
+      verifiedRulingHash: ruling.hash,
+      verifiedRulingOutcome: ruling.outcome,
+    },
+    prompt,
+  );
+  const body: PartySignature = {
+    bet_id: b.bet_id,
+    kind: 'appeal',
+    party: me,
+    message_sha256: signed.messageSha256,
+    party_signature: signed.signatureBase58 as PartySignature['party_signature'],
+    method: signed.method,
+    signed_at: signed.authorizedAt,
+  };
+  return d.api.appeal(body, idempotencyKey);
 }
 
 export interface ClipIn {

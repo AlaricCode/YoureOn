@@ -465,6 +465,21 @@ export const PartySignature = z.object({
 });
 export type PartySignature = z.infer<typeof PartySignature>;
 
+/** §2.12 POST /v1/bets/:bet_id/appeal -> 202 (also POST /v1/demo/bets/:bet_id/appeal, §2.17). */
+export const AppealSubmitted = z.object({
+  status: z.literal('submitted'),
+  signature: Signature,
+  appeal_id: Uuid,
+});
+export type AppealSubmitted = z.infer<typeof AppealSubmitted>;
+
+/**
+ * §2.17 POST /v1/demo/bets/:bet_id/appeal (LOCK_SIGNER=server): the server signs the appeal as the
+ * losing demo party. `party` is only needed for a VOID ruling (either party may appeal; default A).
+ */
+export const DemoAppealRequest = z.object({ party: Party.optional() });
+export type DemoAppealRequest = z.infer<typeof DemoAppealRequest>;
+
 export const AuthorizationResult = z.discriminatedUnion('status', [
   z.object({ status: z.literal('recorded'), waiting_for: Party }),
   z.object({ status: z.literal('submitted'), signature: Signature }),

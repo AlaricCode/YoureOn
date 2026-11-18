@@ -598,6 +598,8 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 | D4-J3 | Closer flow (details below this table) | E3 | D1-J3, D4-L2 | 3 | P1 | Saying "Bitcoin's up by the end of this pitch" produces a 62/38-style terms card within one 5-minute window | B6 |
 | D4-J4 | Stage: Gemini chart from the server's own ring buffer, plus countdown; appeal votes; hearing transcript; the Sound Effects gavel plays on the stage laptop | E3 | D3-J4 | 2 | P1 | Beats 5 and 6 are visible on stage | B5, B6 |
 
+**Built 2026-11-18 (branch `feat/appeal`), Beat 5 without the hearing:** D4-L1 (the appeal path, `apps/server/src/appeal`; STANDS and OVERTURNED both pay the right party on LiteSVM + Postgres, not yet on devnet), D4-J2 (the panel; a missing key is an abstention; the panel p50 on 5 clips is not measured yet), D4-M3's appeal half ("I appeal!" tap + Face ID, the panel view), and D4-J4's appeal votes (the stage already folded them). Not built: the hearing (D4-J1, D4-M3's push-to-talk), the voiced votes (ElevenLabs TTS per vote, API-CONTRACT §4.5), the `appeal_decided` push.
+
 **D4-M1 face scan steps:**
 1. ML Kit's realtime output drives the UI.
 2. `capturePhoto` at 960×1280; un-mirror; `resizeAsync`; assert the dimensions.

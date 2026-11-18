@@ -3,6 +3,7 @@
 // define yet (balance, attempts, frames, concede) are declared here, tolerant z.object, exactly
 // as the contract prints them. Some of these routes are still being built server-side.
 import {
+  AppealSubmitted,
   AuthorizationResult,
   BET_EVENTS_LIMIT,
   betEventsPath,
@@ -294,6 +295,15 @@ export function createYoApi(c: ApiClient) {
       c.request('POST', `${bet(s.bet_id)}/concede`, {
         json: s,
         schema: SubmittedResponse,
+        idempotencyKey,
+      }),
+
+    // §2.12 appeal (Beat 5)
+    getAppeal: (betId: string) => c.request('GET', `${bet(betId)}/appeal`, { schema: SignRequest }),
+    appeal: (s: PartySignature, idempotencyKey: string) =>
+      c.request('POST', `${bet(s.bet_id)}/appeal`, {
+        json: s,
+        schema: AppealSubmitted,
         idempotencyKey,
       }),
 
