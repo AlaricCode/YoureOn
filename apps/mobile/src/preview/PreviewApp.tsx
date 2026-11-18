@@ -12,6 +12,13 @@ import { MARKET_STAKES_USD, marketSideOf } from '@youre-on/shared/judge/market-t
 import { formatUsd, parseUsd } from '@youre-on/shared/money';
 import { splitPot } from '@youre-on/shared/gemini';
 
+import {
+  controlStakes,
+  offerCardView,
+  readout,
+  type OddsControl,
+  type OddsState,
+} from '../app/odds';
 import { initialLock, lockReducer, type EndReason } from '../bets/lock';
 import { betView, myResult } from '../bets/view';
 import { importSafely } from '../app/importSafely';
@@ -61,7 +68,9 @@ import {
   MARKET_REASON,
   MEMBERS,
   NEGOTIATION_SCRIPT,
+  ODDS_STAKES,
   PANEL,
+  previewOdds,
   ROOM,
   RULING_REASON,
 } from './data';
@@ -77,6 +86,7 @@ type Route =
   | 'scan'
   | 'incoming'
   | 'negotiate'
+  | 'odds'
   | 'marketPanel'
   | 'terms'
   | 'lockEnded'
@@ -116,6 +126,11 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [inRoom, setInRoom] = useState(true);
   const [balance, setBalance] = useState(startCents);
   const [market, setMarket] = useState(false);
+  /** Odds: the card at $15 vs $5, the offer on screen, the counter sheet, agreed. */
+  const [atOdds, setAtOdds] = useState(false);
+  const [odds, setOdds] = useState<OddsState | null>(null);
+  const [oddsCounter, setOddsCounter] = useState<OddsControl | null>(null);
+  const [oddsAgreed, setOddsAgreed] = useState(false);
   // "Bet on Bitcoin" panel (Beat 6): A's call and stake, priced at the sample 62 % Up.
   const [mSide, setMSide] = useState<'UP' | 'DOWN'>('UP');
   const [mStake, setMStake] = useState<number>(2);
@@ -149,7 +164,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [price, setPrice] = useState(97412.5);
   const [expiry, setExpiry] = useState(0);
 
-  const bet = useMemo(() => (market ? btcCloser(name) : bottleFlip(name)), [market, name]);
+  const bet = useMemo(
+    () => (market ? btcCloser(name) : bottleFlip(name, 'Jake', atOdds ? ODDS_STAKES : undefined)),
+    [market, name, atOdds],
+  );
   const view = useMemo(() => betView(bet.terms, bet.termsHash, me), [bet, me]);
 
   // One set of timers per route: leaving a route cancels its pending "server pushes".
@@ -454,6 +472,53 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             }}
           />
         );
+      case 'odds': {
+        const card = odds
+          ? offerCardView({ odds, me: 'A', state: 'TERMS_PROPOSED', terms: bet.terms })
+          : null;
+        const sheet = oddsCounter ? controlStakes(oddsCounter, 'A') : null;
+        return (
+          <NegotiateScreen
+            view={view}
+            captions={NEGOTIATION_SCRIPT.slice(0, 2).map((l) => ({ ...l }))}
+            speaking={false}
+            hasMic
+            micMuted={false}
+            draft={view}
+            odds={{
+              card: oddsAgreed ? null : card,
+              agreed: oddsAgreed,
+              busy: false,
+              note: null,
+              counter: oddsCounter
+                ? {
+                    control: oddsCounter,
+                    readout: sheet?.ok ? readout(sheet.stakes, 'A', 'Jake') : (sheet?.note ?? null),
+                    bases: [1, 5, 10, 20],
+                    onChange: setOddsCounter,
+                  }
+                : null,
+              suggest: null,
+              canPropose: false,
+              onAccept: () => {
+                setOddsAgreed(true);
+                later(1500, () => {
+                  setAtOdds(true);
+                  openTerms(false);
+                });
+              },
+              onCounter: () => card && setOddsCounter(card.counterFrom),
+              onSend: () => setOddsCounter(null),
+              onCancel: () => setOddsCounter(null),
+              onWithdraw: () => undefined,
+            }}
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      }
       case 'marketPanel': {
         const { a, b } = splitPot(2n * BigInt(parseUsd(String(mStake))), marketSideOf(mSide), 62n);
         return (
@@ -672,6 +737,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
 
   function openFromMenu(key: MenuKey) {
     setMarket(key === 'market' || key === 'termsMarket' || key === 'marketPanel');
+    setAtOdds(key === 'termsOdds');
+    setOdds(null);
+    setOddsCounter(null);
+    setOddsAgreed(false);
     setMe('A');
     switch (key) {
       case 'launch':
@@ -696,12 +765,17 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return go('incoming');
       case 'negotiate':
         return startNegotiation();
+      case 'oddsOffer':
+      case 'oddsJudge':
+        setOdds(previewOdds(key === 'oddsJudge' ? 'judge' : 'party'));
+        return go('odds');
       case 'marketPanel':
         // 3:20 to the contract's expiry: Gemini prices it for another 1:20
         setExpiry(Date.now() + 200_000);
         return go('marketPanel');
       case 'terms':
       case 'termsMarket':
+      case 'termsOdds':
         return openTerms(false);
       case 'termsTheyFirst':
         return openTerms(true);
@@ -783,8 +857,11 @@ type MenuKey =
   | 'scan'
   | 'incoming'
   | 'negotiate'
+  | 'oddsOffer'
+  | 'oddsJudge'
   | 'terms'
   | 'termsTheyFirst'
+  | 'termsOdds'
   | 'termsMarket'
   | 'endDeclined'
   | 'endExpired'
@@ -840,6 +917,8 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
       ['scan', '8  Scan a face'],
       ['incoming', '9  Incoming challenge'],
       ['negotiate', '10  Judge sets terms (full run)'],
+      ['oddsOffer', '10b  Odds offer, accept or counter'],
+      ['oddsJudge', '10c  Judge odds, from history'],
     ],
   },
   {
@@ -847,6 +926,7 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     items: [
       ['terms', '11  Terms card'],
       ['termsTheyFirst', '12  Terms card, they signed first'],
+      ['termsOdds', '12b  Terms card at odds'],
       ['endDeclined', '13  Declined'],
       ['endExpired', '14  Expired'],
       ['endFailed', '15  Lock failed'],

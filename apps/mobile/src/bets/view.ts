@@ -9,6 +9,7 @@ import {
   type PanelProvider,
 } from '@youre-on/shared/appeal';
 import { formatUsd, type MicroUsdc } from '@youre-on/shared/money';
+import { ratioLabel, toWinLine } from '@youre-on/shared/odds-math';
 import { formatPrice } from '@youre-on/shared/settlement';
 import { otherParty, type Party } from '@youre-on/shared/primitives';
 import type { RulingOutcome } from '@youre-on/shared/ruling';
@@ -37,8 +38,12 @@ export interface BetView {
   myStakeUsd: string;
   theirStakeUsd: string;
   potUsd: string;
-  /** "62/38" for a market bet (my share first), null otherwise. */
+  /** "62/38" for a market bet (my share first), "3 to 1" for a skill bet at odds, else null. */
   odds: string | null;
+  /** Skill bets at odds (unequal stakes): "3 to 1", else null. */
+  ratio: string | null;
+  /** Skill bets at odds: "You put in $5 to win $20", else null. */
+  toWin: string | null;
   /** Market bets: this phone's side ("Up" = Bitcoin at or above the line), else null. */
   mySide: 'Up' | 'Down' | null;
   /** Market bets: the line bound into the terms ("$64,389.60"), else null. */
@@ -63,6 +68,8 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
   const pot = BigInt(terms.stakes.a) + BigInt(terms.stakes.b);
   const mine = BigInt(stake(me));
   const myPct = Number((mine * 100n + pot / 2n) / pot);
+  const atOdds = terms.type === 'skill' && terms.stakes.a !== terms.stakes.b;
+  const ratio = atOdds ? ratioLabel(mine, BigInt(stake(them))) : null;
   return {
     me,
     myName: party(me).display_name,
@@ -79,7 +86,9 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
     myStakeUsd: formatUsd(stake(me)),
     theirStakeUsd: formatUsd(stake(them)),
     potUsd: formatUsd(pot.toString()),
-    odds: terms.type === 'real_world' ? `${myPct}/${100 - myPct}` : null,
+    odds: terms.type === 'real_world' ? `${myPct}/${100 - myPct}` : ratio,
+    ratio,
+    toWin: atOdds ? toWinLine(mine, pot) : null,
     mySide: terms.market ? ((terms.market.side === 'YES') === (me === 'A') ? 'Up' : 'Down') : null,
     lineUsd: terms.market?.strike.value ? formatPrice(terms.market.strike.value) : null,
     deadline: terms.deadline,

@@ -69,6 +69,7 @@ describe('voice readiness', () => {
           'https://youre-on.fly.dev/el/tools/propose_terms',
           'https://youre-on.fly.dev/el/tools/confirm_terms',
           'https://youre-on.fly.dev/el/tools/get_market_odds',
+          'https://youre-on.fly.dev/el/tools/suggest_odds',
         ],
         webhook_url: 'https://youre-on.fly.dev/webhooks/elevenlabs',
         set: {
@@ -114,7 +115,7 @@ describe('voice readiness', () => {
       MISSING.AGENT_ID,
       MISSING.webhook('https://youre-on.fly.dev/webhooks/elevenlabs'),
     ]);
-    expect(b.tool_urls).toHaveLength(3);
+    expect(b.tool_urls).toHaveLength(4);
   });
 
   it('the judge can be ready while the post-call webhook is not (ready needs both)', async () => {

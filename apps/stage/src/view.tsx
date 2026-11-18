@@ -44,6 +44,7 @@ import {
   usdPrice,
 } from './format';
 import { marketView, type MarketView } from './market';
+import { OddsChip, OddsMoment, showsOdds } from './odds';
 import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from './phase';
 import { qrSvg } from './qr';
 import { healthItems, type DemoHealth, type HealthItem } from './health';
@@ -243,6 +244,7 @@ export function TermsCard({ bet }: { bet: BetView }) {
               <span className="chip">
                 {t.party_b.display_name} {usd(t.stakes.b)}
               </span>
+              <OddsChip bet={bet} />
             </>
           )}
           <span className="chip">
@@ -716,6 +718,7 @@ export function MomentPanel({
     );
   else if (phase === 'play') body = <PlayPanel bet={bet} now={now} market={market} />;
   else if (phase === 'lock') body = <LockPhasePanel bet={bet} />;
+  else if (phase === 'terms' && showsOdds(bet)) body = <OddsMoment bet={bet} />;
   else if (phase === 'terms')
     body = bet.envelope ? (
       <RulesPanel bet={bet} />

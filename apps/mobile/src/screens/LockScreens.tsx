@@ -124,6 +124,11 @@ export function TermsCardScreen({
             signed={lock.theirsIn}
           />
         </Card>
+        {view.toWin ? (
+          <DataText muted style={styles.toWin}>
+            {view.toWin}
+          </DataText>
+        ) : null}
 
         <Section label={t(COPY.terms.counts)}>
           <Bullets items={view.success} />
@@ -269,6 +274,7 @@ const styles = StyleSheet.create({
     borderColor: palette.surface,
   },
   edge: { gap: 2, marginBottom: space.x1 },
+  toWin: { textAlign: 'center', marginTop: space.x1 },
   rows: {
     marginTop: space.x3,
     borderTopWidth: StyleSheet.hairlineWidth,

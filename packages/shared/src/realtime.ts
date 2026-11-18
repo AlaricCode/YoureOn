@@ -17,6 +17,7 @@ import { CameraEvidence, GeminiSettlementRecord } from './evidence';
 import { GeminiMarketSnapshot } from './gemini';
 import { HearingRuling, HearingTrigger, HearingTurn } from './hearing';
 import { ClarificationQuestion, GuardrailRefusal, TermsDraft } from './negotiation';
+import { OddsAgreedPayload, OddsAnsweredPayload, OddsOfferedPayload } from './odds';
 import { BetId, Hex32, IsoUtc, Party, Signature, UserRef, Uuid } from './primitives';
 import { Ruling } from './ruling';
 import { TermsEnvelope } from './terms';
@@ -77,6 +78,12 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
     }),
   ),
   env('terms.declined', 'server', z.object({ party: Party })),
+  /** API-CONTRACT §3.4 NEW (odds, ./odds): a party or the judge offers stakes a/b. */
+  env('odds.offered', 'server', OddsOfferedPayload),
+  /** Accepted / countered / withdrawn / superseded. */
+  env('odds.answered', 'server', OddsAnsweredPayload),
+  /** Both accepted: these stakes are agreed (the card carries them under terms_hash). */
+  env('odds.agreed', 'server', OddsAgreedPayload),
   /** API-CONTRACT §3.4 NEW: the loser's concede/appeal message (never the lock). */
   env('tx.sign_request', 'server', TxSignRequestPayload),
   /** API-CONTRACT §3.4 NEW: server-composed [EVENT] line; only A's phone (voice host) acts on it (§4.5). */

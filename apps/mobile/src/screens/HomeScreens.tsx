@@ -253,7 +253,7 @@ export function HistoryScreen({
               <ListRow
                 key={it.bet_id}
                 left={<Avatar name={it.opponent} size={32} />}
-                title={`${it.title} · ${it.opponent}`}
+                title={`${it.title} · ${it.opponent}${it.stakes ? ` · ${it.stakes}` : ''}`}
                 value={`${result[it.outcome]} ${signedUsd(it.net)}`}
               />
             ))}

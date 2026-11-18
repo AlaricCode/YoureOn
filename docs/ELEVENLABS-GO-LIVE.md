@@ -73,6 +73,13 @@ ELEVENLABS_AGENT_ID=agent_...
 next: fly secrets set ELEVENLABS_AGENT_ID=agent_... -a youre-on   (and ... in apps/server/.env)
 ```
 
+**Odds (feat/odds).** Since the odds work, `DEFAULT_WEBHOOK_TOOLS` includes `suggest_odds`
+(`POST /el/tools/suggest_odds`) and `propose_terms` has the optional `stake_b_usd`. Run this sync
+only after that server is deployed (the new tool's route must exist): it creates the
+`suggest_odds` tool and PATCHes the live agent's tool ids and prompt (the `# Odds` section). The
+old agent keeps working until then (`stake_b_usd` is not required). Running it against the live
+agent is the owner's call.
+
 Run it once more. It must print `no changes (no-op)`. If you pass `--llm <id>`, also set
 `ELEVENLABS_AGENT_LLM=<id>` on Fly. The post-call check compares the billed model against it.
 

@@ -202,6 +202,30 @@ export const COPY = {
     failed: ['Try again', 'error'],
     crashed: ['Something went wrong', 'error'],
   },
+  // Odds (app/odds, odds/*): unequal stakes the two agree on, and the judge's suggestion.
+  odds: {
+    title: ['Odds', 'label'],
+    even: ['Even', 'label'],
+    iGive: ['I give', 'label'],
+    iGet: ['I get', 'label'],
+    base: ['Smaller stake', 'label'],
+    accept: ['Accept', 'label'],
+    counter: ['Counter', 'label'],
+    withdraw: ['Withdraw', 'label'],
+    send: ['Send odds', 'label'],
+    cancel: ['Cancel', 'label'],
+    custom: ['Custom', 'label'],
+    offer: ['Offer odds', 'label'],
+    suggestOdds: ['Suggest odds', 'label'],
+    suggesting: ['Asking the judge', 'label'],
+    judgesOdds: ["Judge's odds", 'label'],
+    oddsAgreed: ['Odds agreed', 'label'],
+    demoHistory: ['Demo history', 'label'],
+    byDefault: ['Default odds', 'label'],
+    pending: ['Agree the odds first.', 'body'],
+    changed: ['The odds changed. Look again.', 'body'],
+    tooLong: ['Ten to one, tops. Pick shorter odds.', 'body'],
+  },
   demo: {
     title: ['Demo account', 'label'],
     scan: ['Scan stage code', 'label'],
@@ -239,4 +263,10 @@ export const fill = {
   turn: (name: string) => `${name}'s turn`,
   /** A's typed terms are on the card; B has not accepted yet. First name only: a 3-word label. */
   waitingFor: (name: string) => `Waiting for ${name.trim().split(/\s+/)[0] || 'them'}`,
+  /** An odds offer is out: the other side has not tapped Accept yet. First name only. */
+  waitingOn: (name: string) => `Waiting on ${name.trim().split(/\s+/)[0] || 'them'}`,
+  /** The judge's offer header: "Judge suggests 3:1" (compact ratio keeps it a 3-word label). */
+  judgeSuggests: (ratio: string) => `Judge suggests ${ratio}`,
+  /** "31% for Jake" under the judge's odds. First name only. */
+  chanceFor: (pct: number, name: string) => `${pct}% for ${name.trim().split(/\s+/)[0] || 'them'}`,
 } as const;

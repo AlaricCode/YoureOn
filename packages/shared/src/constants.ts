@@ -9,6 +9,8 @@ export const U64_MAX = 18_446_744_073_709_551_615n;
 export const MAX_STAKE = 20_000_000n;
 /** $0.10 per side (offchain rule only). */
 export const MIN_STAKE = 100_000n;
+/** Skill odds: the larger stake is at most this many times the smaller (SCHEMAS §2.1). */
+export const MAX_ODDS_RATIO = 10n;
 /** Judge confidence < 0.8 → REDO. */
 export const REDO_BELOW = 0.8;
 /** Appeal vote confidence < 0.6 → ABSTAIN. */
