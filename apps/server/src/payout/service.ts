@@ -212,6 +212,14 @@ export class PayoutService {
     if (!RESOLVABLE_STATES.includes(bet.state))
       throw new HttpError('INVALID_STATE', undefined, { state: bet.state });
 
+    // Never build a second resolve while an earlier one may still land (a confirm timeout, a
+    // restart, the resolve-due retry): re-broadcast its exact bytes and wait for it, unless it is
+    // known dead (then the rebuild below is safe).
+    if (prior?.status === 'sent') {
+      const resumed = await this.resumeResolve(rt, betId, prior, rulingHash, judge);
+      if (resumed !== 'dead') return resumed;
+    }
+
     const ix = await getResolveInstructionAsync({
       payer: rt.keys.feePayer,
       judgeAuthority: judge,
@@ -296,6 +304,92 @@ export class PayoutService {
       },
       signature,
       now,
+      landed,
+    );
+  }
+
+  /**
+   * A 'sent' resolve row of this bet, its in-process confirm gone. Known dead (failed onchain,
+   * or past its lastValidBlockHeight and still unseen on a second read) -> the row is retired and
+   * 'dead' returned, so the caller may build a new one. Otherwise its stored message is re-signed
+   * (ed25519 is deterministic: the same signatures, the same tx id), re-broadcast with preflight
+   * off and confirmed -> RULED. A row for a different ruling, or one whose confirm is running in
+   * this process, is never doubled: INVALID_STATE (retryable) until it settles.
+   */
+  private async resumeResolve(
+    rt: ChainRuntime,
+    betId: string,
+    prior: typeof chainTxs.$inferSelect,
+    rulingHash: string,
+    judge: KeyPairSigner,
+  ): Promise<RuledResult | 'dead'> {
+    const inFlight = () =>
+      new HttpError('INVALID_STATE', 'A resolve for this bet is still in flight.', {
+        reason: 'resolve_in_flight',
+        signature: prior.signature,
+      });
+    if (this.confirming.has(prior.id)) throw inFlight();
+    if (!prior.signature || !prior.message_b64) return 'dead';
+    const retire = async (status: 'failed' | 'expired', err: string) => {
+      await this.deps.db
+        .update(chainTxs)
+        .set({ status, err: err.slice(0, 200) })
+        .where(and(eq(chainTxs.id, prior.id), eq(chainTxs.status, 'sent')));
+      return 'dead' as const;
+    };
+    const st = await rt.client.signatureStatus(prior.signature, { searchHistory: true });
+    if (st?.err) return retire('failed', JSON.stringify(st.err));
+    if (!st && prior.last_valid_block_height != null) {
+      const height = await rt.client.blockHeight();
+      if (
+        height > prior.last_valid_block_height &&
+        (await rt.client.signatureStatus(prior.signature, { searchHistory: true })) === null
+      )
+        return retire('expired', 'expired unconfirmed');
+    }
+    const msg = Buffer.from(prior.message_b64, 'base64');
+    if (!msg.includes(Buffer.from(rulingHash, 'hex'))) throw inFlight(); // another ruling's resolve
+    const full = await cosignTx(txFromStored(prior.message_b64, new Map()), [
+      rt.keys.feePayer,
+      judge,
+    ]);
+    if (sigString(full.signatures[rt.keys.feePayer.address]!) !== prior.signature)
+      throw new Error(`stored resolve of bet ${betId} does not re-sign to its signature`);
+    this.deps.log.warn('payout.resolve_resumed', { bet_id: betId, signature: prior.signature });
+    let landed: Landed;
+    this.confirming.add(prior.id);
+    try {
+      await rt.client.send(wireOf(full), true).catch(() => {}); // the status poll decides
+      landed = await confirmSent(rt.client, full, {
+        ...this.o.send,
+        lastValidBlockHeight: prior.last_valid_block_height,
+      });
+    } catch (err) {
+      if (err instanceof TxFailedError && err.kind !== 'timeout')
+        return retire(err.kind === 'expired' ? 'expired' : 'failed', err.message);
+      throw err; // timeout: still 'sent', reconcile() or the next retry settles it
+    } finally {
+      this.confirming.delete(prior.id);
+    }
+    const [betPda] = await findBetPda({ betId: betIdToBytes(betId) });
+    const onchain = await this.fetchBet(rt, betPda);
+    if (!onchain || onchain.status !== BetStatus.Resolved)
+      throw new Error(`resolve ${prior.signature} confirmed but bet ${betId} is not Resolved`);
+    const opt = onchain.outcome as { __option: 'Some'; value: Outcome } | { __option: 'None' };
+    if (opt.__option !== 'Some') throw new Error(`bet ${betId} is Resolved without an outcome`);
+    return this.markRuled(
+      rt,
+      betId,
+      prior.id,
+      {
+        outcome: Outcome[opt.value] as OnchainOutcome,
+        evidenceHash: hexOf(onchain.evidenceHash),
+        rulingHash: hexOf(onchain.rulingHash),
+        appealDeadline: Number(onchain.appealDeadline),
+        resolveDeadline: Number(onchain.resolveDeadline),
+      },
+      prior.signature,
+      prior.sent_at?.getTime() ?? this.deps.now(),
       landed,
     );
   }
