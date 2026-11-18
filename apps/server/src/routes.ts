@@ -19,6 +19,7 @@ import { demoRoutes } from './demo/routes';
 import { judgeRoutes } from './judge/routes';
 import { stageRoutes } from './stage/routes';
 import { marketsRoutes } from './markets/routes';
+import { faceRoutes } from './face/routes';
 
 export const routeModules: RouteModule[] = [
   healthRoutes,
@@ -37,4 +38,5 @@ export const routeModules: RouteModule[] = [
   // hearingRoutes, appealsRoutes, …
   stageRoutes,
   marketsRoutes,
+  faceRoutes,
 ];
