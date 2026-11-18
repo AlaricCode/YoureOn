@@ -157,6 +157,7 @@ d('stage client <-> server /v1/ws (DB)', () => {
     });
     expect(s.room_id).toBe(id);
     expect(s.scopes).toEqual(['stage', 'demo']);
+    expect(s.lock_signer).toBe('phones'); // the test server's LOCK_SIGNER default
     expect(Date.parse(s.expires_at!)).toBeGreaterThan(Date.now());
     const c = connect(s.token, s.room_id);
     await expect.poll(() => c.get().status, { timeout: 3000 }).toBe('open');

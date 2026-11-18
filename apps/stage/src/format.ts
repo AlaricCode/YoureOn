@@ -78,6 +78,8 @@ export function eventLabel(
   type: string,
   payload: unknown,
   names: { A: string | null; B: string | null } = { A: null, B: null },
+  /** LOCK_SIGNER=server: the server signed with the demo keys (no Face ID happened). */
+  custodial = false,
 ): string {
   const p = (payload ?? {}) as Record<string, unknown>;
   const who = (party: unknown) =>
@@ -90,7 +92,9 @@ export function eventLabel(
     return `${kind} ${verb}`;
   }
   if (type === 'terms.authorized')
-    return `${who(p.party)} authorized${typeof p.method === 'string' ? ` · ${AUTH_METHOD[p.method] ?? p.method}` : ''}`;
+    return custodial
+      ? `${who(p.party)} signed · demo key`
+      : `${who(p.party)} authorized${typeof p.method === 'string' ? ` · ${AUTH_METHOD[p.method] ?? p.method}` : ''}`;
   if (type === 'terms.declined') return `${who(p.party)} declined`;
   if (type === 'terms.proposed') return 'Terms proposed';
   if (type === 'ruling.issued') {

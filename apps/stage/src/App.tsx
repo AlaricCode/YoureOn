@@ -55,7 +55,16 @@ import {
   REPLAY_BEATS,
   type ReplayStatus,
 } from './replays';
-import { featuredTx, HelpOverlay, PaidMoment, QrOverlay, ReplayOverlay, StageView } from './view';
+import {
+  featuredTx,
+  HelpOverlay,
+  normalizeSigner,
+  PaidMoment,
+  QrOverlay,
+  ReplayOverlay,
+  StageView,
+  type LockSigner,
+} from './view';
 
 export {
   BetCard,
@@ -85,6 +94,7 @@ interface Live {
   roomId: string;
   roomLabel: string;
   demoKey: string | null;
+  lockSigner: LockSigner;
 }
 
 /** What start() connects with. */
@@ -97,6 +107,8 @@ interface StartParams {
   /** ?bet= / the form's bet id: shown first and pinned while it is live. */
   betId: string | null;
   demoKey: string | null;
+  /** From the stage session (null with a pasted token: then the demo health's, if any). */
+  lockSigner: LockSigner;
   /** A reloaded tab: the card it showed and the other bets it knew. */
   resume?: { focus: string | null; bets: string[] };
 }
@@ -308,6 +320,7 @@ export function App() {
       roomId: s.roomId,
       roomLabel: s.roomLabel,
       demoKey: s.demoKey,
+      lockSigner: s.lockSigner,
     });
     fetchMarket(serverUrl, s.token).then(
       (snapshot) =>
@@ -352,6 +365,7 @@ export function App() {
         let token = f.token?.trim() ?? '';
         let roomId = room;
         let expiresAt: string | null = null;
+        let lockSigner: LockSigner = null;
         if (!token) {
           if (!f.stageKey?.trim()) throw new Error('Enter the stage key.');
           const s = await openStageSession({
@@ -362,12 +376,13 @@ export function App() {
           token = s.token;
           roomId = s.room_id;
           expiresAt = s.expires_at;
+          lockSigner = s.lock_signer;
         } else if (!isUuid(room)) {
           throw new Error('With a pasted stage token, give the room id (uuid), not its code.');
         }
         const roomLabel = roomLabelOf(room);
         // connect first: only a session that started is saved (a reload resumes it)
-        start({ serverUrl: f.serverUrl, token, roomId, roomLabel, betId, demoKey });
+        start({ serverUrl: f.serverUrl, token, roomId, roomLabel, betId, demoKey, lockSigner });
         const saved: SavedSession = {
           serverUrl: f.serverUrl.trim(),
           roomId,
@@ -376,6 +391,7 @@ export function App() {
           betId,
           expiresAt,
           roomLabel,
+          lockSigner,
         };
         writeJson('session', SESSION_KEY, saved);
         writeJson('local', CONFIG_KEY, { serverUrl: f.serverUrl.trim(), roomId: room });
@@ -408,6 +424,7 @@ export function App() {
         roomLabel: s.roomLabel ?? roomLabelOf(s.roomId),
         betId: s.betId,
         demoKey: s.demoKey,
+        lockSigner: normalizeSigner(s.lockSigner),
         resume: { focus: s.focusBetId ?? null, bets: s.bets ?? [] },
       });
     } catch (err) {
@@ -607,6 +624,7 @@ export function App() {
           replays={replays}
           roomLabel={pv ? 'PREVIEW' : (live?.roomLabel ?? null)}
           sound={sound}
+          lockSigner={pv ? null : (live?.lockSigner ?? normalizeSigner(health?.lock_signer))}
         />
       ) : (
         <div className="stage connect">
