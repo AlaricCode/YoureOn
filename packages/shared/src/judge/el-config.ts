@@ -35,6 +35,14 @@ export const DEFAULT_AGENT_LLM = 'claude-haiku-5-5';
  * 'none' / 'minimal', and its own default is 'medium'). ElevenLabs proxies the value.
  */
 export const DEFAULT_REASONING_EFFORT: ElReasoningEffort = 'low';
+/**
+ * The agent LLM's output cap per turn. Not 300: Claude Haiku 5.5 thinks adaptively by default
+ * (reasoning_effort 'low' only lowers it) and thinking counts against max_tokens, on top of the
+ * pre-tool speech and a complete propose_terms call (the whole bet as tool arguments, ~170
+ * tokens for 01-bottle-flip). A cut-off tool call (stop_reason max_tokens) would break the
+ * read-back, and backup_llm_config is disabled. The prompt keeps the spoken reply short.
+ */
+export const AGENT_MAX_TOKENS = 1024;
 export const DEFAULT_TTS_MODEL: ElTtsModel = 'eleven_v4_turbo';
 export const TOOL_SECRET_NAME = 'yo-tool-secret';
 export const AGENT_TAGS = ['youre-on'];
@@ -244,7 +252,7 @@ export function agentBody(o: AgentOptions) {
     // request entirely". Claude 5.x rejects non-default sampling values (FINDINGS §7), which
     // would otherwise silently cascade to a backup model.
     temperature: null,
-    max_tokens: 300,
+    max_tokens: AGENT_MAX_TOKENS,
     enable_parallel_tool_calls: false,
     backup_llm_config: { preference: 'disabled' },
     tool_ids: o.toolIds,

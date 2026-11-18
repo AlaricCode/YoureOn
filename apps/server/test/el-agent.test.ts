@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  AGENT_MAX_TOKENS,
   DEFAULT_AGENT_LLM,
   DEFAULT_WEBHOOK_TOOLS,
   WEBHOOK_TOOL_SPECS,
@@ -164,7 +165,12 @@ describe('el-agent CLI (flags + env)', () => {
       llm: 'claude-haiku-5-5',
       reasoning_effort: 'low',
       temperature: null,
+      backup_llm_config: { preference: 'disabled' },
     });
+    // Haiku 5.5 thinks adaptively and thinking counts against max_tokens: room for that plus a
+    // full propose_terms call, so the read-back's tool call is never cut off (no backup LLM).
+    expect(prompt.max_tokens).toBe(AGENT_MAX_TOKENS);
+    expect(AGENT_MAX_TOKENS).toBeGreaterThanOrEqual(1024);
     const urls = plan
       .filter((a) => a.resource === 'tool')
       .map((a) => (a.body as any).tool_config.api_schema?.url)
