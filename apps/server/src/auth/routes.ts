@@ -12,7 +12,6 @@ import {
   SignupRequest,
   walletBindMessage,
   type AuthChallengeResponse,
-  type Session,
 } from '@youre-on/shared/api';
 import { decodeBase64, verifyEd25519 } from '../crypto';
 import { HttpError } from '../errors';
