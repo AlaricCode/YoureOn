@@ -1,7 +1,6 @@
 // Stage WebSocket client (API-CONTRACT §1.3 stage auth, §3.1–§3.3):
 //   1. POST /v1/stage/session {stage_key, room_id} -> a stage token (scope `stage`, read-only
-//      fan-out for one room). PENDING: the server route is not built yet (server stream); the
-//      page also accepts a pasted token.
+//      fan-out for one room). The page also accepts a pasted token.
 //   2. wss://<host>/v1/ws, first frame `hello {token}` (never the token in the URL), then
 //      `subscribe_room {room_id}`: presence frames, stage.* and every bet in the room.
 //   3. `pong {t}` to every `ping`; dead after 45 s of silence; reconnect with 0.25→5 s backoff
@@ -13,6 +12,9 @@ import {
   WS_RECONNECT_BACKOFF_MS,
   type WsClientFrameInput,
 } from '@youre-on/shared/api';
+import { BetSnapshot } from '@youre-on/shared/api';
+import { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import { z } from 'zod/v4';
 import type { TickerAction } from './ticker';
 
 export const STAGE_SESSION_PATH = '/v1/stage/session';
@@ -24,6 +26,51 @@ export interface StageConfig {
   /** Either a ready stage token or the STAGE_KEY to exchange for one. */
   token?: string;
   stageKey?: string;
+  /** Optional: a bet already in progress, replayed from seq 0 on connect (cold start). */
+  betId?: string;
+}
+
+/** GET with the stage bearer; throws `HTTP <status> <code>` on failure. */
+export async function getJson(
+  serverUrl: string,
+  path: string,
+  token: string,
+  doFetch: typeof fetch = fetch,
+): Promise<unknown> {
+  const res = await doFetch(new URL(path, serverUrl).toString(), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const body = (await res.json().catch(() => null)) as { error?: { code?: string } } | null;
+  if (!res.ok)
+    throw new Error(
+      `GET ${path}: HTTP ${res.status}${body?.error?.code ? ` ${body.error.code}` : ''}`,
+    );
+  return body;
+}
+
+/** §2.14 GET /v1/bets/:id (stage scope: bets of its room). */
+export async function fetchBetSnapshot(
+  serverUrl: string,
+  token: string,
+  betId: string,
+  doFetch: typeof fetch = fetch,
+): Promise<BetSnapshot> {
+  return BetSnapshot.parse(
+    await getJson(serverUrl, `/v1/bets/${encodeURIComponent(betId)}`, token, doFetch),
+  );
+}
+
+const MarketCurrentLite = z.object({ market: GeminiMarketSnapshot.nullable() });
+
+/** §2.13 GET /v1/markets/btc5m/current: the odds widget's first frame before stage.market. */
+export async function fetchMarket(
+  serverUrl: string,
+  token: string,
+  doFetch: typeof fetch = fetch,
+): Promise<GeminiMarketSnapshot | null> {
+  return MarketCurrentLite.parse(
+    await getJson(serverUrl, '/v1/markets/btc5m/current', token, doFetch),
+  ).market;
 }
 
 export function wsUrlFor(serverUrl: string): string {
@@ -73,6 +120,8 @@ export interface StageConnectionOptions {
   token: string;
   roomId: string;
   onAction: (a: TickerAction) => void;
+  /** Bets to replay from `after_seq` in the hello (cold start / reconnect). */
+  subs?: Array<{ bet_id: string; after_seq: number }>;
   makeSocket?: WsFactory;
   now?: () => number;
   random?: () => number;
@@ -86,9 +135,11 @@ export class StageConnection {
   private stopped = false;
   private reconnectTimer: unknown = null;
   private deadTimer: unknown = null;
-  private readonly o: Required<Omit<StageConnectionOptions, 'makeSocket'>> & {
+  private readonly o: Required<Omit<StageConnectionOptions, 'makeSocket' | 'subs'>> & {
     makeSocket: WsFactory;
   };
+  /** bet_id -> last seq seen, so a reconnect resumes instead of replaying everything. */
+  private readonly subs = new Map<string, number>();
 
   constructor(opts: StageConnectionOptions) {
     this.o = {
@@ -99,6 +150,22 @@ export class StageConnection {
       clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
       ...opts,
     };
+    for (const s of opts.subs ?? []) this.subs.set(s.bet_id, s.after_seq);
+  }
+
+  /** Adds (or keeps) a bet subscription; sent now if open, and in every later hello. */
+  subscribe(betId: string, afterSeq = 0): void {
+    const known = this.subs.get(betId);
+    if (known !== undefined) return;
+    this.subs.set(betId, afterSeq);
+    if (this.ws && this.ws.readyState === 1)
+      this.send({ op: 'subscribe', bet_id: betId, after_seq: afterSeq });
+  }
+
+  /** Called with every event seq the page applied (keeps the resume point current). */
+  noteSeq(betId: string, seq: number): void {
+    const known = this.subs.get(betId);
+    if (known !== undefined && seq > known) this.subs.set(betId, seq);
   }
 
   start(): void {
@@ -169,7 +236,11 @@ export class StageConnection {
     const ws = this.o.makeSocket(this.o.wsUrl);
     this.ws = ws;
     ws.onopen = () => {
-      this.send({ op: 'hello', token: this.o.token, subs: [] });
+      this.send({
+        op: 'hello',
+        token: this.o.token,
+        subs: [...this.subs].map(([bet_id, after_seq]) => ({ bet_id, after_seq })),
+      });
       this.send({ op: 'subscribe_room', room_id: this.o.roomId });
       this.armDeadTimer();
     };

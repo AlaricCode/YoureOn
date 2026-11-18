@@ -26,7 +26,7 @@ FAUCET_PORT="${FAUCET_PORT:-29900}"
 GOSSIP_PORT="${GOSSIP_PORT:-28001}"
 DYN_RANGE="${DYN_RANGE:-28100-28200}"
 SO="${ESCROW_SO:-$ROOT/programs/escrow/target/deploy/escrow.so}"
-PROGRAM_ID="FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm"
+PROGRAM_ID="BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp"
 URL="http://127.0.0.1:${RPC_PORT}"
 
 [[ -f "$SO" ]] || { echo "missing $SO (cd programs/escrow && anchor build)"; exit 2; }

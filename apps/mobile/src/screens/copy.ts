@@ -44,6 +44,14 @@ export const COPY = {
     draft: ['Draft terms', 'label'],
     readBack: ['Reading back', 'label'],
     decline: ['Back out', 'label'],
+    typeIt: ['Type it instead', 'label'],
+    useVoice: ['Use the judge', 'label'],
+    theBet: ['The bet', 'label'],
+    stake: ['Stake each', 'label'],
+    send: ['Send terms', 'label'],
+    lockItIn: ['Lock it in', 'label'],
+    waitingTerms: ['Waiting for terms', 'label'],
+    sent: ['Terms sent', 'label'],
   },
   terms: {
     title: ['Terms', 'label'],
@@ -75,6 +83,7 @@ export const COPY = {
     judging: ['Judging', 'label'],
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
+    start: ['Start', 'label'],
   },
   judgeCam: {
     title: ['Judge cam', 'label'],
@@ -146,6 +155,11 @@ export const COPY = {
     judgeCam: ['Judge cam', 'label'],
     demo: ['Demo account', 'label'],
   },
+  app: {
+    loading: ['Loading', 'label'],
+    offline: ["Can't connect", 'error'],
+    failed: ['Try again', 'error'],
+  },
   demo: {
     title: ['Demo account', 'label'],
     scan: ['Scan stage code', 'label'],
@@ -168,4 +182,6 @@ export const fill = {
   headToHead: (w: number, l: number, name: string, net: string) =>
     `You're ${w}-${l} against ${name} (${net})`,
   turn: (name: string) => `${name}'s turn`,
+  /** A's typed terms are on the card; B has not accepted yet. First name only: a 3-word label. */
+  waitingFor: (name: string) => `Waiting for ${name.trim().split(/\s+/)[0] || 'them'}`,
 } as const;

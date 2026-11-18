@@ -12,7 +12,7 @@ set -euo pipefail
 PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="$(cd "$PKG_DIR/../.." && pwd)"
 SO="${ESCROW_SO:-$REPO_DIR/programs/escrow/target/deploy/escrow.so}"
-PROGRAM_ID="FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm"
+PROGRAM_ID="BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp"
 
 RPC_PORT=18899
 FAUCET_PORT=19900

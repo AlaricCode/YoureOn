@@ -96,7 +96,7 @@ import {
 import { findBetPda, findConfigPda, findEventAuthorityPda, findVaultPda } from '../pdas';
 
 export const ESCROW_PROGRAM_ADDRESS =
-  'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm' as Address<'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm'>;
+  'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp' as Address<'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp'>;
 
 export enum EscrowAccount {
   Bet,
@@ -445,7 +445,7 @@ export function identifyEscrowInstruction(
 }
 
 export type ParsedEscrowInstruction<
-  TProgram extends string = 'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm',
+  TProgram extends string = 'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp',
 > =
   | ({ instructionType: EscrowInstruction.AcceptBet } & ParsedAcceptBetInstruction<TProgram>)
   | ({ instructionType: EscrowInstruction.Appeal } & ParsedAppealInstruction<TProgram>)

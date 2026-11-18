@@ -1,6 +1,6 @@
 // The stage client against the real server WebSocket hub (API-CONTRACT §1.3 stage auth, §3.1).
-// DB-backed: skipped without DATABASE_URL. The stage token is inserted directly because
-// POST /v1/stage/session is not built yet (server stream, PENDING).
+// DB-backed: skipped without DATABASE_URL. Most tests insert the stage token directly; one goes
+// through the real POST /v1/stage/session with STAGE_KEY.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -12,7 +12,7 @@ import {
   startServer,
   type RunningServer,
 } from '@youre-on/server';
-import { StageConnection, type WsLike } from '../src/connection';
+import { fetchBetSnapshot, fetchStageToken, StageConnection, type WsLike } from '../src/connection';
 import { applyFrame, initialTicker, type TickerState } from '../src/ticker';
 
 const DB_URL = process.env.DATABASE_URL;
@@ -23,12 +23,14 @@ d('stage client <-> server /v1/ws (DB)', () => {
   let db: DbHandle;
   let server: RunningServer;
   let wsUrl: string;
+  let base: string;
+  const STAGE_KEY = 'stage-live-test-key';
 
   beforeAll(async () => {
     await runMigrations(DB_URL!);
     db = createDb({ url: DB_URL!, max: 2 });
     const { deps } = createDeps({
-      env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: DB_URL }),
+      env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: DB_URL, STAGE_KEY }),
       dbHandle: db,
       rateLimit: false,
     });
@@ -39,6 +41,7 @@ d('stage client <-> server /v1/ws (DB)', () => {
       onClose: () => db.close(),
     });
     wsUrl = `ws://127.0.0.1:${server.port}/v1/ws`;
+    base = `http://127.0.0.1:${server.port}`;
   });
   afterAll(async () => {
     await server?.close();
@@ -92,6 +95,19 @@ d('stage client <-> server /v1/ws (DB)', () => {
         { timeout: 3000 },
       )
       .toEqual({ bet_id: betId, kind: 'gavel' });
+    c.conn.stop();
+  });
+
+  it('POST /v1/stage/session issues a token the WS accepts; a wrong key is refused', async () => {
+    const roomId = await newRoom();
+    await expect(fetchStageToken({ serverUrl: base, roomId, stageKey: 'wrong' })).rejects.toThrow(
+      /401 AUTH_REQUIRED/,
+    );
+    const token = await fetchStageToken({ serverUrl: base, roomId, stageKey: STAGE_KEY });
+    const c = connect(token, roomId);
+    await expect.poll(() => c.get().status, { timeout: 3000 }).toBe('open');
+    // a bet of another room (or none) is invisible to this stage token
+    await expect(fetchBetSnapshot(base, token, randomUUID())).rejects.toThrow(/404/);
     c.conn.stop();
   });
 

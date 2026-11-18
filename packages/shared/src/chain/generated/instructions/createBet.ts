@@ -73,7 +73,7 @@ export type CreateBetInstruction<
   TAccountSystemProgram extends string | AccountMeta<string> = '11111111111111111111111111111111',
   TAccountEventAuthority extends string | AccountMeta<string> = string,
   TAccountProgram extends string | AccountMeta<string> =
-    'FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm',
+    'BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp',
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &

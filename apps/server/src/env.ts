@@ -34,6 +34,14 @@ export const EnvSchema = z.object({
   MAX_STAKE_MICRO: opt(z.string().regex(/^[1-9][0-9]{0,19}$/)),
   APPEAL_WINDOW_S: opt(intStr),
   LOCK_MODE: z.preprocess(unset, z.enum(['atomic', 'sequential']).default('atomic')),
+  /**
+   * Who signs the atomic lock (src/lock). 'phones' = API-CONTRACT §2.8 (each phone signs the stored
+   * message after hold + Face ID). 'server' = custodial demo path: the server signs create_bet /
+   * accept_bet as demo-a / demo-b (DEMO_A/B_SECRET_KEY) right after confirm_terms (D-A).
+   */
+  LOCK_SIGNER: z.preprocess(unset, z.enum(['phones', 'server']).default('phones')),
+  /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
+  SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
@@ -46,6 +54,11 @@ export const EnvSchema = z.object({
   STT_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
   /** mock = generated beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
   SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
+  // --- judge pipeline (src/judge, Beat 4)
+  /** Anthropic model for the attempt ruling (12 frames; Opus is too slow for the 10 s cap). */
+  JUDGE_MODEL: z.preprocess(unset, str.default('claude-sonnet-5-5')),
+  /** Demo fallback (ARCHITECTURE §7.2 cached_ruling): rule from a stored verdict, no LLM call. */
+  CACHED_RULING: z.preprocess(unset, boolStr.default(false)),
   // --- Solana / QuickNode (secret)
   SOLANA_DEVNET_RPC: opt(z.url()),
   SOLANA_DEVNET_WS: opt(z.url()),
@@ -55,6 +68,9 @@ export const EnvSchema = z.object({
   JUDGE_AUTHORITY_SECRET_KEY: opt(str),
   APPEAL_AUTHORITY_SECRET_KEY: opt(str),
   TREASURY_SECRET_KEY: opt(str),
+  /** Custodial demo party keys (scripts/keys.ts demo-a / demo-b), used when LOCK_SIGNER=server. */
+  DEMO_A_SECRET_KEY: opt(str),
+  DEMO_B_SECRET_KEY: opt(str),
   // --- AI providers (secret)
   ANTHROPIC_API_KEY: opt(str),
   OPENAI_API_KEY: opt(str),
@@ -80,6 +96,10 @@ export const EnvSchema = z.object({
   DEMO_SEED_KEK: opt(str),
   SESSION_SECRET: opt(str),
   STAGE_KEY: opt(str),
+  /** Comma-separated origins allowed to call the stage routes (CORS); unset = Vite dev origins. */
+  STAGE_ORIGIN: opt(str),
+  /** Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test. */
+  MARKETS_FEED: opt(z.enum(['on', 'off'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
   // --- optional
@@ -91,7 +111,17 @@ export type Env = z.infer<typeof EnvSchema>;
  * Keys the production deploy must have *today*. Grows as features land; keep it honest so a
  * Fly deploy with a missing secret fails at boot instead of mid-demo.
  */
-export const REQUIRED_IN_PRODUCTION = ['PUBLIC_BASE_URL'] as const satisfies readonly (keyof Env)[];
+export const REQUIRED_IN_PRODUCTION = [
+  'PUBLIC_BASE_URL',
+  // chain lifecycle (src/chain/tx.ts, src/lock, src/payout)
+  'SOLANA_DEVNET_RPC',
+  'FEE_PAYER_SECRET_KEY',
+  'JUDGE_AUTHORITY_SECRET_KEY',
+  // the judge's tools (ANTHROPIC_API_KEY is required only with LLM_PROVIDER=live, below)
+  'ELEVENLABS_TOOL_SECRET',
+  // /v1/demo/* (src/demo)
+  'DEMO_ADMIN_TOKEN',
+] as const satisfies readonly (keyof Env)[];
 
 export class EnvError extends Error {
   constructor(public readonly problems: string[]) {
@@ -108,7 +138,12 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
   }
   const env = r.data;
   if (env.NODE_ENV === 'production') {
-    const missing = REQUIRED_IN_PRODUCTION.filter((k) => env[k] === undefined);
+    const missing: string[] = REQUIRED_IN_PRODUCTION.filter((k) => env[k] === undefined);
+    // A mock LLM refuses every call in production (providers/registry.ts), so without the
+    // key the judge only works with CACHED_RULING=true; the live judge needs both.
+    if (env.LLM_PROVIDER === 'live' && env.ANTHROPIC_API_KEY === undefined) {
+      missing.push('ANTHROPIC_API_KEY');
+    }
     if (missing.length) throw new EnvError(missing.map((k) => `${k}: required in production`));
   }
   return env;

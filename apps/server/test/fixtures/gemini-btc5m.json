@@ -1,0 +1,959 @@
+{
+  "_note": "Real Gemini public REST responses (no key), recorded 2026-11-18T02:37Z and 02:41Z around the BTC05M2611180240 -> BTC05M2611180245 rollover. Trimmed: the events lists keep 1 non-BTC event + the first 3 BTC05M events; image/terms URLs and contract descriptions removed. Nothing else edited.",
+  "events_0237": {
+    "data": [
+      {
+        "id": "475648",
+        "title": "ETH price today at 9:40pm EST",
+        "slug": "eth-price-today-at-940pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "ETH05M2611180240",
+        "status": "active",
+        "createdAt": "2026-11-18T01:31:24.138Z",
+        "contracts": [
+          {
+            "id": "475648-1198256",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.8",
+                "no": "0.38"
+              },
+              "sell": {
+                "yes": "0.62",
+                "no": "0.2"
+              },
+              "bestBid": "0.62",
+              "bestAsk": "0.8"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:31:24.138Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-ETH05M2611180240-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:40:00.000Z",
+            "effectiveDate": "2026-11-18T02:35:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "value": "1804.66",
+              "availableAt": "2026-11-18T02:35:00.000Z"
+            },
+            "source": "LS-LRRR-ETHUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:31:24.138Z",
+        "isLive": true,
+        "description": "Interval ETH price prediction event expiring on November 17, 2026 at 9:40pm ET",
+        "series": "ETH05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Ether"],
+        "expiryDate": "2026-11-18T02:40:00.000Z",
+        "startTime": "2026-11-18T02:35:00.000Z",
+        "subcategory": {
+          "id": 33,
+          "slug": "crypto_ether",
+          "name": "Ether",
+          "path": ["Crypto", "Ether"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-ETHUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-ETHUSD"
+        },
+        "volumeDelta24hPct": "0"
+      },
+      {
+        "id": "475645",
+        "title": "BTC price today at 9:40pm EST",
+        "slug": "btc-price-today-at-940pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC05M2611180240",
+        "status": "active",
+        "createdAt": "2026-11-18T01:31:16.535Z",
+        "contracts": [
+          {
+            "id": "475645-1198249",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.67",
+                "no": "0.46"
+              },
+              "sell": {
+                "yes": "0.54",
+                "no": "0.33"
+              },
+              "bestBid": "0.54",
+              "bestAsk": "0.67"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:31:16.535Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC05M2611180240-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:40:00.000Z",
+            "effectiveDate": "2026-11-18T02:35:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "value": "64389.6",
+              "availableAt": "2026-11-18T02:35:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:31:16.535Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:40pm ET",
+        "series": "BTC05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:40:00.000Z",
+        "startTime": "2026-11-18T02:35:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      },
+      {
+        "id": "475660",
+        "title": "BTC price today at 9:45pm EST",
+        "slug": "btc-price-today-at-945pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC05M2611180245",
+        "status": "active",
+        "createdAt": "2026-11-18T01:35:16.514Z",
+        "contracts": [
+          {
+            "id": "475660-1198400",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.99",
+                "no": "0.99"
+              },
+              "sell": {
+                "yes": "0.01",
+                "no": "0.01"
+              },
+              "bestBid": "0.01",
+              "bestAsk": "0.99"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:35:16.514Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC05M2611180245-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:45:00.000Z",
+            "effectiveDate": "2026-11-18T02:40:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "availableAt": "2026-11-18T02:40:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:35:16.514Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:45pm ET",
+        "series": "BTC05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:45:00.000Z",
+        "startTime": "2026-11-18T02:40:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      },
+      {
+        "id": "475681",
+        "title": "BTC price today at 9:50pm EST",
+        "slug": "btc-price-today-at-950pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC05M2611180250",
+        "status": "active",
+        "createdAt": "2026-11-18T01:41:16.850Z",
+        "contracts": [
+          {
+            "id": "475681-1198677",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.5",
+                "no": "0.51"
+              },
+              "sell": {
+                "yes": "0.49",
+                "no": "0.5"
+              },
+              "bestBid": "0.49",
+              "bestAsk": "0.5"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:41:16.850Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC05M2611180250-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:50:00.000Z",
+            "effectiveDate": "2026-11-18T02:45:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "availableAt": "2026-11-18T02:45:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:41:16.850Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:50pm ET",
+        "series": "BTC05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:50:00.000Z",
+        "startTime": "2026-11-18T02:45:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      }
+    ],
+    "pagination": {
+      "limit": 200,
+      "offset": 0,
+      "total": 98
+    }
+  },
+  "events_0241": {
+    "data": [
+      {
+        "id": "475614",
+        "title": "BTC price today at 9:45pm EST",
+        "slug": "btc-price-today-at-945pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC15M2611180245",
+        "status": "active",
+        "createdAt": "2026-11-18T01:25:23.870Z",
+        "contracts": [
+          {
+            "id": "475614-1198001",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.03",
+                "no": "0.9"
+              },
+              "sell": {
+                "yes": "0.1",
+                "no": "0.97"
+              },
+              "bestAsk": "0.03",
+              "lastTradePrice": "0.1"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:25:23.870Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC15M2611180245-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:45:00.000Z",
+            "effectiveDate": "2026-11-18T02:30:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "value": "64524.7",
+              "availableAt": "2026-11-18T02:30:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:25:23.870Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:45pm ET",
+        "series": "BTC15M",
+        "volume": "190",
+        "volume24h": "190",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:45:00.000Z",
+        "startTime": "2026-11-18T02:30:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 12,
+            "name": "Fifteen Minute",
+            "slug": "fifteen-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      },
+      {
+        "id": "475660",
+        "title": "BTC price today at 9:45pm EST",
+        "slug": "btc-price-today-at-945pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC05M2611180245",
+        "status": "active",
+        "createdAt": "2026-11-18T01:35:16.514Z",
+        "contracts": [
+          {
+            "id": "475660-1198400",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.2",
+                "no": "0.89"
+              },
+              "sell": {
+                "yes": "0.11",
+                "no": "0.8"
+              },
+              "bestBid": "0.11",
+              "bestAsk": "0.2"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:35:16.514Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC05M2611180245-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:45:00.000Z",
+            "effectiveDate": "2026-11-18T02:40:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "value": "64367.38",
+              "availableAt": "2026-11-18T02:40:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:35:16.514Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:45pm ET",
+        "series": "BTC05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:45:00.000Z",
+        "startTime": "2026-11-18T02:40:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      },
+      {
+        "id": "475681",
+        "title": "BTC price today at 9:50pm EST",
+        "slug": "btc-price-today-at-950pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC05M2611180250",
+        "status": "active",
+        "createdAt": "2026-11-18T01:41:16.850Z",
+        "contracts": [
+          {
+            "id": "475681-1198677",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.5",
+                "no": "0.51"
+              },
+              "sell": {
+                "yes": "0.49",
+                "no": "0.5"
+              },
+              "bestBid": "0.49",
+              "bestAsk": "0.5"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:41:16.850Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC05M2611180250-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:50:00.000Z",
+            "effectiveDate": "2026-11-18T02:45:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "availableAt": "2026-11-18T02:45:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:41:16.850Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:50pm ET",
+        "series": "BTC05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:50:00.000Z",
+        "startTime": "2026-11-18T02:45:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      },
+      {
+        "id": "475698",
+        "title": "BTC price today at 9:55pm EST",
+        "slug": "btc-price-today-at-955pm-est",
+        "type": "binary",
+        "category": "Crypto",
+        "ticker": "BTC05M2611180255",
+        "status": "active",
+        "createdAt": "2026-11-18T01:45:16.325Z",
+        "contracts": [
+          {
+            "id": "475698-1198764",
+            "label": "Up",
+            "prices": {
+              "buy": {
+                "yes": "0.5",
+                "no": "0.51"
+              },
+              "sell": {
+                "yes": "0.49",
+                "no": "0.5"
+              },
+              "bestBid": "0.49",
+              "bestAsk": "0.5"
+            },
+            "status": "active",
+            "createdAt": "2026-11-18T01:45:16.325Z",
+            "ticker": "UP",
+            "instrumentSymbol": "GEMI-BTC05M2611180255-UP",
+            "marketState": "open",
+            "abbreviatedName": "Up",
+            "color": "#4CAF50",
+            "expiryDate": "2026-11-18T02:55:00.000Z",
+            "effectiveDate": "2026-11-18T02:50:00.000Z",
+            "sortOrder": 0,
+            "strike": {
+              "type": "reference",
+              "availableAt": "2026-11-18T02:50:00.000Z"
+            },
+            "source": "LS-LRRR-XBTUSD",
+            "isCombo": false,
+            "quantityIncrement": "0.01",
+            "quantityMinimum": "0.01",
+            "priceIncrement": "0.01",
+            "quoteAssetPrecision": 2,
+            "priceMinimum": "0.01"
+          }
+        ],
+        "effectiveDate": "2026-11-18T01:45:16.325Z",
+        "isLive": true,
+        "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:55pm ET",
+        "series": "BTC05M",
+        "volume": "0",
+        "volume24h": "0",
+        "tags": ["Bitcoin"],
+        "expiryDate": "2026-11-18T02:55:00.000Z",
+        "startTime": "2026-11-18T02:50:00.000Z",
+        "subcategory": {
+          "id": 32,
+          "slug": "crypto_bitcoin",
+          "name": "Bitcoin",
+          "path": ["Crypto", "Bitcoin"]
+        },
+        "template": "crypto-up-down",
+        "eventTags": [
+          {
+            "id": 11,
+            "name": "Five Minute",
+            "slug": "five-minute"
+          },
+          {
+            "id": 19,
+            "name": "Up Down",
+            "slug": "up-down"
+          }
+        ],
+        "source": "LS-LRRR-XBTUSD",
+        "sourceDetails": {
+          "agency": "lukka",
+          "index": "LS-LRRR-XBTUSD"
+        },
+        "volumeDelta24hPct": "0"
+      }
+    ],
+    "pagination": {
+      "limit": 200,
+      "offset": 0,
+      "total": 94
+    }
+  },
+  "event_0240_active": {
+    "id": "475645",
+    "title": "BTC price today at 9:40pm EST",
+    "slug": "btc-price-today-at-940pm-est",
+    "type": "binary",
+    "category": "Crypto",
+    "ticker": "BTC05M2611180240",
+    "status": "active",
+    "createdAt": "2026-11-18T01:31:16.535Z",
+    "contracts": [
+      {
+        "id": "475645-1198249",
+        "label": "Up",
+        "prices": {
+          "buy": {
+            "yes": "0.69",
+            "no": "0.44"
+          },
+          "sell": {
+            "yes": "0.56",
+            "no": "0.31"
+          },
+          "bestBid": "0.56",
+          "bestAsk": "0.69"
+        },
+        "status": "active",
+        "createdAt": "2026-11-18T01:31:16.535Z",
+        "ticker": "UP",
+        "instrumentSymbol": "GEMI-BTC05M2611180240-UP",
+        "marketState": "open",
+        "abbreviatedName": "Up",
+        "color": "#4CAF50",
+        "expiryDate": "2026-11-18T02:40:00.000Z",
+        "effectiveDate": "2026-11-18T02:35:00.000Z",
+        "sortOrder": 0,
+        "strike": {
+          "type": "reference",
+          "value": "64389.6",
+          "availableAt": "2026-11-18T02:35:00.000Z"
+        },
+        "source": "LS-LRRR-XBTUSD",
+        "isCombo": false,
+        "quantityIncrement": "0.01",
+        "quantityMinimum": "0.01",
+        "priceIncrement": "0.01",
+        "quoteAssetPrecision": 2,
+        "priceMinimum": "0.01"
+      }
+    ],
+    "effectiveDate": "2026-11-18T01:31:16.535Z",
+    "isLive": true,
+    "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:40pm ET",
+    "series": "BTC05M",
+    "volume": "0",
+    "volume24h": "0",
+    "tags": ["Bitcoin"],
+    "expiryDate": "2026-11-18T02:40:00.000Z",
+    "startTime": "2026-11-18T02:35:00.000Z",
+    "subcategory": {
+      "id": 32,
+      "slug": "crypto_bitcoin",
+      "name": "Bitcoin",
+      "path": ["Crypto", "Bitcoin"]
+    },
+    "template": "crypto-up-down",
+    "eventTags": [
+      {
+        "id": 11,
+        "name": "Five Minute",
+        "slug": "five-minute"
+      },
+      {
+        "id": 19,
+        "name": "Up Down",
+        "slug": "up-down"
+      }
+    ],
+    "source": "LS-LRRR-XBTUSD",
+    "sourceDetails": {
+      "agency": "lukka",
+      "index": "LS-LRRR-XBTUSD"
+    },
+    "volumeDelta24hPct": "0"
+  },
+  "event_0240_settled": {
+    "id": "475645",
+    "title": "BTC price today at 9:40pm EST",
+    "slug": "btc-price-today-at-940pm-est",
+    "type": "binary",
+    "category": "Crypto",
+    "ticker": "BTC05M2611180240",
+    "status": "settled",
+    "createdAt": "2026-11-18T01:31:16.535Z",
+    "contracts": [
+      {
+        "id": "475645-1198249",
+        "label": "Up",
+        "prices": {
+          "buy": {},
+          "sell": {}
+        },
+        "status": "settled",
+        "createdAt": "2026-11-18T01:31:16.535Z",
+        "ticker": "UP",
+        "instrumentSymbol": "GEMI-BTC05M2611180240-UP",
+        "marketState": "closed",
+        "abbreviatedName": "Up",
+        "color": "#4CAF50",
+        "expiryDate": "2026-11-18T02:40:00.000Z",
+        "resolutionSide": "no",
+        "resolvedAt": "2026-11-18T02:40:05.521Z",
+        "effectiveDate": "2026-11-18T02:35:00.000Z",
+        "sortOrder": 0,
+        "strike": {
+          "type": "reference",
+          "value": "64389.6",
+          "availableAt": "2026-11-18T02:35:00.000Z"
+        },
+        "source": "LS-LRRR-XBTUSD",
+        "settlementValue": "64367.38366666667",
+        "isCombo": false,
+        "quantityIncrement": "0.01",
+        "quantityMinimum": "0.01",
+        "priceIncrement": "0.01",
+        "quoteAssetPrecision": 2,
+        "priceMinimum": "0.01"
+      }
+    ],
+    "effectiveDate": "2026-11-18T01:31:16.535Z",
+    "isLive": false,
+    "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:40pm ET",
+    "series": "BTC05M",
+    "resolvedAt": "2026-11-18T02:40:05.521Z",
+    "volume": "7",
+    "volume24h": "7",
+    "tags": ["Bitcoin"],
+    "expiryDate": "2026-11-18T02:40:00.000Z",
+    "startTime": "2026-11-18T02:35:00.000Z",
+    "subcategory": {
+      "id": 32,
+      "slug": "crypto_bitcoin",
+      "name": "Bitcoin",
+      "path": ["Crypto", "Bitcoin"]
+    },
+    "template": "crypto-up-down",
+    "eventTags": [
+      {
+        "id": 11,
+        "name": "Five Minute",
+        "slug": "five-minute"
+      },
+      {
+        "id": 19,
+        "name": "Up Down",
+        "slug": "up-down"
+      }
+    ],
+    "source": "LS-LRRR-XBTUSD",
+    "settlement": {
+      "value": "64367.38366666667"
+    },
+    "sourceDetails": {
+      "agency": "lukka",
+      "index": "LS-LRRR-XBTUSD"
+    },
+    "volumeDelta24hPct": "0"
+  },
+  "event_0245_active": {
+    "id": "475660",
+    "title": "BTC price today at 9:45pm EST",
+    "slug": "btc-price-today-at-945pm-est",
+    "type": "binary",
+    "category": "Crypto",
+    "ticker": "BTC05M2611180245",
+    "status": "active",
+    "createdAt": "2026-11-18T01:35:16.514Z",
+    "contracts": [
+      {
+        "id": "475660-1198400",
+        "label": "Up",
+        "prices": {
+          "buy": {
+            "yes": "0.19",
+            "no": "0.9"
+          },
+          "sell": {
+            "yes": "0.1",
+            "no": "0.81"
+          },
+          "bestBid": "0.1",
+          "bestAsk": "0.19"
+        },
+        "status": "active",
+        "createdAt": "2026-11-18T01:35:16.514Z",
+        "ticker": "UP",
+        "instrumentSymbol": "GEMI-BTC05M2611180245-UP",
+        "marketState": "open",
+        "abbreviatedName": "Up",
+        "color": "#4CAF50",
+        "expiryDate": "2026-11-18T02:45:00.000Z",
+        "effectiveDate": "2026-11-18T02:40:00.000Z",
+        "sortOrder": 0,
+        "strike": {
+          "type": "reference",
+          "value": "64367.38",
+          "availableAt": "2026-11-18T02:40:00.000Z"
+        },
+        "source": "LS-LRRR-XBTUSD",
+        "isCombo": false,
+        "quantityIncrement": "0.01",
+        "quantityMinimum": "0.01",
+        "priceIncrement": "0.01",
+        "quoteAssetPrecision": 2,
+        "priceMinimum": "0.01"
+      }
+    ],
+    "effectiveDate": "2026-11-18T01:35:16.514Z",
+    "isLive": true,
+    "description": "Interval BTC price prediction event expiring on November 17, 2026 at 9:45pm ET",
+    "series": "BTC05M",
+    "volume": "0",
+    "volume24h": "0",
+    "tags": ["Bitcoin"],
+    "expiryDate": "2026-11-18T02:45:00.000Z",
+    "startTime": "2026-11-18T02:40:00.000Z",
+    "subcategory": {
+      "id": 32,
+      "slug": "crypto_bitcoin",
+      "name": "Bitcoin",
+      "path": ["Crypto", "Bitcoin"]
+    },
+    "template": "crypto-up-down",
+    "eventTags": [
+      {
+        "id": 11,
+        "name": "Five Minute",
+        "slug": "five-minute"
+      },
+      {
+        "id": 19,
+        "name": "Up Down",
+        "slug": "up-down"
+      }
+    ],
+    "source": "LS-LRRR-XBTUSD",
+    "sourceDetails": {
+      "agency": "lukka",
+      "index": "LS-LRRR-XBTUSD"
+    },
+    "volumeDelta24hPct": "0"
+  },
+  "strike_0245_pending": {
+    "type": "reference",
+    "availableAt": "2026-11-18T02:40:00.000Z"
+  },
+  "strike_0240_known": {
+    "type": "reference",
+    "value": "64389.6",
+    "availableAt": "2026-11-18T02:35:00.000Z"
+  },
+  "btcusd": {
+    "bid": "64378.84000",
+    "ask": "64386.25000",
+    "last": "64379.76000",
+    "volume": {
+      "BTC": "230.40761695",
+      "USD": "14833587.081412932",
+      "timestamp": 1794969420000
+    }
+  }
+}

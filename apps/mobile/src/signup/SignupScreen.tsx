@@ -3,9 +3,17 @@
 // The phone's own key is the login (API-CONTRACT §2.1), so a returning user, even after a
 // reinstall, never sees this screen. Face enrollment is offered right after (D3-M3).
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 
-import { AlertLine, BodyText, CheckRow, Label, PrimaryButton, TextField } from '../ui/kit';
+import {
+  AlertLine,
+  BodyText,
+  CheckRow,
+  Label,
+  PrimaryButton,
+  QuietButton,
+  TextField,
+} from '../ui/kit';
 import { Screen } from '../ui/parts';
 import { palette, space } from '../ui/tokens';
 import { SignupApiError, type SignedUpUser, type SignupApi } from './api';
@@ -22,11 +30,17 @@ export function SignupScreen({
   api,
   preview = false,
   onSignedUp,
+  onDemo,
+  onTitleLongPress,
 }: {
   api: SignupApi;
   /** Running on the stand-in server: tag the screen "Preview". */
   preview?: boolean;
   onSignedUp: (user: SignedUpUser) => void;
+  /** DEMO_MODE: take over a seeded demo account instead (API-CONTRACT §2.1 demo-claim). */
+  onDemo?: (() => void) | undefined;
+  /** Hidden operator gesture (diagnostics / preview). */
+  onTitleLongPress?: (() => void) | undefined;
 }) {
   const [name, setName] = useState('');
   const [attestedAt, setAttestedAt] = useState<Date | null>(null);
@@ -59,7 +73,9 @@ export function SignupScreen({
           {preview ? <Label variant="small">{SIGNUP_COPY.previewTag}</Label> : null}
         </View>
         <View style={styles.body}>
-          <Label variant="display">{SIGNUP_COPY.title}</Label>
+          <Pressable onLongPress={onTitleLongPress} delayLongPress={1200} accessible={false}>
+            <Label variant="display">{SIGNUP_COPY.title}</Label>
+          </Pressable>
           <BodyText style={styles.gap}>{SIGNUP_COPY.body}</BodyText>
           <View style={styles.flex} />
           <TextField
@@ -93,6 +109,11 @@ export function SignupScreen({
             busy={busy}
             onPress={() => void submit()}
           />
+          {onDemo ? (
+            <View style={styles.check}>
+              <QuietButton testID="signup-demo" label={SIGNUP_COPY.demo} onPress={onDemo} />
+            </View>
+          ) : null}
         </View>
       </KeyboardAvoidingView>
     </Screen>

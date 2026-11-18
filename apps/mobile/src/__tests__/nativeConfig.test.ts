@@ -52,7 +52,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
     'react-native-fast-tflite': '3.0.1',
     '@elevenlabs/react-native': '1.2.38',
     '@livekit/react-native': '2.12.0',
-    '@livekit/react-native-webrtc': '144.2.0',
+    '@livekit/react-native-webrtc': '144.1.2',
     'livekit-client': '2.23.0',
     '@livekit/react-native-expo-plugin': '1.1.0',
     '@config-plugins/react-native-webrtc': '15.0.2',
@@ -116,12 +116,14 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
       'expo-camera',
       'expo-video',
       'expo-audio',
-      'expo-notifications',
       '@livekit/react-native-expo-plugin',
       '@config-plugins/react-native-webrtc',
     ]) {
       expect(names, name).toContain(name);
     }
+    // Free Apple Personal Team signing: no aps-environment entitlement, so the
+    // expo-notifications config plugin stays out (APNs is on the cut line).
+    expect(names).not.toContain('expo-notifications');
     expect(new Set(names).size).toBe(names.length);
   });
 

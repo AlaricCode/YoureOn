@@ -8,10 +8,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-escrow = "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm"
+escrow = "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp"
 
 [programs.devnet]
-escrow = "FyJQHCE1TBuaCtaueeoSzLDzV5Gns6iUSA7Yd2m8UNvm"
+escrow = "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp"
 
 [provider]
 # The QuickNode devnet URL embeds a token: pass it with ANCHOR_PROVIDER_URL / `solana config`,
