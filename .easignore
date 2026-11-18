@@ -1,0 +1,77 @@
+# EAS Build upload filter (docs/IOS-BUILD.md, "Paid account (EAS)").
+#
+# eas-cli 27.x reads this file from the GIT ROOT (not apps/mobile) and, when it exists, uses it
+# INSTEAD OF every .gitignore. It never reads .git/info/exclude. So it repeats every ignore rule
+# of the repo, with ONE deliberate difference: the face-embedding model is uploaded. Metro
+# require()s it (apps/mobile/src/face/loadModel.ts), so a build without it fails at "Bundle React
+# Native code and images". The model stays out of git: the InsightFace weights are licensed for
+# non-commercial research only (apps/mobile/assets/models/NOTICE-w600k_mbf.txt) and the repo is
+# public. Make it once with scripts/face-model.sh.
+#
+# With requireCommit unset (eas.json), eas-cli uploads the WORKING TREE, uncommitted and untracked
+# files included, minus what this file and its built-in `.git` + `node_modules` rules exclude.
+# scripts/eas-preflight.sh replays that copy with eas-cli's own code and fails if anything git
+# ignores (other than the model) would be uploaded, or if a file the build needs would not be.
+
+# --- /.gitignore -----------------------------------------------------------------------------
+# Directory rules are written without a trailing slash where git's has one: `ignore` (the matcher
+# eas-cli uses) only skips children of `dir/`, so the empty directory would still be uploaded.
+node_modules
+.env*
+!.env.example
+target
+**/*-keypair.json
+keys
+.keys
+.expo
+ios/
+android/
+*.log
+dist
+.DS_Store
+# The face model: every .tflite stays out except the one the app bundles.
+apps/mobile/assets/models/*.tflite
+!apps/mobile/assets/models/w600k_mbf_float32.tflite
+
+# --- /apps/mobile/.gitignore -------------------------------------------------------------------
+# Anchored and without a trailing slash, so the directory itself is skipped too. A leftover local
+# `npx expo prebuild` ios/ (several GB with Pods) must never reach EAS: the build would then skip
+# prebuild ("bare" workflow) and use a stale project. EAS runs prebuild itself.
+/apps/mobile/ios
+/apps/mobile/android
+apps/mobile/web-build/
+apps/mobile/expo-env.d.ts
+apps/mobile/.kotlin/
+apps/mobile/.metro-health-check*
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.tsbuildinfo
+
+# --- /apps/stage/.gitignore --------------------------------------------------------------------
+apps/stage/public/replay/*.mp4
+
+# --- /programs/escrow/.gitignore ---------------------------------------------------------------
+programs/escrow/.anchor
+programs/escrow/**/*.rs.bk
+programs/escrow/test-ledger
+programs/escrow/.yarn
+programs/escrow/.surfpool
+
+# --- .git/info/exclude (local tooling) ---------------------------------------------------------
+.claude
+.claude-artifacts
+
+# --- EAS only: local build outputs that are not gitignored but must not be uploaded --------------
+*.ipa
+*.apk
+*.aab
+*.xcarchive
+*.dSYM.zip
