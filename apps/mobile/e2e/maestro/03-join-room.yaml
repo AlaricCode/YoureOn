@@ -1,0 +1,31 @@
+# Phone B, signed in with no room: type the code -> "Join room" -> the room page, where phone A
+# shows as online with a Challenge button (room.presence over B's socket).
+#   maestro --device <udid B> test -e ROOM_CODE=ABC123 -e OPPONENT="Sim A" e2e/maestro/03-join-room.yaml
+appId: dev.youreon.app
+name: join-room
+---
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 30000
+- tapOn:
+    id: room-code
+- inputText: ${ROOM_CODE}
+# The field and "Join room" ride above the keyboard.
+- assertVisible:
+    id: room-join
+    enabled: true
+- takeScreenshot: 05-join-typing
+- tapOn:
+    id: room-join
+- extendedWaitUntil:
+    visible:
+      id: room-code-chip
+    timeout: 20000
+- assertVisible: ${ROOM_CODE}
+- extendedWaitUntil:
+    visible: ${OPPONENT}
+    timeout: 20000
+- assertVisible: Challenge
+- takeScreenshot: 06-room-joined

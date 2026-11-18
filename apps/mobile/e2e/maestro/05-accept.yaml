@@ -1,0 +1,18 @@
+# Phone B: the bet.invited push over B's socket opens the full-screen invite; Accept (not an
+# authorization: API-CONTRACT §2.5) -> B's negotiate screen.
+#   maestro --device <udid B> test -e CHALLENGER="Sim A" e2e/maestro/05-accept.yaml
+appId: dev.youreon.app
+name: accept
+---
+- extendedWaitUntil:
+    visible:
+      id: incoming-accept
+    timeout: 20000
+- assertVisible: ${CHALLENGER} challenged you
+- takeScreenshot: 09-b-incoming
+- tapOn:
+    id: incoming-accept
+- extendedWaitUntil:
+    visible: Back out
+    timeout: 15000
+- takeScreenshot: 10-b-negotiate
