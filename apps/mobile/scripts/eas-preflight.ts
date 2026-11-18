@@ -308,6 +308,16 @@ export function checkEasJsonRaw(easJson: Json): Result[] {
   } else {
     out.push(pass('eas.json uploads the working tree (requireCommit unset)'));
   }
+  // With a local version source, autoIncrement makes eas-cli write the evaluated config (this
+  // shell's IOS_BUNDLE_ID, display name…) back into app.json.
+  out.push(
+    cli.appVersionSource === 'remote'
+      ? pass('eas.json appVersionSource remote (EAS keeps the build number)')
+      : fail(
+          `eas.json appVersionSource is ${String(cli.appVersionSource)}`,
+          'use "remote": a local source makes eas build rewrite app.json',
+        ),
+  );
   const range = typeof cli.version === 'string' ? cli.version : '';
   const min = /^>=\s*(\d+\.\d+\.\d+)$/.exec(range)?.[1];
   out.push(
@@ -407,6 +417,17 @@ export function checkAppConfig(f: AppConfigFacts): Result[] {
           `bundle ID ${String(bundleId)}, v${String(f.exp.version)}`,
         )
       : fail(`app config (${f.profile}) bundle ID ${String(bundleId)}, eas.json says ${want}`),
+  );
+  // Unset, `eas build` asks about export compliance and then writes the EVALUATED ios block
+  // (eas.json's IOS_BUNDLE_ID, the dev client's display name) into app.json.
+  const infoPlist = (ios.infoPlist ?? {}) as Json;
+  out.push(
+    typeof infoPlist.ITSAppUsesNonExemptEncryption === 'boolean'
+      ? pass(`ITSAppUsesNonExemptEncryption ${String(infoPlist.ITSAppUsesNonExemptEncryption)}`)
+      : fail(
+          'ios.infoPlist.ITSAppUsesNonExemptEncryption is not set in app.json',
+          'eas build would prompt, then rewrite app.json with the evaluated config',
+        ),
   );
   const entitlements = (ios.entitlements ?? {}) as Json;
   out.push(

@@ -233,15 +233,23 @@ describe('patch-package checks', () => {
 });
 
 describe('eas.json checks', () => {
+  const cli = { appVersionSource: 'remote', version: '>= 27.10.0' };
+
   it('fails requireCommit: true (the git-ignored model would not be uploaded)', () => {
-    expect(
-      failures(checkEasJsonRaw({ cli: { requireCommit: true, version: '>= 27.10.0' } })),
-    ).toHaveLength(1);
-    expect(statuses(checkEasJsonRaw({ cli: { version: '>= 27.10.0' } }))).toEqual(['pass', 'pass']);
+    expect(failures(checkEasJsonRaw({ cli: { ...cli, requireCommit: true } }))).toHaveLength(1);
+    expect(statuses(checkEasJsonRaw({ cli }))).toEqual(['pass', 'pass', 'pass']);
+  });
+
+  it('fails a local version source (autoIncrement would rewrite app.json)', () => {
+    expect(failures(checkEasJsonRaw({ cli: { ...cli, appVersionSource: 'local' } }))).toHaveLength(
+      1,
+    );
   });
 
   it('warns when cli.version would refuse eas-cli 27.10.0', () => {
-    expect(statuses(checkEasJsonRaw({ cli: { version: '>= 28.0.0' } }))).toEqual(['pass', 'warn']);
+    expect(
+      statuses(checkEasJsonRaw({ cli: { appVersionSource: 'remote', version: '>= 28.0.0' } })),
+    ).toEqual(['pass', 'pass', 'warn']);
   });
 
   const device: Profile = {
@@ -310,7 +318,11 @@ describe('eas.json checks', () => {
 describe('checkAppConfig', () => {
   const exp = {
     version: '1.0.0',
-    ios: { bundleIdentifier: 'dev.youreon.app.eas', entitlements: {} },
+    ios: {
+      bundleIdentifier: 'dev.youreon.app.eas',
+      entitlements: {},
+      infoPlist: { ITSAppUsesNonExemptEncryption: false },
+    },
     runtimeVersion: { policy: 'appVersion' },
     updates: { enabled: false },
   };
@@ -324,14 +336,14 @@ describe('checkAppConfig', () => {
 
   it('passes a matching bundle ID without APNs; updates stay off until the project is linked', () => {
     const rs = checkAppConfig({ profile: 'preview', expected, exp });
-    expect(statuses(rs)).toEqual(['pass', 'pass', 'info', 'info']);
-    expect(rs[2]?.detail).toContain('eas init');
+    expect(statuses(rs)).toEqual(['pass', 'pass', 'pass', 'info', 'info']);
+    expect(rs[3]?.detail).toContain('eas init');
   });
 
   it('passes a linked project whose update URL is derived from its id', () => {
     const rs = checkAppConfig({ profile: 'preview', expected, exp: linked });
-    expect(statuses(rs)).toEqual(['pass', 'pass', 'pass', 'pass']);
-    expect(rs[3]?.detail).toContain('https://u.expo.dev/p1');
+    expect(statuses(rs)).toEqual(['pass', 'pass', 'pass', 'pass', 'pass']);
+    expect(rs[4]?.detail).toContain('https://u.expo.dev/p1');
   });
 
   it('fails a wrong update URL, updates without a project, or another runtime policy', () => {
@@ -348,7 +360,18 @@ describe('checkAppConfig', () => {
       expected: { IOS_BUNDLE_ID: 'other.id' },
       exp: { ...linked, ios: { ...exp.ios, entitlements: { 'aps-environment': 'development' } } },
     });
-    expect(statuses(rs)).toEqual(['fail', 'warn', 'pass', 'pass']);
+    expect(statuses(rs)).toEqual(['fail', 'pass', 'warn', 'pass', 'pass']);
+  });
+
+  it('fails a missing export-compliance answer (eas build would rewrite app.json)', () => {
+    const rs = checkAppConfig({
+      profile: 'preview',
+      expected,
+      exp: { ...exp, ios: { ...exp.ios, infoPlist: {} } },
+    });
+    expect(failures(rs)).toEqual([
+      'ios.infoPlist.ITSAppUsesNonExemptEncryption is not set in app.json',
+    ]);
   });
 });
 
