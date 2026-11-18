@@ -17,6 +17,7 @@ import {
   createKeyPairSignerFromPrivateKeyBytes,
   getAddressEncoder,
   getBase58Decoder,
+  type Base64EncodedWireTransaction,
   type KeyPairSigner,
 } from '@solana/kit';
 import {
@@ -29,6 +30,7 @@ import { bets, betTermsVersions, chainTxs, noncePool } from '@youre-on/db';
 import { SignRequest, type Session } from '@youre-on/shared/api';
 import { AuthorizeRequest } from '@youre-on/shared/authorization';
 import { BetStatus, findBetPda, getBetDecoder } from '@youre-on/shared/escrow-client';
+import { hashJcs } from '@youre-on/shared/jcs';
 import { betIdToBytes } from '@youre-on/shared/primitives';
 import type { Ruling } from '@youre-on/shared/ruling';
 import {
@@ -42,7 +44,7 @@ import {
   type Env as SvmEnv,
 } from '../../../packages/shared/test/escrow/harness';
 import { betsColumnLockSignatures } from '../src/chain/projector';
-import type { ChainRuntime } from '../src/chain/tx';
+import type { ChainClient, ChainRuntime } from '../src/chain/tx';
 import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
 import { createPayoutService } from '../src/payout';
 import { createLogger } from '../src/log';
@@ -79,16 +81,41 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
   let signerA: KeyPairSigner;
   let signerB: KeyPairSigner;
 
-  const install = (signer: 'phones' | 'server') => {
+  /** A fresh lifecycle (also: "the server restarted"), optionally over a different client. */
+  const install = (
+    signer: 'phones' | 'server',
+    o: { client?: ChainClient; timeoutMs?: number } = {},
+  ) => {
     lc = installLifecycle(
       ctx.deps,
       createLifecycle(ctx.deps, {
-        runtime: async () => rt,
+        runtime: async () => (o.client ? { ...rt, client: o.client } : rt),
         signer,
-        send: { pollMs: 5, resendMs: 50, timeoutMs: 2_000 },
+        send: { pollMs: 5, resendMs: 50, timeoutMs: o.timeoutMs ?? 2_000 },
         timers: false,
       }),
     );
+  };
+
+  /**
+   * The LiteSVM client with RPC trouble: `hide` makes every status lookup come back null (an
+   * evicted status cache / a lost confirm), `drop` swallows sends (recorded in `dropped`).
+   */
+  const flaky = (o: { hide?: () => boolean; drop?: () => boolean }) => {
+    const base = rt.client;
+    const dropped: Base64EncodedWireTransaction[] = [];
+    const client: ChainClient = {
+      ...base,
+      signatureStatus: async (sig, opts) => (o.hide?.() ? null : base.signatureStatus(sig, opts)),
+      send: async (wire, skip) => {
+        if (o.drop?.()) {
+          dropped.push(wire);
+          return;
+        }
+        return base.send(wire, skip);
+      },
+    };
+    return { client, dropped, base };
   };
 
   /** Moves the server clock and the SVM clock together. */
@@ -540,6 +567,245 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
       party_signature: b58.decode(ed.sign(msg, keyA.secret)),
     });
     expect(['LOCK_REVOKED', 'LOCK_EXPIRED']).toContain(late.json!.error.code);
+  });
+
+  // ---- recovery: a tx that landed although its confirm was lost (review findings) -----------
+
+  const txRow = async (betId: string, kind: 'atomic_lock' | 'resolve' | 'finalize') =>
+    (
+      await ctx.deps.db
+        .select()
+        .from(chainTxs)
+        .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, kind)))
+        .orderBy(chainTxs.built_at)
+    ).at(-1)!;
+
+  /** LOCKED -> resolve -> finalize after the appeal window -> PAID (frees the pair again). */
+  async function payOut(betId: string) {
+    const row = await betRow(betId);
+    await lc.payout.onRuling(betId, ruling(betId, row.terms_hash!, 'A_WINS'));
+    advance(12_000);
+    expect(await lc.payout.finalizeDue(now())).toContain(betId);
+    await lc.idle();
+    expect((await betRow(betId)).state).toBe('PAID');
+  }
+
+  it('lock landed but its status was lost (restart): at expires_at the sweep adopts it, not expires it', async () => {
+    const f = flaky({ hide: () => true });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    let betId: string;
+    try {
+      const locked = await lockedBetPhones(); // the confirm loop times out: status never seen
+      betId = locked.betId;
+      expect((await betRow(betId)).state).toBe('AWAITING_LOCK');
+      expect((await txRow(betId, 'atomic_lock')).status).toBe('sent');
+      expect((await onchainBet(betId))!.status).toBe(BetStatus.Locked); // it did land
+      install('phones', { client: f.client }); // "restart": the confirm loop is gone
+      expect(await lc.lock.sweep(now())).toEqual({ expired: [], landed: [] });
+      advance(296_000); // past expires_at, status still unknown
+      const r = await lc.lock.sweep(now());
+      expect(r.landed).toContain(betId);
+      expect(r.expired).not.toContain(betId);
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'LOCKED', pending_sig: locked.lockSig });
+      const lock = await txRow(betId, 'atomic_lock');
+      expect(lock.status).toBe('confirmed');
+      const [n] = await ctx.deps.db
+        .select()
+        .from(noncePool)
+        .where(eq(noncePool.nonce_account, lock.nonce_account!));
+      expect(n!.status).toBe('free'); // no revoke was sent for a landed lock
+      expect(
+        (await ctx.deps.db.select().from(chainTxs).where(eq(chainTxs.bet_id, betId))).map(
+          (t) => t.kind,
+        ),
+      ).not.toContain('nonce_advance');
+    } finally {
+      install('phones');
+    }
+    await payOut(betId);
+  });
+
+  it('the chain wins: a confirmed lock moves an EXPIRED bet to LOCKED', async () => {
+    let hide = true;
+    const f = flaky({ hide: () => hide });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    let betId: string;
+    try {
+      betId = (await lockedBetPhones()).betId;
+      // What the old sweep did while the lock was in flight.
+      await ctx.deps.db
+        .update(bets)
+        .set({ state: 'EXPIRED', end_reason: 'accept_timeout' })
+        .where(eq(bets.id, betId));
+      hide = false;
+      const r = await lc.lock.sweep(now());
+      expect(r.landed).toContain(betId);
+      expect(await betRow(betId)).toMatchObject({
+        state: 'LOCKED',
+        end_reason: null,
+        onchain_status: 'locked',
+        onchain_pending: 'locked',
+      });
+    } finally {
+      install('phones');
+    }
+    await payOut(betId);
+  });
+
+  it('a sent lock that never landed: expired + revoked at expires_at, then marked expired', async () => {
+    let drop = true;
+    const f = flaky({ drop: () => drop });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    let betId: string;
+    try {
+      betId = (await lockedBetPhones()).betId;
+    } finally {
+      drop = false;
+      install('phones');
+    }
+    expect(f.dropped.length).toBeGreaterThan(0);
+    expect((await betRow(betId)).state).toBe('AWAITING_LOCK');
+    expect(await onchainBet(betId)).toBeNull();
+    advance(296_000);
+    const r = await lc.lock.sweep(now());
+    expect(r.expired).toContain(betId);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'EXPIRED', end_reason: 'accept_timeout' });
+    expect((await txRow(betId, 'atomic_lock')).status).toBe('sent'); // fate not proven yet
+    // The revoke consumed the nonce value and no Bet exists: the lock can never land.
+    await lc.lock.sweep(now());
+    const lock = await txRow(betId, 'atomic_lock');
+    expect(lock.status).toBe('expired');
+    const [n] = await ctx.deps.db
+      .select()
+      .from(noncePool)
+      .where(eq(noncePool.nonce_account, lock.nonce_account!));
+    expect(n!.status).toBe('free');
+    // The stored signatures are dead: replaying the dropped lock now fails.
+    await expect(f.base.send(f.dropped[0]!, false)).rejects.toThrow();
+  });
+
+  it('finalize confirm timeout: the bet stays FINALIZED; reconcile settles the landed tx -> PAID', async () => {
+    const { betId } = await lockedBetPhones();
+    const row = await betRow(betId);
+    await lc.payout.onRuling(betId, ruling(betId, row.terms_hash!, 'B_WINS'));
+    advance(12_000);
+    let hide = true;
+    const f = flaky({ hide: () => hide });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    try {
+      expect(await lc.payout.finalizeDue(now())).not.toContain(betId);
+      await lc.idle();
+      expect((await betRow(betId)).state).toBe('FINALIZED'); // not reverted to RULED
+      expect(await onchainBet(betId)).toBeNull(); // it landed: close_bet closed the PDA
+      expect((await txRow(betId, 'finalize')).status).toBe('sent');
+      hide = false;
+      expect(await lc.payout.finalizeDue(now())).toContain(betId);
+      await lc.idle();
+      expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'finalize' });
+      expect((await txRow(betId, 'finalize')).status).toBe('confirmed');
+    } finally {
+      install('phones');
+    }
+  });
+
+  it('RULED with the PDA already closed (a reverted payout that landed): finalize recovers -> PAID', async () => {
+    const { betId } = await lockedBetPhones();
+    const row = await betRow(betId);
+    await lc.payout.onRuling(betId, ruling(betId, row.terms_hash!, 'A_WINS'));
+    advance(12_000);
+    const f = flaky({ hide: () => true });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    try {
+      await lc.payout.finalizeDue(now());
+      await lc.idle();
+    } finally {
+      install('phones');
+    }
+    // The state the old code left behind: reverted to RULED, the landed row marked failed.
+    const fin = await txRow(betId, 'finalize');
+    await ctx.deps.db.update(chainTxs).set({ status: 'failed' }).where(eq(chainTxs.id, fin.id));
+    await ctx.deps.db.update(bets).set({ state: 'RULED' }).where(eq(bets.id, betId));
+    expect(await onchainBet(betId)).toBeNull();
+    expect(await lc.payout.finalizeDue(now())).toContain(betId);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'finalize' });
+  });
+
+  it('resolve confirm timeout: a landed resolve is adopted (onRuling, a retry, or reconcile)', async () => {
+    const { betId } = await lockedBetPhones();
+    const termsHash = (await betRow(betId)).terms_hash!;
+    const rul = ruling(betId, termsHash, 'A_WINS');
+    // 1. Timeout, but the Bet already shows Resolved with this ruling: onRuling adopts it.
+    let hide = true;
+    const f = flaky({ hide: () => hide });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    try {
+      const r1 = await lc.payout.onRuling(betId, rul);
+      expect(await betRow(betId)).toMatchObject({
+        state: 'RULED',
+        outcome: 'party_a',
+        ruling_hash: hashJcs(rul),
+      });
+      expect(r1.appeal_deadline).toBe(Number((await onchainBet(betId))!.appealDeadline));
+      await lc.idle();
+    } finally {
+      hide = false;
+      install('phones');
+    }
+    // 2. The state the old code left behind (row failed, bet still pre-ruling): a retry adopts
+    //    instead of rebuilding a resolve that would fail simulation.
+    await ctx.deps.db
+      .update(chainTxs)
+      .set({ status: 'failed' })
+      .where(eq(chainTxs.id, (await txRow(betId, 'resolve')).id));
+    await ctx.deps.db
+      .update(bets)
+      .set({ state: 'JUDGING', outcome: null, ruling_hash: null, appeal_deadline: null })
+      .where(eq(bets.id, betId));
+    const r2 = await lc.payout.onRuling(betId, rul);
+    expect(r2.already).toBe(true);
+    expect(await betRow(betId)).toMatchObject({ state: 'RULED', ruling_hash: hashJcs(rul) });
+    expect((await txRow(betId, 'resolve')).status).toBe('confirmed');
+    await lc.idle();
+    advance(12_000);
+    expect(await lc.payout.finalizeDue(now())).toContain(betId);
+    await lc.idle();
+    expect((await betRow(betId)).state).toBe('PAID');
+  });
+
+  it('resolve sent but unseen at the timeout, landing later: reconcile adopts it -> RULED', async () => {
+    const { betId } = await lockedBetPhones();
+    const rul = ruling(betId, (await betRow(betId)).terms_hash!, 'B_WINS');
+    let drop = true;
+    const f = flaky({ drop: () => drop });
+    install('phones', { client: f.client, timeoutMs: 30 });
+    try {
+      await expect(lc.payout.onRuling(betId, rul)).rejects.toThrow(/not confirmed/);
+    } finally {
+      drop = false;
+      install('phones');
+    }
+    expect((await txRow(betId, 'resolve')).status).toBe('sent'); // still valid: not failed
+    expect((await betRow(betId)).state).toBe('LOCKED');
+    // Still in flight: reconcile waits.
+    await lc.payout.finalizeDue(now());
+    expect((await betRow(betId)).state).toBe('LOCKED');
+    // The network delivers it after all.
+    await f.base.send(f.dropped[0]!, false);
+    await lc.payout.finalizeDue(now());
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({
+      state: 'RULED',
+      outcome: 'party_b',
+      ruling_hash: hashJcs(rul),
+    });
+    expect((await txRow(betId, 'resolve')).status).toBe('confirmed');
+    advance(12_000);
+    expect(await lc.payout.finalizeDue(now())).toContain(betId);
+    await lc.idle();
+    expect((await betRow(betId)).state).toBe('PAID');
   });
 
   it('GET /v1/me/balance: wallet USDC from the chain + my stakes in escrow', async () => {
