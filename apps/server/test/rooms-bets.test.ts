@@ -422,7 +422,7 @@ describeDb('rooms and challenge API over Postgres', () => {
     });
   });
 
-  it("challenge_method 'face' without a valid match_ticket -> VALIDATION_FAILED (ticket check is D4-M1)", async () => {
+  it("challenge_method 'face' without a valid match_ticket -> VALIDATION_FAILED (real tickets: test/face.test.ts)", async () => {
     const [A, B] = await Promise.all([signUp(ctx.base, 'Logan'), signUp(ctx.base, 'Jake')]);
     const room = await newRoom(A, B);
     for (const extra of [{}, { match_ticket: 'mt_forged' }]) {

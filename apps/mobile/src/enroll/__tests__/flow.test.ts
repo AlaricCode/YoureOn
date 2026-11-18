@@ -26,6 +26,7 @@ const face = (yawAngle: number, pitchAngle = 0, width = 300): DetectedFace => ({
   pitchAngle,
   bounds: { x: 0, y: 0, width, height: width },
   frameWidth: 1000,
+  frameHeight: 1333,
 });
 
 const vec = (seed: number) => {

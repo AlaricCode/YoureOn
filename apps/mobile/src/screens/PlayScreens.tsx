@@ -16,6 +16,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { camRetryAction } from '../attempt/retry';
 import { hasCameraLens } from '../device/camera';
+import { feel } from '../device/feedback';
 import {
   canAppeal,
   canConcede,
@@ -35,10 +36,12 @@ import {
   StageBubble,
 } from '../ui/kit';
 import {
+  AttemptDots,
   Avatar,
   BalanceHeader,
   Card,
   Chip,
+  CountdownBar,
   DataText,
   DotsLabel,
   InfoRow,
@@ -137,6 +140,9 @@ export interface Clip {
   durationMs: number;
   endedAtMs: number;
 }
+
+/** The appeal window the ruling counts down (SCHEMAS §9.3, 10 s demo). */
+const APPEAL_WINDOW_MS = 10_000;
 
 /** Recording ceiling (TASKS D3-M1 maxDuration 6). */
 const MAX_RECORD_MS = 6000;
@@ -374,6 +380,8 @@ export function RulingScreen({
   tag?: string | undefined;
 }) {
   const now = useNow(200);
+  // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
+  useEffect(() => feel('ruled'), []);
   const mark = result === 'won' ? 'check' : result === 'lost' ? 'cross' : 'ring';
   const left = appealDeadlineMs - now;
   return (
@@ -389,6 +397,7 @@ export function RulingScreen({
         </Card>
         <View style={styles.rows}>
           <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
+          <CountdownBar fraction={left / APPEAL_WINDOW_MS} />
           <InfoRow label={t(COPY.live.pot)} value={view.potUsd} />
         </View>
         <View style={styles.flex} />
@@ -436,15 +445,13 @@ export function RedoScreen({
   onReady: () => void;
   tag?: string | undefined;
 }) {
+  useEffect(() => feel('redo'), []);
   return (
     <Screen>
       <TopBar tag={tag} />
       <Page>
-        <StatusHero
-          mark="ring"
-          title={RESULT_TITLE.redo}
-          detail={`${attemptNo} / ${maxAttempts}`}
-        />
+        <StatusHero mark="ring" title={RESULT_TITLE.redo} />
+        <AttemptDots current={attemptNo} total={maxAttempts} />
         <Section label={t(COPY.ruling.tip)}>
           <Card>
             <BodyText>{tip}</BodyText>
@@ -481,7 +488,11 @@ export function PayoutScreen({
     <Screen>
       <TopBar tag={tag} />
       <Page>
-        <BalanceHeader cents={balanceCents} pending={won && phase === 'processed'} />
+        <BalanceHeader
+          cents={balanceCents}
+          pending={won && phase === 'processed'}
+          delta={won && phase !== 'reverted' ? `+${winAmount}` : null}
+        />
         <View style={styles.center}>
           {won ? (
             <StatusHero
