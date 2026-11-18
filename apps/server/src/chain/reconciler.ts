@@ -25,8 +25,9 @@
 //
 // Second pass, retryRejected: bets whose projection is parked ('projection_rejected' /
 // 'projector_failed': a CHECK, trigger or projector bug refused the bets write) are re-folded
-// every REFOLD_RETRY_MS, so a fix by hand or a redeploy completes them even when no later event
-// will ever arrive. A retry that is still rejected only logs (the first rejection was audited).
+// every REFOLD_RETRY_MS for REFOLD_MAX_AGE_MS, so a fix by hand or a redeploy completes them even
+// when no later event will ever arrive. A retry that is still rejected only logs (the first
+// rejection was audited).
 import {
   and,
   asc,
