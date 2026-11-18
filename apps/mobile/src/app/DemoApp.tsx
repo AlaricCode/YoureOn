@@ -78,6 +78,7 @@ import {
 import type { HistoryItem, PreviewUser } from '../preview/data';
 import { createServerSignupApi } from '../signup/api';
 import { SignupScreen } from '../signup/SignupScreen';
+import { SplashView } from '../ui/brand';
 import { Label, PrimaryButton } from '../ui/kit';
 import { setConnectionStatus } from '../ui/connection';
 import { isCopyOk } from '../ui/copyRule';
@@ -181,7 +182,8 @@ export default function DemoApp({ onOperator }: { onOperator: () => void }) {
     getRuntime().then(setRt, () => setFailed(true));
   }, []);
   useEffect(start, [start]);
-  if (!rt) return <Loading failed={failed} onRetry={start} />;
+  // The native splash hands off to the same mark (ui/brand SplashView): no jump at launch.
+  if (!rt) return <SplashView failed={failed} onRetry={start} />;
   return <DemoAppInner rt={rt} onOperator={onOperator} />;
 }
 
@@ -1099,7 +1101,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     voice !== null && voiceBet?.bet_id === bet?.bet_id && voicePhase === 'connected';
 
   // ---- render ------------------------------------------------------------------------------
-  if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
+  if (bootFailed && app.auth === 'booting') return <SplashView failed onRetry={boot} />;
 
   // After an appeal the panel's outcome pays (and may differ from the ruling's).
   const outcome = bet ? finalOutcome(bet) : null;
@@ -1111,7 +1113,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const screen = (() => {
     switch (route) {
       case 'boot':
-        return waiting;
+        return <SplashView />;
       case 'signup':
         return (
           <SignupScreen
