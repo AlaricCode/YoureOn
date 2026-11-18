@@ -79,6 +79,7 @@ import {
 } from '../../../packages/shared/test/escrow/harness';
 import type { ChainRuntime } from '../src/chain/tx';
 import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
+import { RateLimiter, type BucketSpec } from '../src/http/rate-limit';
 import { createGeminiClient } from '../src/markets/gemini';
 import { MarketService } from '../src/markets/service';
 import { installSettlement, SettlementService } from '../src/markets/settlement';
@@ -89,6 +90,7 @@ import {
   eventPath,
   fakeGemini,
   GEMINI_FIXTURE as F,
+  strikePath,
   T0237,
   TICKER_PATH,
   type FakeGemini,
@@ -763,27 +765,41 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
 
   // ---- the live driver, against this local server (never the live one) -------------------
 
-  it('scripts/cp1-drive.ts --market down --through paid: market terms -> lock -> Gemini -> PAID', async () => {
-    install('phones'); // the driver plays both phones with fresh wallets
+  /**
+   * Runs the driver (both phones, fresh funded wallets) while this test plays Gemini and the
+   * clock: once the driver waits for Gemini, Gemini settles its bet (recorded "no": DOWN wins),
+   * the keeper rules, then the appeal window passes. `realtime`: the server clock (and so its
+   * rate-limit buckets) runs at wall speed, and the relay re-polls the fake Gemini every tick.
+   */
+  async function runDriver(
+    args: string[],
+    o: { realtime?: boolean; onTick?: (out: string) => Promise<void> } = {},
+  ) {
+    install('phones');
     const w: [TestKey, KeyPairSigner][] = [];
     for (const k of [newKey(), newKey()]) {
       const s = await createKeyPairSignerFromPrivateKeyBytes(k.secret);
       await fund(s);
       w.push([k, s]);
     }
-    const a0 = await usdc(w[0]![1].address);
-    const b0 = await usdc(w[1]![1].address);
+    const before = [await usdc(w[0]![1].address), await usdc(w[1]![1].address)] as const;
     const secret = (k: TestKey, s: KeyPairSigner) =>
       JSON.stringify([...k.secret, ...new Uint8Array(getAddressEncoder().encode(s.address))]);
     const stateFile = join(tmpdir(), `cp1-drive-${randomUUID()}.json`);
-    // Play Gemini and the clock while the driver waits: once its bet is AWAITING_MARKET, Gemini
-    // settles it (recorded "no": DOWN wins), the keeper rules, then the appeal window passes.
     let ticking = true;
     let settledBet: string | null = null;
     let out = '';
+    let wall = Date.now();
     const ticker = (async () => {
       while (ticking) {
         await new Promise((r) => setTimeout(r, 150));
+        if (o.realtime) {
+          const t = Date.now();
+          at(offset + (t - wall));
+          wall = t;
+          await markets.refresh();
+        }
+        await o.onTick?.(out);
         // Gemini settles once the driver is waiting for it (minutes later in real life).
         if (!out.includes('waiting for Gemini')) continue;
         const [waiting] = await ctx.deps.db
@@ -824,16 +840,11 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
             stateFile,
             '--timeout',
             '30',
-            '--market',
-            'down',
-            '--amount',
-            '2',
-            '--through',
-            'paid',
             '--name-a',
             'Ava',
             '--name-b',
             'Ben',
+            ...args,
           ],
           {
             cwd: fileURLToPath(new URL('../../../', import.meta.url)),
@@ -857,16 +868,85 @@ run('e2e Beat 6: the Gemini closer (HTTP + WS + LiteSVM + recorded Gemini)', () 
       rmSync(stateFile, { force: true });
       await settle();
     }
+    return { out, code, settledBet: settledBet as string | null, wallets: w, before };
+  }
+
+  it('scripts/cp1-drive.ts --market down --through paid: market terms -> lock -> Gemini -> PAID', async () => {
+    const r = await runDriver(['--market', 'down', '--amount', '2', '--through', 'paid']);
+    const { out, wallets: w, before } = r;
     expect(out).toContain('Gemini BTC05M2611180240');
     expect(out).toMatch(/TERMS_PROPOSED: DOWN at 0\.61/);
     expect(out).toContain('AWAITING_MARKET in');
     expect(out).toMatch(/Gemini settled: A_WINS/);
     expect(out).toMatch(/PAID via finalize/);
-    expect(code, out).toBe(0);
+    expect(r.code, out).toBe(0);
     // Ava bet DOWN at 39 %: $1.56 against Ben's $2.44; Gemini said no, so Ava takes Ben's stake.
-    expect(await usdc(w[0]![1].address)).toBe(a0 + 2_440_000n);
-    expect(await usdc(w[1]![1].address)).toBe(b0 - 2_440_000n);
-    expect((await betRow(settledBet!)).state).toBe('PAID');
+    expect(await usdc(w[0]![1].address)).toBe(before[0] + 2_440_000n);
+    expect(await usdc(w[1]![1].address)).toBe(before[1] - 2_440_000n);
+    expect((await betRow(r.settledBet!)).state).toBe('PAID');
+  }, 120_000);
+
+  it('the driver against the REAL rate limiter, started before the round can be locked: it waits (and waits out 429s), then locks', async () => {
+    // Gemini has not set the line yet: the window is listed but not lockable (STRIKE_PENDING)
+    const unlined = <T>(body: T): T => {
+      const e = clone(body) as any;
+      for (const ev of e.data ?? [e])
+        for (const c of ev.contracts ?? [])
+          if (c.strike) c.strike = { type: 'reference', availableAt: c.strike.availableAt };
+      return e;
+    };
+    g.routes.set(EVENTS_PATH, unlined(F.events_0237));
+    g.routes.set(eventPath(TICKER), unlined(F.event_0240_active));
+    g.routes.set(strikePath(TICKER), F.strike_0245_pending);
+    markets = new MarketService({
+      client: createGeminiClient({ fetch: g.fetch }),
+      now,
+      log: silentLogger,
+    });
+    ctx.deps.markets = markets;
+    markets.onSnapshot((snap) => svc.onSnapshot(snap));
+    await markets.refresh();
+    expect(markets.current()).toMatchObject({ lockable: false, strike_known: false });
+
+    // The server's own RateLimiter on its clock (which runs at wall speed here). /v1/markets/*
+    // is cut from 60/min to 2 per 10 s so the driver meets 429s within seconds (live it polls
+    // /current 24/min against 60/min); the session bucket stays the real 120/min.
+    const throttled: string[] = [];
+    class Tight extends RateLimiter {
+      override take(name: string, key: string, spec: BucketSpec): void {
+        try {
+          super.take(name, key, name === 'markets' ? { limit: 2, windowMs: 10_000 } : spec);
+        } catch (e) {
+          throttled.push(name);
+          throw e;
+        }
+      }
+    }
+    ctx.deps.rateLimit = new Tight(now);
+    let lined = false;
+    try {
+      const r = await runDriver(['--market', 'up', '--amount', '1', '--through', 'paid'], {
+        realtime: true,
+        // once the driver has been throttled, Gemini sets the line (64389.6)
+        onTick: async () => {
+          if (lined || !throttled.includes('markets')) return;
+          lined = true;
+          g.routes.set(EVENTS_PATH, F.events_0237);
+          g.routes.set(eventPath(TICKER), F.event_0240_active);
+          g.routes.set(strikePath(TICKER), F.strike_0240_known);
+        },
+      });
+      expect(r.code, r.out).toBe(0);
+      expect(throttled).toContain('markets');
+      expect(r.out).toMatch(/\(429 on \/v1\/markets\/btc5m\/current: waiting \d+\.\d s\)/);
+      expect(r.out).toContain('Gemini BTC05M2611180240: line 64389.6');
+      expect(r.out).toContain('AWAITING_MARKET in');
+      expect(r.out).toMatch(/Gemini settled: B_WINS/); // Ava took UP; Gemini said no
+      expect(r.out).toMatch(/PAID via finalize/);
+      expect((await betRow(r.settledBet!)).state).toBe('PAID');
+    } finally {
+      ctx.deps.rateLimit = null;
+    }
   }, 120_000);
 
   // Last: it leaves a Locked bet behind (for timeout_refund), which the driver test would see.

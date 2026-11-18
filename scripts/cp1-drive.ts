@@ -33,10 +33,16 @@
 // Gemini's current BTC 5-minute contract with --amount dollars a side (default 2). The script
 // waits for a lockable window (GET /v1/markets/btc5m/current: strike known, >= 120 s to expiry),
 // proposes (POST /v1/bets/:id/terms/market: the server's binding quote at Gemini's odds), confirms
-// (POST /v1/bets/:id/terms/confirm, following a re-quote), and waits for AWAITING_MARKET. With
-// --through paid it waits for Gemini to settle (the server's settlement keeper rules and sends
-// resolve), then GG (--gg) or the finalize, as for Beat 4. Needs the server's Gemini relay on
-// (MARKETS_FEED) and real_world allowed (ALLOW_P2P_REAL_WORLD, unset = DEMO_MODE).
+// (POST /v1/bets/:id/terms/confirm, following a re-quote; if Gemini stopped pricing the round it
+// waits for the next one and proposes again), and waits for AWAITING_MARKET. With --through paid
+// it waits for Gemini to settle (the server's settlement keeper rules and sends resolve), then GG
+// (--gg) or the finalize, as for Beat 4. Needs the server's Gemini relay on (MARKETS_FEED) and
+// real_world allowed (ALLOW_P2P_REAL_WORLD, unset = DEMO_MODE).
+//
+// Rate limits (API-CONTRACT §1.7: /v1/markets/* 60/min per user, 120/min per session): the waits
+// are paced by scripts/lib/poll.ts (/current every 2.5 s, or asleep until the next window when
+// this one can't be locked any more; the bet every 3 s until expiry, then 1 s), and a 429 is
+// waited out for its Retry-After instead of ending the run.
 //
 // Wallet keys: <keys-dir>/demo-a-keypair.json / demo-b-keypair.json (scripts/keys.ts), or the env
 // DEMO_A_SECRET_KEY / DEMO_B_SECRET_KEY (the same values the server's custodial signer uses).
@@ -68,6 +74,10 @@ import {
 
 import { expandPath, keysDirFrom, parseCli, run } from './lib/cli';
 import { assertNotCommittable, loadRole } from './lib/keys';
+import { MARKET_POLL_MS, marketWaitMs, retryAfterMs, settlementPollMs } from './lib/poll';
+
+/** A 429 is waited out (Retry-After) this many times per request before it counts as an answer. */
+const MAX_429_RETRIES = 8;
 
 const USAGE = `usage: npm run cp1-drive -- [--base-url <url>] [--admin-token <token>] [--keys-dir <dir>]
           [--state-file <path>] [--reset] [--timeout 60] [--name-a Logan] [--name-b Jake]
@@ -138,10 +148,29 @@ class Api {
     readonly admin: string | undefined,
   ) {}
 
+  /** One request. A GET answered 429 is retried after its Retry-After (a poll never dies of it). */
   async call(
     method: string,
     path: string,
     init: { body?: unknown; raw?: Uint8Array; headers?: Record<string, string> } = {},
+  ) {
+    for (let attempt = 0; ; attempt++) {
+      const r = await this.callOnce(method, path, init);
+      if (r.status !== 429 || method !== 'GET' || attempt >= MAX_429_RETRIES) return r;
+      await this.waitOut429(path, r.retryAfter);
+    }
+  }
+
+  private async waitOut429(path: string, retryAfter: string | null) {
+    const ms = retryAfterMs(retryAfter);
+    console.log(`  (429 on ${path.split('?')[0]}: waiting ${(ms / 1000).toFixed(1)} s)`);
+    await new Promise((r) => setTimeout(r, ms));
+  }
+
+  private async callOnce(
+    method: string,
+    path: string,
+    init: { body?: unknown; raw?: Uint8Array; headers?: Record<string, string> },
   ) {
     const raw =
       init.raw ??
@@ -159,7 +188,12 @@ class Api {
     } catch {
       json = { raw: text.slice(0, 200) };
     }
-    return { status: res.status, json };
+    return { status: res.status, json, retryAfter: res.headers.get('retry-after') };
+  }
+
+  /** The server's clock as far as we know it (local clock + the CLOCK_SKEW we learned). */
+  serverNow(): number {
+    return Date.now() + this.skewMs;
   }
 
   /** Server clock - local clock, learned from a CLOCK_SKEW answer (API-CONTRACT §1.3: ±60 s). */
@@ -171,18 +205,25 @@ class Api {
     return this.signedRaw(who, method, path, raw, 'application/json');
   }
 
-  /** A signed write with a raw body (e.g. the frames multipart); same CLOCK_SKEW retry. */
+  /**
+   * A signed write with a raw body (e.g. the frames multipart); same CLOCK_SKEW retry. A 429 is
+   * refused before the handler runs (the rate limit is taken first), so it is re-signed (fresh
+   * timestamp and Idempotency-Key) and sent again after its Retry-After.
+   */
   async signedRaw(who: Signer, method: string, path: string, raw: Uint8Array, contentType: string) {
-    const r = await this.signedOnce(who, method, path, raw, contentType);
-    const serverTime = r.json?.error?.details?.server_time;
-    if (r.status === 401 && r.json?.error?.code === 'CLOCK_SKEW' && serverTime) {
-      this.skewMs = Date.parse(serverTime) - Date.now();
-      console.log(
-        `  (clock skew ${Math.round(this.skewMs / 1000)} s vs the server; using its clock)`,
-      );
-      return this.signedOnce(who, method, path, raw, contentType);
+    for (let attempt = 0; ; attempt++) {
+      let r = await this.signedOnce(who, method, path, raw, contentType);
+      const serverTime = r.json?.error?.details?.server_time;
+      if (r.status === 401 && r.json?.error?.code === 'CLOCK_SKEW' && serverTime) {
+        this.skewMs = Date.parse(serverTime) - Date.now();
+        console.log(
+          `  (clock skew ${Math.round(this.skewMs / 1000)} s vs the server; using its clock)`,
+        );
+        r = await this.signedOnce(who, method, path, raw, contentType);
+      }
+      if (r.status !== 429 || attempt >= MAX_429_RETRIES) return r;
+      await this.waitOut429(path, r.retryAfter);
     }
-    return r;
   }
 
   private signedOnce(
@@ -452,7 +493,11 @@ run(async () => {
 
   let expiryMs: number | null = null;
   if (marketSide) {
-    expiryMs = await marketTerms(api, A, betId, marketSide, amountUsd, timeoutMs);
+    // a round Gemini stops pricing between our quote and the confirm: take the next one
+    for (let round = 1; expiryMs === null; round++) {
+      expiryMs = await marketTerms(api, A, betId, marketSide, amountUsd, timeoutMs);
+      if (expiryMs === null && round >= 2) throw new Error('Gemini stopped pricing twice');
+    }
   } else {
     const terms = must(
       await api.demo('POST', `/v1/demo/bets/${betId}/terms`, {}),
@@ -533,11 +578,17 @@ run(async () => {
     console.log(
       `waiting for Gemini: the contract expires ${new Date(expiryMs).toISOString()} (in ${Math.round((expiryMs - Date.now()) / 1000)} s); settlement lands ~6-9 s later`,
     );
-    ruling = await until(waitMs + timeoutMs, 'the Gemini settlement ruling', async () => {
-      const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
-      const r = snap.latest_ruling as LatestRuling | null;
-      return r && r.ruling.stage === 'settlement' ? r : null;
-    });
+    ruling = await until(
+      waitMs + timeoutMs,
+      'the Gemini settlement ruling',
+      async () => {
+        const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
+        const r = snap.latest_ruling as LatestRuling | null;
+        return r && r.ruling.stage === 'settlement' ? r : null;
+      },
+      // slow until the contract expires (minutes), then 1/s while Gemini settles (~6-9 s)
+      () => settlementPollMs(expiryMs!, api.serverNow()),
+    );
     const r = ruling.ruling;
     console.log(`\nGemini settled: ${r.outcome} (${r.claim_result}, ${r.model}) "${r.reason}"`);
     console.log(`  ruling_hash ${ruling.ruling_hash}, evidence_hash ${r.evidence_hash}`);
@@ -565,11 +616,16 @@ run(async () => {
     );
     const up = await uploadFrames(api, cam, betId, n, nFrames);
     console.log(`  ${nFrames} frames (${up.bytes} B) uploaded: 202, clip ${up.clip.slice(0, 16)}…`);
-    ruling = await until(timeoutMs, `ruling.issued for attempt ${n}`, async () => {
-      const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
-      const r = snap.latest_ruling as LatestRuling | null;
-      return r && r.ruling.attempt_no === n ? r : null;
-    });
+    ruling = await until(
+      timeoutMs,
+      `ruling.issued for attempt ${n}`,
+      async () => {
+        const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
+        const r = snap.latest_ruling as LatestRuling | null;
+        return r && r.ruling.attempt_no === n ? r : null;
+      },
+      1_000, // a session GET: 120/min
+    );
     const r = ruling.ruling;
     console.log(
       `\nruling.issued: ${r.outcome} (${r.claim_result}, confidence ${r.confidence}, ${r.model}) "${r.reason}"`,
@@ -651,9 +707,13 @@ type LatestRuling = {
 /** The judge-cam signer, set on the first Beat 4 attempt. */
 const camRef: { cam: Signer | null } = { cam: null };
 
+/** Confirm refusals that mean Gemini stopped pricing this round (wait for the next one). */
+const ROUND_OVER = new Set(['TOO_CLOSE_TO_EXPIRY', 'MARKET_NOT_OPEN', 'STRIKE_PENDING']);
+
 /**
  * Beat 6 terms: wait for a lockable BTC 5-minute window, propose at Gemini's odds, confirm
- * (following the server's re-quote). Returns the contract's expiry (ms).
+ * (following the server's re-quote). Returns the contract's expiry (ms), or null when Gemini
+ * stopped pricing the round before the confirm (the caller tries the next one).
  */
 async function marketTerms(
   api: Api,
@@ -662,14 +722,32 @@ async function marketTerms(
   side: 'UP' | 'DOWN',
   amountUsd: string,
   timeoutMs: number,
-): Promise<number> {
-  // A window lasts 5 min and is lockable from its strike to T-120 s: wait up to one window.
-  const cur = await until(Math.max(timeoutMs, 330_000), 'a lockable Gemini window', async () => {
-    const r = await api.get(a, '/v1/markets/btc5m/current');
-    if (r.status !== 200)
-      throw new Error(`markets/current: HTTP ${r.status} ${JSON.stringify(r.json)}`);
-    return r.json.lockable ? r.json : null;
-  });
+): Promise<number | null> {
+  // A window lasts 5 min and is lockable from its strike to T-120 s: wait up to one window,
+  // paced by lib/poll.ts (60/min on /v1/markets/*): asleep while no window can be locked.
+  let last: Parameters<typeof marketWaitMs>[0] | null = null;
+  let told = 0;
+  const cur = await until(
+    Math.max(timeoutMs, 330_000),
+    'a lockable Gemini window',
+    async () => {
+      const r = await api.get(a, '/v1/markets/btc5m/current');
+      if (r.status !== 200)
+        throw new Error(`markets/current: HTTP ${r.status} ${JSON.stringify(r.json)}`);
+      last = r.json;
+      return r.json.lockable ? r.json : null;
+    },
+    () => {
+      const ms = last ? marketWaitMs(last, api.serverNow()) : MARKET_POLL_MS;
+      if (ms > MARKET_POLL_MS && Date.now() - told > 30_000) {
+        told = Date.now();
+        console.log(
+          `\n  (this round can't be locked any more; the next opens ${last?.next_window_start}: asleep ${Math.round(ms / 1000)} s)`,
+        );
+      }
+      return ms;
+    },
+  );
   console.log(
     `Gemini ${cur.market.eventTicker}: line ${cur.market.strike.value}, BTC ${cur.market.indexPrice}, bid ${cur.market.bestBid} / ask ${cur.market.bestAsk}, expiry ${cur.market.expiry}, lockable until ${cur.lockable_until}`,
   );
@@ -691,29 +769,63 @@ async function marketTerms(
       console.log(`confirm: ${c.json.say}`);
       break;
     }
-    if (c.status === 409 && c.json?.error?.details?.reason === 'requoted' && i < 2) {
-      hash = c.json.error.details.terms_hash;
+    const err = c.json?.error;
+    if (c.status === 409 && err?.details?.reason === 'requoted' && i < 2) {
+      hash = err.details.terms_hash;
       console.log(`  re-quoted by the server (quote older than 30 s): new terms ${hash}`);
+      console.log(`    ${err.message}`);
+      // a re-quote across the rollover is the next contract: its own expiry
+      if (err.details.new_round === true) return confirmOn(api, a, betId, hash);
       continue;
+    }
+    if (
+      c.status === 409 &&
+      err?.code === 'MARKET_UNAVAILABLE' &&
+      ROUND_OVER.has(err.details?.reason)
+    ) {
+      console.log(`  Gemini stopped pricing this round (${err.details.reason}): the next one`);
+      return null;
     }
     must(c, [200], 'confirm');
   }
   return Date.parse(q.market.expiry);
+}
+
+/** Confirms the terms with `hash` (a cross-round re-quote) and returns their contract's expiry. */
+async function confirmOn(api: Api, a: Player, betId: string, hash: string): Promise<number | null> {
+  const c = await api.signed(a, 'POST', `/v1/bets/${betId}/terms/confirm`, { terms_hash: hash });
+  if (c.status === 409 && ROUND_OVER.has(c.json?.error?.details?.reason)) return null;
+  console.log(`confirm: ${must(c, [200], 'confirm').say}`);
+  const snap = must(await api.get(a, `/v1/bets/${betId}`), [200], 'bet snapshot');
+  const expiry = snap.envelope?.terms?.market?.expiry;
+  if (typeof expiry !== 'string') throw new Error('the re-quoted terms carry no market expiry');
+  return Date.parse(expiry);
 }
 type ChainTxRow = { kind: string; status: string; signature: string | null };
 const lastTx = (rows: ChainTxRow[], kind: string) =>
   rows.filter((t) => t.kind === kind && t.status === 'confirmed').at(-1) ??
   rows.filter((t) => t.kind === kind).at(-1);
 
-/** Polls `probe` every 400 ms until it returns non-null, or throws after `ms`. */
-async function until<T>(ms: number, what: string, probe: () => Promise<T | null>): Promise<T> {
+/**
+ * Polls `probe` until it returns non-null, or throws after `ms`. `every`: the pause between
+ * probes (ms, or computed after each probe); 400 ms suits the unmetered demo routes only: a
+ * bearer route is 120/min per session (see lib/poll.ts).
+ */
+async function until<T>(
+  ms: number,
+  what: string,
+  probe: () => Promise<T | null>,
+  every: number | (() => number) = 400,
+): Promise<T> {
   const t0 = Date.now();
   for (;;) {
     const v = await probe();
     if (v !== null) return v;
-    if (Date.now() - t0 > ms) throw new Error(`no ${what} after ${Math.round(ms / 1000)} s`);
+    const elapsed = Date.now() - t0;
+    if (elapsed > ms) throw new Error(`no ${what} after ${Math.round(ms / 1000)} s`);
     process.stdout.write('.');
-    await new Promise((r) => setTimeout(r, 400));
+    const pause = typeof every === 'number' ? every : every();
+    await new Promise((r) => setTimeout(r, Math.max(0, Math.min(pause, ms - elapsed + 1))));
   }
 }
 
