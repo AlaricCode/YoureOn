@@ -11,17 +11,26 @@
       "extends": "base",
       "developmentClient": true,
       "distribution": "internal",
-      "environment": "development"
+      "environment": "development",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://localhost:8080"
+      }
     },
     "preview": {
       "extends": "base",
       "distribution": "internal",
-      "environment": "preview"
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev"
+      }
     },
     "production": {
       "extends": "base",
       "environment": "production",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev"
+      }
     }
   },
   "submit": {
