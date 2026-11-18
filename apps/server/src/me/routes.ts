@@ -1,3 +1,4 @@
+// GET /v1/me/bets (B) — API-CONTRACT §2.14: see ./bets.ts.
 // GET /v1/me/balance (B) — API-CONTRACT §2.14:
 //   {wallet_pubkey, usdc, usdc_display, in_escrow, in_escrow_display, as_of, source: 'rpc'}
 // `usdc` = the sum of getTokenAccountsByOwner(mint) (payouts may land in a fallback account,
@@ -12,6 +13,7 @@ import type { RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { appAuth, requireAppSession } from '../auth/middleware';
 import { lifecycleOf } from '../lock/runtime';
+import { listMyBets, parseMeBetsQuery } from './bets';
 
 export const BALANCE_CACHE_MS = 2_000;
 
@@ -30,6 +32,16 @@ export function createMeRoutes(): RouteModule {
   return {
     name: 'me',
     register(app) {
+      app.get('/v1/me/bets', requireAppSession, async (c) => {
+        const q = parseMeBetsQuery({
+          status: c.req.query('status'),
+          limit: c.req.query('limit'),
+          cursor: c.req.query('cursor'),
+        });
+        const me = appAuth(c);
+        return c.json(await listMyBets(c.get('deps'), me, q), 200);
+      });
+
       app.get('/v1/me/balance', requireAppSession, async (c) => {
         const deps = c.get('deps');
         const me = appAuth(c);

@@ -263,20 +263,27 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   useEffect(() => {
     if (!app.judgeCam || app.auth !== 'signedIn') return;
     const poll = async () => {
+      let items: { bet_id?: string }[];
       try {
         const r = (await rt.client.request('GET', '/v1/me/bets?status=active&limit=5')) as {
           items?: { bet_id?: string }[];
         };
-        for (const it of r.items ?? []) {
-          if (!it.bet_id) continue;
-          if (!rt.hub.has(it.bet_id)) rt.hub.adopt(await rt.api.getBet(it.bet_id));
-          rt.ws.subscribe(it.bet_id);
-          const cur = appRef.current.activeBetId;
-          if (!cur || isOver(rt.hub.get(cur)?.state ?? null))
-            dispatch({ type: 'bet_opened', bet_id: it.bet_id });
-        }
+        items = r.items ?? [];
       } catch {
-        // route not served yet / offline: keep polling
+        return; // route not served yet / offline: keep polling
+      }
+      for (const it of items) {
+        if (!it.bet_id) continue;
+        // One bet this device cannot open (404, a transient error) must not hide the rest.
+        try {
+          if (!rt.hub.has(it.bet_id)) rt.hub.adopt(await rt.api.getBet(it.bet_id));
+        } catch {
+          continue;
+        }
+        rt.ws.subscribe(it.bet_id);
+        const cur = appRef.current.activeBetId;
+        if (!cur || isOver(rt.hub.get(cur)?.state ?? null))
+          dispatch({ type: 'bet_opened', bet_id: it.bet_id });
       }
     };
     void poll();

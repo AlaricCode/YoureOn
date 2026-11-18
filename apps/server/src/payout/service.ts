@@ -57,6 +57,7 @@ import {
 import { HearingRuling } from '@youre-on/shared/hearing';
 import { hashJcs } from '@youre-on/shared/jcs';
 import { formatUsd } from '@youre-on/shared/money';
+import { renderSignCard } from '@youre-on/shared/sign-card';
 import { betIdToBytes, type Party } from '@youre-on/shared/primitives';
 import { payout, Ruling, toOnchainOutcome, type OnchainOutcome } from '@youre-on/shared/ruling';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
@@ -95,7 +96,7 @@ import {
   type LifecycleDeps,
   type Tx,
 } from '../lock/common';
-import { displayCode, loadEnvelope } from '../lock/terms';
+import { loadEnvelope } from '../lock/terms';
 import { txFromStored } from '../lock/service';
 
 /** A ruling the judge slice hands over: SCHEMAS Ruling (attempt / settlement) or HearingRuling. */
@@ -676,14 +677,15 @@ export class PayoutService {
       staticAccounts: Address[];
       lifetimeToken: string;
     };
-    const names = await this.names(bet);
-    const winner: Party = loser === 'A' ? 'B' : 'A';
-    const pot = formatUsd(((bet.stake_a ?? 0n) + (bet.stake_b ?? 0n)).toString());
-    const appealEnd =
-      bet.appeal_deadline?.getTime() ?? row.built_at.getTime() + SIGN_REQUEST_TTL_MS;
+    // The phone (device policy G2) refuses unless every card string equals its own
+    // renderSignCard() over the same final Terms, loser and BetSnapshot.deadlines.appeal_deadline
+    // (whole unix seconds), so the server renders it with that one shared function.
+    const appealEndSecs = Math.floor(
+      (bet.appeal_deadline?.getTime() ?? row.built_at.getTime() + SIGN_REQUEST_TTL_MS) / 1000,
+    );
     const validUntil = Math.min(
       row.built_at.getTime() + SIGN_REQUEST_TTL_MS,
-      appealEnd + FINALIZE_DELAY_MS,
+      appealEndSecs * 1000 + FINALIZE_DELAY_MS,
     );
     return {
       bet_id: bet.id,
@@ -700,17 +702,19 @@ export class PayoutService {
         valid_until: iso(validUntil),
       },
       envelope,
-      card: {
-        title: `GG: pay ${names[winner]}`,
-        prompt_message: `Pay ${names[winner]} ${pot}`,
-        hold_label: 'GG',
-        stakes_line: `${formatUsd((bet.stake_a ?? 0n).toString())} each`,
-        pot_line: `${pot} pot`,
-        odds_display: null,
-        terms_code: displayCode(envelope.terms_hash),
-        countdown_ends_at: iso(appealEnd),
+      card: renderSignCard({
+        kind: 'concede',
+        terms: envelope.terms,
+        terms_hash: envelope.terms_hash,
+        me: loser,
+        appeal_deadline: appealEndSecs,
+      }),
+      // T2: the phone compares this with the outcome of the ruling.issued it verified, so it is
+      // the offchain RulingOutcome (A_WINS / B_WINS), not the onchain enum name.
+      ruling_ref: {
+        ruling_hash: bet.ruling_hash!,
+        outcome: bet.outcome === 'party_a' ? 'A_WINS' : 'B_WINS',
       },
-      ruling_ref: { ruling_hash: bet.ruling_hash!, outcome: FROM_PG[bet.outcome as 'party_a'] },
       issued_at: iso(this.deps.now()),
     };
   }
