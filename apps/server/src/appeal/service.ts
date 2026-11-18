@@ -30,7 +30,9 @@
 // GG / finalize / another appeal got there first), SIGN_REQUEST_EXPIRED (no fresh built message),
 // MESSAGE_MISMATCH (message_sha256 != the stored message), SIGNATURE_INVALID (the signature does
 // not verify over the stored bytes, as for concede). Rate limit 3/h per user: the route passes
-// `beforeSubmit`, run after every check so a refused tap spends nothing.
+// the `bucket`. Its token is taken last in the filing's own transaction (every check passed;
+// RATE_LIMITED rolls the filing back) and given back when the chain refuses the filing at
+// preflight, so only an accepted filing spends one.
 //
 // Decision timing: the AppealResult carries all three votes (SCHEMAS §7 `votes.length(3)`), so
 // it is decided when every seat has answered or timed out. Two agreeing votes already fix the
@@ -145,6 +147,13 @@ export const APPEAL_UI_MARGIN_MS = 1_000;
 export const APPEAL_REBUILD_MS = 20_000;
 /** API-CONTRACT §1.7: 3 appeals per hour per user (ESCROW TM-L9). */
 export const APPEAL_BUCKET = { limit: 3, windowMs: 3_600_000 } as const;
+/** The appellant's 3/h bucket (the route binds it to deps.rateLimit and the caller). */
+export interface AppealBucket {
+  /** Takes one token, or throws RATE_LIMITED. */
+  take(): void;
+  /** Gives the token back (the chain refused the filing). */
+  refund(): void;
+}
 /** A failed resolve_appeal is sent again by the sweep no sooner than this. */
 export const RESOLVE_APPEAL_RETRY_MS = 3_000;
 /** rulings.model of the stage='appeal' row (DATA-MODEL §5.13). */
@@ -469,7 +478,7 @@ export class AppealService {
     betId: string,
     userId: string,
     body: Partial<PartySignature>,
-    o: { beforeSubmit?: () => void; requestId?: string; actor?: 'user' | 'system' } = {},
+    o: { bucket?: AppealBucket; requestId?: string; actor?: 'user' | 'system' } = {},
   ): Promise<AppealSubmitted> {
     if (body.kind !== undefined && body.kind !== 'appeal')
       throw new HttpError('VALIDATION_FAILED', undefined, {
@@ -498,7 +507,6 @@ export class AppealService {
       signature = sigString(await signBytes(kp.keyPair.privateKey, msg));
       messageSha = req.message_sha256;
     }
-    o.beforeSubmit?.(); // the 3/h bucket: only a filing that passed every check spends it
 
     const now = this.deps.now();
     const role = party === 'A' ? 'party_a' : 'party_b';
@@ -601,6 +609,9 @@ export class AppealService {
         request_id: o.requestId ?? null,
         details: { appeal_id: ap.id, party, signature: txSig, original_outcome: original },
       });
+      // The 3/h bucket, last: every check passed (a refused tap, or a double tap that lost the
+      // race above, spends nothing), and RATE_LIMITED rolls this filing back.
+      o.bucket?.take();
       return { full, rowId: row.id, lvbh: row.last_valid_block_height, appealId: ap.id, txSig };
     });
     if (!prepared) {
@@ -613,6 +624,7 @@ export class AppealService {
       await rt.client.send(wireOf(prepared.full), false);
     } catch (err) {
       if (err instanceof PreflightError) {
+        o.bucket?.refund(); // the chain refused it: never filed, so it costs nothing
         await this.failAppeal(betId, prepared.appealId, prepared.rowId, 'failed', err, false);
         if (isBlockhashNotFound(err)) throw new HttpError('SIGN_REQUEST_EXPIRED');
         throw (
