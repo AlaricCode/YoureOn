@@ -12,7 +12,8 @@ primary_region = "dfw"
   NODE_ENV = "production"
   PORT = "8080"
   LOCK_MODE = "atomic"
-  DEMO_MODE = "false"
+  DEMO_MODE = "true"
+  CACHED_RULING = "true" # until ANTHROPIC_API_KEY + LLM_PROVIDER=live are set
   PUBLIC_BASE_URL = "https://youre-on.fly.dev"
   PROGRAM_ID = "BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp" # = packages/shared ESCROW_ID; env.ts rejects any other value
   USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
