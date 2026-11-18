@@ -26,7 +26,7 @@
 //
 // Not reachable today: an Open Bet tracked by a live row (the atomic lock never leaves one; the
 // sequential fallback is not implemented). The orphan path covers any Open Bet anyway.
-import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { getBase58Decoder, type Address, type Transaction } from '@solana/kit';
 import { auditLog, bets, chainTxs } from '@youre-on/db';
 import { isTerminalBetState, type BetState } from '@youre-on/shared/bet-state';
@@ -62,6 +62,7 @@ import {
   PreflightError,
   SimulationError,
   TxFailedError,
+  txFate,
   wireOf,
   type ChainRuntime,
   type Landed,
@@ -144,6 +145,7 @@ export class RefundService {
   private readonly confirming = new Set<string>();
   private readonly anomalies = new Map<string, number>();
   private readonly orphanTx = new Map<string, { signature: string; lvbh: bigint | null }>();
+  private readonly orphanBusy = new Set<string>();
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   /** The last orphan scan, for GET /v1/demo/health. */
   lastOrphanScan: OrphanSummary | null = null;
@@ -193,32 +195,42 @@ export class RefundService {
       this.deps.log.warn('refund.reconcile_failed', { err });
     }
     const due = new Date(nowMs);
+    // Skipped rows must not use up the LIMIT (they would starve due refunds behind them): the
+    // backoff and the in-flight checks are part of the query.
+    for (const [id, until] of this.anomalies) if (nowMs >= until) this.anomalies.delete(id);
+    const backoff = [...this.anomalies.keys()];
     const rows = await this.deps.db
       .select({ id: bets.id })
       .from(bets)
       .where(
-        or(
-          // Locked: the judge never ruled before resolve_deadline (or it is not known yet).
-          and(
-            inArray(bets.state, [...LOCKED_FAMILY]),
-            or(isNull(bets.resolve_deadline), lte(bets.resolve_deadline, due)),
-          ),
-          // Appealed: the appeal was never decided before appeal_resolve_deadline.
-          and(
-            inArray(bets.state, [...APPEAL_FAMILY]),
-            isNotNull(bets.appeal_resolve_deadline),
-            lte(bets.appeal_resolve_deadline, due),
-          ),
-          // An appeal the DB may not know about: APPEALED without its deadline, or RULED a
-          // minute past the appeal window (finalize-due would have paid it out by now).
-          and(
-            inArray(bets.state, ['APPEALED', 'APPEAL_RESOLVED']),
-            isNull(bets.appeal_resolve_deadline),
-          ),
-          and(
-            eq(bets.state, 'RULED'),
-            isNull(bets.appeal_resolve_deadline),
-            lte(bets.appeal_deadline, new Date(nowMs - RULED_APPEAL_PROBE_MS)),
+        and(
+          sql`NOT EXISTS (SELECT 1 FROM ${chainTxs} t WHERE t.bet_id = ${bets.id}
+                AND t.kind IN ('resolve','concede','finalize','timeout_refund')
+                AND t.status = 'sent')`,
+          backoff.length ? notInArray(bets.id, backoff) : undefined,
+          or(
+            // Locked: the judge never ruled before resolve_deadline (or it is not known yet).
+            and(
+              inArray(bets.state, [...LOCKED_FAMILY]),
+              or(isNull(bets.resolve_deadline), lte(bets.resolve_deadline, due)),
+            ),
+            // Appealed: the appeal was never decided before appeal_resolve_deadline.
+            and(
+              inArray(bets.state, [...APPEAL_FAMILY]),
+              isNotNull(bets.appeal_resolve_deadline),
+              lte(bets.appeal_resolve_deadline, due),
+            ),
+            // An appeal the DB may not know about: APPEALED without its deadline, or RULED a
+            // minute past the appeal window (finalize-due would have paid it out by now).
+            and(
+              inArray(bets.state, ['APPEALED', 'APPEAL_RESOLVED']),
+              isNull(bets.appeal_resolve_deadline),
+            ),
+            and(
+              eq(bets.state, 'RULED'),
+              isNull(bets.appeal_resolve_deadline),
+              lte(bets.appeal_deadline, new Date(nowMs - RULED_APPEAL_PROBE_MS)),
+            ),
           ),
         ),
       )
@@ -228,8 +240,6 @@ export class RefundService {
     let sent = 0;
     for (const { id } of rows) {
       if (sent >= REFUND_BATCH) break;
-      const backoffUntil = this.anomalies.get(id);
-      if (backoffUntil !== undefined && nowMs < backoffUntil) continue;
       try {
         clock ??= await chainNow(rt.client);
         const r = await this.refundOne(rt, id, clock, nowMs);
@@ -395,47 +405,41 @@ export class RefundService {
       .orderBy(chainTxs.sent_at)
       .limit(25);
     const done: string[] = [];
-    let height: bigint | null = null;
     for (const row of rows) {
       if (this.confirming.has(row.id) || !row.signature) continue;
-      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
-      if (st?.err) {
-        await this.markRow(row.id, 'failed', JSON.stringify(st.err));
+      const { fate, status: st } = await txFate(
+        rt.client,
+        row.signature,
+        row.last_valid_block_height,
+        { sentAtMs: row.sent_at?.getTime() ?? null, nowMs },
+      );
+      if (fate === 'failed') {
+        await this.markRow(row.id, 'failed', JSON.stringify(st?.err));
         continue;
       }
-      if (st && st.confirmationStatus !== 'processed') {
-        const b = await this.betRow(row.bet_id);
-        // From the DB alone: each side's own stake (ESCROW §6 refund; a donation would add to B).
-        const from = b && APPEAL_FAMILY.includes(b.state) ? BetStatus.Appealed : BetStatus.Locked;
-        const payout = b ? { to_a: b.stake_a ?? 0n, to_b: b.stake_b ?? 0n } : null;
-        await this.settle(
-          row.bet_id,
-          row.id,
-          from,
-          payout,
-          {
-            signature: row.signature,
-            processedAt: row.rpc_processed_at?.getTime() ?? nowMs,
-            confirmedAt: nowMs,
-            slot: st.slot,
-          },
-          row.sent_at?.getTime() ?? nowMs,
-        );
-        done.push(row.bet_id);
+      if (fate === 'dead') {
+        await this.markRow(row.id, 'expired', 'expired unconfirmed');
         continue;
       }
-      if (!st) {
-        height ??= await rt.client.blockHeight();
-        const lvbh = row.last_valid_block_height;
-        const old = row.sent_at ? nowMs - row.sent_at.getTime() > 10 * 60_000 : true;
-        const past = lvbh != null ? height > lvbh : old;
-        // Known dead only if a second read (after the height) still has no status.
-        if (
-          past &&
-          (await rt.client.signatureStatus(row.signature, { searchHistory: true })) === null
-        )
-          await this.markRow(row.id, 'expired', 'expired unconfirmed');
-      }
+      if (fate !== 'landed') continue; // may still land: never rebuilt meanwhile
+      const b = await this.betRow(row.bet_id);
+      // From the DB alone: each side's own stake (ESCROW §6 refund; a donation would add to B).
+      const from = b && APPEAL_FAMILY.includes(b.state) ? BetStatus.Appealed : BetStatus.Locked;
+      const payout = b ? { to_a: b.stake_a ?? 0n, to_b: b.stake_b ?? 0n } : null;
+      await this.settle(
+        row.bet_id,
+        row.id,
+        from,
+        payout,
+        {
+          signature: row.signature,
+          processedAt: row.rpc_processed_at?.getTime() ?? nowMs,
+          confirmedAt: nowMs,
+          slot: st?.slot ?? null,
+        },
+        row.sent_at?.getTime() ?? nowMs,
+      );
+      done.push(row.bet_id);
     }
     return done;
   }
@@ -660,21 +664,31 @@ export class RefundService {
 
   /** Sends one orphan exit (fee payer) and waits for it; null when one is still in flight. */
   async sendOrphanExit(rt: ChainRuntime, l: LiveBet, action: ServerExit): Promise<string | null> {
+    // One exit per Bet at a time in this process (the keeper sweep, an armed sweep and a reset
+    // can overlap): reserve the PDA before the first await.
+    if (this.orphanBusy.has(l.address)) return null;
+    this.orphanBusy.add(l.address);
+    try {
+      return await this.sendOrphanExitLocked(rt, l, action);
+    } finally {
+      this.orphanBusy.delete(l.address);
+    }
+  }
+
+  private async sendOrphanExitLocked(
+    rt: ChainRuntime,
+    l: LiveBet,
+    action: ServerExit,
+  ): Promise<string | null> {
     const prev = this.orphanTx.get(l.address);
     if (prev) {
-      const st = await rt.client.signatureStatus(prev.signature, { searchHistory: true });
-      if (st && !st.err && st.confirmationStatus !== 'processed') {
-        // It landed: the next scan sees the Bet closed (or the next status).
-        this.orphanTx.delete(l.address);
+      const { fate } = await txFate(rt.client, prev.signature, prev.lvbh);
+      if (fate === 'landed' || fate === 'pending') {
+        // Landed: the next scan sees the Bet's new status. Pending: it may still land.
+        if (fate === 'landed') this.orphanTx.delete(l.address);
         return null;
       }
-      if (!st?.err) {
-        const height = await rt.client.blockHeight();
-        if (prev.lvbh === null || height <= prev.lvbh) return null; // may still land
-        if ((await rt.client.signatureStatus(prev.signature, { searchHistory: true })) !== null)
-          return null;
-      }
-      this.orphanTx.delete(l.address); // known dead: rebuilding is safe
+      this.orphanTx.delete(l.address); // failed or known dead: rebuilding is safe
     }
     const plan = await planExit(rt, l.address, l.bet, action);
     const fp = rt.keys.feePayer;

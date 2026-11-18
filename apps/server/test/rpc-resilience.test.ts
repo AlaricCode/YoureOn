@@ -23,7 +23,9 @@ import {
   RpcStats,
   rpcChainClient,
   RpcTimeoutError,
+  SendFateUnknownError,
   TxFailedError,
+  txFate,
   wireOf,
   withRpcRetry,
   type ChainClient,
@@ -344,16 +346,28 @@ describe('rpcChainClient.send: a preflight "rejection" of our own landed tx is n
   };
   const client = (rpc: Rpc<SolanaRpcApi>) => rpcChainClient('http://127.0.0.1:1', rpc);
 
-  it('AlreadyProcessed (the retried send of a tx that landed): resolves; the poll decides', async () => {
+  it('AlreadyProcessed (the retried send of a tx that landed): ours by definition, resolves', async () => {
+    const f = fakeRpc({ sendErr: preflight('AlreadyProcessed') });
+    await expect(client(f.rpc).send(await wire(), false)).resolves.toBeUndefined();
+    expect(f.calls).toEqual(['send']);
+  });
+
+  it('BlockhashNotFound (a durable nonce our landed lock advanced): the chain knows it -> resolves', async () => {
     const f = fakeRpc({
-      sendErr: preflight('AlreadyProcessed'),
+      sendErr: preflight('BlockhashNotFound'),
       status: { err: null, confirmationStatus: 'confirmed', slot: 5n },
     });
     await expect(client(f.rpc).send(await wire(), false)).resolves.toBeUndefined();
     expect(f.calls).toEqual(['send', 'status {"searchTransactionHistory":true}']);
   });
 
-  it('an unknown signature: a real rejection -> PreflightError with the logs', async () => {
+  it('BlockhashNotFound and unknown on both lookups: a real rejection -> PreflightError', async () => {
+    const f = fakeRpc({ sendErr: preflight('BlockhashNotFound') });
+    await expect(client(f.rpc).send(await wire(), false)).rejects.toBeInstanceOf(PreflightError);
+    expect(f.calls.filter((c) => c.startsWith('status'))).toHaveLength(2);
+  });
+
+  it('an InstructionError: the program refused this tx -> PreflightError at once, no lookup', async () => {
     const err = { InstructionError: [2, { Custom: 1 }] };
     const f = fakeRpc({ sendErr: preflight(err) });
     const e = await client(f.rpc)
@@ -362,16 +376,105 @@ describe('rpcChainClient.send: a preflight "rejection" of our own landed tx is n
     expect(e).toBeInstanceOf(PreflightError);
     expect((e as PreflightError).err).toEqual(err);
     expect((e as PreflightError).logs).toEqual(['l1']);
+    expect(f.calls).toEqual(['send']);
   });
 
-  it('the status check failing too: still a PreflightError (never a silent success)', async () => {
+  it('the lookup failing: an unknown fate (SendFateUnknownError), never a rejection', async () => {
     const f = fakeRpc({ sendErr: preflight('BlockhashNotFound'), statusErr: true });
-    await expect(client(f.rpc).send(await wire(), false)).rejects.toBeInstanceOf(PreflightError);
+    const e = await client(f.rpc)
+      .send(await wire(), false)
+      .catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(SendFateUnknownError);
+    expect(e).not.toBeInstanceOf(PreflightError);
+    expect((e as SendFateUnknownError).rejection.err).toBe('BlockhashNotFound');
   });
 
   it('a transport error is passed through untouched (no status lookup)', async () => {
     const f = fakeRpc({ sendErr: fetchFailed('ECONNRESET') });
     await expect(client(f.rpc).send(await wire(), false)).rejects.toThrow('fetch failed');
     expect(f.calls).toEqual(['send']);
+  });
+});
+
+describe('txFate: the one rule for rebuilding a money tx', () => {
+  const st = (o: Partial<SigStatus>): SigStatus => ({
+    err: null,
+    confirmationStatus: 'confirmed',
+    slot: 1n,
+    ...o,
+  });
+  const client = (reads: Array<SigStatus | null>, height = 50n) =>
+    fake({
+      signatureStatus: async () => (reads.length > 1 ? reads.shift()! : (reads[0] ?? null)),
+      blockHeight: async () => height,
+    });
+
+  it('landed / failed / processed-only', async () => {
+    expect((await txFate(client([st({})]), 's', 100n)).fate).toBe('landed');
+    expect((await txFate(client([st({ err: { x: 1 } })]), 's', 100n)).fate).toBe('failed');
+    expect((await txFate(client([st({ confirmationStatus: 'processed' })]), 's', 100n)).fate).toBe(
+      'pending',
+    );
+  });
+
+  it('unseen: pending while the blockhash is valid; dead past it only if a second read is empty', async () => {
+    expect((await txFate(client([null], 50n), 's', 100n)).fate).toBe('pending');
+    expect((await txFate(client([null, null], 150n), 's', 100n)).fate).toBe('dead');
+    // It landed in the last valid block: the second read sees it.
+    expect((await txFate(client([null, st({})], 150n), 's', 100n)).fate).toBe('landed');
+  });
+
+  it('no lastValidBlockHeight: dead only when sent long enough ago', async () => {
+    const now = 1_000_000;
+    expect(
+      (await txFate(client([null, null]), 's', null, { sentAtMs: now - 1_000, nowMs: now })).fate,
+    ).toBe('pending');
+    expect(
+      (await txFate(client([null, null]), 's', null, { sentAtMs: now - 11 * 60_000, nowMs: now }))
+        .fate,
+    ).toBe('dead');
+  });
+});
+
+describe('budget and re-broadcast', () => {
+  it('the last attempt only gets what is left of the budget', async () => {
+    hung.mockClear();
+    const t = withRpcRetry(hung as unknown as RpcTransport, {
+      timeoutMs: 1_000,
+      budgetMs: 1_700,
+      baseMs: 1,
+      sleep: noSleep,
+    });
+    const t0 = Date.now();
+    await expect(t(req())).rejects.toBeInstanceOf(RpcTimeoutError);
+    const took = Date.now() - t0;
+    expect(hung).toHaveBeenCalledTimes(2);
+    expect(took).toBeLessThan(1_900); // 1000 + (1700 - ~1000), not 2000
+  });
+
+  it('confirmSent keeps re-broadcasting while every status poll fails', async () => {
+    const fp = await generateKeyPairSigner();
+    const sends: boolean[] = [];
+    const c = fake({
+      signatureStatus: async () => {
+        throw new Error('HTTP 429');
+      },
+      send: async (_w, skip) => void sends.push(skip),
+    });
+    const ix = {
+      programAddress: 'ComputeBudget111111111111111111111111111111' as never,
+      data: new Uint8Array([1]),
+    };
+    const built = await buildBlockhashTx(c, fp.address, [ix], { signers: [fp], label: 't' });
+    let t = 0;
+    await confirmSent(c, built.tx, {
+      now: () => t,
+      sleep: async (ms) => void (t += ms),
+      pollMs: 100,
+      resendMs: 500,
+      timeoutMs: 3_000,
+      lastValidBlockHeight: 100n,
+    }).catch(() => {});
+    expect(sends.filter((s) => s).length).toBeGreaterThanOrEqual(4);
   });
 });

@@ -128,6 +128,8 @@ export interface MemcmpFilter {
 
 /** The RPC rejected the tx at preflight (nothing landed, no fee). */
 export class PreflightError extends Error {
+  /** The recent blockhash of the rejected tx, when the caller knows it (BlockhashNotFound retries). */
+  blockhash?: string;
   constructor(
     message: string,
     readonly err: unknown,
@@ -145,6 +147,34 @@ export class PreflightError extends Error {
 export function isBlockhashNotFound(err: unknown): boolean {
   return err instanceof PreflightError && jsonSafe(err.err).includes('BlockhashNotFound');
 }
+
+/**
+ * A send was rejected at preflight at the tx level, and the follow-up signature lookup failed:
+ * it may be our own earlier attempt that landed. Not a PreflightError on purpose: callers treat
+ * it as transport trouble and let the status poll decide.
+ */
+export class SendFateUnknownError extends Error {
+  constructor(
+    readonly signature: string,
+    readonly rejection: PreflightError,
+    cause: unknown,
+  ) {
+    super(`send of ${signature}: ${rejection.message}; status lookup failed`, { cause });
+    this.name = 'SendFateUnknownError';
+  }
+}
+
+/** `{InstructionError: [...]}`: an instruction failed (the program or a token check refused). */
+export function isInstructionError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    (err as { InstructionError?: unknown }).InstructionError !== undefined
+  );
+}
+
+/** How long send() waits before its second signature lookup after a tx-level rejection. */
+export const SEND_RECHECK_MS = 400;
 
 /** The tx landed and failed onchain, or never confirmed. */
 export class TxFailedError extends Error {
@@ -248,6 +278,8 @@ export function isRetriableRpcError(e: unknown): boolean {
 export const RPC_ATTEMPT_TIMEOUT_MS = 10_000;
 /** Total time one logical RPC request may take, retries and backoff included. */
 export const RPC_REQUEST_BUDGET_MS = 25_000;
+/** A retry is not started with less than this left of the budget. */
+const MIN_ATTEMPT_MS = 500;
 
 export interface RetryOptions {
   /** Total tries per request (default 6: about 0.25 + 0.5 + 1 + 2 + 4 s of backoff). */
@@ -305,16 +337,21 @@ export function withRpcRetry(inner: RpcTransport, o: RetryOptions = {}): RpcTran
     const method = methodOf(config.payload);
     for (let i = 0; ; i++) {
       try {
-        const res = await attemptWithTimeout(inner, config, timeoutMs);
+        // The last attempt gets only what is left of the budget, so a request never runs past
+        // budgetMs (+ scheduling noise) however its attempts time out.
+        const left = budgetMs - (now() - t0);
+        const attemptMs = timeoutMs > 0 ? Math.max(1, Math.min(timeoutMs, left)) : timeoutMs;
+        const res = await attemptWithTimeout(inner, config, attemptMs);
         o.stats?.record({ method, ms: now() - t0, ok: true, attempts: i + 1, at: now() });
         return res;
       } catch (e) {
         const backoff = baseMs * 2 ** i + Math.floor(Math.random() * baseMs);
+        // Give up unless the backoff AND a meaningful attempt still fit in the budget.
         const giveUp =
           i >= attempts - 1 ||
           !isRetriableRpcError(e) ||
           config.signal?.aborted ||
-          now() - t0 + backoff > budgetMs;
+          now() - t0 + backoff + MIN_ATTEMPT_MS > budgetMs;
         if (giveUp) {
           o.stats?.record({
             method,
@@ -588,19 +625,38 @@ export function rpcChainClient(
       } catch (e) {
         const d = preflightDetails(e);
         if (!d) throw e;
-        // A rejection can be our OWN earlier attempt: the transport retries a send whose first
-        // try timed out after the node got it, and the re-simulation then fails (AlreadyProcessed,
-        // or a durable nonce it advanced itself). Callers treat PreflightError as "nothing landed"
-        // (the lock would be cancelled and its nonce revoked), so ask the chain first: a known
-        // signature is not a rejection, and the caller's status poll takes it from here.
+        const rejection = new PreflightError(
+          `preflight rejected: ${jsonSafe(d.err)}`,
+          d.err,
+          d.logs,
+        );
+        // An instruction failed in simulation: the program refused THIS tx (a doomed lock, a
+        // closed window). A duplicate of our own landed tx never gets that far: the age and
+        // status-cache checks run before any instruction.
+        if (isInstructionError(d.err)) throw rejection;
+        // The transport re-sends a send whose first try timed out after the node got it; the
+        // re-simulation then fails at the tx level (AlreadyProcessed; BlockhashNotFound for a
+        // durable nonce the landed lock advanced itself). Callers read PreflightError as "nothing
+        // landed" (the lock would be cancelled and its nonce revoked), so: AlreadyProcessed is
+        // ours by definition; anything else, ask the chain (twice, a node may lag). A known
+        // signature returns normally and the caller's status poll takes over; a failed lookup
+        // is an unknown fate, never a rejection.
+        if (jsonSafe(d.err).includes('AlreadyProcessed')) return;
         const sig = signatureOfWire(wire);
-        const st = await kit
-          .getSignatureStatuses([sig], { searchTransactionHistory: true })
-          .send()
-          .then((r) => r.value[0] ?? null)
-          .catch(() => null);
-        if (st) return;
-        throw new PreflightError(`preflight rejected: ${jsonSafe(d.err)}`, d.err, d.logs);
+        for (let i = 0; i < 2; i++) {
+          let st: unknown;
+          try {
+            const { value } = await kit
+              .getSignatureStatuses([sig], { searchTransactionHistory: true })
+              .send();
+            st = value[0] ?? null;
+          } catch (lookupErr) {
+            throw new SendFateUnknownError(sig, rejection, lookupErr);
+          }
+          if (st) return;
+          if (i === 0) await new Promise((r) => setTimeout(r, SEND_RECHECK_MS));
+        }
+        throw rejection;
       }
     },
     async signatureStatus(sig, o) {
@@ -805,9 +861,23 @@ export async function buildBlockhashTx(
   client: ChainClient,
   feePayer: Address,
   ixs: readonly Instruction[],
-  opts: { signers?: readonly KeyPairSigner[]; label: string; cuPrice?: bigint },
+  opts: {
+    signers?: readonly KeyPairSigner[];
+    label: string;
+    cuPrice?: bigint;
+    /**
+     * A blockhash not to use (the one a node just rejected): wait for a newer one, so a rebuild
+     * never produces the very same bytes and signature.
+     */
+    avoidBlockhash?: string;
+  },
 ): Promise<Built> {
-  const lifetime = await client.latestBlockhash();
+  let lifetime = await client.latestBlockhash();
+  for (let i = 0; opts.avoidBlockhash && lifetime.blockhash === opts.avoidBlockhash; i++) {
+    if (i >= 10) throw new Error(`${opts.label}: no blockhash newer than the rejected one`);
+    await new Promise((r) => setTimeout(r, 400));
+    lifetime = await client.latestBlockhash();
+  }
   const budget = (cu: number) => [
     cuLimitIx(cu),
     ...(opts.cuPrice ? [cuPriceIx(opts.cuPrice)] : []),
@@ -911,9 +981,7 @@ export async function confirmSent(
       pollErrors++;
       lastPollError = rpcErrorText(e);
     }
-    if (!polled) {
-      // fall through to the timeout check
-    } else if (st) {
+    if (polled && st) {
       if (st.err)
         throw new TxFailedError(
           `tx ${signature} failed onchain: ${jsonSafe(st.err)}`,
@@ -928,7 +996,9 @@ export async function confirmSent(
       if (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized')
         return { signature, processedAt, confirmedAt: now(), slot: st.slot };
     } else if (now() - lastSend >= resendMs) {
-      if (o.lastValidBlockHeight != null) {
+      // Unseen, or the status RPC is failing: keep re-broadcasting (the send path may work while
+      // the status path 429s). Expiry is only ever declared from a successful poll.
+      if (polled && o.lastValidBlockHeight != null) {
         const height = await client.blockHeight().catch(() => null);
         // The status poll ran before the height read: ask once more, so a tx that landed in
         // the last valid block is never reported dead (a caller may rebuild a dead tx).
@@ -957,6 +1027,47 @@ export async function confirmSent(
       );
     await sleep(pollMs);
   }
+}
+
+/**
+ * What became of a sent tx, from the chain alone. The one rule for rebuilding a money tx: only a
+ * 'failed' or 'dead' one may be replaced; a 'pending' one may still land.
+ *   landed   seen at confirmed / finalized without error
+ *   failed   seen with an onchain error
+ *   dead     unseen, the chain is past its lastValidBlockHeight (no lvbh: sent > maxAgeMs ago),
+ *            and a second status read, made after the height read, is still empty (a tx that
+ *            landed in the last valid block shows up there)
+ *   pending  everything else (processed only, or unseen with a still-valid blockhash)
+ */
+export type TxFate = 'landed' | 'failed' | 'dead' | 'pending';
+
+export async function txFate(
+  client: ChainClient,
+  signature: string,
+  lastValidBlockHeight: bigint | null,
+  o: { sentAtMs?: number | null; nowMs?: number; maxAgeMs?: number } = {},
+): Promise<{ fate: TxFate; status: SigStatus | null }> {
+  const look = () => client.signatureStatus(signature, { searchHistory: true });
+  const st = await look();
+  if (st?.err) return { fate: 'failed', status: st };
+  if (st)
+    return {
+      fate:
+        st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized'
+          ? 'landed'
+          : 'pending',
+      status: st,
+    };
+  let past: boolean;
+  if (lastValidBlockHeight != null) past = (await client.blockHeight()) > lastValidBlockHeight;
+  else {
+    const nowMs = o.nowMs ?? Date.now();
+    past = o.sentAtMs == null || nowMs - o.sentAtMs > (o.maxAgeMs ?? 10 * 60_000);
+  }
+  if (!past) return { fate: 'pending', status: null };
+  const again = await look();
+  if (!again) return { fate: 'dead', status: null };
+  return txFate(client, signature, lastValidBlockHeight, o); // it showed up: classify that
 }
 
 // ---------------------------------------------------------------------------------------------

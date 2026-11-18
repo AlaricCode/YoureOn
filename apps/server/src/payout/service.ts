@@ -80,6 +80,7 @@ import {
   SimulationError,
   TOKEN_PROGRAM,
   TxFailedError,
+  txFate,
   wireOf,
   type ChainRuntime,
   type Landed,
@@ -118,8 +119,6 @@ export const FINALIZE_DELAY_MS = 1_000;
 export const CONCEDE_REBUILD_MS = 20_000;
 /** A recent blockhash lives ~60 s on devnet; the sign request stops a bit earlier. */
 export const SIGN_REQUEST_TTL_MS = 50_000;
-/** Wait before rebuilding a resolve whose blockhash the RPC node did not know. */
-export const BLOCKHASH_RETRY_MS = 500;
 /** CONCEDED / FINALIZED this long with no payout in flight counts as stranded. */
 export const STRANDED_GRACE_MS = 30_000;
 
@@ -195,14 +194,16 @@ export class PayoutService {
       // checked), the row is retired, so one immediate rebuild beats waiting for resolve-due.
       if (!isBlockhashNotFound(err)) throw err;
       this.deps.log.warn('payout.resolve_blockhash_retry', { bet_id: betId });
-      // A slot later, so getLatestBlockhash hands out a newer one (the same blockhash would
-      // rebuild the very same bytes).
-      await new Promise((r) => setTimeout(r, BLOCKHASH_RETRY_MS));
-      return this.resolveOnce(betId, input);
+      // Never the rejected blockhash again: the same one would rebuild the very same bytes.
+      return this.resolveOnce(betId, input, (err as PreflightError).blockhash);
     }
   }
 
-  private async resolveOnce(betId: string, input: Ruling | HearingRuling): Promise<RuledResult> {
+  private async resolveOnce(
+    betId: string,
+    input: Ruling | HearingRuling,
+    avoidBlockhash?: string,
+  ): Promise<RuledResult> {
     const ruling = PayoutRuling.parse(input);
     if (ruling.bet_id !== betId)
       throw new Error(`ruling is for bet ${ruling.bet_id}, not ${betId}`);
@@ -260,6 +261,7 @@ export class PayoutService {
     const built = await buildBlockhashTx(rt.client, rt.keys.feePayer.address, [ix], {
       signers: [rt.keys.feePayer, judge],
       label: 'resolve',
+      ...(avoidBlockhash ? { avoidBlockhash } : {}),
     });
     const signature = sigString(built.tx.signatures[rt.keys.feePayer.address]!);
     const now = this.deps.now();
@@ -290,7 +292,10 @@ export class PayoutService {
       try {
         await rt.client.send(wireOf(built.tx), false);
       } catch (err) {
-        if (err instanceof PreflightError) throw err;
+        if (err instanceof PreflightError) {
+          err.blockhash = built.blockhash ?? undefined;
+          throw err;
+        }
         // Transport trouble: confirmSent re-broadcasts the same bytes.
         this.deps.log.warn('payout.resolve_send_retry', { bet_id: betId, err });
       }
@@ -366,16 +371,14 @@ export class PayoutService {
         .where(and(eq(chainTxs.id, prior.id), eq(chainTxs.status, 'sent')));
       return 'dead' as const;
     };
-    const st = await rt.client.signatureStatus(prior.signature, { searchHistory: true });
-    if (st?.err) return retire('failed', JSON.stringify(st.err));
-    if (!st && prior.last_valid_block_height != null) {
-      const height = await rt.client.blockHeight();
-      if (
-        height > prior.last_valid_block_height &&
-        (await rt.client.signatureStatus(prior.signature, { searchHistory: true })) === null
-      )
-        return retire('expired', 'expired unconfirmed');
-    }
+    const { fate, status } = await txFate(
+      rt.client,
+      prior.signature,
+      prior.last_valid_block_height,
+      { sentAtMs: prior.sent_at?.getTime() ?? null, nowMs: this.deps.now() },
+    );
+    if (fate === 'failed') return retire('failed', JSON.stringify(status?.err));
+    if (fate === 'dead') return retire('expired', 'expired unconfirmed');
     const msg = Buffer.from(prior.message_b64, 'base64');
     if (!msg.includes(Buffer.from(rulingHash, 'hex'))) throw inFlight(); // another ruling's resolve
     const full = await cosignTx(txFromStored(prior.message_b64, new Map()), [
@@ -1124,29 +1127,21 @@ export class PayoutService {
       .orderBy(chainTxs.sent_at)
       .limit(25);
     const paid: string[] = [];
-    let height: bigint | null = null;
     for (const row of rows) {
       if (this.confirming.has(row.id) || !row.signature) continue;
       const kind = row.kind as 'resolve' | 'concede' | 'finalize';
-      const st = await rt.client.signatureStatus(row.signature, { searchHistory: true });
-      const landed =
-        st &&
-        !st.err &&
-        (st.confirmationStatus === 'confirmed' || st.confirmationStatus === 'finalized');
-      let dead: 'failed' | 'expired' | null = st?.err ? 'failed' : null;
-      if (!st) {
-        height ??= await rt.client.blockHeight();
-        const lvbh = row.last_valid_block_height;
-        const old = row.sent_at ? nowMs - row.sent_at.getTime() > 10 * 60_000 : true;
-        // Known dead only if a second status read (after the height read) is still empty: a tx
-        // that landed in the last valid block would otherwise be reverted and paid out twice
-        // over (the program refuses the second payout, but the DB would flap).
-        if (
-          (lvbh != null ? height > lvbh : old) &&
-          (await rt.client.signatureStatus(row.signature, { searchHistory: true })) === null
-        )
-          dead = 'expired';
-      }
+      // Known dead needs a second empty status read after the past-height read (txFate): a tx
+      // that landed in the last valid block would otherwise be reverted and paid out again
+      // (the program refuses the second payout, but the DB would flap).
+      const { fate, status: st } = await txFate(
+        rt.client,
+        row.signature,
+        row.last_valid_block_height,
+        { sentAtMs: row.sent_at?.getTime() ?? null, nowMs },
+      );
+      const landed = fate === 'landed';
+      const dead: 'failed' | 'expired' | null =
+        fate === 'failed' ? 'failed' : fate === 'dead' ? 'expired' : null;
       if (!landed && !dead) continue; // still in flight
       const onchain = await readBetAccount(rt, row.bet_id);
       if (kind === 'resolve') {
