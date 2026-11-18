@@ -507,6 +507,160 @@ describe('bet card state', () => {
     expect(framesOf(s, s.bets[BET]!)).toEqual([]);
   });
 
+  it('Beat 5: hearing turns, the three panel votes as they land, and the appeal result', () => {
+    const hearing = '00000000-0000-4000-8000-0000000000e1';
+    const appeal = '00000000-0000-4000-8000-0000000000e2';
+    const vote = (
+      seat: number,
+      provider: string,
+      outcome: string,
+      confidence: number,
+      status = 'ok',
+    ) => ({
+      schema_version: 1,
+      appeal_id: appeal,
+      bet_id: BET,
+      seat,
+      provider,
+      model: `${provider}/m`,
+      status,
+      outcome,
+      confidence,
+      reason: status === 'ok' ? 'Lands upright.' : '',
+      counted_as: status === 'ok' && outcome !== 'REDO' ? outcome : 'ABSTAIN',
+      latency_ms: 2100,
+      created_at: '2026-11-21T18:08:00.000Z',
+    });
+    const votes = [
+      vote(0, 'anthropic', 'B_WINS', 0.9),
+      vote(1, 'openai', 'A_WINS', 0.7),
+      vote(2, 'google', 'REDO', 0, 'timeout'),
+    ];
+    const frames = [
+      ...fullBet(),
+      ev('hearing.opened', {
+        hearing_id: hearing,
+        trigger: 'contested',
+        order: ['A', 'B'],
+        turn_ms: 10000,
+      }),
+      ev('hearing.turn_open', {
+        hearing_id: hearing,
+        turn_index: 0,
+        party: 'A',
+        closes_at: '2026-11-21T18:07:30.000Z',
+      }),
+    ];
+    let s = run(frames);
+    expect(s.dropped).toBe(0);
+    expect(s.bets[BET]!.hearing).toEqual({
+      hearing_id: hearing,
+      open: { party: 'A', closes_at: '2026-11-21T18:07:30.000Z' },
+      turns: [],
+    });
+    s = run(
+      [
+        ev('hearing.turn', {
+          turn: {
+            schema_version: 1,
+            turn_id: '00000000-0000-4000-8000-0000000000e3',
+            hearing_id: hearing,
+            bet_id: BET,
+            turn_index: 0,
+            party: 'A',
+            started_at: '2026-11-21T18:07:20.000Z',
+            ended_at: '2026-11-21T18:07:30.000Z',
+            duration_ms: 10000,
+            transcript: 'It wobbled off the base!',
+            transcript_sha256: 'cd'.repeat(32),
+            stt: 'elevenlabs',
+          },
+        }),
+        ev('chain.BetAppealed', {
+          ...meta('2'.repeat(88)),
+          bet_id: BET,
+          appellant: PK.a,
+          original_outcome: 'PartyB',
+          appeal_resolve_deadline: 1795284800,
+          ts: 1795284440,
+        }),
+        ev('appeal.vote', { vote: votes[0] }),
+        ev('appeal.vote', { vote: votes[2] }),
+      ],
+      s,
+    );
+    expect(s.dropped).toBe(0);
+    const b = s.bets[BET]!;
+    expect(b.hearing?.open).toBeNull();
+    expect(b.hearing?.turns).toEqual([{ party: 'A', transcript: 'It wobbled off the base!' }]);
+    expect(b.appealed).toBe(true);
+    expect(b.votes.map((v) => [v.seat, v.counted_as])).toEqual([
+      [0, 'B_WINS'],
+      [2, 'ABSTAIN'],
+    ]);
+    let html = renderToString(<BetCard bet={b} now={0} />).replace(/<!-- -->/g, '');
+    expect(html).toContain('APPEAL · THREE-MODEL PANEL');
+    expect(html).toContain(
+      '<li class="vote cast"><span class="who">Claude</span><span class="what">Jake · 90%</span>',
+    );
+    expect(html).toContain(
+      '<li class="vote pending"><span class="who">Seat 2</span><span class="what">deliberating…</span>',
+    );
+    expect(html).toContain(
+      '<li class="vote abstain"><span class="who">Gemini</span><span class="what">abstains</span>',
+    );
+    s = run(
+      [
+        ev('appeal.vote', { vote: votes[1] }),
+        ev('appeal.result', {
+          result: {
+            schema_version: 1,
+            appeal_id: appeal,
+            bet_id: BET,
+            appellant: 'A',
+            original_outcome: 'B_WINS',
+            original_ruling_hash: 'ab'.repeat(32),
+            votes,
+            tally: { A_WINS: 1, B_WINS: 1, ABSTAIN: 1 },
+            final_outcome: 'B_WINS',
+            decided_by: 'upheld_no_majority',
+            flipped: false,
+            evidence_hash: '6d'.repeat(32),
+            frame_hashes: [],
+            terms_hash: envelope.terms_hash,
+            created_at: '2026-11-21T18:08:10.000Z',
+          },
+          ruling_hash: 'ef'.repeat(32),
+        }),
+      ],
+      s,
+    );
+    expect(s.dropped).toBe(0);
+    html = renderToString(<BetCard bet={s.bets[BET]!} now={0} />).replace(/<!-- -->/g, '');
+    expect(html).toContain('Ruling stands · Jake wins');
+    expect(html).toContain('(1-1, 1 abstain)');
+    expect(html).toContain('<span class="who">GPT</span><span class="what">Logan · 70%</span>');
+  });
+
+  it('a hearing in progress (contested REDO) shows whose turn it is and the clock', () => {
+    const b = {
+      ...emptyBet(BET),
+      state: 'HEARING',
+      names: { A: 'Logan', B: 'Jake' },
+      hearing: {
+        hearing_id: '00000000-0000-4000-8000-0000000000e1',
+        open: { party: 'B' as const, closes_at: '2026-11-21T18:07:30.000Z' },
+        turns: [{ party: 'A' as const, transcript: 'It wobbled!' }],
+      },
+    };
+    const html = renderToString(
+      <BetCard bet={b} now={Date.parse('2026-11-21T18:07:24.000Z')} />,
+    ).replace(/<!-- -->/g, '');
+    expect(html).toContain('HEARING · EACH SIDE ARGUES');
+    expect(html).toContain('Jake argues · <span class="countdown">0:06</span>');
+    expect(html).toContain('<b>Logan:</b> “It wobbled!”');
+  });
+
   it('captions: the judge (partial, then final) and the players (party.line)', () => {
     seq = 0;
     const u = '00000000-0000-4000-8000-0000000000c1';
