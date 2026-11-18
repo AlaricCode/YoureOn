@@ -130,6 +130,13 @@ export const CHECKS = [
     hint: 'Tap "Capture still + embed" twice: stage timings, then the same-person cosine (want > 0.30).',
   },
   {
+    id: 'faceid-gate',
+    label: 'Face ID prompt (the wallet gate)',
+    required: false,
+    kind: 'auto',
+    hint: 'Runs the GG / lock authorization prompt (Face ID, then passcode). Signs nothing.',
+  },
+  {
     id: 'jcs-vectors',
     label: 'JCS + terms hash vectors on Hermes',
     required: false,

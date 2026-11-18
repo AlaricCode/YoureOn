@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { camRetryAction } from '../attempt/retry';
+import { hasCameraLens } from '../device/camera';
 import {
   canAppeal,
   canConcede,
@@ -161,6 +162,8 @@ export function JudgeCamScreen({
   const [phase, setPhase] = useState<CamPhase>('standby');
   const [count, setCount] = useState(3);
   const [ready, setReady] = useState(false);
+  /** The camera failed to start, or it started with no lens (the simulator). */
+  const [noCamera, setNoCamera] = useState(false);
   const [failed, setFailed] = useState(false);
   const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -263,8 +266,10 @@ export function JudgeCamScreen({
     };
   }, [phase, stop, ready, arm]);
 
-  const bubble =
-    phase === 'standby'
+  // No capture device (the simulator) or one that failed to start: say so on the stage.
+  const bubble = noCamera
+    ? t(COPY.judgeCam.noCamera)
+    : phase === 'standby'
       ? t(COPY.judgeCam.standingBy)
       : phase === 'countdown'
         ? count === 0
@@ -296,9 +301,13 @@ export function JudgeCamScreen({
               mode="video"
               mute
               videoQuality="720p"
-              onCameraReady={() => setReady(true)}
+              onCameraReady={() => {
+                setReady(true);
+                void hasCameraLens(cam.current).then((ok) => setNoCamera(!ok));
+              }}
+              onMountError={() => setNoCamera(true)}
             />
-            <StageBubble prompt={bubble} recording={phase === 'recording'} />
+            <StageBubble prompt={bubble} recording={phase === 'recording' && !noCamera} />
             {phase === 'recording' ? (
               <View style={styles.shutterSlot}>
                 <ShutterButton active label={t(COPY.judgeCam.stop)} onPress={() => void stop()} />

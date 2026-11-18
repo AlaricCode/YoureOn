@@ -1,0 +1,14 @@
+# Phone A: B's decline arrives as bet.state CANCELLED -> "Declined. Nothing moved." -> home.
+appId: dev.youreon.app
+name: a-sees-decline
+---
+- extendedWaitUntil:
+    visible: Declined. Nothing moved.
+    timeout: 20000
+- takeScreenshot: 14-a-declined
+- tapOn: Back home
+- extendedWaitUntil:
+    visible:
+      id: balance-header
+    timeout: 15000
+- takeScreenshot: 15-a-home

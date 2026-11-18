@@ -1,7 +1,15 @@
 // Home (rooms: TASKS D1-M6, API-CONTRACT §2.3; balance: D3-M2, §2.14), bet history and the
 // profile page (D5-M2).
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import { signedUsd } from '../bets/view';
 import type { HistoryItem, PreviewUser } from '../preview/data';
@@ -12,6 +20,7 @@ import {
   Chip,
   DataText,
   ListRow,
+  OperatorHold,
   Page,
   ReconnectBanner,
   Screen,
@@ -39,6 +48,8 @@ export function HomeScreen({
   onHistory,
   onProfile,
   onTitleLongPress,
+  note,
+  creating = false,
 }: {
   name: string;
   balanceCents: number;
@@ -59,6 +70,10 @@ export function HomeScreen({
   onProfile: () => void;
   /** Hidden operator gesture (diagnostics / preview). */
   onTitleLongPress?: (() => void) | undefined;
+  /** Why the last "New room" or "Challenge" failed (it clears itself), or null. */
+  note?: string | null | undefined;
+  /** "New room" is in flight. */
+  creating?: boolean | undefined;
 }) {
   const [code, setCode] = useState('');
   const [alert, setAlert] = useState<string | null>(null);
@@ -76,14 +91,9 @@ export function HomeScreen({
     <Screen>
       <ReconnectBanner visible={offline} />
       <View style={styles.head}>
-        <Pressable
-          style={styles.flex}
-          onLongPress={onTitleLongPress}
-          delayLongPress={1200}
-          accessible={false}
-        >
+        <OperatorHold style={styles.flex} onHold={onTitleLongPress}>
           <BalanceHeader cents={balanceCents} pending={pending} inBetsUsd={inBetsUsd} />
-        </Pressable>
+        </OperatorHold>
         <Pressable
           testID="home-profile"
           accessibilityRole="button"
@@ -99,84 +109,107 @@ export function HomeScreen({
           </Label>
         ) : null}
       </View>
-      <Page>
-        {room ? (
-          <>
-            <View style={styles.roomHead}>
-              <Label variant="small">{t(COPY.home.room)}</Label>
-              <Chip label={room.code} />
-            </View>
-            <ScrollView style={styles.flex} contentContainerStyle={styles.list}>
-              {members.length === 0 ? (
-                <StatusHero mark="ring" title={t(COPY.home.empty)} />
-              ) : (
-                members.map((m) => (
-                  <View key={m.user_id} style={styles.member}>
-                    <Avatar name={m.display_name} online={m.online} />
-                    <DataText style={styles.flex} lines={1}>
-                      {m.display_name}
-                    </DataText>
-                    {m.online ? (
-                      <View style={styles.challenge}>
-                        <QuietButton
-                          testID={`challenge-${m.user_id}`}
-                          label={t(COPY.home.challenge)}
-                          onPress={() => onChallenge(m)}
-                        />
-                      </View>
-                    ) : (
-                      <Chip label={t(COPY.home.offline)} />
-                    )}
-                  </View>
-                ))
-              )}
-            </ScrollView>
-            {onScan ? (
-              <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
-            ) : null}
-            <View style={styles.row}>
-              <View style={styles.flex}>
-                <QuietButton label={t(COPY.home.history)} onPress={onHistory} />
+      {/* The room code field sits at the bottom: keep it and "Join room" above the keyboard. */}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Page>
+          {room ? (
+            <>
+              <View style={styles.roomHead}>
+                <Label variant="small">{t(COPY.home.room)}</Label>
+                <Chip testID="room-code-chip" label={room.code} />
               </View>
-              <View style={styles.flex}>
-                <QuietButton label={t(COPY.home.leave)} onPress={onLeave} />
+              <ScrollView style={styles.flex} contentContainerStyle={styles.list}>
+                {members.length === 0 ? (
+                  <StatusHero mark="ring" title={t(COPY.home.empty)} />
+                ) : (
+                  members.map((m) => (
+                    <View key={m.user_id} style={styles.member}>
+                      <Avatar name={m.display_name} online={m.online} />
+                      <DataText style={styles.flex} lines={1}>
+                        {m.display_name}
+                      </DataText>
+                      {m.online ? (
+                        <View style={styles.challenge}>
+                          <QuietButton
+                            testID={`challenge-${m.user_id}`}
+                            label={t(COPY.home.challenge)}
+                            onPress={() => onChallenge(m)}
+                          />
+                        </View>
+                      ) : (
+                        <Chip label={t(COPY.home.offline)} />
+                      )}
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+              <AlertLine testID="home-alert" message={note ?? null} />
+              {onScan ? (
+                <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
+              ) : null}
+              <View style={styles.row}>
+                <View style={styles.flex}>
+                  <QuietButton
+                    testID="home-history"
+                    label={t(COPY.home.history)}
+                    onPress={onHistory}
+                  />
+                </View>
+                <View style={styles.flex}>
+                  <QuietButton testID="room-leave" label={t(COPY.home.leave)} onPress={onLeave} />
+                </View>
               </View>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={styles.flex} />
-            <TextField
-              testID="room-code"
-              label={t(COPY.home.roomCode)}
-              placeholder="UBC26X"
-              value={code}
-              onChangeText={(v) => {
-                setCode(v);
-                setAlert(null);
-              }}
-              maxLength={12}
-              onSubmitEditing={() => void join()}
-            />
-            <AlertLine message={alert} />
-            <PrimaryButton
-              testID="room-join"
-              label={t(COPY.home.join)}
-              disabled={code.trim().length < 4}
-              busy={busy}
-              onPress={() => void join()}
-            />
-            <View style={styles.row}>
-              <View style={styles.flex}>
-                <QuietButton label={t(COPY.home.create)} onPress={onCreate} />
+            </>
+          ) : (
+            <>
+              {/* Tapping the empty space puts the keyboard away. */}
+              <Pressable style={styles.flex} onPress={Keyboard.dismiss} accessible={false} />
+              <TextField
+                testID="room-code"
+                label={t(COPY.home.roomCode)}
+                placeholder="UBC26X"
+                value={code}
+                onChangeText={(v) => {
+                  setCode(v);
+                  setAlert(null);
+                }}
+                maxLength={12}
+                autoCapitalize="characters"
+                textContentType="none"
+                onSubmitEditing={() => void join()}
+              />
+              <AlertLine testID="home-alert" message={alert ?? note ?? null} />
+              <PrimaryButton
+                testID="room-join"
+                label={t(COPY.home.join)}
+                disabled={code.trim().length < 4}
+                busy={busy}
+                onPress={() => void join()}
+              />
+              <View style={styles.row}>
+                <View style={styles.flex}>
+                  <QuietButton
+                    testID="room-create"
+                    label={t(COPY.home.create)}
+                    busy={creating}
+                    onPress={onCreate}
+                  />
+                </View>
+                <View style={styles.flex}>
+                  <QuietButton
+                    testID="home-history"
+                    label={t(COPY.home.history)}
+                    onPress={onHistory}
+                  />
+                </View>
               </View>
-              <View style={styles.flex}>
-                <QuietButton label={t(COPY.home.history)} onPress={onHistory} />
-              </View>
-            </View>
-          </>
-        )}
-      </Page>
+            </>
+          )}
+        </Page>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
@@ -184,9 +217,14 @@ export function HomeScreen({
 export function HistoryScreen({
   items,
   onBack,
+  status = 'ready',
+  onRetry,
 }: {
   items: readonly HistoryItem[];
   onBack: () => void;
+  /** The real app loads the list (GET /v1/me/bets); the preview passes it ready. */
+  status?: 'loading' | 'ready' | 'failed';
+  onRetry?: () => void;
 }) {
   const result = {
     won: t(COPY.history.won),
@@ -197,7 +235,15 @@ export function HistoryScreen({
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.history.title)} />
       <Page>
-        {items.length === 0 ? (
+        {status === 'loading' ? (
+          <StatusHero mark="ring" title={t(COPY.app.loading)} />
+        ) : status === 'failed' ? (
+          <>
+            <StatusHero mark="cross" title={t(COPY.app.offline)} />
+            <View style={styles.flex} />
+            <PrimaryButton testID="history-retry" label={t(COPY.app.failed)} onPress={onRetry} />
+          </>
+        ) : items.length === 0 ? (
           <>
             <StatusHero mark="ring" title={t(COPY.history.empty)} />
             <View style={styles.flex} />
@@ -232,7 +278,8 @@ export function ProfileScreen({
   name: string;
   faceOn: boolean;
   onBack: () => void;
-  onFace: () => void;
+  /** Face enrollment / settings; omitted while the app has none: the row is then plain info. */
+  onFace?: (() => void) | undefined;
   onHistory: () => void;
   onJudgeCam: () => void;
   onDemo: () => void;
@@ -240,7 +287,8 @@ export function ProfileScreen({
   return (
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.profile.title)} />
-      <Page>
+      {/* Scrolls: in landscape (the judge cam on its tripod) the last rows were cut off. */}
+      <ScrollView style={styles.flex} contentContainerStyle={styles.profileScroll}>
         <View style={styles.profileHead}>
           <Avatar name={name} size={72} accent />
           <DataText variant="title">{name}</DataText>
@@ -256,10 +304,14 @@ export function ProfileScreen({
           <ListRow title={t(COPY.profile.history)} onPress={onHistory} />
         </Section>
         <Section label={t(COPY.profile.demo)}>
-          <ListRow title={t(COPY.profile.judgeCam)} onPress={onJudgeCam} />
-          <ListRow title={t(COPY.profile.demo)} onPress={onDemo} />
+          <ListRow
+            testID="profile-judge-cam"
+            title={t(COPY.profile.judgeCam)}
+            onPress={onJudgeCam}
+          />
+          <ListRow testID="profile-demo" title={t(COPY.profile.demo)} onPress={onDemo} />
         </Section>
-      </Page>
+      </ScrollView>
     </Screen>
   );
 }
@@ -291,4 +343,5 @@ const styles = StyleSheet.create({
   challenge: { width: 120 },
   row: { flexDirection: 'row', gap: space.x1, marginTop: space.x1 },
   profileHead: { alignItems: 'center', gap: space.x2, marginTop: space.x2 },
+  profileScroll: { paddingHorizontal: space.page, paddingBottom: space.x4 },
 });

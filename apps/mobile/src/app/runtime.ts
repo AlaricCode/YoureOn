@@ -46,6 +46,17 @@ export interface Runtime {
   uuid(): string;
 }
 
+/** Runs every listener; one that throws is logged and the rest still run. */
+function notifyAll<T>(listeners: Iterable<(v: T) => void>, v: T): void {
+  for (const l of listeners) {
+    try {
+      l(v);
+    } catch (err) {
+      console.warn('[yo] listener failed', err instanceof Error ? err.message : String(err));
+    }
+  }
+}
+
 const rnFetch: FetchLike = async (url, init) => {
   // JSON goes as its string (the signed bytes); multipart goes as an ArrayBuffer of the exact
   // signed bytes (RN's fetch -> XHR sends ArrayBuffer bodies byte-for-byte).
@@ -123,16 +134,12 @@ async function build(): Promise<Runtime> {
         // The server replays from after_seq; a REST pass catches anything a replay missed.
         void hub.resyncAll();
       }
-      for (const l of controlListeners) l(f);
+      notifyAll(controlListeners, f);
     },
-    onStatus: (s) => {
-      for (const l of statusListeners) l(s);
-    },
+    onStatus: (s) => notifyAll(statusListeners, s),
     // login() resolving null (device unknown: DB reseeded) also signs out, back to signup.
     onUnauthorized: async () => (await mgr.login().catch(() => null)) !== null,
-    onForbidden: (d) => {
-      for (const l of forbiddenListeners) l(d);
-    },
+    onForbidden: (d) => notifyAll(forbiddenListeners, d),
     log: (m, x) => console.warn(`[yo] ${m}`, x ?? ''),
   });
   // A user switch (demo claim from Profile) or sign-out: the old user's subs and bets go, so the

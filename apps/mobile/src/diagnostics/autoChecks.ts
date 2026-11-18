@@ -1,6 +1,9 @@
 // Native bodies for the 'auto' and 'confirm' diagnostics checks. Each one imports its native
-// module with a dynamic import(), so a module missing from the build fails only its own row
-// instead of crashing the whole screen at startup. App code only (never imported by tests).
+// module with a dynamic import() through importSafely, so a module missing from the build (or one
+// that throws while it initialises) fails only its own row instead of crashing the app: a bare
+// import() would hand that error to Metro's fatal handler (see app/importSafely). App code only
+// (never imported by tests).
+import { importSafely } from '../app/importSafely';
 import type { CheckId } from './catalog';
 import type { CheckBody } from './runner';
 
@@ -10,7 +13,7 @@ const fmt = (ms: number) => `${ms.toFixed(1)} ms`;
 export const DIAGNOSTICS_SECURE_STORE_KEY = 'youreon.diagnostics.probe.v1';
 
 const tfliteWarmup: CheckBody = async () => {
-  const { loadFaceModel, warmUpFaceModel } = await import('../face/loadModel');
+  const { loadFaceModel, warmUpFaceModel } = await importSafely(() => import('../face/loadModel'));
   const { model, loadMs } = await loadFaceModel();
   const warm = await warmUpFaceModel(model);
   // A second run shows the warm cost (what a real embed pays).
@@ -19,7 +22,7 @@ const tfliteWarmup: CheckBody = async () => {
 };
 
 const localAuthHardware: CheckBody = async () => {
-  const LA = await import('expo-local-authentication');
+  const LA = await importSafely(() => import('expo-local-authentication'));
   const hasHardware = await LA.hasHardwareAsync();
   const enrolled = await LA.isEnrolledAsync();
   const types = await LA.supportedAuthenticationTypesAsync();
@@ -30,7 +33,7 @@ const localAuthHardware: CheckBody = async () => {
 };
 
 const secureStoreRw: CheckBody = async () => {
-  const SecureStore = await import('expo-secure-store');
+  const SecureStore = await importSafely(() => import('expo-secure-store'));
   const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
   const value = `probe-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   await SecureStore.setItemAsync(DIAGNOSTICS_SECURE_STORE_KEY, value, options);
@@ -43,7 +46,7 @@ const secureStoreRw: CheckBody = async () => {
 };
 
 const haptics: CheckBody = async () => {
-  const Haptics = await import('expo-haptics');
+  const Haptics = await importSafely(() => import('expo-haptics'));
   await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
   await new Promise((r) => setTimeout(r, 250));
   await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -51,15 +54,15 @@ const haptics: CheckBody = async () => {
 };
 
 const micLivekit: CheckBody = async () => {
-  const { requestRecordingPermissionsAsync } = await import('expo-audio');
+  const { requestRecordingPermissionsAsync } = await importSafely(() => import('expo-audio'));
   const perm = await requestRecordingPermissionsAsync();
-  const lk = await import('@livekit/react-native');
+  const lk = await importSafely(() => import('@livekit/react-native'));
   if (typeof lk.registerGlobals !== 'function') throw new Error('registerGlobals missing');
   if (typeof lk.AudioSession?.configureAudio !== 'function')
     throw new Error('AudioSession.configureAudio missing');
   // Importing the ElevenLabs RN entry calls LiveKit's registerGlobals(), which installs the WebRTC
   // globals livekit-client needs. That fails here if @livekit/react-native-webrtc is not linked.
-  const el = await import('@elevenlabs/react-native');
+  const el = await importSafely(() => import('@elevenlabs/react-native'));
   if (typeof el.ConversationProvider !== 'function')
     throw new Error('ElevenLabs ConversationProvider missing');
   const hasPeerConnection =
@@ -71,8 +74,8 @@ const micLivekit: CheckBody = async () => {
 };
 
 const reanimatedWorklets: CheckBody = async () => {
-  const Reanimated = await import('react-native-reanimated');
-  const { runOnUIAsync } = await import('react-native-worklets');
+  const Reanimated = await importSafely(() => import('react-native-reanimated'));
+  const { runOnUIAsync } = await importSafely(() => import('react-native-worklets'));
   const sv = Reanimated.makeMutable(0);
   const result = await runOnUIAsync((a: number) => {
     'worklet';
@@ -84,13 +87,13 @@ const reanimatedWorklets: CheckBody = async () => {
 };
 
 const gestureHandler: CheckBody = async () => {
-  const GH = await import('react-native-gesture-handler');
+  const GH = await importSafely(() => import('react-native-gesture-handler'));
   if (!GH.GestureHandlerRootView) throw new Error('GestureHandlerRootView missing');
   return 'react-native-gesture-handler imported';
 };
 
 const notifications: CheckBody = async () => {
-  const N = await import('expo-notifications');
+  const N = await importSafely(() => import('expo-notifications'));
   const p = await N.getPermissionsAsync();
   return `permission=${p.status} (local notifications are the P0 path, FINDINGS §3.14)`;
 };
@@ -100,8 +103,8 @@ const notifications: CheckBody = async () => {
 // WALLET_EXISTS. So it reads the pubkey item, probes the CSPRNG without storing anything, and
 // pre-warms noble.
 const wallet: CheckBody = async () => {
-  const { createWallet, prewarmSigner } = await import('../wallet');
-  const { expoWalletPlatform } = await import('../wallet/expoPlatform');
+  const { createWallet, prewarmSigner } = await importSafely(() => import('../wallet'));
+  const { expoWalletPlatform } = await importSafely(() => import('../wallet/expoPlatform'));
   const w = createWallet(expoWalletPlatform);
   const t0 = performance.now();
   const publicKey = await w.getPublicKey();
@@ -118,8 +121,23 @@ const wallet: CheckBody = async () => {
   return `${key}; getRandomValues OK in ${fmt(t1 - t0)}; prewarm ${fmt(t2 - t1)}`;
 };
 
+// The exact prompt sequence GG and the lock hold run (wallet/authMethod, SCHEMAS O8), without the
+// seed read or a signature: shows on the demo phone, before going on stage, that Face ID (or the
+// passcode) works for this app and which method a bet would record.
+const faceIdGate: CheckBody = async () => {
+  const LA = await importSafely(() => import('expo-local-authentication'));
+  const { runAuthorizationGate } = await importSafely(() => import('../wallet/authMethod'));
+  const r = await runAuthorizationGate(
+    { authenticateAsync: LA.authenticateAsync },
+    'Test Face ID (nothing is signed)',
+  );
+  if (!r.ok)
+    throw new Error(`${r.error} at the ${r.stage} prompt${r.detail ? `: ${r.detail}` : ''}`);
+  return `${r.method} after ${r.prompts} prompt${r.prompts === 1 ? '' : 's'}; nothing signed`;
+};
+
 const jcsVectors: CheckBody = async () => {
-  const { jcsVectorsCheck } = await import('./jcsVectors');
+  const { jcsVectorsCheck } = await importSafely(() => import('./jcsVectors'));
   return jcsVectorsCheck();
 };
 
@@ -133,5 +151,6 @@ export const AUTO_CHECKS: Partial<Record<CheckId, CheckBody>> = {
   'gesture-handler': gestureHandler,
   notifications,
   wallet,
+  'faceid-gate': faceIdGate,
   'jcs-vectors': jcsVectors,
 };

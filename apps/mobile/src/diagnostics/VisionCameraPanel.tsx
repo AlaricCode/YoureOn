@@ -4,7 +4,7 @@
 // detector+2.1.0.patch), and the full face-embedding pipeline with stage timings. Loaded lazily
 // by the diagnostics screen, so a missing native module fails this panel only.
 import { File } from 'expo-file-system';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, StyleSheet, Text, View } from 'react-native';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 import {
@@ -15,6 +15,7 @@ import {
 import { cosine } from '../enroll/flow';
 import { getNativeEmbedder } from '../face/native';
 import { alignTransform, pickProbeFace } from '../face/pipeline';
+import { useVisionCameraPresence } from '../device/visionCamera';
 import type { PanelProps } from './panelTypes';
 import { describeError, runCheck } from './runner';
 
@@ -25,6 +26,15 @@ export function toFileUrl(path: string): string {
 
 export default function VisionCameraPanel({ onResult }: PanelProps) {
   const permission = useCameraPermission();
+  const presence = useVisionCameraPresence('front');
+  useEffect(() => {
+    if (presence !== 'none') return;
+    onResult('vision-camera-preview', {
+      status: 'fail',
+      detail: 'no camera device on this phone',
+      at: new Date().toISOString(),
+    });
+  }, [presence, onResult]);
   const photoOutput = usePhotoOutput({ containerFormat: 'jpeg', quality: 0.9 });
   const outputs = useMemo(() => [photoOutput], [photoOutput]);
   const previewReported = useRef(false);
@@ -169,6 +179,17 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
             });
           }}
         />
+      </View>
+    );
+  }
+
+  // No camera (the simulator): <Camera> would throw on the missing accelerometer.
+  if (presence !== 'present') {
+    return (
+      <View style={styles.panel}>
+        <Text style={styles.note}>
+          {presence === 'none' ? 'No camera device on this phone' : 'Looking for the camera…'}
+        </Text>
       </View>
     );
   }
