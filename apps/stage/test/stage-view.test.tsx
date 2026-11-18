@@ -302,6 +302,146 @@ describe('bet card state', () => {
     expect(s.bets[BET]!.state).toBe('ATTEMPT');
   });
 
+  // The stage first sees a bet mid-flight (page reloaded / opened during the pitch): a live
+  // event lands, then subscribe(id, 0) replays seq 1..N-1 and the REST snapshot may land after
+  // newer live events. The card must end where an in-order fold ends, never regress.
+  const betState = (state: string, prev: string | null) =>
+    ev('bet.state', {
+      state,
+      prev,
+      onchain_status: null,
+      chain_ack: 'none',
+      pending_tx: null,
+      reason: null,
+    });
+  function pitch(): unknown[] {
+    const base = fullBet() as Array<{ type: string; payload: unknown }>;
+    seq = 5; // keep the first five (seq 1-5), number the rest after them
+    const redo = { ...ruling, outcome: 'REDO', redo_reason: 'unclear' };
+    return [
+      ...base.slice(0, 5), // proposed, auth A, auth B, lock submitted, BetCreated
+      betState('LOCKED', 'AWAITING_LOCK'),
+      ev('attempt.started', {
+        attempt_no: 1,
+        performer: 'A',
+        max_ms: 30000,
+        recorder_device_id: '00000000-0000-4000-8000-0000000000d1',
+        go_at: '2026-11-21T18:05:40.000Z',
+      }),
+      ev('ruling.issued', { ruling: redo, ruling_hash: 'cd'.repeat(32) }),
+      ev('attempt.started', {
+        attempt_no: 2,
+        performer: 'A',
+        max_ms: 30000,
+        recorder_device_id: '00000000-0000-4000-8000-0000000000d1',
+        go_at: '2026-11-21T18:05:50.000Z',
+      }),
+      ev('ruling.issued', { ruling, ruling_hash: 'ab'.repeat(32) }),
+      ev(base[6]!.type, base[6]!.payload), // BetResolved
+      betState('RULED', 'JUDGING'),
+    ];
+  }
+  const card = (s: TickerState) => ({ ...s.bets[BET]!, updated_at: 0 });
+
+  it('a seq-0 replay after a newer live event does not regress the card', () => {
+    const frames = pitch();
+    const inOrder = run(frames);
+    expect(inOrder.dropped).toBe(0);
+    expect(inOrder.bets[BET]).toMatchObject({
+      state: 'RULED',
+      auth_count: 2,
+      attempt_no: 2,
+      ruling: { outcome: 'B_WINS', ruling_hash: 'ab'.repeat(32) },
+    });
+
+    // live: the last event first, then the replay of everything before it
+    const live = run([frames.at(-1), ...frames.slice(0, -1)]);
+    expect(live.dropped).toBe(0);
+    expect(card(live)).toEqual(card(inOrder));
+    expect(live.bets[BET]!.state).toBe('RULED');
+
+    // the reported case: live bet.state LOCKED (seq 6), then replayed seq 1-5: stays LOCKED
+    let s = run([frames[5]]);
+    expect(s.bets[BET]!.state).toBe('LOCKED');
+    s = run(frames.slice(0, 5), s);
+    expect(s.bets[BET]).toMatchObject({ state: 'LOCKED', auth_count: 2 });
+    expect(s.bets[BET]!.auth.B?.method).toBe('passcode_hold');
+
+    // any interleaving converges on the in-order card; the ticker keeps every event once
+    const shuffled = [...frames].reverse();
+    const r = run([...shuffled, ...frames]);
+    expect(card(r)).toEqual(card(inOrder));
+    expect(r.events).toHaveLength(frames.length);
+  });
+
+  it('a REST snapshot older than the live events does not roll the state back', () => {
+    const frames = pitch();
+    const snapshot = (last_seq: number, state: BetSnapshot['state']): BetSnapshot => ({
+      bet_id: BET,
+      room_id: null,
+      state,
+      prev_state: null,
+      onchain_status: null,
+      chain_ack: 'stream',
+      pending_tx: null,
+      party_a: {
+        user_id: '00000000-0000-4000-8000-00000000000a',
+        pubkey: PK.a as never,
+        display_name: 'Logan',
+        avatar_url: null,
+      },
+      party_b: {
+        user_id: '00000000-0000-4000-8000-00000000000b',
+        pubkey: PK.b as never,
+        display_name: 'Jake',
+        avatar_url: null,
+      },
+      my_party: null,
+      envelope: null,
+      draft: null,
+      authorizations: { A: null, B: null },
+      deadlines: {
+        accept_deadline: null,
+        resolve_deadline: null,
+        appeal_deadline: null,
+        appeal_resolve_deadline: null,
+      },
+      attempt_no: null,
+      redo_count: 0,
+      latest_ruling: null,
+      appeal: null,
+      payout: null,
+      signatures: { lock: SIG_LOCK as never },
+      end_reason: null,
+      last_seq,
+    });
+    // fetched at seq 3 (AWAITING_AUTHORIZATIONS), lands after the live bet reached RULED
+    let s = run(frames);
+    s = applyFrame(s, {
+      kind: 'snapshot',
+      bet: snapshot(3, 'AWAITING_AUTHORIZATIONS'),
+      receivedAt: 2,
+    });
+    expect(s.bets[BET]).toMatchObject({ state: 'RULED', auth_count: 2, attempt_no: 2 });
+    expect(s.bets[BET]!.ruling?.ruling_hash).toBe('ab'.repeat(32));
+
+    // snapshot first, then the replay of the seqs it already covers: its state holds until a
+    // newer event moves it
+    s = applyFrame(initialTicker, {
+      kind: 'snapshot',
+      bet: snapshot(6, 'LOCKED'),
+      receivedAt: 1,
+    });
+    s = run(frames.slice(0, 5), s);
+    expect(s.bets[BET]).toMatchObject({ state: 'LOCKED', names: { A: 'Logan', B: 'Jake' } });
+    s = run(frames.slice(5), s);
+    expect(s.bets[BET]!.state).toBe('RULED');
+
+    // a fresh snapshot (last_seq >= everything seen) still lays on top
+    s = applyFrame(s, { kind: 'snapshot', bet: snapshot(99, 'FINALIZED'), receivedAt: 3 });
+    expect(s.bets[BET]!.state).toBe('FINALIZED');
+  });
+
   it('tx.failed on the lock shows the error; market.tick does not steal the focus', () => {
     seq = 0;
     let s = run([

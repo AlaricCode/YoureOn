@@ -8,6 +8,12 @@
 // its cited frame, the appeal window, the payout) and keeps the latest Gemini `stage.market`
 // snapshot plus a short index-price history for the odds widget. A REST BetSnapshot
 // (GET /v1/bets/:id) seeds a view on cold start; later events win over it.
+//
+// The card is always the fold of the bet's events in seq order, with the latest REST snapshot
+// slotted in at its last_seq. Events normally arrive in order and fold incrementally; an older
+// one (the seq-0 replay that follows a live event when the stage first sees a bet mid-flight,
+// or a snapshot fetched before newer live events) triggers a rebuild from the retained
+// per-bet history instead of being folded on top, so the card never regresses.
 import { WsServerControlFrame, type BetSnapshot } from '@youre-on/shared/api';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
@@ -15,6 +21,8 @@ import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
 
 export const MAX_EVENTS = 200;
 export const MAX_MARKET_POINTS = 150;
+/** Per-bet events kept for rebuilding the card (market.tick is not kept). */
+export const MAX_BET_HISTORY = 1000;
 
 export type ConnStatus = 'idle' | 'authorizing' | 'connecting' | 'open' | 'closed';
 
@@ -99,6 +107,10 @@ export interface TickerState {
   market: GeminiMarketSnapshot | null;
   marketHistory: Array<{ t: number; price: number }>;
   bets: Record<string, BetView>;
+  /** Each bet's card-relevant events, sorted by seq (the source a rebuild folds). */
+  history: Record<string, RealtimeEvent[]>;
+  /** Latest GET /v1/bets/:id per bet (slotted into a rebuild at its last_seq). */
+  snapshots: Record<string, BetSnapshot>;
   /** The bet with the most recent activity: what the big card shows. */
   focusBetId: string | null;
   dropped: number;
@@ -117,6 +129,8 @@ export const initialTicker: TickerState = {
   market: null,
   marketHistory: [],
   bets: {},
+  history: {},
+  snapshots: {},
   focusBetId: null,
   dropped: 0,
   errors: [],
@@ -376,6 +390,32 @@ export function foldSnapshot(b: BetView, snap: BetSnapshot, at: number): BetView
   return v;
 }
 
+/** Highest seq already reflected in the bet's card (events or the snapshot's last_seq). */
+function foldedSeq(s: TickerState, betId: string): number {
+  const h = s.history[betId];
+  return Math.max(h?.length ? h[h.length - 1]!.seq : 0, s.snapshots[betId]?.last_seq ?? 0);
+}
+
+/** The card from scratch: events in seq order, the snapshot slotted in after its last_seq. */
+export function rebuildBet(
+  betId: string,
+  history: readonly RealtimeEvent[],
+  snap: BetSnapshot | undefined,
+  at: number,
+): BetView {
+  let v = emptyBet(betId, at);
+  let seeded = !snap;
+  for (const e of history) {
+    if (!seeded && e.seq > snap!.last_seq) {
+      v = foldSnapshot(v, snap!, at);
+      seeded = true;
+    }
+    v = foldEvent(v, e, at);
+  }
+  if (!seeded) v = foldSnapshot(v, snap!, at);
+  return v;
+}
+
 export type TickerAction =
   | { kind: 'status'; status: ConnStatus; closeCode?: number | null }
   | { kind: 'frame'; raw: unknown; receivedAt: number }
@@ -403,10 +443,19 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   if (a.kind === 'market') return withMarket(s, a.snapshot, a.receivedAt);
   if (a.kind === 'snapshot') {
     const id = a.bet.bet_id;
-    const view = foldSnapshot(s.bets[id] ?? emptyBet(id), a.bet, a.receivedAt);
+    const prev = s.bets[id];
+    // A snapshot older than what the card already shows is slotted in by seq, not laid on top.
+    const view =
+      prev && a.bet.last_seq < foldedSeq(s, id)
+        ? {
+            ...rebuildBet(id, s.history[id] ?? [], a.bet, a.receivedAt),
+            updated_at: Math.max(prev.updated_at, a.receivedAt),
+          }
+        : foldSnapshot(prev ?? emptyBet(id), a.bet, a.receivedAt);
     return {
       ...s,
       bets: { ...s.bets, [id]: view },
+      snapshots: { ...s.snapshots, [id]: a.bet },
       focusBetId: s.focusBetId ?? id,
     };
   }
@@ -454,23 +503,40 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
   const parsed = parseRealtimeEvent(raw);
   if (!parsed.ok) return { ...s, dropped: s.dropped + 1 };
   const e = parsed.event;
-  if (s.events.some((x) => x.bet_id === e.bet_id && x.seq === e.seq)) return s;
+  const past = s.history[e.bet_id] ?? [];
+  if (
+    past.some((x) => x.seq === e.seq) ||
+    s.events.some((x) => x.bet_id === e.bet_id && x.seq === e.seq)
+  )
+    return s;
   const events = [...s.events, toTicker(e)]
     .sort((x, y) => (x.ts === y.ts ? x.seq - y.seq : x.ts < y.ts ? -1 : 1))
     .slice(-MAX_EVENTS);
   // market.tick is 1 Hz chatter: it doesn't steal the focus or touch the card.
-  const bets =
-    e.type === 'market.tick'
-      ? s.bets
-      : {
-          ...s.bets,
-          [e.bet_id]: foldEvent(s.bets[e.bet_id] ?? emptyBet(e.bet_id), e, a.receivedAt),
-        };
+  if (e.type === 'market.tick')
+    return {
+      ...s,
+      events,
+      focusBetId: s.focusBetId ?? e.bet_id,
+      lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
+    };
+  const inOrder = e.seq > foldedSeq(s, e.bet_id);
+  const hist = (inOrder ? [...past, e] : [...past, e].sort((x, y) => x.seq - y.seq)).slice(
+    -MAX_BET_HISTORY,
+  );
+  const prev = s.bets[e.bet_id];
+  const view = inOrder
+    ? foldEvent(prev ?? emptyBet(e.bet_id), e, a.receivedAt)
+    : {
+        ...rebuildBet(e.bet_id, hist, s.snapshots[e.bet_id], a.receivedAt),
+        updated_at: Math.max(prev?.updated_at ?? 0, a.receivedAt),
+      };
   return {
     ...s,
     events,
-    bets,
-    focusBetId: e.type === 'market.tick' ? (s.focusBetId ?? e.bet_id) : e.bet_id,
+    bets: { ...s.bets, [e.bet_id]: view },
+    history: { ...s.history, [e.bet_id]: hist },
+    focusBetId: e.bet_id,
     lastSeq: { ...s.lastSeq, [e.bet_id]: Math.max(s.lastSeq[e.bet_id] ?? 0, e.seq) },
   };
 }
