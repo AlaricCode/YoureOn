@@ -54,6 +54,7 @@ import { SimulationError } from '../src/chain/tx';
 import { HttpError } from '../src/errors';
 import type { Logger } from '../src/log';
 import { confirmTerms } from '../src/lock/terms';
+import { confirmAndLock } from '../src/voice/tools';
 import { realWorldReply } from '../src/markets/voice-tool';
 import { silentLogger } from '../src/log';
 import {
@@ -472,6 +473,98 @@ describeDb(
       expect(r.json!.error).toMatchObject({
         code: 'TERMS_HASH_MISMATCH',
         details: { reason: 'requoted' },
+      });
+      expect(r.json!.error.details.terms_hash).toBe((await betRow(betId)).terms_hash);
+    });
+
+    it('confirm when Gemini can no longer price the round: 409 with Gemini’s own reason (not QUOTE_STALE)', async () => {
+      const { A, betId } = await newBet();
+      const first = MarketTermsResponse.parse(
+        (await post(A, marketTermsPath(betId), { side: 'UP', amount_usd: '5' })).json,
+      );
+      // 02:38:30: inside T-120 s of the 02:40 contract, the next one not listed yet
+      clock.t = Date.parse('2026-11-18T02:38:30.000Z');
+      await markets.refresh();
+      const c = await confirmTerms(ctx.deps, betId);
+      expect(c).toMatchObject({ ok: false, fix: 'QUOTE_STALE', refusal: 'TOO_CLOSE_TO_EXPIRY' });
+      const r = await post(A, termsConfirmPath(betId), { terms_hash: first.terms_hash });
+      expect(r.status).toBe(409);
+      expect(r.json!.error).toMatchObject({
+        code: 'MARKET_UNAVAILABLE',
+        message: 'Too late for this round. The next one opens soon.',
+        details: { reason: 'TOO_CLOSE_TO_EXPIRY' },
+      });
+      // the old card stays the bet's terms: nothing was frozen
+      expect(await betRow(betId)).toMatchObject({
+        state: 'TERMS_PROPOSED',
+        terms_hash: first.terms_hash,
+      });
+      // the voice judge hears the same reason
+      expect(await confirmAndLock(ctx.deps, betId)).toMatchObject({
+        ok: false,
+        fix: 'QUOTE_STALE',
+        reason: 'TOO_CLOSE_TO_EXPIRY',
+      });
+    });
+
+    it('a re-quote after the rollover moves the bet to the next round, and says so (new line, new end)', async () => {
+      const { A, betId } = await newBet();
+      const first = MarketTermsResponse.parse(
+        (await post(A, marketTermsPath(betId), { side: 'DOWN', amount_usd: '2' })).json,
+      );
+      expect(first.quote.market.eventTicker).toBe(TICKER);
+      // 02:41:57: the relay rolled over to the 02:45 contract (line 64367.38)
+      g.routes.set(EVENTS_PATH, F.events_0241);
+      g.routes.set(eventPath('BTC05M2611180245'), F.event_0245_active);
+      clock.t = T0241;
+      await markets.refresh();
+      const voice = await confirmAndLock(ctx.deps, betId);
+      expect(voice).toMatchObject({ ok: false, fix: 'REQUOTED', new_round: true });
+      expect(voice.say).toMatch(
+        /^That round closed\. New round: line \$64,367\.38, ends 02:45 UTC\. \$[\d.]+ against \$[\d.]+\. Say yes to lock it\.$/,
+      );
+      const row = await betRow(betId);
+      const terms = Terms.parse(
+        JSON.parse(
+          (
+            await ctx.deps.db
+              .select()
+              .from(betTermsVersions)
+              .where(eq(betTermsVersions.terms_hash, row.terms_hash!))
+          )[0]!.canonical_json,
+        ),
+      );
+      expect(terms.market).toMatchObject({
+        eventTicker: 'BTC05M2611180245',
+        expiry: '2026-11-18T02:45:00.000Z',
+      });
+      // the typed route: same re-quote path, the message names the new round
+      clock.t += MARKET_CONFIRM_MAX_AGE_MS + 1_000;
+      await markets.refresh();
+      const r = await post(A, termsConfirmPath(betId), { terms_hash: row.terms_hash });
+      expect(r.status).toBe(409);
+      expect(r.json!.error).toMatchObject({
+        code: 'TERMS_HASH_MISMATCH',
+        message: "Gemini's odds moved. Review the new split.", // same round as the last re-quote
+        details: { reason: 'requoted', new_round: false },
+      });
+    });
+
+    it('the typed confirm names the new round when a re-quote crosses the rollover', async () => {
+      const { A, betId } = await newBet();
+      const first = MarketTermsResponse.parse(
+        (await post(A, marketTermsPath(betId), { side: 'UP', amount_usd: '1' })).json,
+      );
+      g.routes.set(EVENTS_PATH, F.events_0241);
+      g.routes.set(eventPath('BTC05M2611180245'), F.event_0245_active);
+      clock.t = T0241;
+      await markets.refresh();
+      const r = await post(A, termsConfirmPath(betId), { terms_hash: first.terms_hash });
+      expect(r.status).toBe(409);
+      expect(r.json!.error).toMatchObject({
+        code: 'TERMS_HASH_MISMATCH',
+        message: 'New round: line $64,367.38, ends 02:45 UTC. Review the new split.',
+        details: { reason: 'requoted', new_round: true },
       });
       expect(r.json!.error.details.terms_hash).toBe((await betRow(betId)).terms_hash);
     });

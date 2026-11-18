@@ -35,7 +35,8 @@ import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
 import { lifecycleOf } from '../lock/runtime';
-import { confirmTerms, persistEvaluation } from '../lock/terms';
+import { newRoundLine } from '@youre-on/shared/judge/market-terms';
+import { confirmTerms, isNewRound, persistEvaluation } from '../lock/terms';
 import { realWorldEnabled } from '../markets/quote';
 import { realWorldReply } from '../markets/voice-tool';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
@@ -398,16 +399,28 @@ export async function confirmAndLock(
   const r = await confirmTerms(deps, betId, o);
   if (!r.ok && r.fix === 'REQUOTED') {
     // A market quote too old to lock: re-quoted as new terms (terms.proposed already pushed).
+    // If the old round stopped pricing, the re-quote is the NEXT round: say so (new line, end).
     const s = r.envelope.terms.stakes;
+    const m = r.envelope.terms.market!;
+    const split = `${formatUsd(s.a)} against ${formatUsd(s.b)}`;
+    const newRound = isNewRound(r);
     return fitReply({
       ok: false,
       fix: 'REQUOTED',
       terms_hash: r.envelope.terms_hash,
-      say: `Gemini's odds moved: ${formatUsd(s.a)} against ${formatUsd(s.b)} now. Say yes to lock it.`,
+      new_round: newRound,
+      say: newRound
+        ? `That round closed. ${newRoundLine(m)} ${split}. Say yes to lock it.`
+        : `Gemini's odds moved: ${split} now. Say yes to lock it.`,
     });
   }
   if (!r.ok && r.fix === 'QUOTE_STALE')
-    return { ok: false, fix: 'QUOTE_STALE', say: CONFIRM_SAY.QUOTE_STALE };
+    return {
+      ok: false,
+      fix: 'QUOTE_STALE',
+      reason: r.refusal ?? 'QUOTE_STALE',
+      say: CONFIRM_SAY.QUOTE_STALE,
+    };
   if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
   if (!r.already) lifecycleOf(deps).lock.startInBackground(betId);
   const t = r.envelope.terms;

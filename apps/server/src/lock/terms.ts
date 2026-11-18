@@ -27,12 +27,14 @@ import {
   marketReadback,
   oddsDisplay,
 } from '@youre-on/shared/judge/market-terms';
+import type { FairRefusal } from '@youre-on/shared/gemini';
 import { readbackSay, type ProposeEvaluation } from '@youre-on/shared/judge/reply';
 import type { GuardrailRefusal, TermsDraft, TermsProposal } from '@youre-on/shared/negotiation';
 import {
   computeTermsHash,
   Terms,
   termsCode,
+  type MarketRef,
   type TermsEnvelope,
   type TermsPresentation,
 } from '@youre-on/shared/terms';
@@ -188,7 +190,8 @@ export type PersistResult =
       /** real_world: the binding quote's snapshot row and hash. */
       quote?: { snapshot_id: string; snapshot_sha256: string };
     }
-  | { kind: 'draft' }
+  /** `refusal`: Gemini could not give the binding quote (the terms.draft carries it as an issue). */
+  | { kind: 'draft'; refusal?: FairRefusal }
   | { kind: 'refused' }
   | { kind: 'skipped'; reason: string };
 
@@ -218,6 +221,7 @@ export async function persistEvaluation(
   if (evaluation.kind === 'invalid') return { kind: 'skipped', reason: 'invalid' };
   // real_world: the binding quote, before the row lock (it may refetch Gemini, <= 2 s).
   let quote = o.quote;
+  let refusal: FairRefusal | undefined;
   if (
     !quote &&
     evaluation.kind === 'proposal' &&
@@ -230,6 +234,7 @@ export async function persistEvaluation(
       : ({ ok: false, reason: 'MARKET_NOT_OPEN' } as const);
     if (q.ok) quote = q.quote;
     else {
+      refusal = q.reason;
       deps.log.info('terms.market_refused', { bet_id: betId, reason: q.reason });
       evaluation = { kind: 'issue', issue: refusalIssue(q.reason), proposal: evaluation.proposal };
     }
@@ -275,7 +280,8 @@ export async function persistEvaluation(
 
     if (evaluation.kind === 'issue') {
       const e = await draft(evaluation.proposal ?? {}, [], [evaluation.issue]);
-      return { res: { kind: 'draft' } as PersistResult, bet, envs: [e] };
+      const res: PersistResult = refusal ? { kind: 'draft', refusal } : { kind: 'draft' };
+      return { res, bet, envs: [e] };
     }
     if (evaluation.missing.length) {
       const e = await draft(evaluation.proposal, evaluation.missing, []);
@@ -420,10 +426,22 @@ async function cancelRefused(
 export type ConfirmResult =
   | { ok: true; code: string; envelope: TermsEnvelope; already: boolean }
   | { ok: false; fix: 'NOT_PROPOSED' | 'NOT_FOUND' | 'FROZEN'; state?: BetState }
-  /** A market bet's quote was too old to lock: re-quoted as a new version (not frozen). */
-  | { ok: false; fix: 'REQUOTED'; envelope: TermsEnvelope }
-  /** ...and Gemini could not re-quote it (the terms.draft carries the issue). */
-  | { ok: false; fix: 'QUOTE_STALE'; reason: string };
+  /**
+   * A market bet's quote was too old to lock: re-quoted as a new version (not frozen).
+   * `previous` is the old quote: a different eventTicker means the re-quote moved the bet to
+   * the next 5-minute round (a new line and expiry), not just new odds.
+   */
+  | { ok: false; fix: 'REQUOTED'; envelope: TermsEnvelope; previous: MarketRef }
+  /**
+   * ...and Gemini could not re-quote it (the terms.draft carries the issue). `refusal` is
+   * Gemini's reason when it had one (TOO_CLOSE_TO_EXPIRY, STRIKE_PENDING ...); `reason` is
+   * for the log.
+   */
+  | { ok: false; fix: 'QUOTE_STALE'; reason: string; refusal: FairRefusal | null };
+
+/** The re-quote moved the bet to another 5-minute contract (a new line and expiry). */
+export const isNewRound = (r: { envelope: TermsEnvelope; previous: MarketRef }): boolean =>
+  r.envelope.terms.market?.eventTicker !== r.previous.eventTicker;
 
 /**
  * A market bet whose quote is older than MARKET_CONFIRM_MAX_AGE_MS is re-quoted (same side and
@@ -453,8 +471,14 @@ async function requoteIfStale(
       templateClaim: isTemplateClaim(t),
     },
   );
-  if (r.kind === 'proposed') return { ok: false, fix: 'REQUOTED', envelope: r.envelope };
-  return { ok: false, fix: 'QUOTE_STALE', reason: r.kind === 'skipped' ? r.reason : r.kind };
+  if (r.kind === 'proposed')
+    return { ok: false, fix: 'REQUOTED', envelope: r.envelope, previous: t.market };
+  return {
+    ok: false,
+    fix: 'QUOTE_STALE',
+    reason: r.kind === 'skipped' ? r.reason : r.kind,
+    refusal: r.kind === 'draft' ? (r.refusal ?? null) : null,
+  };
 }
 
 /** confirm_terms step 2: freeze -> AWAITING_AUTHORIZATIONS. The caller starts the lock. */

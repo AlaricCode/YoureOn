@@ -12,6 +12,7 @@ import {
   MarketTermsRequest,
   marketTermsPath,
   MARKET_VOID_EDGE,
+  newRoundLine,
   oddsDisplay,
 } from '../../src/judge/market-terms';
 import { Terms } from '../../src/terms';
@@ -29,6 +30,16 @@ describe('market terms (Beat 6)', () => {
     expect(expiryLabel(EXPIRY)).toBe('02:40 UTC');
     expect(marketClaim(EXPIRY)).toBe(
       "Gemini's BTC 5-minute contract expiring 02:40 UTC resolves UP.",
+    );
+  });
+
+  it('a re-quote onto the next round names its line and end', () => {
+    const strike = { value: '64367.38', type: 'reference' as const, availableAt: null };
+    expect(newRoundLine({ strike, expiry: '2026-11-18T02:45:00.000Z' })).toBe(
+      'New round: line $64,367.38, ends 02:45 UTC.',
+    );
+    expect(newRoundLine({ strike: { ...strike, value: null }, expiry: EXPIRY })).toBe(
+      'New round: line not set, ends 02:40 UTC.',
     );
   });
 
