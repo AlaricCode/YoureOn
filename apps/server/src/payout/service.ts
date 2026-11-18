@@ -146,6 +146,11 @@ export interface PayoutServiceOptions {
   send?: SendOptions;
   /** Arm the setTimeout fast path (default true). */
   timers?: boolean;
+  /**
+   * The loser's appeal SignRequest, pushed beside the concede one at RULED (src/appeal
+   * AppealService.pushRequest); null / absent = only the concede request is pushed.
+   */
+  appealRequest?: (rt: ChainRuntime, bet: BetRow, loser: Party) => Promise<SignRequest | null>;
 }
 
 export interface RuledResult {
@@ -575,21 +580,27 @@ export class PayoutService {
       appeal_deadline: appealDeadline,
     });
 
-    // The loser's GG prompt (decisive outcomes only), off the ruling's path.
+    // The loser's GG prompt (decisive outcomes only), off the ruling's path, with the appeal
+    // request beside it (API-CONTRACT §3.4: "concede + appeal, loser"; camera bets only).
     if (this.o.signer === 'phones' && (outcome === 'PartyA' || outcome === 'PartyB')) {
       const loser: Party = outcome === 'PartyA' ? 'B' : 'A';
       this.o.inflight.run('payout.sign_request', async () => {
         const fresh = await this.bet(betId);
-        const req = await this.buildConcede(rt, fresh, loser);
-        const env = await this.deps.db.transaction((tx) =>
-          appendBetEvent(tx, {
-            bet_id: betId,
-            type: 'tx.sign_request',
-            payload: { request: req },
-            now: this.deps.now(),
-          }),
-        );
-        fanout(this.deps, fresh, [env]);
+        const push = async (request: SignRequest) => {
+          const env = await this.deps.db.transaction((tx) =>
+            appendBetEvent(tx, {
+              bet_id: betId,
+              type: 'tx.sign_request',
+              payload: { request },
+              now: this.deps.now(),
+            }),
+          );
+          fanout(this.deps, fresh, [env]);
+        };
+        // The GG prompt first, never held up by the appeal build (one more simulate).
+        await push(await this.buildConcede(rt, fresh, loser));
+        const appeal = await this.o.appealRequest?.(rt, fresh, loser);
+        if (appeal) await push(appeal);
       });
     }
     this.armFinalize(betId, appealDeadline * 1000 + FINALIZE_DELAY_MS);
@@ -627,6 +638,8 @@ export class PayoutService {
     } catch (err) {
       this.deps.log.warn('payout.reconcile_stranded_failed', { err });
     }
+    // Only RULED: an APPEALED bet is the appeal panel's (resolve_appeal pays it), and a RULED
+    // one whose appeal is on its way waits for that tx's fate.
     const due = await this.deps.db
       .select({ id: bets.id })
       .from(bets)
@@ -634,6 +647,7 @@ export class PayoutService {
         and(
           eq(bets.state, 'RULED'),
           lte(bets.appeal_deadline, new Date(nowMs - FINALIZE_DELAY_MS)),
+          sql`NOT ${appealInFlight}`,
         ),
       )
       .limit(25);
@@ -654,7 +668,19 @@ export class PayoutService {
     try {
       const rt = await this.rt();
       const bet = await this.bet(betId);
-      if (bet.state !== 'RULED') return 'skipped';
+      if (bet.state !== 'RULED') return 'skipped'; // APPEALED: the panel's resolve_appeal pays
+      const [appealing] = await this.deps.db
+        .select({ id: chainTxs.id })
+        .from(chainTxs)
+        .where(
+          and(
+            eq(chainTxs.bet_id, betId),
+            eq(chainTxs.kind, 'appeal'),
+            inArray(chainTxs.status, ['signed', 'sent']),
+          ),
+        )
+        .limit(1);
+      if (appealing) return 'skipped'; // the appeal service re-arms finalize if it never lands
       const idBytes = betIdToBytes(betId);
       const [betPda] = await findBetPda({ betId: idBytes });
       const onchain = await this.fetchBet(rt, betPda);
@@ -1370,30 +1396,7 @@ export class PayoutService {
         .where(eq(bets.id, betId))
         .returning();
       const names = await this.names(b, tx);
-      const winner: Party | null = outcome === 'PartyA' ? 'A' : outcome === 'PartyB' ? 'B' : null;
-      const cue = voided
-        ? judgeCue(
-            'VOIDED',
-            { a: formatUsd(amounts.to_a.toString()), b: formatUsd(amounts.to_b.toString()) },
-            "Say it's void: both got their stake back.",
-          )
-        : judgeCue(
-            'PAID',
-            {
-              winner: winner ? names[winner] : 'split',
-              amount: formatUsd(
-                (winner === 'A'
-                  ? amounts.to_a
-                  : winner === 'B'
-                    ? amounts.to_b
-                    : amounts.to_a
-                ).toString(),
-              ),
-              to_a: formatUsd(amounts.to_a.toString()),
-              to_b: formatUsd(amounts.to_b.toString()),
-            },
-            winner ? `Congratulate ${names[winner]} in one line.` : 'Say it is a split.',
-          );
+      const cue = payoutCue(outcome, amounts, names);
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
@@ -1480,6 +1483,43 @@ export class PayoutService {
     >;
   }
 }
+
+/**
+ * judge.cue PAID / VOIDED for a payout of `outcome` (concede, finalize, resolve_appeal):
+ * `[EVENT] PAID winner=Jake amount=$10 … :: Congratulate Jake in one line.`
+ */
+export function payoutCue(
+  outcome: OnchainOutcome,
+  amounts: { to_a: bigint; to_b: bigint },
+  names: Record<Party, string>,
+) {
+  if (outcome === 'Refund')
+    return judgeCue(
+      'VOIDED',
+      { a: formatUsd(amounts.to_a.toString()), b: formatUsd(amounts.to_b.toString()) },
+      "Say it's void: both got their stake back.",
+    );
+  const winner: Party | null = outcome === 'PartyA' ? 'A' : outcome === 'PartyB' ? 'B' : null;
+  return judgeCue(
+    'PAID',
+    {
+      winner: winner ? names[winner] : 'split',
+      amount: formatUsd(
+        (winner === 'A' ? amounts.to_a : winner === 'B' ? amounts.to_b : amounts.to_a).toString(),
+      ),
+      to_a: formatUsd(amounts.to_a.toString()),
+      to_b: formatUsd(amounts.to_b.toString()),
+    },
+    winner ? `Congratulate ${names[winner]} in one line.` : 'Say it is a split.',
+  );
+}
+
+/**
+ * A RULED bet whose loser's `appeal` is signed / out (src/appeal): finalize waits for its fate
+ * (it lands -> APPEALED; it never does -> the appeal service re-arms finalize).
+ */
+const appealInFlight = sql`EXISTS (SELECT 1 FROM ${chainTxs} t WHERE t.bet_id = ${bets.id}
+  AND t.kind = 'appeal' AND t.status IN ('signed','sent'))`;
 
 /** One in-flight tx per (bet, kind) (chain_txs_inflight_uq): retire a stale one before a new build. */
 async function expireInflight(tx: Tx, betId: string, kind: 'resolve' | 'concede' | 'finalize') {

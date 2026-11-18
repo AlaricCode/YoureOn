@@ -1,6 +1,7 @@
 // Realtime / snapshot fixtures for the store, hub and machine tests: real, hash-checked Terms
 // (the preview bottle flip), parsed through the shared schemas like the socket does.
 import type { BetSnapshot } from '@youre-on/shared/api';
+import { AppealResult, AppealVote, decideAppeal } from '@youre-on/shared/appeal';
 import { LOCK_SUBMIT_MARGIN_SECS } from '@youre-on/shared/constants';
 import { RealtimeEvent } from '@youre-on/shared/realtime';
 import { Ruling } from '@youre-on/shared/ruling';
@@ -130,4 +131,52 @@ export function snapshot(o: Partial<BetSnapshot> = {}): BetSnapshot {
     last_seq: 2,
     ...o,
   } as BetSnapshot;
+}
+
+// ---- Beat 5: the appeal panel (SCHEMAS §7) -------------------------------------------------
+
+export const APPEAL_ID = 'e9f8a7b6-c5d4-4e3f-a2b1-c0d9e8f7a6b5';
+const PROVIDERS = ['anthropic', 'openai', 'google'] as const;
+
+/** One panel vote (`counted` = how it counts; ABSTAIN = a seat that timed out). */
+export function appealVote(seat: 0 | 1 | 2, counted: 'A_WINS' | 'B_WINS' | 'ABSTAIN') {
+  const ok = counted !== 'ABSTAIN';
+  return AppealVote.parse({
+    schema_version: 1,
+    appeal_id: APPEAL_ID,
+    bet_id: BET,
+    seat,
+    provider: PROVIDERS[seat],
+    model: `${PROVIDERS[seat]}/model-${seat}`,
+    status: ok ? 'ok' : 'timeout',
+    outcome: ok ? counted : 'REDO',
+    confidence: ok ? 0.82 : 0,
+    reason: ok ? `Seat ${seat}: it ends on its side in frame 6.` : '',
+    counted_as: counted,
+    latency_ms: 2400,
+    created_at: '2026-11-21T18:08:12.000Z',
+  });
+}
+
+/** The panel's result for B's appeal of an A_WINS ruling: `counted` decides it (decideAppeal). */
+export function appealResult(counted: readonly ('A_WINS' | 'B_WINS' | 'ABSTAIN')[]) {
+  const votes = counted.map((c, i) => appealVote(i as 0 | 1 | 2, c));
+  const d = decideAppeal('A_WINS', votes);
+  return AppealResult.parse({
+    schema_version: 1,
+    appeal_id: APPEAL_ID,
+    bet_id: BET,
+    appellant: 'B',
+    original_outcome: 'A_WINS',
+    original_ruling_hash: 'ef'.repeat(32),
+    votes,
+    tally: d.tally,
+    final_outcome: d.final_outcome,
+    decided_by: d.decided_by,
+    flipped: d.flipped,
+    evidence_hash: 'cd'.repeat(32),
+    frame_hashes: [],
+    terms_hash: flip.termsHash,
+    created_at: '2026-11-21T18:08:14.000Z',
+  });
 }

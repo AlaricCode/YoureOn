@@ -15,6 +15,7 @@ import { chainRoutes } from './chain/routes';
 import { lockRoutes } from './lock/routes';
 import { termsRoutes } from './terms/routes';
 import { payoutRoutes } from './payout/routes';
+import { appealRoutes } from './appeal/routes';
 import { meRoutes } from './me/routes';
 import { demoRoutes } from './demo/routes';
 import { judgeRoutes } from './judge/routes';
@@ -38,7 +39,8 @@ export const routeModules: RouteModule[] = [
   meRoutes,
   demoRoutes,
   judgeRoutes,
-  // hearingRoutes, appealsRoutes, …
+  appealRoutes,
+  // hearingRoutes (Beat 5's hearing is cut, D-C)
   stageRoutes,
   marketsRoutes,
   marketBetRoutes,

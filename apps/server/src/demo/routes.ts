@@ -17,6 +17,11 @@
 //                                        (no voice_conversation_id needed). Body: optional
 //                                        propose_terms args (the LLM projection) overriding the fixture.
 //   POST /v1/demo/bets/:bet_id/confirm   the confirm_terms step (freeze + LockService.start).
+//   POST /v1/demo/bets/:bet_id/appeal    {party?} LOCK_SIGNER=server only: the losing demo party's
+//                                        appeal, signed custodially by the server (the same path as a
+//                                        signature-less GG tap; src/appeal). `party` only for a VOID
+//                                        ruling (either party may appeal; default A). 202
+//                                        {status, signature, appeal_id}; no 3/h bucket (admin key).
 //   GET  /v1/demo/bets/:bet_id           state + chain_txs summary (scripts/cp1-drive.ts polls it).
 //   POST /v1/demo/claim-tokens           {party: 'a'|'b', display_name?} -> one-time QR for
 //                                        POST /v1/auth/demo-claim (claim-tokens.ts; 10 min, single
@@ -43,7 +48,12 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import type { Context, MiddlewareHandler } from 'hono';
 import { auditLog, chainTxs, devices, users } from '@youre-on/db';
-import { DemoClaimTokenRequest, HDR, type DemoClaimTokenResponse } from '@youre-on/shared/api';
+import {
+  DemoAppealRequest,
+  DemoClaimTokenRequest,
+  HDR,
+  type DemoClaimTokenResponse,
+} from '@youre-on/shared/api';
 import { MAX_STAKE } from '@youre-on/shared/constants';
 import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
 import { Pubkey, Uuid } from '@youre-on/shared/primitives';
@@ -401,6 +411,16 @@ export const demoRoutes: RouteModule = {
         details: { device_id: d!.id },
       });
       return c.json({ device_id: d!.id, user_id: user.id }, 201);
+    });
+
+    app.post('/v1/demo/bets/:bet_id/appeal', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const betId = betIdParam(c.req.param('bet_id'));
+      const body = await readBody(c, DemoAppealRequest);
+      const res = await lifecycleOf(deps).appeal.appealAsDemo(betId, body.party, {
+        requestId: c.get('requestId'),
+      });
+      return c.json(res, 202);
     });
 
     app.post('/v1/demo/bets/:bet_id/confirm', requireDemo, async (c) => {
