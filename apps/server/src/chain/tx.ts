@@ -202,12 +202,17 @@ export function createRetryingSolanaRpc(url: string, o?: RetryOptions): Rpc<Sola
   return createSolanaRpcFromTransport(withRpcRetry(createDefaultRpcTransport({ url }), o));
 }
 
-/** An RPC that does not accept maxSupportedTransactionVersion 1 (JSON-RPC invalid params). */
+/**
+ * An RPC that does not accept maxSupportedTransactionVersion 1: a JSON-RPC invalid-params error
+ * (-32602) that names the version parameter. Any other invalid-params error (a bad signature, a
+ * provider hiccup) is not, so it can never downgrade the client.
+ */
 export function isTxVersionParamError(e: unknown): boolean {
   for (let x: unknown = e, i = 0; x && typeof x === 'object' && i < 4; i++) {
-    const ctx = (x as { context?: { __code?: unknown } }).context;
-    const msg = String((x as { message?: unknown }).message ?? '');
-    if (ctx?.__code === -32602 || /-32602|invalid params|maxSupportedTransactionVersion/i.test(msg))
+    const ctx = (x as { context?: { __code?: unknown; __serverMessage?: unknown } }).context;
+    const text = `${String((x as { message?: unknown }).message ?? '')} ${String(ctx?.__serverMessage ?? '')}`;
+    const invalidParams = ctx?.__code === -32602 || /-32602|invalid param/i.test(text);
+    if (invalidParams && /maxSupportedTransactionVersion|transaction version/i.test(text))
       return true;
     x = (x as { cause?: unknown }).cause;
   }
@@ -327,14 +332,30 @@ export function rpcChainClient(
         tx = await get(maxTxVersion);
       } catch (e) {
         if (maxTxVersion !== 1 || !isTxVersionParamError(e)) throw e;
-        maxTxVersion = 0;
         tx = await get(0);
+        maxTxVersion = 0; // remembered only once version 0 actually worked
       }
       if (!tx || !tx.meta) return null;
       const loaded = tx.meta.loadedAddresses;
+      // getTransaction has no block height; attribution orders events by it (projector.ts), so
+      // ask the block for it (no transactions, no rewards: a few hundred bytes). Best effort.
+      let blockHeight: number | null = null;
+      try {
+        const b = await rpc
+          .getBlock(tx.slot, {
+            commitment: 'confirmed',
+            transactionDetails: 'none',
+            rewards: false,
+          })
+          .send();
+        blockHeight = b ? Number(b.blockHeight) : null;
+      } catch {
+        blockHeight = null;
+      }
       return {
         signature: sig,
         slot: Number(tx.slot),
+        blockHeight,
         blockTime: tx.blockTime === null ? null : Number(tx.blockTime),
         err: tx.meta.err,
         accountKeys: [

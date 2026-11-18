@@ -31,7 +31,7 @@ import {
   TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
 import { FailedTransactionMetadata, type TransactionMetadata } from 'litesvm';
-import { chainEvents, chainTxs, noncePool } from '@youre-on/db';
+import { bets, chainEvents, chainTxs, noncePool } from '@youre-on/db';
 import type { Session } from '@youre-on/shared/api';
 import { ESCROW_PROGRAM_ADDRESS } from '@youre-on/shared/escrow-client';
 import type { Ruling } from '@youre-on/shared/ruling';
@@ -255,6 +255,9 @@ run('QuickNode Stream path on LiteSVM transactions (filter -> webhook -> project
       cluster: 'localnet',
     };
     await ctx.deps.db.delete(noncePool); // this database's pool = the SVM's pool
+    // and its chain history starts empty too (the reconciler's candidate query is global)
+    await ctx.deps.db.delete(bets); // cascades chain_txs, bet_events, outbox
+    await ctx.deps.db.delete(chainEvents);
     (ctx.deps.env as { USDC_MINT?: string }).USDC_MINT = svm.mint;
     install();
     A = await signUpWith('Logan', keyA);

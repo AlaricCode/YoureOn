@@ -244,6 +244,8 @@ export function parseStreamDelivery(body: unknown): StreamBatch {
 export interface RpcTransaction {
   signature: string;
   slot: number | null;
+  /** The block's height (getBlock), when the client could get it: attribution orders by it. */
+  blockHeight?: number | null;
   /** unix seconds, or null. */
   blockTime: number | null;
   /** meta.err (null = success). */
@@ -264,7 +266,8 @@ const b58 = getBase58Encoder();
  * event-authority PDA and whose data starts with the Anchor event tag; never top-level ones. The
  * events then go through the same envelope parser as a Stream delivery, so a row has the same
  * dedup key (signature, outer_ix, inner_ix) and payload whichever source stores it first. `slot`
- * is set; block_height / tx_index are null (getTransaction has neither).
+ * is set, block_height when the client fetched it; tx_index stays null (a later Stream copy
+ * backfills both, ingest.ts).
  */
 export function eventsFromRpcTransaction(tx: RpcTransaction, eventAuthority: string): StreamBatch {
   if (tx.err !== null && tx.err !== undefined) return parseStreamDelivery(null);
@@ -294,7 +297,7 @@ export function eventsFromRpcTransaction(tx: RpcTransaction, eventAuthority: str
     txs: [
       {
         signature: tx.signature,
-        blockHeight: null,
+        blockHeight: tx.blockHeight ?? null,
         blockTime: tx.blockTime,
         txIndex: null,
         events,
