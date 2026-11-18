@@ -1,7 +1,11 @@
 // Stand-in data for the app preview, until rooms, bets, the judge and payouts are served
 // (TASKS D0-J4, D1-J1, D3-L1, D4-L2). The two bets are SCHEMAS §2.5 and §2.6 verbatim, with
 // the phone's own name as party A, so the screens render real, hash-checked Terms.
+import { getRoutine, ROUTINES, routineRef } from '@youre-on/shared/dance/routine';
+import { DANCE_SCORER_VERSION } from '@youre-on/shared/dance/score';
+import { danceTermsText } from '@youre-on/shared/dance/terms';
 import { emptyOdds, oddsReducer, type OddsOffer, type OddsState } from '@youre-on/shared/odds';
+import type { DanceScoredPayload } from '@youre-on/shared/realtime';
 import { computeTermsHash, type Terms } from '@youre-on/shared/terms';
 
 export interface PreviewUser {
@@ -171,6 +175,91 @@ export function btcCloser(myName: string, opponent = 'Jake'): PreviewBet {
     created_at: '2026-11-21T18:06:30.120Z',
   });
   return { terms, termsHash: terms_hash };
+}
+
+/**
+ * DANCE-OFF §1: "Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each", built from
+ * the bundled routine exactly as the server's danceTermsArgs does (the routine line commits to
+ * its sha256). `me` is party A (the challenger, on the left of the display).
+ */
+export function danceOff(
+  myName: string,
+  opponent = 'Jake',
+  routineId = 'wave-pop',
+  /** Each side's stake (micro-USDC); even money only. */
+  stake = '5000000',
+): PreviewBet {
+  const routine = getRoutine(routineId) ?? ROUTINES[0];
+  if (!routine) throw new Error('no bundled routine');
+  const text = danceTermsText(routine, stake);
+  const { terms, terms_hash } = computeTermsHash({
+    schema_version: 1,
+    bet_id: '3d1a6b2e-8c4f-4a7e-9b15-6f2e0c9d4a81',
+    escrow: ESCROW,
+    party_a: { pubkey: A_KEY, display_name: myName },
+    party_b: { pubkey: B_KEY, display_name: opponent },
+    type: 'dance_off',
+    claim: text.claim,
+    performer: null,
+    yes_party: 'A',
+    attempts: { count: 1, rule: 'single' },
+    success_criteria: text.success_criteria,
+    failure_criteria: text.failure_criteria,
+    edge_cases: [],
+    evidence_source: 'camera',
+    market: null,
+    stakes: { a: stake, b: stake, currency: 'USDC' },
+    deadline: '2026-11-21T18:15:00.000Z',
+    created_at: '2026-11-21T18:05:12.345Z',
+  });
+  return { terms, termsHash: terms_hash };
+}
+
+/** The announcer's line for the preview's dance off (SCHEMAS §5.2 `reason`). */
+export const DANCE_REASON = 'Logan hit every wave on the beat. Jake was a step behind all night.';
+
+/**
+ * A stand-in dance.scored for the preview (not hash-checked: the screens only read it). A wins
+ * 87.4 to 71.2, or (`tooClose`) 80.1 to 79.4: within the 2-point margin, so the round is void.
+ */
+export function previewDanceScored(bet: PreviewBet, tooClose = false): DanceScoredPayload {
+  const routine = getRoutine('wave-pop') ?? ROUTINES[0];
+  if (!routine) throw new Error('no bundled routine');
+  const scores = tooClose ? { a: 801, b: 794 } : { a: 874, b: 712 };
+  return {
+    evidence: {
+      schema_version: 1,
+      kind: 'dance',
+      bet_id: bet.terms.bet_id,
+      attempt_no: 1,
+      terms_hash: bet.termsHash,
+      routine: routineRef(routine),
+      scorer_version: DANCE_SCORER_VERSION,
+      pose_sha256: 'ab'.repeat(32),
+      pose_frames: 412,
+      sync_offset_ms: 0,
+      scores,
+      winner: tooClose ? null : ('A' as const),
+      too_close: tooClose,
+      failed: null,
+      // A: PERFECT with a GOOD every fourth move; B: GOOD with a MISS every third.
+      key_moves: routine.key_moves.map((m, i) => ({
+        id: m.id,
+        a: i % 4 === 3 ? ('GOOD' as const) : ('PERFECT' as const),
+        b: i % 3 === 2 ? ('MISS' as const) : ('GOOD' as const),
+      })),
+      checks: { coverage_a_pct: 98, coverage_b_pct: 96, max_people: 2, side_swaps: 0 },
+      frames: [0, 1, 2, 3].map((index) => ({
+        index,
+        t_ms: 2000 + index * 3500,
+        sha256: index.toString(16).repeat(64),
+      })),
+      clip_sha256: null,
+    },
+    evidence_hash: 'cd'.repeat(32),
+    validation: { verdict: 'valid', notes: 'Both danced the whole round.', skipped: false },
+    announcer_line: tooClose ? 'Too close to call. Both of you, again.' : DANCE_REASON,
+  };
 }
 
 /** The judge's side of Beat 2, as live captions (`judge.line`), with who said each line. */

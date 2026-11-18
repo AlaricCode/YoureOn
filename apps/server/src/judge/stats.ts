@@ -8,7 +8,7 @@ import { percentile } from '../chain/tx';
 import { cachedRulingOn } from '../demo/toggles';
 
 /** Who made the call. */
-export type JudgeCallSource = 'ruling' | 'warmup';
+export type JudgeCallSource = 'ruling' | 'warmup' | 'dance';
 
 export interface JudgeCallSample {
   at: number;

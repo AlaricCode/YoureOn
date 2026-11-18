@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { END_COPY } from '../../bets/lock';
 import { RESULT_TITLE, signedUsd } from '../../bets/view';
-import { FILMING_TIP, NEGOTIATION_SCRIPT, PANEL, RULING_REASON } from '../../preview/data';
+import {
+  DANCE_REASON,
+  danceOff,
+  FILMING_TIP,
+  NEGOTIATION_SCRIPT,
+  PANEL,
+  previewDanceScored,
+  RULING_REASON,
+} from '../../preview/data';
 import { checkCopy, type CopyRole } from '../../ui/copyRule';
 import { COPY, fill } from '../copy';
 
@@ -54,9 +62,29 @@ describe('results and data', () => {
     const data = [
       FILMING_TIP,
       RULING_REASON,
+      DANCE_REASON,
+      previewDanceScored(danceOff('Logan'), true).announcer_line,
       ...NEGOTIATION_SCRIPT.map((l) => l.text),
       ...PANEL.map((p) => p.reason),
     ];
     for (const text of data) expect(checkCopy(text, 'body')).toEqual([]);
+  });
+});
+
+describe('Dance Off and double or nothing copy', () => {
+  it('the tempo is data; the dance lines keep the label rule', () => {
+    expect(fill.bpm(120)).toBe('120 bpm');
+    expect(fill.bpm(112.4)).toBe('112 bpm');
+    expect(checkCopy(fill.bpm(128), 'label')).toEqual([]);
+    for (const line of [COPY.dance.open, COPY.rematch.button, COPY.dance.announcer])
+      expect(checkCopy(line[0], 'label')).toEqual([]);
+  });
+
+  it('a dance off card reads without chain words: claim and rules', () => {
+    const { terms } = danceOff('Logan', 'Jake');
+    for (const text of [terms.claim, ...terms.success_criteria])
+      expect(checkCopy(text, 'data')).toEqual([]);
+    // The rule line is a sentence on the card, never a label.
+    expect(checkCopy(terms.success_criteria[1]!, 'body')).toEqual([]);
   });
 });

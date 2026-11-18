@@ -149,7 +149,9 @@ export function readbackSay(p: TermsProposal, names?: PartyNames): string {
   const stake =
     p.type === 'skill'
       ? stakeSentence(p, names)
-      : `${cap(spokenUsd(p.amount))} a side at even money, Gemini sets the odds.`;
+      : p.type === 'dance_off'
+        ? DANCE_READBACK_TAIL
+        : `${cap(spokenUsd(p.amount))} a side at even money, Gemini sets the odds.`;
   for (let keep = edges.length; keep >= 0; keep--) {
     for (const d of [deadline, []]) {
       const s = [...head, ...edges.slice(0, keep), ...d, stake].join(' ');
@@ -159,6 +161,9 @@ export function readbackSay(p: TermsProposal, names?: PartyNames): string {
   const s = [...head, stake].join(' ');
   return s.length <= SAY_MAX_CHARS ? s : `${s.slice(0, SAY_MAX_CHARS - 1)}…`;
 }
+
+/** A dance off's claim already says the stake ("$5 each"); its read-back adds the refund rule. */
+export const DANCE_READBACK_TAIL = 'One round, even money. Too close to call is a refund.';
 
 /** Display names for the read-back ("Logan puts in fifteen, Jake puts in five"). */
 export interface PartyNames {

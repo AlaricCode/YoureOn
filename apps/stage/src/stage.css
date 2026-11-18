@@ -1011,6 +1011,214 @@ code,
   font-weight: 600;
 }
 
+/* ---- dance off (dance.ts): the routine, both dancers, the scoreboard, the key-move grid ------ */
+.dance-routine {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+}
+.dance-routine .title {
+  font-size: 1.5em;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+}
+.dance-routine .len {
+  font-size: 0.85em;
+  font-weight: 500;
+  color: var(--muted);
+}
+.dance-duo {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+  padding: 0.4em 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.dancer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+}
+.dancer-b {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+.dancer .who {
+  font-size: 1.3em;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dancer .side {
+  font-size: 0.75em;
+  color: var(--muted);
+}
+.dancer.moving .avatar {
+  box-shadow:
+    0 0 0 0.1em var(--black),
+    0 0 0 0.2em var(--green);
+  animation: dance-bob 0.5s ease-in-out infinite alternate;
+}
+.dancer-b.moving .avatar {
+  animation-delay: 0.25s;
+}
+/* three bars on the beat between the two names (only while the round runs) */
+.dance-duo .beat {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.15em;
+  height: 1.2em;
+}
+.dance-duo .beat i {
+  display: block;
+  width: 0.22em;
+  height: 30%;
+  border-radius: 0.1em;
+  background: var(--dim);
+}
+.dance-play.dancing .beat i {
+  background: var(--green);
+  animation: dance-bar 0.5s ease-in-out infinite alternate;
+}
+.dance-play.dancing .beat i:nth-child(2) {
+  animation-delay: 0.17s;
+}
+.dance-play.dancing .beat i:nth-child(3) {
+  animation-delay: 0.33s;
+}
+@keyframes dance-bob {
+  to {
+    transform: translateY(-0.18em);
+  }
+}
+@keyframes dance-bar {
+  to {
+    height: 100%;
+  }
+}
+
+.dance-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+  min-height: 0;
+}
+.dance-scores {
+  display: flex;
+  gap: 1.6em;
+}
+.dance-score {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: baseline;
+  column-gap: 0.6em;
+  padding-top: 0.3em;
+  border-top: 0.12em solid var(--line-strong);
+}
+.dance-score .who {
+  font-size: 1.05em;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* the match score: big thin numerals, like the money (it is a score, never a percent) */
+.dance-score .pts {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  font-size: 2.6em;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  animation: land 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dance-score .tally {
+  font-size: 0.72em;
+  color: var(--muted);
+}
+.dance-score.won {
+  border-top-color: var(--green);
+}
+.dance-score.won .pts {
+  color: var(--green);
+}
+.dance-score.lost .pts,
+.dance-score.lost .who {
+  color: var(--muted);
+}
+.dance-grid {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0.14em;
+  font-size: 0.6em;
+}
+.dance-grid th {
+  font-weight: 500;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  padding: 0 0.1em 0.15em;
+}
+.dance-grid th.corner,
+.dance-grid tbody th {
+  width: 5.5em;
+  text-align: left;
+  color: var(--text);
+  font-weight: 600;
+}
+.dance-grid td {
+  padding: 0.35em 0;
+  border-radius: 0.3em;
+  text-align: center;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+.dance-grid td.perfect {
+  background: var(--green);
+  color: var(--on-fill);
+}
+.dance-grid td.good {
+  background: var(--fill);
+  color: var(--text);
+  box-shadow: inset 0 0 0 0.1em var(--line-strong);
+}
+.dance-grid td.miss {
+  color: var(--dim);
+  box-shadow: inset 0 0 0 0.1em var(--line);
+}
+/* too close to call is the headline of a void dance off, not a grey footnote */
+.ruling.dance.void .verdict {
+  color: var(--text);
+}
+.ruling.dance .reason {
+  font-size: 1em;
+}
+.dance-refund {
+  margin: 0;
+  font-size: 0.95em;
+}
+.phones-center .dance-scores {
+  gap: 1em;
+}
+.phones-center .dance-score .pts {
+  font-size: 2.2em;
+}
+
 /* ---- right column ------------------------------------------------------------------------- */
 .odds {
   flex: none;

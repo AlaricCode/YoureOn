@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+Package.resolved
+# Raw recordings, tracks and tool output stay local; only the final mp4 and the generated
+# routine module are committed (under apps/mobile and packages/shared).
+work/
+*.mov
+*.wav
+*.json

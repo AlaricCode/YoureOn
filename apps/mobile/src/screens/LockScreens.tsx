@@ -172,6 +172,8 @@ export function TermsCardScreen({
           <InfoRow label={t(COPY.terms.evidence)} value={view.evidence} divider />
           {view.kind === 'skill' ? (
             <InfoRow label={t(COPY.terms.tries)} value={view.attempts} divider />
+          ) : view.kind === 'dance' ? (
+            <InfoRow label={t(COPY.terms.round)} value={view.attempts} divider />
           ) : null}
           {view.odds ? <InfoRow label={t(COPY.terms.odds)} value={view.odds} divider /> : null}
           <InfoRow label={t(COPY.terms.deadline)} value={clockLabel(view.deadline)} divider />

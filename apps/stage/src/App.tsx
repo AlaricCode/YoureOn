@@ -10,7 +10,8 @@
 // no server (preview.ts), ?preview=gemini walks one Gemini bet (Beat 6) through its clock to
 // Gemini's result (preview-market.ts), ?preview=gg / ?preview=review the GG moment and the spoken
 // review request (preview-gg.ts), ?preview=odds walks two players agreeing the odds
-// (preview-odds.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
+// (preview-odds.ts), ?preview=dance / ?preview=dance-tie a Dance Off to its scoreboard
+// (preview-dance.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
 // (verify.ts), and the projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
@@ -61,6 +62,7 @@ import {
 import { seedBet } from './seed';
 import { DemoHealthError, fetchDemoHealth, HEALTH_POLL_MS, type DemoHealth } from './health';
 import { PREVIEW_HEALTH, previewAt } from './preview';
+import { isDancePreview, previewDanceAt } from './preview-dance';
 import { isGgPreview, previewGgAt } from './preview-gg';
 import { ggCoversPayout, ggMomentOn } from './gg';
 import { GgMoment, useGgSounds } from './gg-moment';
@@ -397,7 +399,9 @@ export function App() {
             ? previewGgAt(previewStart, now, launch.preview)
             : isOddsPreview(launch.preview)
               ? previewOddsAt(previewStart, now, launch.preview)
-              : previewAt(previewStart, now, launch.preview || null),
+              : isDancePreview(launch.preview)
+                ? previewDanceAt(previewStart, now, launch.preview)
+                : previewAt(previewStart, now, launch.preview || null),
     [launch.preview, marketPv, previewStart, now],
   );
   const shown = pv ? pv.state : state;

@@ -26,6 +26,7 @@ import { judgeFrameTimesMs } from '@youre-on/shared/judge/frames';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import type { CameraEvidence } from '@youre-on/shared/evidence';
 import { getJson } from './connection';
+import { isDanceBet } from './dance';
 import { bottleFrame } from './preview';
 import { frameKey, type BetView, type TickerState } from './ticker';
 
@@ -132,6 +133,7 @@ export const playedKey = (betId: string, attempt: number, kind: 'win' | 'foul') 
 /**
  * Auto-play now? Only for a decisive bet that has been PAID, when its payout was fresh when the
  * stage first saw it (`paidSeenAt`, a cold start shows nothing), once the PAID moment is over,
+ * never for a dance off (no evidence clip: the scoreboard is its replay),
  * with no overlay or operator panel open, and once per (bet, attempt). Never while RULED: the
  * appeal window is the judge's, and the outcome can still change.
  */
@@ -147,6 +149,8 @@ export function shouldAutoPlay(o: {
   const b = o.bet;
   if (!b || !b.paid_at || !b.payout || o.paidSeenAt === null) return false;
   if (b.state !== 'PAID' || winnerOf(b) === null) return false;
+  // a dance off has no camera evidence clip of a winning moment: its scoreboard is the replay
+  if (isDanceBet(b)) return false;
   if (o.paidSeenAt - Date.parse(b.paid_at) > PAID_FRESH_MS) return false;
   const due = o.paidSeenAt + PAID_MOMENT_MS;
   if (o.now < due || o.now > due + SLOWMO_AUTO_WINDOW_MS) return false;

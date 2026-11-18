@@ -6,7 +6,9 @@
 //   ruling.issued            the judge voice. "Jake wins. <reason>"; REDO "Run it back. <reason>"
 //                            (said once: a reason that already says it, as the server's own REDO
 //                            reasons do, is read as it is); VOID says why and that both stakes go
-//                            back; a Gemini settlement starts "Gemini settles it."
+//                            back; a Gemini settlement starts "Gemini settles it."; a Dance Off
+//                            VOID (too close / failed / invalid) says its own reason, which the
+//                            server writes ("Too close to call. …"), then that both stakes go back
 //   judge.cue PAID / VOIDED  the judge voice, when money moved (read from the [EVENT] line's
 //                            values): "Paid. Jake takes $10.00."; after a GG (via=gg) "Logan says
 //                            GG. Jake takes $10.00." The VOIDED cue a VOID ruling sends
@@ -20,6 +22,7 @@
 // Only shape checks here (looseObject): the caller already parsed the event, and a line is never
 // worth failing over.
 import { z } from 'zod/v4';
+import { DANCE_OFF_MODEL } from './ruling';
 
 export const StageVoiceName = z.enum(['judge', 'seat_1', 'seat_2', 'seat_3']);
 export type StageVoiceName = z.infer<typeof StageVoiceName>;
@@ -156,6 +159,7 @@ const RulingLite = z.looseObject({
   reason: z.string(),
   stage: z.string().optional(),
   void_reason: z.string().nullish(),
+  model: z.string().optional(),
 });
 const VoteLite = z.looseObject({
   seat: z.number().int().min(0).max(2),
@@ -181,8 +185,12 @@ function rulingLine(r: z.infer<typeof RulingLite>, name: (p: 'A' | 'B') => strin
     return SAYS_RUN_IT_BACK.test(r.reason)
       ? sentence(r.reason)
       : `Run it back. ${sentence(r.reason)}`;
-  if (r.outcome === 'VOID')
+  if (r.outcome === 'VOID') {
+    // A dance off's VOID reason is the announcer's line naming why ("Too close to call. …").
+    if (r.model === DANCE_OFF_MODEL && clean(r.reason))
+      return `${sentence(r.reason)} It's void: both stakes go back.`;
     return `${VOID_LINE[r.void_reason ?? ''] ?? ''} It's void: both stakes go back.`.trim();
+  }
   const won = `${name(r.outcome === 'A_WINS' ? 'A' : 'B')} wins. ${sentence(r.reason)}`;
   return r.stage === 'settlement' ? `Gemini settles it. ${won}` : won;
 }

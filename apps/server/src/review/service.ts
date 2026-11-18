@@ -38,6 +38,7 @@ import { APPEAL_UI_MARGIN_MS } from '../appeal/service';
 import { judgeCue, type JudgeCue } from '../bets/cues';
 import { partyOf, type BetRow } from '../bets/snapshot';
 import { HttpError } from '../errors';
+import { isDanceOffBet } from '../judge/dance-bet';
 import { fanout, iso, lockBet, type LifecycleDeps, type Tx } from '../lock/common';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 
@@ -197,6 +198,8 @@ export class ReviewService {
       if (stateFix) return no(stateFix);
       if (await appealFiled(tx, betId)) return no('WITH_PANEL');
       if (b.evidence_source === 'gemini') return no('MARKET');
+      // DANCE-OFF §5: the score decides a dance off; there is no review ("The ruling is final.").
+      if (await isDanceOffBet(tx, betId)) return no('FINAL');
       if (!loser || !loserName) return no('NO_LOSER');
       if (!b.appeal_deadline) return no('NO_RULING');
       const confirmBy = confirmByOf(b.appeal_deadline);
