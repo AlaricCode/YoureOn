@@ -767,7 +767,7 @@ Source rules: DATA-MODEL §10, FINDINGS §3.2 and §7. PENDING: confirm the Elev
 
 ### 7.1 Per beat
 
-Likelihoods and mitigations come from FINDINGS §4. This table adds what the system does automatically and what the presenter does. **Every replayed or pre-recorded fallback is labelled "REPLAY" on the stage.**
+Likelihoods and mitigations come from FINDINGS §4. This table adds what the system does automatically and what the presenter does. **Every replayed or pre-recorded fallback is labelled "REPLAY" on the stage.** The post-bet slow-mo (key R, SCHEMAS §4.1) plays the bet's own live evidence frames, so it is badged `SLOW-MO`, never "REPLAY".
 
 | Beat | Failure | Automatic response | Presenter fallback / toggle |
 |---|---|---|---|
@@ -972,3 +972,4 @@ Open items for the lead engineer (defaults in force until changed):
 - **2026-11-08, completeness pass** (`TRACEABILITY.md`): §9 item 15 now discloses the pre-window data artifacts (the eval clips, which stay out of git) and says the face model is regenerated in the window (timing rule; TASKS §3.2 rule 9, D0-M2).
 - **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`): summary, the §1 diagram and the `apps/mobile` row now say 12 frames + one landing crop (the shared sampler `packages/shared/src/judge/frames.ts`). The judge cam is optional: with two phones the non-performer's phone records with `recorder:'self'`, on A's phone too when B performs. That deviates from FINDINGS §4 Beat 4 ("recording never happens on A's phone"); the recording has no audio track, so the WebRTC mic is untouched.
 - **2026-11-18, the stage voice:** the stage routes row adds `GET /v1/stage/audio`, `/v1/stage/tts/:clip_id` (content-addressed, was `:vote_id`) and `/v1/stage/sfx/:kind`. §8.2: TTS voices the rulings and payouts on the projector as well as the appeal votes, with the browser's voice as the fallback; the Sound Effects cues are generated at server boot, not at build time (API-CONTRACT §4.5). One judge at a time: once A's phone has relayed a `judge.line` for a bet, its ruling and payout are the phone judge's, and the stage stays quiet for them.
+- **2026-11-18, slow-mo replay (feat/slowmo-replay):** §7.1 says the post-bet slow-mo replays live evidence frames and is badged `SLOW-MO`, not "REPLAY" (which stays reserved for pre-recorded fallbacks).

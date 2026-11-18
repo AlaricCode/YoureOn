@@ -12,7 +12,8 @@
 // re-checked here (verify.ts), and the projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
-// Keys: 1-6 REPLAY clips, Esc closes, F full screen, Q big Explorer QR, M mute, V voice, H help.
+// Keys: 1-6 REPLAY clips, R slow-mo, Esc closes, F full screen, Q big Explorer QR, M mute, V voice,
+// H help.
 import {
   useCallback,
   useEffect,
@@ -80,6 +81,10 @@ import {
   StageView,
   type LockSigner,
 } from './view';
+// --- slow-mo (feat/slowmo-replay) ---
+import { useSlowMo } from './SlowMoPlayer';
+import type { SlowmoOverlay } from './slowmo';
+// --- end slow-mo ---
 
 export {
   BetCard,
@@ -336,7 +341,7 @@ export function App() {
   const [form, setForm] = useState<FormState>(() => initialForm(launch));
   const [state, dispatch] = useReducer(applyFrame, initialTicker);
   const [overlay, setOverlay] = useState<
-    { kind: 'replay'; beat: number } | { kind: 'qr' | 'help' } | null
+    { kind: 'replay'; beat: number } | { kind: 'qr' | 'help' } | SlowmoOverlay | null
   >(null);
   const [live, setLive] = useState<Live | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -744,6 +749,23 @@ export function App() {
     if (fresh.length) audio.current?.play(fresh[fresh.length - 1]!);
   }, [shown, shownNow]);
 
+  // --- slow-mo (feat/slowmo-replay) ---
+  // The slow-mo replay of the focused bet (SlowMoPlayer.tsx): R toggles it; it plays once on its own
+  // after a fresh payout's PAID moment, once the judge's line is over. One overlay slot with 1-6.
+  const slowmo = useSlowMo({
+    bet: focus,
+    now: shownNow,
+    conn: live ? { serverUrl: live.serverUrl, token: live.token } : null,
+    preview: pv !== null,
+    frameBlobs: shown.frameBlobs,
+    overlay,
+    setOverlay,
+    voiceIdle: () => voice.current?.idle !== false,
+  });
+  const slowmoRef = useRef(slowmo);
+  slowmoRef.current = slowmo;
+  // --- end slow-mo ---
+
   // Stage cues (gavel, drumroll, …): a flash on the projector, and the sound (the ElevenLabs
   // clip once it is loaded; a cue naming one the page has not loaded loads it for next time).
   const [flash, setFlash] = useState<string | null>(null);
@@ -784,6 +806,8 @@ export function App() {
       const k = e.key.toLowerCase();
       if (k === 'escape') setOverlay(null);
       else if (k === 'f') toggleFullscreen();
+      else if (k === 'r')
+        slowmoRef.current.toggle(); // slow-mo (feat/slowmo-replay)
       else if (k === 'q') setOverlay((o) => (o?.kind === 'qr' ? null : { kind: 'qr' }));
       else if (k === 'h' || k === '?')
         setOverlay((o) => (o?.kind === 'help' ? null : { kind: 'help' }));
@@ -893,7 +917,7 @@ export function App() {
           </form>
           <ReplayLine replays={replays} off={launch.noPreload} />
           <p className="muted small">
-            Keys: 1–6 REPLAY clips · F full screen · Q big QR · H help ·{' '}
+            Keys: 1–6 REPLAY clips · R slow-mo · F full screen · Q big QR · H help ·{' '}
             <a href="?preview">open the preview</a>
           </p>
           <p className="muted small tip">
@@ -903,6 +927,7 @@ export function App() {
         </div>
       )}
       {paidMoment && focus?.payout && <PaidMoment bet={focus} />}
+      {slowmo.node /* slow-mo (feat/slowmo-replay) */}
       {flash && <div className={`flash ${flash}`} aria-hidden="true" />}
       {overlay?.kind === 'replay' && (
         <ReplayOverlay

@@ -1,0 +1,181 @@
+/* The slow-mo replay (SlowMoPlayer.tsx): a black full-screen layer over the stage view. It shares
+   the overlays' z 10 and comes after the PAID moment in the DOM, so R during the PAID burst shows
+   the slow-mo (auto-play only starts once the burst is over); the other overlays share its slot.
+   One accent: the win colour, or the loss colour for a foul. Sized from the stage's em
+   (stage.css: ~28px on 1920x1080). */
+.slowmo {
+  --sm-win: var(--good, #00d47a);
+  --sm-foul: var(--bad, #ff4f45);
+  --sm-accent: var(--sm-win);
+  --sm-frame-h: 62vh;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  color: #fff;
+  cursor: pointer;
+  animation: slowmo-in 0.35s ease-out;
+}
+.slowmo.foul {
+  --sm-accent: var(--sm-foul);
+}
+.slowmo-badge,
+.slowmo-chip {
+  position: absolute;
+  top: 3vh;
+  z-index: 2;
+  padding: 0.3em 0.8em;
+  border-radius: 0.3em;
+  font-weight: 900;
+}
+.slowmo-badge {
+  left: 2vw;
+  background: var(--sm-accent);
+  color: #000;
+  letter-spacing: 0.2em;
+}
+.slowmo-chip {
+  right: 2vw;
+  font-size: 1.25em;
+  letter-spacing: 0.02em;
+  border: 1px solid rgb(255 255 255 / 0.18);
+}
+.slowmo-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1.6vh;
+  /* clear of the badge row */
+  margin-top: 6vh;
+}
+.slowmo-frame {
+  position: relative;
+  margin: 0;
+  height: var(--sm-frame-h);
+  aspect-ratio: 4 / 3;
+  max-width: 92vw;
+  overflow: hidden;
+  border-radius: 0.6em;
+  background: #0a0a0a;
+  box-shadow: 0 0 0 0.08em rgb(255 255 255 / 0.08);
+  transition: box-shadow 0.45s ease;
+}
+.slowmo-frame.clip {
+  aspect-ratio: 16 / 9;
+}
+.slowmo-frame img,
+.slowmo-frame video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform-origin: 50% 62%;
+  will-change: opacity, transform;
+  user-select: none;
+}
+.slowmo-frame video {
+  object-fit: contain;
+}
+.slowmo-frame.holding {
+  box-shadow:
+    0 0 0 0.16em var(--sm-accent),
+    0 0 3em color-mix(in srgb, var(--sm-accent) 32%, transparent);
+}
+.slowmo-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 58%, rgb(0 0 0 / 0.5));
+}
+.slowmo-time {
+  position: absolute;
+  top: 0.7em;
+  right: 0.8em;
+  padding: 0.12em 0.5em;
+  border-radius: 0.3em;
+  background: rgb(0 0 0 / 0.5);
+  color: rgb(255 255 255 / 0.85);
+  font-family: var(--mono);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+.slowmo-hold {
+  position: absolute;
+  left: 0.8em;
+  bottom: 0.8em;
+  padding: 0.3em 0.7em;
+  border-radius: 0.3em;
+  background: var(--sm-accent);
+  color: #000;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  animation: slowmo-hold-in 0.4s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+/* as wide as the frame, never wider (it does not size the column) */
+.slowmo-lower {
+  width: 0;
+  min-width: 100%;
+}
+.slowmo-reason {
+  margin: 0;
+  font-size: 1.2em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.slowmo-footer {
+  margin: 0.35em 0 0;
+  color: var(--muted, #a3a9bd);
+  font-size: 0.8em;
+  letter-spacing: 0.04em;
+}
+.slowmo-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0.5vh;
+  background: rgb(255 255 255 / 0.06);
+}
+.slowmo-progress span {
+  display: block;
+  height: 100%;
+  background: var(--sm-accent);
+  transform-origin: left;
+}
+.slowmo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 8vh;
+  z-index: 12;
+  transform: translateX(-50%);
+  padding: 0.5em 1.1em;
+  border-radius: 0.6em;
+  border: 1px solid var(--line, #262b3b);
+  background: var(--panel-2, #161a26);
+  font-weight: 700;
+  pointer-events: none;
+}
+@keyframes slowmo-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes slowmo-hold-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.4em);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slowmo,
+  .slowmo-hold {
+    animation: none;
+  }
+  .slowmo-frame {
+    transition: none;
+  }
+}

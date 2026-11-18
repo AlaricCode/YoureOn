@@ -24,6 +24,7 @@ import { stageAudioRoutes } from './stage/audio';
 import { stageStaticRoutes } from './stage/static';
 import { marketsRoutes } from './markets/routes';
 import { marketBetRoutes } from './markets/bet-routes';
+import { replayRoutes } from './replay/routes';
 
 export const routeModules: RouteModule[] = [
   healthRoutes,
@@ -45,6 +46,7 @@ export const routeModules: RouteModule[] = [
   stageRoutes,
   // after stageRoutes: its '/v1/stage/*' CORS middleware covers these
   stageAudioRoutes,
+  replayRoutes,
   marketsRoutes,
   marketBetRoutes,
   // GET / and /stage/*: the built projector page (apps/stage/dist), same-origin with the API.
