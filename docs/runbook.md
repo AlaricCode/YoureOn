@@ -22,12 +22,13 @@ them it answers 404.
 
 Check these first; each changes the script ([`pitch.md`](pitch.md)).
 
-| Gap                         | Effect                                                                                                                                                                                                               | Check                                                    |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| ElevenLabs key pending      | No voice judge: A uses "Type it instead" in Beat 2.                                                                                                                                                                  | `demo "$SERVER/v1/demo/voice"`                           |
-| QuickNode key pending       | No Stream: chain events arrive through `rpc_poll`, about 5 s after the send (30 s once a Stream token is set); the stage ticker won't say "via QuickNode Streams". The RPC is not QuickNode's, so it can rate-limit. | `stream.last_delivery_at` in the health report is `null` |
-| Signed iPhone build pending | No phones: run the bets from the laptop with `cp1-drive` (see "No phones" in the pitch).                                                                                                                             | The app is installed and opens on each phone             |
-| Beat 6 not yet run live     | Rehearse it at least once on Gemini; keep `REPLAY 6` and the Gemini replay feed ready.                                                                                                                               | `docs/measurements.md` Beat 6 TODO filled in             |
+| Gap                            | Effect                                                                                                                                                                                                               | Check                                                               |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| ElevenLabs key pending         | No voice judge: A uses "Type it instead" in Beat 2.                                                                                                                                                                  | `demo "$SERVER/v1/demo/voice"`                                      |
+| QuickNode key pending          | No Stream: chain events arrive through `rpc_poll`, about 5 s after the send (30 s once a Stream token is set); the stage ticker won't say "via QuickNode Streams". The RPC is not QuickNode's, so it can rate-limit. | `stream.last_delivery_at` in the health report is `null`            |
+| Signed iPhone build pending    | No phones: run the bets from the laptop with `cp1-drive` (see "No phones" in the pitch).                                                                                                                             | The app is installed and opens on each phone                        |
+| Beat 6 not yet run live        | Rehearse it at least once on Gemini; keep `REPLAY 6` and the Gemini replay feed ready.                                                                                                                               | `docs/measurements.md` Beat 6 TODO filled in                        |
+| Beat 5 appeal not yet run live | Rehearse it on devnet before showing it ("The appeal (Beat 5)" below); without the appeal key an appealed bet is refunded after 300 s instead of paid.                                                               | `appeal_key` set and no `appeal_key_*` warning in the health report |
 
 ## 1. Pre-show checklist (start 60 minutes before)
 
@@ -123,6 +124,33 @@ free nonces are enough for the demo. If `free` is low:
 - Phone A creates the room; its 6-character code goes into the stage URL.
 - Pick the pitch start time for the Bitcoin closer: about 1:05 after a five-minute mark
   ([`pitch.md`](pitch.md#timing-the-closer-beat-6)).
+
+### The appeal (Beat 5)
+
+Optional, and built without the hearing. The loser of a decisive ruling taps **I appeal!** (Face
+ID, no hold) on the ruling screen before the last second of the 10 s window. Claude, GPT and Gemini
+vote on the same frames (8 s each at most); two agreeing votes decide, anything else (a tie, all
+abstaining) upholds the ruling. The appeal key then pays with `resolve_appeal`, about 1 s later.
+
+- **Needs:** migration 0008 applied (the `appeals` tables); `APPEAL_AUTHORITY_SECRET_KEY` on Fly,
+  equal to Config's `appeal_authority` (health: `appeal_key`, warnings `appeal_key_missing` /
+  `appeal_key_mismatch`); for real votes `LLM_PROVIDER=live`, `ALLOW_SPEND=true` and
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`. A vendor without its key
+  abstains; with no key at all every vote abstains and the ruling stands. `CACHED_RULING` does not
+  replay the panel.
+- **From the laptop** (`LOCK_SIGNER=server`, the custodial demo): right after `RULED`,
+  `demo -X POST "$SERVER/v1/demo/bets/$BET/appeal" -d '{}'` files the losing demo party's appeal
+  (`{"party":"A"}` only for a VOID ruling). It answers 202 `{status, signature, appeal_id}`, or
+  `APPEAL_WINDOW_CLOSED` after `appeal_deadline − 1 s`. The admin route is not rate-limited.
+- **Driver:** `npm run cp1-drive -- --base-url $SERVER --through paid --appeal` runs a whole bet,
+  appeals as the loser inside the window, prints the three votes and the result, and waits for
+  `PAID via resolve_appeal`.
+- **Rate limit:** 3 appeals per hour per player (the phones and `cp1-drive`), held in memory on the
+  one machine (a restart clears it). Rehearse with the admin route, or keep the last hour's player
+  appeals under 3 before the pitch.
+- **If it stalls:** `stuck_bets` lists an `APPEALED` bet; the keeper's `appeal-sweep` re-runs a lost
+  panel and resends a failed `resolve_appeal`. Past `appeal_resolve_deadline` (300 s after the
+  appeal) the timeout-refund keeper returns both stakes (`EXPIRED`, `appeal_timeout`).
 
 ## 2. Opening the stage
 

@@ -51,7 +51,7 @@ export const AppealVote = z.strictObject({
   provider: PanelProvider,
   model: z.string().min(1).max(80),
   status: z.enum(['ok', 'error', 'timeout']),
-  /** toOutcome(voter's VisionVerdict, yes_party); REDO if status != ok. Never VOID. */
+  /** voteOutcome(voter's VisionVerdict, yes_party) (no 0.8 floor); REDO if status != ok. Never VOID. */
   outcome: z.enum(['A_WINS', 'B_WINS', 'REDO']),
   /** 0 if status != ok. */
   confidence: Confidence,

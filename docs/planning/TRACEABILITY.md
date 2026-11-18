@@ -153,7 +153,7 @@ Every requirement in BRIEF.md (as amended, plus D1–D7) mapped to the spec sect
 | B4d | The winner's phone buzzes with the payout | Beat 4 | SCH X10 | D3-M2 | covered |
 | B5a | Contested shot → each side gets about 10 s to argue | Beat 5 | SCH §6; API §2.11 | D4-J1, D4-M3 | **fixed-now**: `force-hearing` (trigger `'demo'`) makes the contested shot deterministic on stage |
 | B5b | The judge reviews the clip and rules | Beat 5 | SCH §6 `HearingRuling` | D4-J1 | covered (PENDING-KEY) |
-| B5c | "I appeal!" → the three-model panel votes live | Beat 5 | SCH §7; API §2.12, §7.2 | D4-L1, D4-J2, D4-M3, D4-J4 | **fixed-now**: the appeal gesture aligned to tap + Face ID (D4-M3) |
+| B5c | "I appeal!" → the three-model panel votes live | Beat 5 | SCH §7; API §2.12, §7.2 | D4-L1, D4-J2, D4-M3, D4-J4 | **fixed-now**: the appeal gesture aligned to tap + Face ID (D4-M3). **Built 2026-11-18** (`feat/appeal`; tests `apps/server/test/e2e-beats.test.ts`, `appeal-panel.test.ts`, `apps/mobile/src/app/__tests__/appeal.test.ts`); the hearing (B5a/B5b) is not |
 | B5d | The ruling stands or flips | Beat 5 | SCH §7 | D4-L1 | covered |
 | B6a | "Bitcoin's up by the end of this pitch" → the judge pulls Gemini's 5-minute BTC market | Beat 6 | API §4.3 `get_market_odds`; ARCH §3.6 | D4-J3 | covered |
 | B6b | Fair stakes from the live price (e.g. 62/38) | Beat 6 | SCH §8.2 | D1-J3, D4-M4 | covered |

@@ -138,8 +138,9 @@ verdict they can't confirm. If the judge is slow or wrong, see the runbook (`CAC
 > key. And if our server vanished tomorrow, every bet has a deadline after which anyone can refund
 > it. The program decides where money can go. The AI only decides who won."
 
-Stage: stays on the paid bet. Don't show the stage preview's sample appeal: the hearing and panel
-are not built.
+Stage: stays on the paid bet. Don't show the stage preview's sample appeal: the hearing is not
+built, and the panel (built and tested, see the runbook's "The appeal (Beat 5)") has not run live
+yet.
 
 ### 3:45–4:25 · Beat 6, part 2: the closer settles
 
@@ -202,8 +203,8 @@ Gemini's regulated market instead of our escrow.
 **What if the AI judge is wrong?** Three guards. It rules on frames whose hashes are committed on
 chain, so the evidence can't be swapped later. Deterministic checks can veto a verdict (REDO), and
 low confidence or a model error is a REDO too; a third REDO refunds both. And the loser
-can appeal inside the window; only a separate appeal key can settle an appeal. The three-model
-panel behind that key is the next thing we build.
+can appeal inside the window; only a separate appeal key can settle an appeal. Behind that key, a
+panel of three models from three companies votes on the same frames; two must agree to flip it.
 
 **Can your server steal the money?** No. The program pays out only to the two parties' own token
 accounts; there is no admin withdrawal. Our judge key can pick who won, not where money goes. We
