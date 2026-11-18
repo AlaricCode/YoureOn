@@ -19,6 +19,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "environment": "development",
+      "channel": "development",
       "env": {
         "IOS_BUNDLE_ID": "dev.youreon.app.eas.dev",
         "IOS_DISPLAY_NAME": "You're On Dev",
@@ -29,6 +30,7 @@
       "extends": "base",
       "distribution": "internal",
       "environment": "preview",
+      "channel": "preview",
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev",
@@ -38,6 +40,7 @@
     },
     "preview-typed": {
       "extends": "preview",
+      "channel": "preview-typed",
       "env": {
         "EXPO_PUBLIC_VOICE": "off",
         "EXPO_PUBLIC_BUILD": "preview-typed"
@@ -45,6 +48,7 @@
     },
     "pitch": {
       "extends": "preview",
+      "channel": "pitch",
       "env": {
         "EXPO_PUBLIC_BUILD": "pitch"
       }
@@ -52,6 +56,7 @@
     "production": {
       "extends": "base",
       "environment": "production",
+      "channel": "production",
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://youre-on.fly.dev",

@@ -289,6 +289,8 @@ export function checkPatch(p: PatchFacts, postinstall: string | undefined): Resu
 export interface Profile {
   distribution?: string;
   developmentClient?: boolean;
+  /** EAS Update channel the build listens on. */
+  channel?: string;
   env?: Record<string, string>;
   image?: string;
   node?: string;
@@ -338,6 +340,13 @@ export function checkProfiles(profiles: Record<string, Profile | Error>): Result
       if (env.EXPO_PUBLIC_VOICE !== 'on' && env.EXPO_PUBLIC_VOICE !== 'off') {
         problems.push(`EXPO_PUBLIC_VOICE ${String(env.EXPO_PUBLIC_VOICE)} (want on|off)`);
       }
+      // EXPO_PUBLIC_* are baked into each update, so two profiles with different env must not
+      // share a channel (an update for one would rewrite the other's env).
+      if (!p.channel) problems.push('no EAS Update channel');
+      const twin = Object.entries(profiles).find(
+        ([other, q]) => other !== name && !(q instanceof Error) && q.channel === p.channel,
+      );
+      if (p.channel && twin) problems.push(`shares channel "${p.channel}" with ${twin[0]}`);
     }
     const summary = [
       p.distribution,
@@ -345,6 +354,7 @@ export function checkProfiles(profiles: Record<string, Profile | Error>): Result
       env.IOS_BUNDLE_ID,
       env.EXPO_PUBLIC_API_URL,
       env.EXPO_PUBLIC_VOICE && `voice ${env.EXPO_PUBLIC_VOICE}`,
+      p.channel && `channel ${p.channel}`,
       p.image,
     ]
       .filter(Boolean)
@@ -408,14 +418,38 @@ export function checkAppConfig(f: AppConfigFacts): Result[] {
         ),
   );
   const eas = ((f.exp.extra ?? {}) as Json).eas as Json | undefined;
+  const projectId = typeof eas?.projectId === 'string' ? eas.projectId : null;
   out.push(
-    typeof eas?.projectId === 'string'
-      ? pass(`linked to EAS project ${eas.projectId}`, `owner ${String(f.exp.owner ?? '?')}`)
+    projectId
+      ? pass(`linked to EAS project ${projectId}`, `owner ${String(f.exp.owner ?? '?')}`)
       : info(
           'not linked to an EAS project yet',
           '`eas init` (or the first `eas build`) writes extra.eas.projectId + owner into app.json; commit it',
         ),
   );
+  const updates = (f.exp.updates ?? {}) as Json;
+  const runtime = (f.exp.runtimeVersion ?? {}) as Json;
+  if (runtime.policy !== 'appVersion') {
+    out.push(
+      fail('runtimeVersion is not {"policy":"appVersion"}', JSON.stringify(f.exp.runtimeVersion)),
+    );
+  } else if (projectId) {
+    const url = `https://u.expo.dev/${projectId}`;
+    out.push(
+      updates.enabled === true && updates.url === url
+        ? pass('EAS Update on', `${url}, runtime = expo.version ${String(f.exp.version)}`)
+        : fail(
+            'EAS Update misconfigured',
+            `updates ${JSON.stringify(updates)}; expected url ${url}`,
+          ),
+    );
+  } else {
+    out.push(
+      updates.enabled === false
+        ? info('EAS Update off until the project is linked', 'builds run the embedded JS only')
+        : fail('EAS Update enabled without an EAS project', JSON.stringify(updates)),
+    );
+  }
   return out;
 }
 
