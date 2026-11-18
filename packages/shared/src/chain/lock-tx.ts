@@ -1,8 +1,10 @@
-// The atomic-lock message (ESCROW §5.0.1) as the server's LockService stores it, built with the
-// Codama client: `[AdvanceNonceAccount, SetComputeUnitLimit, (SetComputeUnitPrice), create_bet,
-// accept_bet]` on a durable nonce, fee payer = nonce authority = S. Compiled ONCE into the stored
-// message bytes; each party then signs those exact bytes separately (`cosign`), the way the two
-// phones and the server do. No LiteSVM import: the local-validator suite shares this file.
+// The atomic-lock message (ESCROW §5.0.1) as the server's LockService (apps/server/src/lock)
+// stores it, built with the Codama client: `[AdvanceNonceAccount, SetComputeUnitLimit,
+// (SetComputeUnitPrice), create_bet, accept_bet]` on a durable nonce, fee payer = nonce
+// authority = S. Compiled ONCE into the stored message bytes; each party then signs those exact
+// bytes separately (`cosign`), the way the two phones and the server do. No LiteSVM import: the
+// escrow and local-validator test suites and the server share this file. The parties may be
+// no-op signers (`createNoopSigner(pubkey)`): compiling only needs their addresses.
 import {
   appendTransactionMessageInstructions,
   compileTransaction,
@@ -19,6 +21,7 @@ import {
   type Instruction,
   type KeyPairSigner,
   type Transaction,
+  type TransactionSigner,
 } from '@solana/kit';
 
 import {
@@ -26,7 +29,7 @@ import {
   findVaultPda,
   getAcceptBetInstructionAsync,
   getCreateBetInstructionAsync,
-} from '@youre-on/shared/escrow-client';
+} from './generated/index';
 
 const COMPUTE_BUDGET = address('ComputeBudget111111111111111111111111111111');
 
@@ -55,9 +58,9 @@ export function priorityFee(cuLimit: number, microLamports: bigint): bigint {
 }
 
 export type LockParties = {
-  s: KeyPairSigner;
-  a: KeyPairSigner;
-  b: KeyPairSigner;
+  s: TransactionSigner;
+  a: TransactionSigner;
+  b: TransactionSigner;
   mint: Address;
   aToken: Address;
   bToken: Address;
