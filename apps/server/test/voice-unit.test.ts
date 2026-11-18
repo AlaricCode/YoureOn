@@ -355,10 +355,11 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       'vad_score',
     ])
       expect(CLIENT_EVENTS).toContain(e);
-    // overrides allowed: first_message, prompt.llm, tts.model_id only
+    // no client overrides (a token holder must not pick a costlier LLM / TTS model), sent as
+    // explicit false so a sync turns them off on the existing agent
     expect(a.platform_settings.overrides.conversation_config_override).toEqual({
-      agent: { first_message: true, prompt: { llm: true } },
-      tts: { model_id: true },
+      agent: { first_message: false, prompt: { llm: false } },
+      tts: { model_id: false },
     });
   });
 

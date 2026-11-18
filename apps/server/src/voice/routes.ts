@@ -1,5 +1,6 @@
 // Voice routes (TASKS D0-J2):
-//   POST /v1/voice/tokens       (S)  mint an ElevenLabs conversation token (API-CONTRACT §2.6)
+//   POST /v1/voice/tokens       (S)  mint an ElevenLabs conversation token (API-CONTRACT §2.6);
+//                                    6 / 10 min per user; DEMO_MODE: demo players only
 //   POST /el/tools/propose_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //   POST /v1/bets/:bet_id/voice/lines (S, A)  transcript relay -> judge.line / party.line (./relay)
@@ -27,6 +28,7 @@ import type { AppDeps, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
+import { nonDemoPlayers } from '../demo/players';
 import { requireDemo } from '../demo/routes';
 import { createElevenLabsClient, UpstreamError, type ElevenLabsClient } from './elevenlabs';
 import { voiceReadiness } from './readiness';
@@ -38,6 +40,9 @@ import {
   ToolState,
   type ProposalSink,
 } from './tools';
+
+/** Conversation tokens per user (§1.7): a burst of 6, then one every 100 s. */
+export const VOICE_TOKENS_BUCKET = { limit: 6, windowMs: 10 * 60_000 } as const;
 
 export interface VoiceRoutesOptions {
   /** Defaults to a fetch client built from ELEVENLABS_API_KEY. */
@@ -71,6 +76,12 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         const me = appAuth(c);
         const body = await readBody(c, VoiceTokenRequest);
         const agentId = d.env.ELEVENLABS_AGENT_ID;
+        // DEMO_MODE (the finals server): the judge agent is for the demo players only, so open
+        // signups can't fill the plan's concurrent conversations before the real one starts.
+        if (d.env.DEMO_MODE && (await nonDemoPlayers(d, [me.user_id])).length)
+          throw new HttpError('NOT_A_PARTY', 'The voice judge is for the demo players today.', {
+            reason: 'demo_only',
+          });
 
         if (body.bet_id) {
           const [bet] = await d.db
@@ -102,6 +113,9 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
             { reason: deps.env.ELEVENLABS_API_KEY ? 'spend_disabled' : 'not_configured' },
             { retryable: false },
           );
+        // Each token opens a billed agent session of up to 20 min: a per-user bucket on top of
+        // the 120/min session one (a bet mints once, plus one retry on a blip).
+        d.rateLimit?.take('voice/tokens', me.user_id, VOICE_TOKENS_BUCKET);
         let minted;
         try {
           minted = await el.conversationToken(agentId);

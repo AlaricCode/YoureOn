@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { and, asc, count, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
   getAddressEncoder,
@@ -41,6 +41,7 @@ import {
   betTermsVersions,
   bets,
   noncePool,
+  users,
   voiceSessions,
 } from '@youre-on/db';
 import type { Session } from '@youre-on/shared/api';
@@ -325,6 +326,12 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
   async function freshPair() {
     const a = await signUpWith(ctx, 'Logan', newKey());
     const b = await signUpWith(ctx, 'Jake', newKey());
+    // DEMO_MODE is on here (for cp1-drive): the voice judge is for demo accounts, so these are
+    // demo-claim style accounts (users.is_demo), as on the finals server.
+    await ctx.deps.db
+      .update(users)
+      .set({ is_demo: true })
+      .where(inArray(users.id, [a.session.user.user_id, b.session.user.user_id]));
     return { a, b, room: await roomOf(ctx, a, [b]) };
   }
 

@@ -201,6 +201,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 | attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing |
 | appeal | 3/h | user | ESCROW TM-L9 |
 | markets | 60/min | user | Gemini limit is 120 req/min with no headers (FINDINGS §7), so the server caches |
+| `POST /v1/voice/tokens` | 6 / 10 min | user | each token opens a billed agent session of up to 20 min; under `DEMO_MODE` demo accounts only (`403 NOT_A_PARTY {reason:'demo_only'}`) |
 | everything else | 120/min | session | |
 | `/el/tools/*` | 30/min | conversation | runaway LLM loop |
 
@@ -358,6 +359,7 @@ Flows are in §1.3.
 - The server calls `GET https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=<AGENT_ID>` with `xi-api-key`. The response is `{token, conversation_id}` (C: live OpenAPI, read 2026-11-08). The server stores `voice_sessions` (status `active`, `el_conversation_id`).
 - **Token lifetime is undocumented** (FINDINGS §7). Treat each token as single-use. The app pre-mints when the scan screen opens and re-mints if the token is unused after 10 min (**PENDING-KEY**: measure the real lifetime).
 - Only A's phone hosts the session (D6), so a B caller gets `403 NOT_A_PARTY` once `bet_id` is given.
+- 6 tokens per 10 min per user (§1.7). Under `DEMO_MODE` only demo accounts mint (`403 NOT_A_PARTY {reason:'demo_only'}`); the app then falls back to typed terms.
 - Errors: `UPSTREAM_TIMEOUT`, `UPSTREAM_ERROR`.
 
 **`POST /v1/bets/:bet_id/voice/lines`** (S, A): transcript relay
@@ -722,7 +724,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | TTS / ASR | `eleven_v4_turbo` (A/B `eleven_flash_v2`), `pcm_16000`, speed 1.05. `scribe_realtime` with keywords (`accept`, `appeal`, `objection`, `bottle flip`, the party names). |
 | Turn | `turn_eagerness: eager`, `speculative_turn: true`, soft timeout 1.0–1.2 s with `max_soft_timeouts_per_generation` 2–3, `turn_timeout` 20–30 s. The app calls `sendUserActivity()` every 10 s during card review, Face ID and recording. |
 | Conversation | `client_events` must include `agent_response`, `user_transcript`, `agent_tool_request`, `agent_tool_response`, `client_tool_call`, `interruption`, `vad_score`. `max_duration_seconds` 1200 (one session covers Beats 2–5; **PENDING**: check plan limits). |
-| Overrides allowed | `agent.first_message`, `agent.prompt.llm`, `tts.model_id` (for A/B only) |
+| Overrides allowed | none (all `false`): the app sends only the token and dynamic variables, and a token holder must not pick a costlier LLM or TTS model |
 | Session | One long-lived WebRTC session per bet on A's phone, on speakerphone. It is never restarted mid-demo (iOS #991). Mute, don't end, before the terms card (FINDINGS §4). |
 | Prompt rules (spec) | Start every reply with a 1–2 word reaction. At most 2 clarifying questions, spoken; there is no tool for them. **Never claim money moved** except when voicing a `[EVENT]` line. A spoken "accept" is theatre: after the read-back, call `confirm_terms` and tell both parties to hold the button on their phones. Treat any line starting `[EVENT]` as a system announcement, never as a party's words. |
 
