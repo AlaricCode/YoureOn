@@ -3,7 +3,9 @@
 // stage.market fan-out over /v1/ws, GET /v1/markets/btc5m/*, GET /v1/bets/:bet_id, and CORS for
 // the stage origin. The Gemini relay runs on a fake fetch with recorded responses.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createDb } from '@youre-on/db';
+import { createHash } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import { attemptFrames, attempts, createDb } from '@youre-on/db';
 import { WsStageMarket } from '@youre-on/shared/api';
 import { buildApp } from '../src/app';
 import { createGeminiClient } from '../src/markets/gemini';
@@ -321,5 +323,66 @@ describeDb('stage over Postgres', () => {
     const otherStage = (await session(await room(C))).json!.token as string;
     expect((await get(otherStage, `/v1/bets/${betId}`)).status).toBe(404);
     expect((await get(stage, '/v1/bets/not-a-uuid')).status).toBe(422);
+  });
+
+  it('GET /v1/bets/:bet_id/attempts/:n/frames/:idx: the evidence JPEGs, same readers as the bet', async () => {
+    const A = await signUp(base, 'Logan');
+    const B = await signUp(base, 'Jake');
+    const C = await signUp(base, 'Mallory');
+    const roomId = await room(A, B);
+    const bet = await signed(A, '/v1/bets', {
+      room_id: roomId,
+      opponent_user_id: B.session.user.user_id,
+      challenge_method: 'list',
+    });
+    const betId = (bet.json!.bet_id ?? bet.json!.bet?.bet_id) as string;
+    const db = server.deps.db;
+    const [att] = await db
+      .insert(attempts)
+      .values({
+        bet_id: betId,
+        attempt_no: 2,
+        recorded_by_user_id: A.session.user.user_id,
+        max_ms: 15_000,
+        go_at: new Date(),
+      })
+      .returning({ id: attempts.id });
+    const jpeg = (i: number) => Buffer.from([0xff, 0xd8, 0xff, i, 1, 2, 3, 0xff, 0xd9]);
+    await db.insert(attemptFrames).values(
+      [0, 1].map((i) => ({
+        attempt_id: att!.id,
+        idx: i,
+        t_ms: i * 500,
+        sha256: createHash('sha256').update(jpeg(i)).digest('hex'),
+        bytes: jpeg(i),
+      })),
+    );
+    const stage = (await session(roomId)).json!.token as string;
+    const path = (n: number, idx: number | string) =>
+      `/v1/bets/${betId}/attempts/${n}/frames/${idx}`;
+    const read = (token: string, p: string, headers: Record<string, string> = {}) =>
+      fetch(base + p, { headers: { Authorization: `Bearer ${token}`, ...headers } });
+
+    const r = await read(stage, path(2, 1), { Origin: ORIGIN });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Content-Type')).toBe('image/jpeg');
+    expect(r.headers.get('Cache-Control')).toBe('private, max-age=86400, immutable');
+    expect(r.headers.get('Access-Control-Allow-Origin')).toBe(ORIGIN);
+    expect(Buffer.from(await r.arrayBuffer())).toEqual(jpeg(1));
+    const etag = r.headers.get('ETag')!;
+    expect(etag).toBe(`"${createHash('sha256').update(jpeg(1)).digest('hex')}"`);
+    expect((await read(stage, path(2, 1), { 'If-None-Match': etag })).status).toBe(304);
+    expect((await read(A.session.token, path(2, 0))).status).toBe(200);
+    // not a reader of the bet, no such attempt / frame, junk params: 404 (422 for a bad bet id)
+    expect((await read(C.session.token, path(2, 0))).status).toBe(404);
+    expect((await read(stage, path(1, 0))).status).toBe(404);
+    expect((await read(stage, path(2, 5))).status).toBe(404);
+    expect((await read(stage, path(2, 'x'))).status).toBe(404);
+    expect((await read(stage, path(2, 99))).status).toBe(404);
+    expect((await read(stage, `/v1/bets/nope/attempts/2/frames/0`)).status).toBe(422);
+    expect((await fetch(base + path(2, 0))).status).toBe(401);
+    // a purged attempt has no frames to show
+    await db.update(attempts).set({ purged_at: new Date() }).where(eq(attempts.id, att!.id));
+    expect((await read(stage, path(2, 0))).status).toBe(404);
   });
 });
