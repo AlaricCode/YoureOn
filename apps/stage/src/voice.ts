@@ -85,8 +85,12 @@ interface Pending {
   settle(o: Outcome): void;
 }
 
-const within = <T>(p: Promise<T>, ms: number): Promise<T | void> =>
-  Promise.race([p, new Promise<void>((r) => setTimeout(r, ms))]);
+/** `p`, or nothing after `ms` (a clip or an utterance that never ends must not stall the queue). */
+function within<T>(p: Promise<T>, ms: number): Promise<T | void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>((r) => (timer = setTimeout(r, ms)));
+  return Promise.race([p, cap]).finally(() => clearTimeout(timer));
+}
 
 export class StageVoice {
   private readonly pending = new Map<string, Pending>();
