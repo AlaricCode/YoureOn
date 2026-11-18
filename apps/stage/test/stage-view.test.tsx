@@ -18,6 +18,7 @@ import {
   type TickerState,
 } from '../src/ticker';
 import { fetchBetSnapshot, fetchMarket, StageConnection, type WsLike } from '../src/connection';
+import { replayUrl } from '../src/replays';
 
 const vector = <T,>(name: string): T =>
   (
@@ -224,14 +225,21 @@ describe('bet card state', () => {
     expect(html).toContain('Logan');
     expect(html).toContain('Jake');
     expect(html).toContain('water bottle flip');
-    expect(html).toContain(b.terms_code!);
-    expect(html).toContain('Face ID');
-    expect(html).toContain('Passcode');
-    expect(html).toContain('1 tx · 3 signatures');
+    expect(html).toContain(`${b.terms_code!.slice(0, 4)}·${b.terms_code!.slice(4)}`);
+    expect(html).toContain('1 transaction · 3 signatures');
     expect(html).toContain(explorerTx(SIG_LOCK).replace(/&/g, '&amp;'));
     expect(html).toContain('Jake wins');
     expect(html).toContain('https://x.test/f5.jpg'); // the first cited frame
     expect(html).toContain('Appeal window 0:08');
+    expect(html).toContain('WINNER');
+
+    // while locking, each player shows how they authorized
+    const locking = renderToString(
+      <BetCard bet={run(fullBet().slice(0, 4)).bets[BET]!} now={now} />,
+    );
+    expect(locking).toContain('✓ <!-- -->Face ID');
+    expect(locking).toContain('✓ <!-- -->Passcode');
+    expect(locking).toContain('Locking both stakes in one transaction');
   });
 
   it('a REST snapshot seeds names / auth / lock on cold start; events still win', () => {
@@ -490,7 +498,7 @@ describe('odds widget', () => {
     expect(html).toContain('$64,389.60');
     expect(html).toContain('$64,379.76');
     expect(html).toContain('2:49');
-    expect(html).toContain('Up <!-- -->$6.10');
+    expect(html.replace(/<!-- -->/g, '')).toContain('Up $6.10 · Down $3.90');
     expect(html).toContain('fair stakes');
   });
 
@@ -534,14 +542,15 @@ describe('stage layout', () => {
     const html = renderToString(<StageView state={s} now={T} />);
     expect(html).toContain('Logan');
     expect(html).toContain('BTC 5-min');
-    expect(html).toContain('chain.BetResolved');
+    expect(html).toContain('<code>BetResolved</code>');
     expect(html).toContain(explorerTx(SIG_RESOLVE).replace(/&/g, '&amp;'));
   });
 
   it('REPLAY overlay is labelled and points at public/replay/beat{n}.mp4', () => {
-    const html = renderToString(<ReplayOverlay beat={3} onClose={() => {}} />);
+    const html = renderToString(<ReplayOverlay beat={3} src={replayUrl(3)} onClose={() => {}} />);
     expect(html).toContain('REPLAY · beat <!-- -->3');
-    expect(html).toContain('/replay/beat3.mp4');
+    expect(html).toContain('src="/replay/beat3.mp4"');
+    expect(replayUrl(3, '/stage/')).toBe('/stage/replay/beat3.mp4');
   });
 
   it('helpers', () => {

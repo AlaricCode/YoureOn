@@ -1,0 +1,1097 @@
+// The pitch screen's components (ARCHITECTURE §2 apps/stage row, §5.2 "what the UI shows when";
+// BRIEF 5i). Built for a projector at 5 m: dark, high contrast, sized in viewport units so a
+// 1280x720 projector shows the same layout as a 4K one, and never scrolling.
+//
+//   top:    brand · phase rail (Challenge -> Terms -> Lock -> Attempt/Market -> Ruling -> Paid)
+//   left:   the two players (photo or initials, Face ID per party, online) · the terms card with
+//           the terms code · the moment panel (whatever just happened, big) · live judge caption
+//   right:  Gemini BTC 5-minute odds · the on-chain ticker with Explorer links
+//   bottom: demo health (fee payer SOL, free nonces, RPC / DB ms, REPLAY clips cached)
+// Overlays: the PAID moment, a big Explorer QR (Q), REPLAY clips (1-6), key help (H).
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  explorerTx,
+  type BetView,
+  type PartyKey,
+  type TickerEvent,
+  type TickerState,
+} from './ticker';
+import {
+  AUTH_METHOD,
+  clock,
+  eventLabel,
+  groupedCode,
+  hueOf,
+  initials,
+  lagLabel,
+  shortSig,
+  usd,
+  usdPrice,
+} from './format';
+import { marketView, type MarketView } from './market';
+import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from './phase';
+import { qrSvg } from './qr';
+import { healthItems, type DemoHealth, type HealthItem } from './health';
+import { presentCount, readyCount, type ReplayStatus } from './replays';
+
+const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
+
+/** The winner of a decisive ruling (or of the appeal), else null. */
+export function winnerOf(b: BetView): PartyKey | null {
+  const o = b.appeal_result?.final_outcome ?? b.ruling?.outcome;
+  return o === 'A_WINS' ? 'A' : o === 'B_WINS' ? 'B' : null;
+}
+
+/** The newest transaction worth scanning: payout, then ruling, then lock. */
+export function featuredTx(b: BetView): { label: string; signature: string } | null {
+  if (b.payout?.signature) return { label: 'Payout transaction', signature: b.payout.signature };
+  if (b.txs.resolve) return { label: 'Ruling transaction', signature: b.txs.resolve };
+  if (b.lock?.signature) return { label: 'Lock transaction', signature: b.lock.signature };
+  return null;
+}
+
+export function ExplorerLink({ sig, label }: { sig: string; label?: string }) {
+  return (
+    <a className="explorer" href={explorerTx(sig)} target="_blank" rel="noreferrer">
+      {label ?? shortSig(sig)} ↗
+    </a>
+  );
+}
+
+// ---- QR -------------------------------------------------------------------------------------
+
+export function QrCode({ text, label }: { text: string; label?: string }) {
+  const q = useMemo(() => {
+    try {
+      return qrSvg(text);
+    } catch {
+      return null;
+    }
+  }, [text]);
+  if (!q) return null;
+  return (
+    <svg
+      className="qr"
+      viewBox={`0 0 ${q.side} ${q.side}`}
+      role="img"
+      aria-label={label ?? `QR code: ${text}`}
+      shapeRendering="crispEdges"
+    >
+      <rect width={q.side} height={q.side} fill="#fff" />
+      <path d={q.path} fill="#000" />
+    </svg>
+  );
+}
+
+export function TxQrCard({ tx }: { tx: { label: string; signature: string } }) {
+  return (
+    <figure className="qr-card">
+      <QrCode text={explorerTx(tx.signature)} label={`QR: ${tx.label} on Solana Explorer`} />
+      <figcaption>
+        <span className="label">SCAN · {tx.label}</span>
+        <span className="muted">Solana Explorer · devnet</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+// ---- players --------------------------------------------------------------------------------
+
+export function Avatar({
+  name,
+  url,
+  size = 'lg',
+}: {
+  name: string | null;
+  url: string | null;
+  size?: 'lg' | 'sm';
+}) {
+  const [broken, setBroken] = useState(false);
+  const style = { '--hue': String(hueOf(name)) } as CSSProperties;
+  return (
+    <span className={`avatar ${size}`} style={style} aria-hidden="true">
+      {url && !broken ? (
+        <img src={url} alt="" onError={() => setBroken(true)} referrerPolicy="no-referrer" />
+      ) : (
+        <span className="initials">{initials(name)}</span>
+      )}
+    </span>
+  );
+}
+
+function partyStatus(b: BetView, p: PartyKey, online: boolean | null): ReactNode {
+  const won = winnerOf(b);
+  if (b.payout) {
+    const amount = p === 'A' ? b.payout.to_a : b.payout.to_b;
+    return amount !== '0' ? (
+      <span className="status win">+{usd(amount)}</span>
+    ) : (
+      <span className="status muted">$0</span>
+    );
+  }
+  if (won)
+    return won === p ? (
+      <span className="status win">WINNER</span>
+    ) : (
+      <span className="status muted">GG</span>
+    );
+  if (b.declined === p) return <span className="status bad">declined</span>;
+  const a = b.auth[p];
+  const locked = b.lock && b.lock.status !== 'failed';
+  if (a || locked)
+    return (
+      <span className="status good">✓ {a ? (AUTH_METHOD[a.method] ?? a.method) : 'locked'}</span>
+    );
+  if (online === false) return <span className="status bad">offline</span>;
+  if (b.envelope) return <span className="status waiting">waiting for Face ID…</span>;
+  if (p === 'B' && b.invite === 'accepted') return <span className="status good">✓ accepted</span>;
+  return <span className="status muted">{online ? 'online' : ' '}</span>;
+}
+
+export function PartyCard({
+  bet,
+  party,
+  online,
+}: {
+  bet: BetView;
+  party: PartyKey;
+  online: boolean | null;
+}) {
+  const won = winnerOf(bet);
+  const cls = `party party-${party.toLowerCase()}${won === party ? ' winner' : won ? ' loser' : ''}`;
+  return (
+    <div className={cls}>
+      <Avatar name={bet.names[party]} url={bet.avatars[party]} />
+      <div className="party-text">
+        <span className="name">{nameOf(bet, party)}</span>
+        {partyStatus(bet, party, online)}
+      </div>
+    </div>
+  );
+}
+
+// ---- terms ----------------------------------------------------------------------------------
+
+export function TermsCard({ bet }: { bet: BetView }) {
+  const env = bet.envelope;
+  if (!env)
+    return (
+      <section className="terms pending" aria-label="terms">
+        <span className="label">TERMS</span>
+        <p className="claim muted">The judge is setting the terms…</p>
+      </section>
+    );
+  const t = env.terms;
+  const same = t.stakes.a === t.stakes.b;
+  return (
+    <section className="terms" aria-label="terms">
+      <div className="terms-main">
+        <span className="label">TERMS · {env.presentation.title}</span>
+        <p className="claim">“{t.claim}”</p>
+        <div className="stakes">
+          {same ? (
+            <span className="chip">{usd(t.stakes.a)} each</span>
+          ) : (
+            <>
+              <span className="chip">
+                {t.party_a.display_name} {usd(t.stakes.a)}
+              </span>
+              <span className="chip">
+                {t.party_b.display_name} {usd(t.stakes.b)}
+              </span>
+            </>
+          )}
+          <span className="chip">
+            pot {usd((BigInt(t.stakes.a) + BigInt(t.stakes.b)).toString())}
+          </span>
+          {t.market && (
+            <span className="chip market">
+              {t.party_a.display_name} {t.market.side === 'YES' ? 'UP' : 'DOWN'} · Gemini{' '}
+              {Math.round(Number(t.market.priceAtLock) * 100)}% up at lock
+            </span>
+          )}
+        </div>
+      </div>
+      {bet.terms_code && (
+        <div className="code-box" aria-label="terms code">
+          <span className="label">TERMS CODE</span>
+          <span className="code">{groupedCode(bet.terms_code)}</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---- the phase rail -------------------------------------------------------------------------
+
+export function PhaseRail({ bet }: { bet: BetView | null }) {
+  return (
+    <ol className="rail" aria-label="phase">
+      {phaseSteps(bet).map((s, i) => (
+        <li
+          key={s.key}
+          className={`step ${s.status}`}
+          aria-current={s.status === 'current' ? 'step' : undefined}
+        >
+          <span className="n">
+            {s.status === 'done' ? '✓' : s.status === 'failed' ? '✕' : i + 1}
+          </span>
+          <span className="t">{s.label}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+// ---- the moment panel -----------------------------------------------------------------------
+
+/**
+ * The three signatures on the one lock transaction (ARCHITECTURE §5.2): A and B each sign on their
+ * own phone behind Face ID, the server's fee payer signs last and pays the fees.
+ */
+export function SignerSlots({ bet }: { bet: BetView }) {
+  const lock = bet.lock && bet.lock.status !== 'failed' ? bet.lock : null;
+  const slot = (p: PartyKey) => {
+    const a = bet.auth[p];
+    const ok = !!a || !!lock;
+    return (
+      <li key={p} className={`slot ${ok ? 'ok' : bet.declined === p ? 'no' : 'wait'}`}>
+        <Avatar name={bet.names[p]} url={bet.avatars[p]} size="sm" />
+        <span className="who">{nameOf(bet, p)}</span>
+        <span className="how">
+          {bet.declined === p
+            ? 'declined'
+            : a
+              ? `✓ ${AUTH_METHOD[a.method] ?? a.method}`
+              : lock
+                ? '✓ signed'
+                : 'waiting…'}
+        </span>
+      </li>
+    );
+  };
+  return (
+    <ol className="slots" aria-label="signatures">
+      {slot('A')}
+      {slot('B')}
+      <li className={`slot ${lock ? 'ok' : 'idle'}`}>
+        <span className="avatar sm fee" aria-hidden="true">
+          <span className="initials">◎</span>
+        </span>
+        <span className="who">Fee payer</span>
+        <span className="how">{lock ? '✓ signed' : 'signs last'}</span>
+      </li>
+    </ol>
+  );
+}
+
+function LockLine({ bet }: { bet: BetView }) {
+  const l = bet.lock!;
+  const streams = lagLabel(l.sent_at, l.onchain_at);
+  const status =
+    l.status === 'failed'
+      ? `failed${l.error ? `: ${l.error}` : ''}`
+      : l.onchain
+        ? `✓ on-chain${streams ? ` · Streams ${streams}` : ''}`
+        : l.status === 'confirmed'
+          ? '✓ confirmed'
+          : 'sending…';
+  return (
+    <div className="receipt">
+      <span className="label">LOCK</span>
+      <span>
+        {l.kind === 'atomic_lock'
+          ? `1 transaction · ${l.signers} signatures`
+          : `${l.kind} · ${l.signers} signatures`}
+      </span>
+      {l.signature && <ExplorerLink sig={l.signature} />}
+      <span
+        className={
+          l.status === 'failed' ? 'bad' : l.onchain || l.status === 'confirmed' ? 'good' : 'muted'
+        }
+      >
+        {status}
+      </span>
+    </div>
+  );
+}
+
+export function FrameStrip({ urls, cited }: { urls: string[]; cited: number[] }) {
+  if (!urls.length) return null;
+  return (
+    <ol className="frames" aria-label="evidence frames">
+      {urls.slice(0, 12).map((u, i) => (
+        <li key={i} className={cited.includes(i) ? 'cited' : undefined}>
+          <img src={u} alt={`frame ${i}`} loading="eager" />
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function AppealBar({ bet, now }: { bet: BetView; now: number }) {
+  if (bet.appeal_deadline === null || bet.payout) return null;
+  const left = bet.appeal_deadline * 1000 - now;
+  const total = bet.resolved_at ? (bet.appeal_deadline - bet.resolved_at) * 1000 : 10_000;
+  const frac = Math.max(0, Math.min(1, left / Math.max(1, total)));
+  return (
+    <div className={`appeal ${left > 0 ? 'open' : 'closed'}`}>
+      <span className="countdown">
+        {left > 0 ? `Appeal window ${clock(left)}` : 'Appeal window closed'}
+      </span>
+      <span className="bar" aria-hidden="true">
+        <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
+      </span>
+    </div>
+  );
+}
+
+function outcomeLine(b: BetView): string {
+  const r = b.ruling!;
+  if (r.outcome === 'A_WINS') return `${nameOf(b, 'A')} wins`;
+  if (r.outcome === 'B_WINS') return `${nameOf(b, 'B')} wins`;
+  if (r.outcome === 'REDO') return 'Redo';
+  return `Void${r.void_reason ? ` · ${r.void_reason.replace(/_/g, ' ')}` : ''} · refund`;
+}
+
+const PROVIDER: Record<string, string> = { anthropic: 'Claude', openai: 'GPT', google: 'Gemini' };
+
+function AppealPanel({ bet }: { bet: BetView }) {
+  const r = bet.appeal_result;
+  return (
+    <div className="appeal-panel">
+      <span className="label">APPEAL · THREE-MODEL PANEL</span>
+      <ol className="votes">
+        {[0, 1, 2].map((seat) => {
+          const v = bet.votes.find((x) => x.seat === seat);
+          return (
+            <li
+              key={seat}
+              className={
+                v ? `vote ${v.counted_as === 'abstain' ? 'abstain' : 'cast'}` : 'vote pending'
+              }
+            >
+              <span className="who">
+                {v ? (PROVIDER[v.provider] ?? v.provider) : `Seat ${seat + 1}`}
+              </span>
+              <span className="what">
+                {!v
+                  ? 'deliberating…'
+                  : v.status !== 'ok' || v.outcome === 'REDO'
+                    ? 'abstains'
+                    : `${nameOf(bet, v.outcome === 'A_WINS' ? 'A' : 'B')} · ${Math.round(v.confidence * 100)}%`}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      {r && (
+        <p className="appeal-result">
+          {r.flipped ? 'Overturned' : 'Ruling stands'} ·{' '}
+          {r.final_outcome === 'VOID'
+            ? 'refund'
+            : `${nameOf(bet, r.final_outcome === 'A_WINS' ? 'A' : 'B')} wins`}{' '}
+          <span className="muted">
+            ({r.tally.A_WINS}-{r.tally.B_WINS}, {r.tally.ABSTAIN} abstain)
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function HearingPanel({ bet, now }: { bet: BetView; now: number }) {
+  const h = bet.hearing!;
+  return (
+    <div className="hearing">
+      <span className="label">HEARING · EACH SIDE ARGUES</span>
+      {h.open && (
+        <p className="big">
+          {nameOf(bet, h.open.party)} argues ·{' '}
+          <span className="countdown">{clock(Date.parse(h.open.closes_at) - now)}</span>
+        </p>
+      )}
+      {h.turns.map((t) => (
+        <p key={t.party} className="turn">
+          <b>{nameOf(bet, t.party)}:</b> “{t.transcript || '…'}”
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
+  const r = bet.ruling;
+  if (!r) return null;
+  const cited = r.cited_frames[0];
+  const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
+  return (
+    <div
+      className={`ruling ${r.outcome === 'REDO' ? 'redo' : r.outcome === 'VOID' ? 'void' : 'decisive'}`}
+    >
+      <span className="label">
+        {r.stage === 'settlement'
+          ? 'GEMINI SETTLES IT'
+          : r.stage === 'hearing'
+            ? 'THE JUDGE RULES · AFTER THE HEARING'
+            : `THE JUDGE RULES${r.attempt_no ? ` · ATTEMPT ${r.attempt_no}` : ''}`}
+      </span>
+      <div className="verdict">{outcomeLine(bet)}</div>
+      <div className="ruling-row">
+        <div className="ruling-text">
+          <p className="reason">{r.reason}</p>
+          {r.outcome !== 'REDO' && <AppealBar bet={bet} now={now} />}
+          {bet.appealed && !bet.payout && !bet.appeal_result && bet.votes.length === 0 && (
+            <span className="countdown">Appealed · the panel is reviewing</span>
+          )}
+        </div>
+        {citedUrl && (
+          <figure className="cited">
+            <img src={citedUrl} alt={`cited frame ${cited}`} />
+            <figcaption>frame {cited}</figcaption>
+          </figure>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlayPanel({ bet, now, market }: { bet: BetView; now: number; market: MarketView | null }) {
+  const redoPending =
+    bet.ruling?.outcome === 'REDO' && (bet.attempt_no ?? 0) <= (bet.ruling.attempt_no ?? 0);
+  if (redoPending) return <RulingPanel bet={bet} now={now} />;
+  const pot =
+    bet.envelope &&
+    usd((BigInt(bet.envelope.terms.stakes.a) + BigInt(bet.envelope.terms.stakes.b)).toString());
+  let line: ReactNode;
+  if (isMarketBet(bet)) {
+    line = (
+      <p className="big">
+        Waiting on Gemini
+        {market ? (
+          <>
+            {' '}
+            · closes in <span className="countdown">{clock(market.msLeft)}</span>
+          </>
+        ) : null}
+      </p>
+    );
+  } else if (bet.attempt_no !== null && bet.frame_urls.length) {
+    line = (
+      <p className="big">
+        {bet.attempt_no > 1 ? `Attempt ${bet.attempt_no} · ` : ''}The judge is watching{' '}
+        {bet.frame_urls.length} frames…
+      </p>
+    );
+  } else if (bet.attempt_no !== null) {
+    const who = bet.performer ?? bet.envelope?.terms.performer ?? null;
+    line = (
+      <p className="big">
+        {bet.attempt_no > 1 ? `Redo · attempt ${bet.attempt_no}` : `Attempt ${bet.attempt_no}`}
+        {who ? ` · ${nameOf(bet, who)} is up` : ''} <span className="rec">● REC</span>
+      </p>
+    );
+  } else
+    line = (
+      <p className="big muted">
+        Ready when you are, {nameOf(bet, bet.envelope?.terms.performer ?? 'B')}.
+      </p>
+    );
+  const showSigners = bet.attempt_no === null && !isMarketBet(bet);
+  return (
+    <div className="play">
+      <div className="headline">
+        <span className="stamp good">LOCKED</span>
+        {pot && <span className="pot">{pot} in escrow</span>}
+      </div>
+      {showSigners && (
+        <>
+          <p className="sub">Both stakes, one atomic transaction, three signatures:</p>
+          <SignerSlots bet={bet} />
+        </>
+      )}
+      {line}
+      <FrameStrip urls={bet.frame_urls} cited={[]} />
+    </div>
+  );
+}
+
+function PaidPanel({ bet }: { bet: BetView }) {
+  const p = bet.payout!;
+  const refund =
+    p.event === 'BetRefunded' || p.event === 'BetCancelled' || bet.ruling?.outcome === 'VOID';
+  return (
+    <div className="paid">
+      <div className="headline">
+        <span className="stamp win">{refund ? 'REFUNDED' : 'PAID'}</span>
+        <span className="pot muted">{p.event} · devnet</span>
+      </div>
+      <div className="payouts">
+        {(['A', 'B'] as const).map((k) => {
+          const amt = k === 'A' ? p.to_a : p.to_b;
+          return (
+            <div key={k} className={`payout-row${amt !== '0' ? ' got' : ''}`}>
+              <span>{nameOf(bet, k)}</span>
+              <span className="amt">{amt !== '0' ? `+${usd(amt)}` : '$0'}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChallengePanel({ bet }: { bet: BetView }) {
+  const a = nameOf(bet, 'A');
+  const b = nameOf(bet, 'B');
+  return (
+    <div className="intro">
+      <p className="big">
+        {a} challenged {b}
+      </p>
+      <p className="muted">
+        {bet.invite === 'declined'
+          ? `${b} declined.`
+          : bet.invite === 'accepted'
+            ? 'Challenge accepted. The judge is listening.'
+            : `Waiting for ${b} to accept…`}
+      </p>
+    </div>
+  );
+}
+
+function LockPhasePanel({ bet }: { bet: BetView }) {
+  const n = (bet.auth.A ? 1 : 0) + (bet.auth.B ? 1 : 0);
+  return (
+    <div className="intro">
+      <SignerSlots bet={bet} />
+      <p className="big">
+        {bet.lock && bet.lock.status !== 'failed'
+          ? 'Locking both stakes in one transaction…'
+          : n === 0
+            ? 'Hold to confirm + Face ID on both phones'
+            : `${n} of 2 authorized`}
+      </p>
+      <p className="muted">
+        {bet.lock?.status === 'failed'
+          ? "Couldn't lock it. Nothing moved."
+          : 'Nothing has moved yet: one signature per phone, then a single transaction.'}
+      </p>
+    </div>
+  );
+}
+
+export function MomentPanel({
+  bet,
+  now,
+  market,
+}: {
+  bet: BetView;
+  now: number;
+  market: MarketView | null;
+}) {
+  const phase = phaseOf(bet);
+  const tx = featuredTx(bet);
+  const ended = endedEarly(bet);
+  let body: ReactNode;
+  if (ended && phase !== 'ruling')
+    body = (
+      <div className="intro">
+        <p className="big bad">{ended === 'cancelled' ? 'Cancelled' : 'Expired'}</p>
+        <p className="muted">Nothing was paid out{bet.lock ? '; any stakes were refunded' : ''}.</p>
+      </div>
+    );
+  else if (phase === 'paid' && bet.payout) body = <PaidPanel bet={bet} />;
+  else if (phase === 'ruling' || phase === 'paid')
+    body = (
+      <>
+        {bet.hearing &&
+        bet.ruling?.stage !== 'hearing' &&
+        !isDecisiveOrVoid(bet.ruling?.outcome) ? (
+          <HearingPanel bet={bet} now={now} />
+        ) : (
+          <RulingPanel bet={bet} now={now} />
+        )}
+        {(bet.appealed || bet.votes.length > 0) && <AppealPanel bet={bet} />}
+      </>
+    );
+  else if (phase === 'play') body = <PlayPanel bet={bet} now={now} market={market} />;
+  else if (phase === 'lock') body = <LockPhasePanel bet={bet} />;
+  else if (phase === 'terms')
+    body = (
+      <div className="intro">
+        <p className="big">
+          {bet.envelope ? 'Terms are set. Both confirm on their phones.' : 'Negotiating terms…'}
+        </p>
+        <p className="muted">
+          {bet.envelope
+            ? 'Same terms code on both phones and up here: everyone is agreeing to the same bet.'
+            : 'The AI judge asks the edge-case questions, then reads the terms back.'}
+        </p>
+      </div>
+    );
+  else body = <ChallengePanel bet={bet} />;
+
+  return (
+    <section className={`moment phase-${phase}`} aria-label="moment">
+      <div className="moment-body">{body}</div>
+      {tx && <TxQrCard tx={tx} />}
+      {bet.lock && phase !== 'lock' && (
+        <footer className="receipts">
+          <LockLine bet={bet} />
+          {bet.txs.resolve && (
+            <div className="receipt">
+              <span className="label">RULING</span>
+              <ExplorerLink sig={bet.txs.resolve} />
+            </div>
+          )}
+          {bet.payout?.signature && (
+            <div className="receipt">
+              <span className="label">PAYOUT</span>
+              <ExplorerLink sig={bet.payout.signature} />
+            </div>
+          )}
+        </footer>
+      )}
+      {bet.lock && phase === 'lock' && (
+        <footer className="receipts">
+          <LockLine bet={bet} />
+        </footer>
+      )}
+    </section>
+  );
+}
+
+/** The whole left column for one bet: players, terms, the moment, the judge's caption. */
+export function BetCard({
+  bet,
+  now,
+  market = null,
+  presence = null,
+}: {
+  bet: BetView;
+  now: number;
+  market?: MarketView | null;
+  presence?: Record<string, boolean> | null;
+}) {
+  const online = (p: PartyKey): boolean | null => {
+    const id = bet.user_ids[p];
+    if (!presence || !id || !(id in presence)) return null;
+    return presence[id]!;
+  };
+  return (
+    <section className="card" aria-label="bet">
+      <div className="versus">
+        <PartyCard bet={bet} party="A" online={online('A')} />
+        <span className="vs">VS</span>
+        <PartyCard bet={bet} party="B" online={online('B')} />
+      </div>
+      <TermsCard bet={bet} />
+      <MomentPanel bet={bet} now={now} market={market} />
+      {bet.last_judge_line && (
+        <p className="caption" aria-live="polite">
+          <span className="label">JUDGE</span> {bet.last_judge_line}
+        </p>
+      )}
+    </section>
+  );
+}
+
+// ---- overlays -------------------------------------------------------------------------------
+
+export function PaidMoment({ bet }: { bet: BetView }) {
+  const p = bet.payout!;
+  const w: PartyKey | null =
+    p.to_a !== '0' && p.to_b === '0' ? 'A' : p.to_b !== '0' && p.to_a === '0' ? 'B' : null;
+  const total = (BigInt(p.to_a) + BigInt(p.to_b)).toString();
+  return (
+    <div className="paid-moment" role="status" aria-label="paid">
+      <div className="burst" aria-hidden="true" />
+      <span className="paid-word">PAID</span>
+      <span className="paid-line">
+        {w ? (
+          <>
+            {usd(total)} → {nameOf(bet, w)}
+          </>
+        ) : (
+          <>
+            {nameOf(bet, 'A')} {usd(p.to_a)} · {nameOf(bet, 'B')} {usd(p.to_b)}
+          </>
+        )}
+      </span>
+      <span className="muted">
+        {p.event} on Solana devnet{p.signature ? ` · ${shortSig(p.signature)}` : ''}
+      </span>
+    </div>
+  );
+}
+
+export function QrOverlay({
+  tx,
+  onClose,
+}: {
+  tx: { label: string; signature: string } | null;
+  onClose: () => void;
+}) {
+  return (
+    <div className="overlay qr-overlay" role="dialog" aria-label="explorer qr" onClick={onClose}>
+      {tx ? (
+        <>
+          <QrCode text={explorerTx(tx.signature)} label={`QR: ${tx.label}`} />
+          <p className="big">{tx.label}</p>
+          <p className="muted mono">
+            explorer.solana.com/tx/{shortSig(tx.signature)}?cluster=devnet
+          </p>
+        </>
+      ) : (
+        <p className="big muted">No transaction yet.</p>
+      )}
+    </div>
+  );
+}
+
+export const KEYS: Array<[string, string]> = [
+  ['1 – 6', 'Play the REPLAY clip of that beat'],
+  ['Esc', 'Close any overlay'],
+  ['F', 'Full screen on / off'],
+  ['Q', 'Big QR of the latest transaction'],
+  ['H or ?', 'This help'],
+];
+
+export function HelpOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="overlay help" role="dialog" aria-label="keys" onClick={onClose}>
+      <h2>Keys</h2>
+      <dl>
+        {KEYS.map(([k, v]) => (
+          <div key={k}>
+            <dt>{k}</dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+export function ReplayOverlay({
+  beat,
+  src,
+  onClose,
+}: {
+  beat: number;
+  src: string;
+  onClose: () => void;
+}) {
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    if (!missing) return;
+    const t = setTimeout(onClose, 2500);
+    return () => clearTimeout(t);
+  }, [missing, onClose]);
+  return (
+    <div className="replay" role="dialog" aria-label={`replay beat ${beat}`} onClick={onClose}>
+      <span className="replay-badge">REPLAY · beat {beat}</span>
+      {missing ? (
+        <p className="big muted">No clip at replay/beat{beat}.mp4</p>
+      ) : (
+        <video src={src} autoPlay playsInline onEnded={onClose} onError={() => setMissing(true)} />
+      )}
+    </div>
+  );
+}
+
+// ---- the right column -----------------------------------------------------------------------
+
+const TICKER_TYPES =
+  /^(chain\.|tx\.|terms\.authorized|terms\.declined|ruling\.issued|appeal\.result)/;
+
+export function tickerRows(state: TickerState, max = 14): TickerEvent[] {
+  return state.events
+    .filter((e) => TICKER_TYPES.test(e.type))
+    .slice()
+    .reverse()
+    .slice(0, max);
+}
+
+/** chain.* lag after the tx.submitted of the same signature: the Streams proof. */
+function streamsLag(state: TickerState, e: TickerEvent): string | null {
+  if (e.source !== 'chain') return null;
+  const sig = (e.payload as { signature?: string } | null)?.signature;
+  if (!sig) return null;
+  const sent = state.events.find(
+    (x) =>
+      x.type === 'tx.submitted' && (x.payload as { signature?: string } | null)?.signature === sig,
+  );
+  return sent ? lagLabel(sent.ts, e.ts) : null;
+}
+
+const hhmmss = (iso: string) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ''
+    : d.toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+};
+
+export function Ticker({ state }: { state: TickerState }) {
+  const rows = tickerRows(state);
+  return (
+    <section aria-label="ticker" className="ticker">
+      <h2>
+        On-chain · devnet <span className="muted">via QuickNode Streams</span>
+      </h2>
+      {state.errors.length > 0 && (
+        <ul className="errors">
+          {state.errors.slice(-2).map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+        </ul>
+      )}
+      {rows.length === 0 ? (
+        <p className="muted">No events yet.</p>
+      ) : (
+        <ol className="events">
+          {rows.map((e) => {
+            const lag = streamsLag(state, e);
+            return (
+              <li
+                key={`${e.bet_id}:${e.seq}`}
+                className={e.source === 'chain' ? 'chain' : 'server'}
+              >
+                <span className="t">{hhmmss(e.ts)}</span>
+                <span className="what">
+                  <code>{eventLabel(e.type, e.payload, state.bets[e.bet_id]?.names)}</code>
+                  {lag && <span className="lag"> {lag}</span>}
+                </span>
+                {e.explorer ? (
+                  <a className="explorer" href={e.explorer} target="_blank" rel="noreferrer">
+                    ↗
+                  </a>
+                ) : (
+                  <span />
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function Sparkline({ points, strike }: { points: number[]; strike: number | null }) {
+  if (points.length < 2) return <div className="spark" />;
+  const all = strike !== null ? [...points, strike] : points;
+  const lo = Math.min(...all);
+  const hi = Math.max(...all);
+  const span = hi - lo || 1;
+  const y = (v: number) => 100 - ((v - lo) / span) * 100;
+  const d = points
+    .map((p, i) => `${((i / (points.length - 1)) * 300).toFixed(1)},${y(p).toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg className="spark" viewBox="0 -4 300 108" preserveAspectRatio="none" aria-hidden="true">
+      {strike !== null && <line x1="0" x2="300" y1={y(strike)} y2={y(strike)} className="strike" />}
+      <polyline points={d} fill="none" />
+    </svg>
+  );
+}
+
+export function OddsWidget({
+  view,
+  bet = null,
+}: {
+  view: MarketView | null;
+  bet?: BetView | null;
+}) {
+  if (!view)
+    return (
+      <section className="odds" aria-label="odds">
+        <h2>BTC 5-min · Gemini</h2>
+        <p className="muted">Waiting for the market…</p>
+      </section>
+    );
+  const up = view.upPct;
+  const t = bet?.envelope?.terms;
+  const sides =
+    view.split.ok && view.split.fromTerms && t?.market
+      ? {
+          up: t.market.side === 'YES' ? t.party_a.display_name : t.party_b.display_name,
+          down: t.market.side === 'YES' ? t.party_b.display_name : t.party_a.display_name,
+        }
+      : null;
+  return (
+    <section className="odds" aria-label="odds">
+      <h2>
+        BTC 5-min · Gemini <span className="muted">prediction market</span>
+      </h2>
+      <div className="odds-grid">
+        <div>
+          <span className="label">LINE</span>
+          <span className="num">{view.strike ? usdPrice(view.strike) : 'pending'}</span>
+        </div>
+        <div>
+          <span className="label">BTC</span>
+          <span className={`num ${view.direction}`}>{usdPrice(view.price)}</span>
+        </div>
+        <div>
+          <span className="label">CLOSES</span>
+          <span className="num">{clock(view.msLeft)}</span>
+        </div>
+        <div>
+          <span className="label">UP</span>
+          <span className="num">{up !== null ? `${up}%` : '—'}</span>
+        </div>
+      </div>
+      {up !== null && (
+        <div className="updown" aria-hidden="true">
+          <span className="u" style={{ width: `${up}%` }} />
+          <span className="d" />
+        </div>
+      )}
+      <Sparkline points={view.history} strike={view.strike ? Number(view.strike) : null} />
+      <div className="split">
+        {view.split.ok ? (
+          <>
+            <span className="good">
+              {sides ? `${sides.up} UP` : 'Up'} {usd(view.split.up)} ·{' '}
+              {sides ? `${sides.down} DOWN` : 'Down'} {usd(view.split.down)}
+            </span>
+            <span className="muted">
+              of a {usd(view.split.pot)} pot
+              {view.split.fromTerms ? ' · locked' : ' · fair stakes now'}
+            </span>
+          </>
+        ) : (
+          <span className="muted">{view.split.reason.replace(/_/g, ' ').toLowerCase()}</span>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ---- health strip ---------------------------------------------------------------------------
+
+export function HealthStrip({
+  health,
+  error,
+  replays,
+  status,
+}: {
+  health: DemoHealth | null;
+  error: string | null;
+  replays: ReplayStatus | null;
+  status: string;
+}) {
+  const items: HealthItem[] = health ? healthItems(health) : [];
+  if (error) items.unshift({ key: 'err', label: 'Health', value: error, level: 'bad' });
+  if (replays) {
+    const present = presentCount(replays);
+    const ready = readyCount(replays);
+    items.push({
+      key: 'replay',
+      label: 'REPLAY',
+      value: `${ready}/${present} cached`,
+      level: present === 0 ? 'warn' : ready === present ? 'ok' : 'idle',
+    });
+  }
+  items.push({ key: 'ws', label: 'WS', value: status, level: status === 'open' ? 'ok' : 'warn' });
+  return (
+    <footer className="health" aria-label="demo health">
+      {items.map((i) => (
+        <span key={i.key} className={`hi ${i.level}`}>
+          <span className="label">{i.label}</span> {i.value}
+        </span>
+      ))}
+    </footer>
+  );
+}
+
+// ---- the whole stage ------------------------------------------------------------------------
+
+export function StageView({
+  state,
+  now,
+  onDisconnect,
+  preview = null,
+  health = null,
+  healthError = null,
+  showHealth = false,
+  replays = null,
+  roomLabel = null,
+}: {
+  state: TickerState;
+  now: number;
+  onDisconnect?: () => void;
+  /** The preview step's name ('' for the loop) when showing sample data. */
+  preview?: string | null;
+  health?: DemoHealth | null;
+  healthError?: string | null;
+  showHealth?: boolean;
+  replays?: ReplayStatus | null;
+  roomLabel?: string | null;
+}) {
+  const bet = state.focusBetId ? (state.bets[state.focusBetId] ?? null) : null;
+  const mv = useMemo(
+    () => (state.market ? marketView(state.market, state.marketHistory, now, bet) : null),
+    [state.market, state.marketHistory, now, bet],
+  );
+  const live = state.status === 'open';
+  return (
+    <div className="stage">
+      <header className="topbar">
+        <h1>
+          You&apos;re <span className="on">On</span>
+        </h1>
+        <PhaseRail bet={bet} />
+        <div className="conn">
+          {preview !== null ? (
+            <span className="badge preview">PREVIEW · sample data</span>
+          ) : (
+            <span className={`badge ${live ? 'live' : 'down'}`}>
+              {live ? 'LIVE' : state.status.toUpperCase()}
+            </span>
+          )}
+          <span className="muted small">
+            {roomLabel ? `room ${roomLabel}` : ''}
+            {state.presence ? ` · ${state.presence.online}/${state.presence.members} online` : ''}
+          </span>
+          {onDisconnect && (
+            <button type="button" className="ghost" onClick={onDisconnect}>
+              disconnect
+            </button>
+          )}
+        </div>
+      </header>
+      <main className="layout">
+        <div className="left">
+          {bet ? (
+            <BetCard
+              bet={bet}
+              now={now}
+              market={mv}
+              presence={state.presence?.online_by_user ?? null}
+            />
+          ) : (
+            <section className="card empty">
+              <p className="huge">Waiting for a challenge…</p>
+              <p className="muted">Point a phone at a friend to start a bet.</p>
+            </section>
+          )}
+        </div>
+        <aside className="right">
+          <OddsWidget view={mv} bet={bet} />
+          <Ticker state={state} />
+        </aside>
+      </main>
+      {showHealth && (
+        <HealthStrip health={health} error={healthError} replays={replays} status={state.status} />
+      )}
+    </div>
+  );
+}
