@@ -45,6 +45,8 @@ describe('stage page', () => {
     expect(html).toContain('Connect');
     expect(html).toContain('href="?preview"');
     expect(html).toContain('/stage/?room=ABC234#key=STAGE_KEY');
+    // the health strip reads /v1/demo/health with the stage bearer: no admin key in the link
+    expect(html).not.toContain('DEMO_ADMIN_TOKEN');
   });
 
   it('renders events newest first with Explorer links', () => {

@@ -1,8 +1,9 @@
-// The "demo health" strip along the bottom of the stage (API-CONTRACT §2.17 GET /v1/demo/health,
-// gated by DEMO_MODE=true + X-YO-Demo-Key): fee payer SOL, free durable nonces, RPC and DB
-// latency, the last server tx. Shown only when the page was opened with a demo key in its URL
-// fragment (#demo=<DEMO_ADMIN_TOKEN>); polled every 10 s. The parse is tolerant: fields the
-// server does not send show as "—" instead of failing the strip.
+// The "demo health" strip along the bottom of the stage (API-CONTRACT §2.17 GET /v1/demo/health):
+// fee payer SOL, free durable nonces, RPC and DB latency, the last server tx. Polled every 10 s
+// with the stage session's own bearer, which the server accepts under DEMO_MODE (its 'demo'
+// scope, apps/server/src/demo/routes.ts), so the projector URL needs no admin key. A demo key
+// in the fragment (#demo=<DEMO_ADMIN_TOKEN>) is still sent when given. The parse is tolerant:
+// fields the server does not send show as "—" instead of failing the strip.
 import { z } from 'zod/v4';
 
 export const DEMO_HEALTH_PATH = '/v1/demo/health';
@@ -110,20 +111,28 @@ export function healthItems(h: DemoHealth): HealthItem[] {
   return items;
 }
 
-/** GET /v1/demo/health with the admin key; 404 means a wrong key or DEMO_MODE off. */
+export class DemoHealthError extends Error {
+  constructor(readonly status: number) {
+    super(
+      status === 404 ? 'demo health 404 (demo key or DEMO_MODE)' : `demo health HTTP ${status}`,
+    );
+    this.name = 'DemoHealthError';
+  }
+}
+
+/**
+ * GET /v1/demo/health with the stage bearer (and the admin key when the page has one); 404 means
+ * DEMO_MODE is off, or neither credential is accepted.
+ */
 export async function fetchDemoHealth(
   serverUrl: string,
-  demoKey: string,
+  auth: { token?: string | null; demoKey?: string | null },
   doFetch: typeof fetch = fetch,
 ): Promise<DemoHealth> {
-  const res = await doFetch(new URL(DEMO_HEALTH_PATH, serverUrl).toString(), {
-    headers: { [DEMO_KEY_HEADER]: demoKey },
-  });
-  if (!res.ok)
-    throw new Error(
-      res.status === 404
-        ? 'demo health 404 (demo key or DEMO_MODE)'
-        : `demo health HTTP ${res.status}`,
-    );
+  const headers: Record<string, string> = {};
+  if (auth.token) headers.authorization = `Bearer ${auth.token}`;
+  if (auth.demoKey) headers[DEMO_KEY_HEADER] = auth.demoKey;
+  const res = await doFetch(new URL(DEMO_HEALTH_PATH, serverUrl).toString(), { headers });
+  if (!res.ok) throw new DemoHealthError(res.status);
   return DemoHealth.parse(await res.json());
 }
