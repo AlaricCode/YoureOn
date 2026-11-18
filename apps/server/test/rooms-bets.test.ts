@@ -483,6 +483,17 @@ describeDb('rooms and challenge API over Postgres', () => {
       source: 'server',
       payload: { challenger: { user_id: uid(A) }, room_id: room.room_id },
     });
+    // A list challenge between strangers: the rivalry says so (first meeting, A's view).
+    expect(invited.payload.rivalry).toEqual({
+      challenge_method: 'list',
+      a_wins: 0,
+      b_wins: 0,
+      pushes: 0,
+      total: 0,
+      streak: null,
+      rival: false,
+      includes_seed: false,
+    });
     // B opens the invite card and subscribes from where it is: bet.state DRAFTING (seq 2).
     b.send({ op: 'subscribe', bet_id: betId, after_seq: 1 });
     const drafting = await b.next((f) => f.type === 'bet.state');
@@ -500,6 +511,9 @@ describeDb('rooms and challenge API over Postgres', () => {
     a.send({ op: 'subscribe', bet_id: betId, after_seq: 0 });
     await a.next((f) => f.op === 'subscribed');
     expect(a.frames.filter((f) => f.bet_id === betId && f.seq).map((f) => f.seq)).toEqual([1, 2]);
+    expect(a.frames.find((f) => f.bet_id === betId && f.seq === 1)?.payload.rivalry).toEqual(
+      invited.payload.rivalry,
+    );
 
     const db = ctx.deps.db;
     const ev = await db

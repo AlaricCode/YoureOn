@@ -39,6 +39,7 @@ import {
   hueOf,
   initials,
   lagLabel,
+  rivalryLine,
   shortSig,
   usd,
   usdPrice,
@@ -890,6 +891,17 @@ export function betTickOf(
   return m && state.market?.eventTicker === m.eventTicker ? state.market : null;
 }
 
+/** Face challenges: the pair's record so far, under VS ("Logan 4–7 Jake · Rivals"). */
+export function RivalryLine({ bet }: { bet: BetView }) {
+  const line = rivalryLine(bet.rivalry, bet.names);
+  if (!line) return null;
+  return (
+    <p className={`rivalry${bet.rivalry?.rival ? ' rivals' : ''}`} aria-label="rivalry">
+      {line}
+    </p>
+  );
+}
+
 /** The whole left column for one bet: players, terms, a Gemini bet's market, the moment, the caption. */
 export function BetCard({
   bet,
@@ -920,6 +932,7 @@ export function BetCard({
         <span className="vs">VS</span>
         <PartyCard bet={bet} party="B" online={online('B')} />
       </div>
+      <RivalryLine bet={bet} />
       <TermsCard bet={bet} />
       {bet.envelope?.terms.market && (
         <MarketPanel bet={bet} tick={tick} now={now} verification={verification} />

@@ -566,6 +566,19 @@ run('demo valves: toggles, warmup, judge health, seeded head-to-head (HTTP + Lit
         b_vs_a: { wins: 7, losses: 4, pushes: 0, net: '7000000', includes_seed: true },
       },
     });
+    // Rivalry fields: in the default pattern Jake took the last bet (Logan won 2, 5, 7, 10).
+    expect((r.json as any).head_to_head.a_vs_b).toMatchObject({
+      total: 11,
+      last_result: 'loss',
+      streak: { holder: 'them', length: 1 },
+      rival: true,
+    });
+    expect((r.json as any).head_to_head.b_vs_a).toMatchObject({
+      total: 11,
+      last_result: 'win',
+      streak: { holder: 'me', length: 1 },
+      rival: true,
+    });
     const rows = await seedRows();
     expect(rows).toHaveLength(11);
     for (const row of rows) {
@@ -738,6 +751,10 @@ run('demo valves: toggles, warmup, judge health, seeded head-to-head (HTTP + Lit
       pushes: 0,
       net: '-7000000',
       includes_seed: true,
+      total: 11,
+      last_result: 'loss',
+      streak: { holder: 'them', length: 1 },
+      rival: true,
     });
     expect(ab.json!.last_settled_at).toEqual(expect.any(String));
     expect(ab.headers.get('cache-control')).toMatch(/no-store/);
@@ -753,6 +770,10 @@ run('demo valves: toggles, warmup, judge health, seeded head-to-head (HTTP + Lit
         net_display: '$0',
         last_settled_at: null,
         includes_seed: false,
+        total: 0,
+        last_result: null,
+        streak: null,
+        rival: false,
       });
     expect((await get(path(uid(a)), bearer(a))).json).toMatchObject({ wins: 0, losses: 0 });
 
