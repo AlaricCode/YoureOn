@@ -11,7 +11,8 @@
 //
 //   npm run sam3-smoke -- --clip <video> --prompt "<thing>" [--prompt "<other thing>"]
 //       [--sampling uniform|judge] [--frames 12] [--url https://...modal.run]
-//       [--save-frames <dir>] [--json out.json]
+//       [--save-frames <dir>] [--json out.json] [--masks]
+//   --masks  also return each mask (run-length encoded) in the --json output
 //
 // Env: SAM3_URL (or --url), SAM3_API_TOKEN (the bearer token; also read from
 // ~/.config/youre-on/sam3.env). Needs ffmpeg on PATH. Each call is billed GPU time on Modal; the
@@ -35,7 +36,7 @@ const TOKEN_FILE = join(homedir(), '.config', 'youre-on', 'sam3.env');
 const MAX_PROMPTS = 4;
 
 const USAGE = `usage: npm run sam3-smoke -- --clip <video> --prompt "<thing>" [--prompt ...] (1-${MAX_PROMPTS})
-  [--sampling uniform|judge] [--frames 12] [--url <endpoint>] [--save-frames <dir>] [--json <file>]
+  [--sampling uniform|judge] [--frames 12] [--url <endpoint>] [--save-frames <dir>] [--json <file>] [--masks]
 Env: SAM3_URL, SAM3_API_TOKEN (else ${TOKEN_FILE}). Needs ffmpeg.`;
 
 type Box = [number, number, number, number];
@@ -164,6 +165,7 @@ async function main() {
       url: { type: 'string' },
       'save-frames': { type: 'string' },
       json: { type: 'string' },
+      masks: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -190,6 +192,7 @@ async function main() {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
     body: JSON.stringify({
       prompts,
+      masks: values.masks,
       frames: s.frames.map((f) => f.bytes.toString('base64')),
     }),
     signal: AbortSignal.timeout(600_000),
