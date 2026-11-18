@@ -53,8 +53,18 @@ export class BetHub {
     return () => this.listeners.delete(l);
   }
 
+  /** One failing listener is logged and skipped: the others, and the bet's state, carry on. */
   private emit(e: RealtimeEvent | null, before: BetModel | null, after: BetModel) {
-    for (const l of this.listeners) l(e, before, after);
+    for (const l of this.listeners) {
+      try {
+        l(e, before, after);
+      } catch (err) {
+        this.log('listener.failed', {
+          type: e?.type ?? 'snapshot',
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /** Forget every bet (the signed-in user changed): nothing of the old user's bets carries over. */
