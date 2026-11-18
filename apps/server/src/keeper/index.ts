@@ -40,12 +40,15 @@ export function createServerKeeper(
 ): Keeper {
   const keeper = new Keeper({ now: deps.now, log: deps.log, ...opts });
   keeper.register(draftIdleTask(deps));
-  const env = deps.env;
-  if (env) for (const t of chainLifecycleTasks({ ...deps, env })) keeper.register(t);
-  // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
-  if (env) keeper.register(resolveDueTask(deps));
-  // market-settlement (Beat 6): reads deps.markets / deps.onRuling at run time too. The same
-  // deps object as the routes', so it shares their SettlementService (settlementOf).
-  if (env) keeper.register(settlementTask(deps as typeof deps & { env: NonNullable<typeof env> }));
+  if (!deps.env) return keeper;
+  // Every task gets THIS deps object, never a copy: lifecycleOf / settlementOf are keyed on it,
+  // so the sweeps share the routes' LockService / PayoutService / SettlementService, and they
+  // read fields server.ts sets after this call (deps.markets, deps.onRuling) at run time.
+  // (A spread copy made before deps.markets was set gave a lock landed by the sweep its own
+  // SettlementService without a Gemini client.)
+  const withEnv = deps as typeof deps & { env: NonNullable<typeof deps.env> };
+  for (const t of chainLifecycleTasks(withEnv)) keeper.register(t);
+  keeper.register(resolveDueTask(deps));
+  keeper.register(settlementTask(withEnv));
   return keeper;
 }
