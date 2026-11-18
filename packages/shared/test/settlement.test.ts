@@ -187,6 +187,13 @@ describe('settlementRuling (§5.2 stage settlement)', () => {
     expect(ruling(same).outcome).toBe('A_WINS');
   });
 
+  it("a settled body without the line still settles on Gemini's side", () => {
+    const rec = record({ kind: 'settled', side: 'no' }, { strike: { ...STRIKE, value: null } });
+    const r = ruling(rec);
+    expect(r.outcome).toBe('B_WINS');
+    expect(r.reason).toBe('Gemini settled DOWN: Bitcoin finished at $64,367.38, below the line.');
+  });
+
   it('a record for another contract or bet never rules this one', () => {
     const other = record({ kind: 'settled', side: 'yes' }, { eventTicker: 'BTC05M2611180245' });
     expect(ruling(other).outcome).toBe('VOID');

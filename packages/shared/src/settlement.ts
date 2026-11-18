@@ -85,10 +85,13 @@ export function settlementOutcome(
   if (c.status === 'invalid' || c.resolutionSide === null)
     return { outcome: 'VOID', why: 'invalid' };
   // Gemini's settled line must be the line we bound into the terms; anything else is ambiguous.
+  // (A settled body that omits the line is not a mismatch: Gemini's side still decides.)
   if (
     c.eventTicker !== market.eventTicker ||
     c.instrumentSymbol !== market.instrumentSymbol ||
-    (market.strike.value !== null && !sameDecimal(c.strike.value, market.strike.value))
+    (market.strike.value !== null &&
+      c.strike.value !== null &&
+      !sameDecimal(c.strike.value, market.strike.value))
   )
     return { outcome: 'VOID', why: 'strike_mismatch' };
   return { outcome: c.resolutionSide === 'yes' ? 'MET' : 'NOT_MET', side: c.resolutionSide };
@@ -104,7 +107,8 @@ export function settlementReason(record: GeminiSettlementRecord, d: SettlementDe
   const up = d.side === 'yes';
   const vs = up ? 'at or above' : 'below';
   const at = c.settlementValue === null ? '' : ` at ${formatPrice(c.settlementValue)}`;
-  return `Gemini settled ${up ? 'UP' : 'DOWN'}: Bitcoin finished${at}, ${vs} the ${formatPrice(c.strike.value)} line.`;
+  const line = c.strike.value === null ? 'the line' : `the ${formatPrice(c.strike.value)} line`;
+  return `Gemini settled ${up ? 'UP' : 'DOWN'}: Bitcoin finished${at}, ${vs} ${line}.`;
 }
 
 export interface SettlementRulingInput {
