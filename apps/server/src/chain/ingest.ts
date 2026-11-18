@@ -5,15 +5,17 @@
 //   COMMIT, then publish the chain.* envelopes to the WS hub.
 //
 // Duplicates alone produce an empty RETURNING, so a replayed delivery is a cheap no-op (§8.3),
-// with one exception: a duplicate of a row parked as 'not_ours' (the Stream delivered the lock
-// before the tx sender recorded its signature) is handed to the projector again, so the
-// reconciler's / startup sweep's rpc_poll copy of the same event un-parks it.
+// with one exception: a duplicate of a PARKED row (REFOLDABLE_ERRORS: 'not_ours' = no server
+// lock signature matched yet, 'unknown_bet' = no bets row yet, 'projector_failed' = stored by the
+// deterministic-failure fallback) is handed to the projector again, so the reconciler's / startup
+// sweep's rpc_poll copy of the same event un-parks it.
 // No RPC calls happen in here: the ack budget is p95 ≤ 150 ms.
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, inArray, isNull } from 'drizzle-orm';
 import { chainEvents } from '@youre-on/db';
 import type { AppDeps } from '../context';
 import {
   APPLY_ERROR,
+  REFOLDABLE_ERRORS,
   type ChainProjector,
   type Fanout,
   type InsertedChainEvent,
@@ -39,7 +41,7 @@ export interface IngestResult {
 }
 
 export async function ingestChainEvents(
-  deps: Pick<AppDeps, 'db' | 'hub' | 'now'>,
+  deps: Pick<AppDeps, 'db' | 'hub' | 'now'> & Partial<Pick<AppDeps, 'log'>>,
   projector: ChainProjector,
   events: readonly ParsedChainEvent[],
   o: { deliveryId: string | null; source?: 'stream' | 'rpc_poll' },
@@ -73,10 +75,10 @@ export async function ingestChainEvents(
       // Parked rows go in as fresh (apply_error cleared) so the projector re-checks attribution.
       ...parked.map((r) => ({ ...r, apply_error: null })),
     ];
-    const out = toApply.length ? await projector.apply(tx, toApply, nowMs) : [];
+    const out = toApply.length ? await projector.apply(tx, toApply, nowMs, deps.log) : [];
     return { inserted: ins.length, fanout: out };
   });
-  for (const f of fanout) deps.hub.publishBetEvent(f.envelope, f.room_id);
+  publishFanout(deps, fanout);
   return {
     received: events.length,
     inserted,
@@ -110,7 +112,15 @@ function toRows(
   }));
 }
 
-/** Stored rows matching these keys that are still parked as 'not_ours' (never applied). */
+/** After COMMIT: bet:<id> (+ the room's stage), and both parties' user channels when given. */
+export function publishFanout(deps: Pick<AppDeps, 'hub'>, fanout: readonly Fanout[]): void {
+  for (const f of fanout) {
+    deps.hub.publishBetEvent(f.envelope, f.room_id);
+    for (const u of f.user_ids ?? []) deps.hub.publishToUser(u, f.envelope);
+  }
+}
+
+/** Stored rows matching these keys that are still parked (REFOLDABLE_ERRORS, never applied). */
 async function parkedDuplicates(
   tx: Tx,
   keys: readonly { signature: string; outer_ix: number; inner_ix: number }[],
@@ -127,7 +137,7 @@ async function parkedDuplicates(
     .where(
       and(
         inArray(chainEvents.signature, [...new Set(keys.map((k) => k.signature))]),
-        eq(chainEvents.apply_error, APPLY_ERROR.notOurs),
+        inArray(chainEvents.apply_error, [...REFOLDABLE_ERRORS]),
         isNull(chainEvents.applied_at),
       ),
     );
@@ -137,10 +147,11 @@ async function parkedDuplicates(
 }
 
 /**
- * Re-folds the parked ('not_ours') rows of these bets inside the caller's transaction. The
- * LockService calls this in the transaction that records a lock signature (chain_txs), so a
- * Stream delivery that beat the signature write is applied at once. Publish the returned fanout
- * after COMMIT (deps.hub.publishBetEvent).
+ * Re-folds the parked rows (REFOLDABLE_ERRORS) of these bets inside the caller's transaction, e.g.
+ * from a transaction that records a lock signature, so a Stream delivery that beat the signature
+ * write is applied at once. (The LockService records chain_txs.signature before it sends, so on
+ * the normal path nothing is ever parked for a server lock.) Publish the returned fanout after
+ * COMMIT with publishFanout.
  */
 export async function refoldParkedInTx(
   tx: Tx,
@@ -155,7 +166,7 @@ export async function refoldParkedInTx(
     .where(
       and(
         inArray(chainEvents.bet_id, [...betIds]),
-        eq(chainEvents.apply_error, APPLY_ERROR.notOurs),
+        inArray(chainEvents.apply_error, [...REFOLDABLE_ERRORS]),
         isNull(chainEvents.applied_at),
       ),
     );
