@@ -112,6 +112,13 @@ export interface DemoHealth {
   stream?: { last_delivery_at: string | null; events_last_hour: number };
   markets?: { last_ok_at: string | null; last_error: string | null } | null;
   build?: { image: string | null; machine: string | null; region: string | null };
+  config?: {
+    address: string;
+    paused: boolean;
+    judge_authority: string;
+    appeal_window_secs: number;
+    mint_allowed: boolean;
+  } | null;
 }
 
 /** GET /v1/demo/health -> one check per money-path item, plus the server's own warnings. */
@@ -172,6 +179,23 @@ export function evaluateDemoHealth(
       verdict: 'NO-GO',
       detail: `fee payer ${h.fee_payer} is not the pinned FEE_PAYER_PUBKEY: phones refuse every lock`,
     });
+
+  // Paused / wrong judge / mint not allowed come through as critical server warnings below.
+  if (h.config)
+    add({
+      id: 'chain.config',
+      verdict:
+        h.config.paused ||
+        !h.config.mint_allowed ||
+        (h.judge && h.judge !== h.config.judge_authority)
+          ? 'NO-GO'
+          : 'GO',
+      detail: `${h.config.paused ? 'PAUSED' : 'live'}, appeal window ${h.config.appeal_window_secs} s, judge ${
+        h.judge === h.config.judge_authority ? 'matches' : 'MISMATCH'
+      }, mint ${h.config.mint_allowed ? 'allowed' : 'NOT allowed'}`,
+    });
+  else if (h.config === null)
+    add({ id: 'chain.config', verdict: 'WARN', detail: 'Config unreadable from the server' });
 
   const sol = h.fee_payer_sol;
   add(

@@ -122,6 +122,25 @@ describe('demo-check: /v1/demo/health', () => {
     expect(off[0]!.verdict).toBe('NO-GO');
   });
 
+  it('the escrow Config: live + matching judge is GO; paused or a judge mismatch is NO-GO', () => {
+    const config = {
+      address: 'C1',
+      paused: false,
+      judge_authority: 'J1',
+      appeal_window_secs: 10,
+      mint_allowed: true,
+    };
+    const go = evaluateDemoHealth(ok({ ...healthy, judge: 'J1', config }), NOW);
+    expect(byId(go)['chain.config']).toBe('GO');
+    const paused = evaluateDemoHealth(
+      ok({ ...healthy, judge: 'J1', config: { ...config, paused: true } }),
+      NOW,
+    );
+    expect(byId(paused)['chain.config']).toBe('NO-GO');
+    const wrong = evaluateDemoHealth(ok({ ...healthy, judge: 'J2', config }), NOW);
+    expect(byId(wrong)['chain.config']).toBe('NO-GO');
+  });
+
   it('the build the server reports is printed (which image answers)', () => {
     const build = { image: 'registry.fly.io/youre-on:dep-1', machine: 'm1', region: 'dfw' };
     const cs = evaluateDemoHealth(ok({ ...healthy, build }), NOW);
