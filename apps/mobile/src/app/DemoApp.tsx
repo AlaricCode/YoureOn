@@ -2,7 +2,8 @@
 // server: the route comes from ./machine selectRoute(app state, the active bet's server state).
 //   signup | demo claim (custodial demo seed -> wallet.importSeed, decision D-A)
 //   -> home: rooms (create / join / presence) -> challenge from the list (POST /v1/bets 'list')
-//   -> B: full-screen invite + haptic -> negotiate (captions, draft) -> terms card (hash checked,
+//   -> B: full-screen invite + haptic -> negotiate (captions, draft; on A's phone "Type it
+//      instead", automatic with EXPO_PUBLIC_VOICE=off or a failed voice session) -> terms card (hash checked,
 //      device policy, hold -> Face ID -> sign -> PartyAuthorization; or the server pushes LOCKED)
 //   -> live / judge cam (record, frames, upload) -> ruling (GG = concede, Face ID) / REDO
 //   -> payout with GET /v1/me/balance.
@@ -73,6 +74,17 @@ import {
   type AppState,
 } from './machine';
 import { getRuntime, type Runtime } from './runtime';
+import {
+  canConfirm,
+  canSubmit,
+  confirmTypedTerms,
+  initialTyped,
+  submitTypedTerms,
+  TYPED_STAKES_USD,
+  typedReducer,
+  waitingForAccept,
+  type TypedStakeUsd,
+} from './typedTerms';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
@@ -129,6 +141,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [app, dispatch] = useReducer(reducer, initialApp);
   const [, rerender] = useReducer((x: number) => x + 1, 0);
   const [lock, lockDispatch] = useReducer(lockReducer, initialLock);
+  const [typed, typedDispatch] = useReducer(typedReducer, initialTyped);
+  /** The bet whose voice session failed (no key, token refused, SDK error): type it instead. */
+  const [voiceFailedBet, setVoiceFailedBet] = useState<string | null>(null);
   const [walletKey, setWalletKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [busy, setBusy] = useState(false);
@@ -307,6 +322,54 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     () => (bet?.envelope && me ? betView(bet.envelope.terms, bet.envelope.terms_hash, me) : null),
     [bet?.envelope?.terms_hash, me],
   );
+
+  // ---- typed terms (A only): reset per bet; the form is the default without voice ------------
+  const negotiating = route === 'negotiate' && me === 'A' && !app.judgeCam;
+  const opponentName = bet?.party_b?.display_name ?? '';
+  // No judge to talk to: voice off, this phone never got the bet's voice variables (a restart
+  // mid-bet), or the session failed.
+  const typedForced =
+    !VOICE_ENABLED ||
+    (bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id)));
+  useEffect(() => {
+    if (!negotiating || !bet) return;
+    typedDispatch({ type: 'init', bet_id: bet.bet_id, bName: opponentName, typed: typedForced });
+  }, [negotiating, bet?.bet_id, opponentName, typedForced]);
+
+  const voiceFailed = useCallback((id: string) => {
+    setVoiceFailedBet(id);
+    typedDispatch({ type: 'open' });
+  }, []);
+
+  const submitTyped = async () => {
+    if (!bet || !canSubmit(typed) || typed.bet_id !== bet.bet_id) return;
+    typedDispatch({ type: 'submit' });
+    const outcome = await submitTypedTerms(
+      { api: rt.api },
+      { betId: bet.bet_id, claim: typed.claim, stakeUsd: typed.stakeUsd, bName: opponentName },
+    );
+    typedDispatch({ type: 'submitted', outcome });
+    if (outcome.kind !== 'proposed') feel('failed');
+  };
+
+  const confirmTyped = async () => {
+    const hash = bet?.envelope?.terms_hash ?? null;
+    // Gated on B's accept too: an early tap would get a 409 replayed for this key for 24h.
+    if (!bet || !hash || !canConfirm(typed, hash, bet.inviteAnswer)) return;
+    typedDispatch({ type: 'confirm' });
+    const keyName = `confirm:${bet.bet_id}:${hash}`;
+    const r = await confirmTypedTerms(
+      { api: rt.api },
+      { betId: bet.bet_id, termsHash: hash, idempotencyKey: keyFor(keyName) },
+    );
+    if (r.ok) typedDispatch({ type: 'confirmed' });
+    else {
+      // A 4xx is replayed for its key: the next tap is a new request with a new key.
+      if (r.freshKey) keys.current.delete(keyName);
+      typedDispatch({ type: 'confirm_failed', note: r.note });
+      feel('failed');
+    }
+  };
 
   // ---- the lock card: fetch the request if we missed the push; run the policy at mount -----
   const req = bet?.authorizeRequest ?? null;
@@ -668,9 +731,42 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             view={names}
             captions={captions}
             speaking={captions.at(-1)?.who === 'judge'}
-            hasMic={me === 'A'}
+            hasMic={me === 'A' && VOICE_ENABLED}
             micMuted={view !== null}
             draft={view}
+            typed={
+              negotiating && typed.bet_id === bet?.bet_id
+                ? {
+                    mode: typed.mode,
+                    canVoice: !typedForced,
+                    claim: typed.claim,
+                    stakeUsd: typed.stakeUsd,
+                    stakes: TYPED_STAKES_USD,
+                    sending: typed.phase === 'sending',
+                    confirming: typed.phase === 'confirming' || typed.phase === 'confirmed',
+                    canSubmit: canSubmit(typed),
+                    canConfirm: canConfirm(
+                      typed,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    ),
+                    waitingFor: waitingForAccept(
+                      typed,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    )
+                      ? names.theirName
+                      : null,
+                    note: typed.note,
+                    onOpen: () => typedDispatch({ type: 'open' }),
+                    onVoice: () => typedDispatch({ type: 'voice' }),
+                    onClaim: (text) => typedDispatch({ type: 'claim', text }),
+                    onStake: (usd) => typedDispatch({ type: 'stake', usd: usd as TypedStakeUsd }),
+                    onSubmit: () => void submitTyped(),
+                    onConfirm: () => void confirmTyped(),
+                  }
+                : undefined
+            }
             onDecline={() => {
               if (bet && me === 'B') void rt.api.declineInvite(bet.bet_id).catch(() => undefined);
               dismiss();
@@ -787,7 +883,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         <PanelErrorBoundary
           key={bet.bet_id}
           name="voice"
-          onError={(m) => console.warn('[yo] voice', m)}
+          onError={(m) => {
+            console.warn('[yo] voice', m);
+            voiceFailed(bet.bet_id);
+          }}
         >
           <Suspense fallback={null}>
             <JudgeVoice
@@ -796,6 +895,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               dynamicVariables={voice}
               startAttempt={(n) => rt.api.startAttempt(bet.bet_id, n).then(() => undefined)}
               onShowTermsCard={() => undefined}
+              onFailed={() => voiceFailed(bet.bet_id)}
             />
           </Suspense>
         </PanelErrorBoundary>
