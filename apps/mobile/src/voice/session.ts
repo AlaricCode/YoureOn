@@ -15,9 +15,11 @@
 //                  An onError while connected (e.g. a client tool threw) is logged, not fatal.
 //
 // Why guarded: the SDK's controls throw "No active conversation" before connect / after end.
+import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import { BetState } from '@youre-on/shared/bet-state';
 import type { JudgeCueName } from '@youre-on/shared/api';
 
+import { sha256 } from '../wallet/noble';
 import { ATTEMPT_CUES, createLineBatcher, cueAction, type VoiceLine } from './judgeTools';
 
 export const CONNECT_TIMEOUT_MS = 15_000;
@@ -99,13 +101,30 @@ export interface JudgeSessionDeps {
 }
 
 /**
- * A UUIDv4-shaped utterance id from the bet, the speaker and the SDK event id. Deterministic, so a
+ * What identifies one line within the conversation. The SDK's event_id is the turn counter: a
+ * turn with a tool call (pre-tool speech "Bold. Writing that down.", then the read-back) has two
+ * agent responses with one event_id, so it is not enough. An agent response's response_id is
+ * stable across streamed parts and resends; without one, the text tells two lines of one turn
+ * apart while a resend stays the same line.
+ */
+export function utteranceKey(m: {
+  event_id?: number;
+  response_id?: string;
+  text: string;
+  at: number;
+}): string {
+  if (m.response_id) return `r:${m.response_id}`;
+  return `e:${m.event_id ?? m.at}:${m.text}`;
+}
+
+/**
+ * A UUIDv4-shaped utterance id from the bet, the speaker and utteranceKey(). Deterministic, so a
  * re-sent line is the same line (voice/lines idempotency) and the server's judge.line echo
  * replaces the local caption; the variant nibble (8 judge / 9 party) keeps an agent response and
- * a user transcript that share an event id apart.
+ * a user transcript apart. The tail is 48 bits of sha256(key).
  */
-export function utteranceId(betId: string, role: 'judge' | 'party', eventId: number): string {
-  const h = (Math.trunc(Math.abs(eventId)) % 2 ** 48).toString(16).padStart(12, '0');
+export function utteranceId(betId: string, role: 'judge' | 'party', key: string): string {
+  const h = bytesToHex(sha256(utf8ToBytes(key))).slice(0, 12);
   const b = betId.toLowerCase();
   return `${b.slice(0, 8)}-${b.slice(9, 13)}-4${b.slice(15, 18)}-${role === 'judge' ? '8' : '9'}${b.slice(20, 23)}-${h}`;
 }
@@ -270,12 +289,24 @@ export function createJudgeSession(d: JudgeSessionDeps) {
       }
       fail('session', message);
     },
-    onMessage(m: { role?: string; source?: string; message: string; event_id?: number }) {
+    onMessage(m: {
+      role?: string;
+      source?: string;
+      message: string;
+      event_id?: number;
+      response_id?: string;
+    }) {
       if (over()) return;
       const judge = m.role === 'agent' || m.source === 'ai';
       const text = m.message.trim();
       if (!text || (!judge && isEventLine(text))) return;
-      const id = utteranceId(d.betId, judge ? 'judge' : 'party', m.event_id ?? now());
+      const key = utteranceKey({
+        event_id: m.event_id,
+        response_id: judge ? m.response_id : undefined,
+        text,
+        at: now(),
+      });
+      const id = utteranceId(d.betId, judge ? 'judge' : 'party', key);
       d.onCaption({ id, who: judge ? 'judge' : 'a', text });
       batcher.add({
         utterance_id: id,

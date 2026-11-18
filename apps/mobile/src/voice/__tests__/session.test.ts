@@ -11,6 +11,7 @@ import {
   isEventLine,
   micMutedFor,
   utteranceId,
+  utteranceKey,
   type Caption,
   type ConversationPort,
   type FailReason,
@@ -336,11 +337,56 @@ describe('judge session: captions + transcript relay', () => {
     ]);
   });
 
-  it('utteranceId is deterministic and UUIDv4-shaped; isEventLine', () => {
-    expect(utteranceId(BET, 'judge', 7)).toBe('7f3c2a9e-4b1d-4e8a-8c2f-000000000007');
-    expect(utteranceId(BET, 'party', 7)).toBe('7f3c2a9e-4b1d-4e8a-9c2f-000000000007');
-    expect(utteranceId(BET, 'judge', 7)).toBe(utteranceId(BET, 'judge', 7));
-    expect(Uuid.safeParse(utteranceId(BET, 'judge', 2 ** 50)).success).toBe(true);
+  it('two agent responses in one turn (pre-tool speech, then the read-back) are two lines', async () => {
+    const t = setup();
+    await t.started();
+    t.connected();
+    // The SDK's event_id is the turn counter; response_id tells the responses apart.
+    t.s.onMessage({
+      role: 'agent',
+      message: 'Bold. Writing that down.',
+      event_id: 4,
+      response_id: 'resp_a',
+    });
+    t.s.onMessage({
+      role: 'agent',
+      message: 'Jake lands a water bottle flip upright. Five dollars each.',
+      event_id: 4,
+      response_id: 'resp_b',
+    });
+    // A resend of the first response keeps its id (voice/lines is idempotent on it).
+    t.s.onMessage({
+      role: 'agent',
+      message: 'Bold. Writing that down.',
+      event_id: 4,
+      response_id: 'resp_a',
+    });
+    const ids = t.captions.map((c) => c.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids[2]).toBe(ids[0]);
+    // An older SDK without response_id: the text separates them, a resend still matches.
+    const u = setup();
+    await u.started();
+    u.connected();
+    u.s.onMessage({ role: 'agent', message: 'Bold. Writing that down.', event_id: 4 });
+    u.s.onMessage({ role: 'agent', message: 'Five dollars each.', event_id: 4 });
+    u.s.onMessage({ role: 'agent', message: 'Bold. Writing that down.', event_id: 4 });
+    const uids = u.captions.map((c) => c.id);
+    expect([new Set(uids).size, uids[2] === uids[0]]).toEqual([2, true]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(new Set(u.posted.flat().map((l) => l.utterance_id)).size).toBe(2);
+  });
+
+  it('utteranceId is deterministic and UUIDv4-shaped; utteranceKey; isEventLine', () => {
+    const k = utteranceKey({ response_id: 'resp_1', event_id: 7, text: 'Hi.', at: 0 });
+    expect(k).toBe('r:resp_1');
+    expect(utteranceKey({ event_id: 7, text: 'Hi.', at: 0 })).toBe('e:7:Hi.');
+    expect(utteranceKey({ text: 'Hi.', at: 1700 })).toBe('e:1700:Hi.');
+    expect(utteranceId(BET, 'judge', k)).toMatch(/^7f3c2a9e-4b1d-4e8a-8c2f-[0-9a-f]{12}$/);
+    expect(utteranceId(BET, 'party', k)).toMatch(/^7f3c2a9e-4b1d-4e8a-9c2f-[0-9a-f]{12}$/);
+    expect(utteranceId(BET, 'judge', k)).toBe(utteranceId(BET, 'judge', k));
+    expect(utteranceId(BET, 'judge', k)).not.toBe(utteranceId(BET, 'judge', 'r:resp_2'));
+    expect(Uuid.safeParse(utteranceId(BET, 'judge', k)).success).toBe(true);
     expect(isEventLine('[EVENT] PAID winner=Jake :: x')).toBe(true);
     expect(isEventLine('  [event] x')).toBe(true);
     expect(isEventLine('Event over.')).toBe(false);
