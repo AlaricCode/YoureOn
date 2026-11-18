@@ -164,6 +164,15 @@ describeDb('typed terms: POST /v1/bets/:id/terms/typed + /terms/confirm (DB)', (
     expect(await eventTypes(betId)).toEqual(
       expect.arrayContaining(['terms.refused', 'bet.state', 'judge.cue']),
     );
+    // Typed: nobody has said the quip yet, so a live judge is told to say it (speak).
+    const [cue] = await ctx.deps.db
+      .select({ envelope: betEvents.envelope })
+      .from(betEvents)
+      .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'judge.cue')));
+    expect((cue!.envelope as { payload: unknown }).payload).toMatchObject({
+      cue: 'REFUSED',
+      speak: true,
+    });
     const audits = await ctx.deps.db
       .select()
       .from(auditLog)

@@ -543,6 +543,9 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
         quip: REFUSAL_QUIPS[category],
       });
       expect(await audits(betId, 'terms.refused_prefilter')).toHaveLength(1);
+      // The judge already spoke the quip from the reply: the cue informs it, it does not repeat.
+      const refusedCue = evs.find((e) => e.type === 'judge.cue')!.envelope as any;
+      expect(refusedCue.payload).toMatchObject({ cue: 'REFUSED', speak: false });
 
       // A re-worded, safe call on the same bet gets the refusal again; nothing is composed.
       const sanitized = await tool('propose_terms', { ...ids, ...BOTTLE });
