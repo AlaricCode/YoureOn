@@ -34,10 +34,19 @@ fi
 mkdir -p "$OUT"
 PROFILE="$(mktemp -d)"
 trap 'rm -rf "$PROFILE"' EXIT
+failed=0
 for step in "${STEPS[@]}"; do
   file="$OUT/stage-$step-$SIZE.png"
+  rm -f "$file"
+  # Chrome sometimes exits non-zero after writing the screenshot: judge by the file.
   "$CHROME" --headless=new --disable-gpu --hide-scrollbars --user-data-dir="$PROFILE" \
     --window-size="${SIZE/x/,}" --virtual-time-budget=3000 --screenshot="$file" \
-    "${BASE}?preview=${step}&nopreload" >/dev/null 2>&1
-  echo "$file"
+    "${BASE}?preview=${step}&nopreload" >/dev/null 2>&1 || true
+  if [ -s "$file" ]; then
+    echo "$file"
+  else
+    echo "no screenshot for $step" >&2
+    failed=1
+  fi
 done
+exit "$failed"
