@@ -36,6 +36,9 @@
 //   POST /v1/demo/warmup                 one live judge call on a stored JPEG, getLatestBlockhash,
 //                                        one Gemini relay poll, voice readiness; per check
 //                                        {ok, ms, error} (warmup.ts). No bet, no money. 1 per 10 s.
+//   POST /v1/demo/seed-h2h {a_wins?, b_wins?}
+//                                        replaces the is_seed head-to-head history of demo-a vs
+//                                        demo-b (default 4-7, seed-h2h.ts); reset keeps it.
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import type { Context, MiddlewareHandler } from 'hono';
@@ -60,6 +63,7 @@ import { claimTokensOf, demoPartyKey } from './claim-tokens';
 import { demoWallets, isDemoPlayer } from './players';
 import { rebalanceDemoWallets } from './rebalance';
 import { DemoResetRequest, resetDemo } from './reset';
+import { SeedH2hRequest, seedHeadToHead } from './seed-h2h';
 import { DemoTogglesRequest, togglesOf } from './toggles';
 import { runWarmup, takeWarmupToken } from './warmup';
 import { realWorldEnabled } from '../markets/quote';
@@ -203,6 +207,13 @@ export const demoRoutes: RouteModule = {
       const r = await runWarmup(deps, { requestId: c.get('requestId') });
       c.header('Cache-Control', 'no-store');
       return c.json(r, 200);
+    });
+
+    app.post('/v1/demo/seed-h2h', requireDemo, async (c) => {
+      const deps = c.get('deps');
+      const body = await readBody(c, SeedH2hRequest);
+      const r = await seedHeadToHead(deps, body, { requestId: c.get('requestId') });
+      return c.json({ ok: true, ...r }, 200);
     });
 
     // Every money sweep, now (before a beat, or to see the orphan refunds go out): the same
