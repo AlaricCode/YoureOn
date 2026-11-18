@@ -7,7 +7,8 @@
 import {
   address,
   appendTransactionMessageInstructions,
-  createSolanaRpc,
+  createDefaultRpcTransport,
+  createSolanaRpcFromTransport,
   createTransactionMessage,
   fetchEncodedAccount,
   getAddressDecoder,
@@ -18,6 +19,7 @@ import {
   getProgramDerivedAddress,
   getSignatureFromTransaction,
   getTransactionSize,
+  isSolanaError,
   getU32Encoder,
   getU64Encoder,
   pipe,
@@ -25,6 +27,8 @@ import {
   setTransactionMessageLifetimeUsingBlockhash,
   setTransactionMessageLifetimeUsingDurableNonce,
   signTransactionMessageWithSigners,
+  SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR,
+  type RpcTransport,
   type Address,
   type Blockhash,
   type Commitment,
@@ -76,9 +80,34 @@ export function redactUrl(url: string): string {
   }
 }
 
+/**
+ * The public devnet RPC answers 429 under any real load, and a 429 on the confirm poll after a
+ * send made the crank / smoke report "FAILED" for transactions that had landed. Retry 429/5xx
+ * with exponential backoff (re-sending the same signed bytes is safe; reads are idempotent).
+ * Mirrors apps/server/src/chain/tx.ts withRpcRetry.
+ */
+function retryingTransport(url: string, attempts = 6, baseMs = 300): RpcTransport {
+  const inner = createDefaultRpcTransport({ url });
+  return (async (config: Parameters<RpcTransport>[0]) => {
+    for (let i = 0; ; i++) {
+      try {
+        return await inner(config);
+      } catch (e) {
+        const status = isSolanaError(e, SOLANA_ERROR__RPC__TRANSPORT_HTTP_ERROR)
+          ? e.context.statusCode
+          : 0;
+        if (i >= attempts - 1 || !(status === 429 || status >= 500)) throw e;
+        await new Promise((r) =>
+          setTimeout(r, baseMs * 2 ** i + Math.floor(Math.random() * baseMs)),
+        );
+      }
+    }
+  }) as RpcTransport;
+}
+
 /** Connects, identifies the cluster by genesis hash and refuses mainnet. */
 export async function connect(url: string): Promise<Chain> {
-  const rpc = createSolanaRpc(url);
+  const rpc = createSolanaRpcFromTransport(retryingTransport(url));
   const label = redactUrl(url);
   let genesis: string;
   try {
