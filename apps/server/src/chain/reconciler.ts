@@ -1,8 +1,16 @@
 // Stream-gap reconciler (DATA-MODEL §8.3 "Gaps", ARCHITECTURE §3 "Background loops" / data flow,
 // API-CONTRACT §5.4 "Reconciler"): on every keeper tick, transactions the SERVER sent whose
-// escrow events the QuickNode Stream has not delivered within STREAM_FALLBACK_MS are fetched with
-// getTransaction and ingested as source 'rpc_poll', through the same decoder rules
-// (streams.ts eventsFromRpcTransaction = filter.js rules 1-5) and the same projector.
+// escrow events the QuickNode Stream has not delivered within the fallback delay
+// (rpcPollFallbackMs) are fetched with getTransaction and ingested as source 'rpc_poll', through
+// the same decoder rules (streams.ts eventsFromRpcTransaction = filter.js rules 1-5) and the same
+// projector.
+//
+// The fallback delay: RPC_POLL_FALLBACK_MS, else 30 s when a Stream is configured
+// (QN_STREAM_SECURITY_TOKEN set), else STREAM_FALLBACK_MS (5 s). With a Stream, 5 s is shorter
+// than its normal lag (dataset batches, elastic batching, delivery; whether the Solana dataset
+// trails at confirmed or finalized is unmeasured until the key run): rpc_poll would store every
+// server-tx event first, every chain.* event would say observed_via 'rpc_poll', and the Stream's
+// copies would only dedupe. Without a Stream nothing else will come, so 5 s.
 //
 // rpc_poll is a DEGRADED mode. The Stream stays the normal source: its copy stamps
 // chain_txs.stream_seen_at (then the tx is never polled), whichever copy arrives second is a
@@ -14,7 +22,7 @@
 //
 // Bounded: only server-sent txs (chain_txs with a signature and a sent_at, never nonce advances;
 // any status, since a lock marked expired / failed that landed after all is still ours), sent
-// between STREAM_FALLBACK_MS and RPC_POLL_MAX_AGE_MS ago, with no chain_events row yet, at most
+// between the fallback delay and RPC_POLL_MAX_AGE_MS ago, with no chain_events row yet, at most
 // RPC_POLL_BATCH getTransaction calls per tick, and a per-signature backoff (excluded in SQL, so
 // backed-off rows never starve newer ones). Anything the server did not send (a permissionless
 // finalize / timeout_refund by someone else) only arrives through the Stream (the startup sweep
@@ -45,12 +53,27 @@ import {
 import { chainEvents, chainTxs } from '@youre-on/db';
 import { STREAM_FALLBACK_MS } from '@youre-on/shared/constants';
 import type { AppDeps } from '../context';
+import type { Env } from '../env';
 import { eventAuthorityAddress } from './filter-config';
 import { isTransientDbError } from './db-errors';
 import { ingestChainEvents, publishFanout, refoldParkedInTx, storeUnprojected } from './ingest';
 import { APPLY_ERROR, createChainProjector, type ChainProjector } from './projector';
 import { eventsFromRpcTransaction } from './streams';
 import type { ChainRuntime } from './tx';
+
+/** The default rpc_poll delay while a Stream is configured (see the header). */
+export const RPC_POLL_FALLBACK_WITH_STREAM_MS = 30_000;
+
+/**
+ * How long a server tx waits for its Stream copy before rpc_poll fetches it: RPC_POLL_FALLBACK_MS,
+ * else 30 s with a Stream configured (QN_STREAM_SECURITY_TOKEN), else STREAM_FALLBACK_MS.
+ */
+export function rpcPollFallbackMs(
+  env: Partial<Pick<Env, 'RPC_POLL_FALLBACK_MS' | 'QN_STREAM_SECURITY_TOKEN'>>,
+): number {
+  if (env.RPC_POLL_FALLBACK_MS !== undefined) return env.RPC_POLL_FALLBACK_MS;
+  return env.QN_STREAM_SECURITY_TOKEN ? RPC_POLL_FALLBACK_WITH_STREAM_MS : STREAM_FALLBACK_MS;
+}
 
 /** Older server txs are left to the Stream / the operator. */
 export const RPC_POLL_MAX_AGE_MS = 30 * 60_000;
@@ -77,6 +100,7 @@ export interface ReconcileResult {
 
 export interface StreamGapOptions {
   projector?: ChainProjector;
+  /** Default STREAM_FALLBACK_MS; the server passes rpcPollFallbackMs(env) (keeper/index.ts). */
   fallbackMs?: number;
   maxAgeMs?: number;
   batch?: number;

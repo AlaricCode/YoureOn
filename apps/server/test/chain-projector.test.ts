@@ -160,6 +160,7 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
         expect.objectContaining({
           bet_id: b.id,
           kind: 'atomic_lock',
+          first_copy: 'stream',
           send_to_stream_ms: expect.any(Number),
         }),
       );
@@ -545,12 +546,29 @@ describeDb('chain projector over Postgres (webhook -> bets projection)', () => {
       });
       expect((await eventsOfBet(db(), b.id)).map((e) => e.block_height)).toEqual([null, null]);
       // the resumed Stream delivers its copy: a duplicate, but it fills in what rpc_poll lacked
+      const info = vi.spyOn(deps.log, 'info');
       expect((await post(body)).json).toMatchObject({ inserted: 0, published: 0 });
       expect((await eventsOfBet(db(), b.id)).map((e) => [e.block_height, e.tx_index])).toEqual([
         [820_000, 0],
         [820_000, 0],
       ]);
       expect((await lockTxOf(db(), b.lockTx)).stream_seen_at).toEqual(new Date(NOW));
+      // ...and the Streams lane latency is still measured, although rpc_poll's copy came first
+      const seenLogs = () => info.mock.calls.filter(([msg]) => msg === 'chain.stream_seen');
+      expect(seenLogs()).toEqual([
+        [
+          'chain.stream_seen',
+          expect.objectContaining({
+            bet_id: b.id,
+            kind: 'atomic_lock',
+            first_copy: 'rpc_poll',
+            send_to_stream_ms: expect.any(Number),
+          }),
+        ],
+      ]);
+      await post(body); // a replay: stream_seen_at is set, nothing is logged twice
+      expect(seenLogs()).toHaveLength(1);
+      info.mockRestore();
       // someone else's resolve + finalize + close (permissionless, never in chain_txs): with
       // the lock's position known, the BetClosed no longer makes them ambiguous
       const fin = randomSig();

@@ -34,6 +34,9 @@ import {
 import { parseStreamDelivery, StreamPayloadError } from '../src/chain/streams';
 import { attributeEvents, chainOrder, type AttributionRow } from '../src/chain/projector';
 import { isTransientDbError } from '../src/chain/routes';
+import { rpcPollFallbackMs, RPC_POLL_FALLBACK_WITH_STREAM_MS } from '../src/chain/reconciler';
+import { STREAM_FALLBACK_MS } from '@youre-on/shared/constants';
+import { loadEnv } from '../src/env';
 import {
   ALL_EVENT_NAMES,
   block,
@@ -645,5 +648,28 @@ describe('attributeEvents (ESCROW §5.1 / §7.1: bind events to OUR instance of 
       false,
       false,
     ]);
+  });
+});
+
+describe('rpcPollFallbackMs (how long rpc_poll waits for the Stream)', () => {
+  it('5 s without a Stream, 30 s with one configured, RPC_POLL_FALLBACK_MS wins', () => {
+    expect(rpcPollFallbackMs({})).toBe(STREAM_FALLBACK_MS);
+    expect(STREAM_FALLBACK_MS).toBe(5_000);
+    expect(rpcPollFallbackMs({ QN_STREAM_SECURITY_TOKEN: 'qn_' + 'a'.repeat(64) })).toBe(
+      RPC_POLL_FALLBACK_WITH_STREAM_MS,
+    );
+    expect(RPC_POLL_FALLBACK_WITH_STREAM_MS).toBe(30_000);
+    expect(
+      rpcPollFallbackMs({
+        QN_STREAM_SECURITY_TOKEN: 'qn_' + 'a'.repeat(64),
+        RPC_POLL_FALLBACK_MS: 0,
+      }),
+    ).toBe(0);
+    // from the environment: an integer string; blank = unset
+    const env = (extra: Record<string, string>) =>
+      loadEnv({ DATABASE_URL: 'postgres://x@localhost/x', ...extra });
+    expect(rpcPollFallbackMs(env({ RPC_POLL_FALLBACK_MS: '12000' }))).toBe(12_000);
+    expect(rpcPollFallbackMs(env({ RPC_POLL_FALLBACK_MS: '' }))).toBe(5_000);
+    expect(() => env({ RPC_POLL_FALLBACK_MS: '-1' })).toThrow(/RPC_POLL_FALLBACK_MS/);
   });
 });

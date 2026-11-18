@@ -9,7 +9,8 @@
 // lock signature matched yet, 'unknown_bet' = no bets row yet, 'projector_failed' = stored by the
 // deterministic-failure fallback, 'projection_rejected' = the bets write was refused) is handed
 // to the projector again, so a later copy of the same event un-parks it; and a Stream copy of a
-// row rpc_poll stored first backfills its block position and chain_txs.stream_seen_at.
+// row rpc_poll stored first backfills its block position and chain_txs.stream_seen_at (and logs
+// chain.stream_seen after COMMIT, so the Streams latency is measured whichever copy came first).
 // No RPC calls happen in here: the ack budget is p95 ≤ 150 ms.
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { chainEvents, chainTxs } from '@youre-on/db';
@@ -17,10 +18,13 @@ import type { Logger } from '../log';
 import type { AppDeps } from '../context';
 import {
   APPLY_ERROR,
+  logStreamSeen,
   REFOLDABLE_ERRORS,
+  streamSeenCols,
   type ChainProjector,
   type Fanout,
   type InsertedChainEvent,
+  type StreamSeen,
   type Tx,
 } from './projector';
 import type { ParsedChainEvent } from './streams';
@@ -51,7 +55,7 @@ export async function ingestChainEvents(
   if (events.length === 0) return { received: 0, inserted: 0, duplicates: 0, published: 0 };
   const nowMs = deps.now();
   const rows = toRows(events, o, nowMs);
-  const { inserted, fanout } = await deps.db.transaction(async (tx) => {
+  const { inserted, fanout, seen } = await deps.db.transaction(async (tx) => {
     const ins = await tx
       .insert(chainEvents)
       .values(rows)
@@ -66,7 +70,9 @@ export async function ingestChainEvents(
       });
     const fresh = new Set(ins.map(keyOf));
     const dupes = rows.filter((r) => !fresh.has(keyOf(r)));
-    const parked = dupes.length ? await storedDuplicates(tx, dupes, nowMs) : [];
+    const { parked, seen } = dupes.length
+      ? await storedDuplicates(tx, dupes, nowMs)
+      : { parked: [], seen: [] };
     const toApply: InsertedChainEvent[] = [
       ...ins.map(({ id, bet_id, event_name, apply_error }) => ({
         id,
@@ -78,9 +84,10 @@ export async function ingestChainEvents(
       ...parked.map((r) => ({ ...r, apply_error: null })),
     ];
     const out = toApply.length ? await projector.apply(tx, toApply, nowMs, deps.log) : [];
-    return { inserted: ins.length, fanout: out };
+    return { inserted: ins.length, fanout: out, seen };
   });
   publishFanout(deps, fanout);
+  if (deps.log) logStreamSeen(deps.log, seen, nowMs);
   return {
     received: events.length,
     inserted,
@@ -126,13 +133,14 @@ export function publishFanout(deps: Pick<AppDeps, 'hub'>, fanout: readonly Fanou
  * The stored twins of this delivery's duplicates. Returns the ones still parked
  * (REFOLDABLE_ERRORS) for the projector. A Stream copy of a row an rpc_poll copy stored first also
  * backfills what getTransaction could not give (block_height, tx_index: attribution orders by
- * them) and stamps chain_txs.stream_seen_at (the Stream did see the tx).
+ * them) and stamps chain_txs.stream_seen_at (the Stream did see the tx); `seen` is what it
+ * stamped, for the chain.stream_seen latency log (the projector logs it for first copies).
  */
 async function storedDuplicates(
   tx: Tx,
   dupes: readonly ReturnType<typeof toRows>[number][],
   nowMs: number,
-): Promise<InsertedChainEvent[]> {
+): Promise<{ parked: InsertedChainEvent[]; seen: StreamSeen[] }> {
   const incoming = new Map(dupes.map((d) => [keyOf(d), d]));
   const rows = await tx
     .select({
@@ -142,28 +150,40 @@ async function storedDuplicates(
       inner_ix: chainEvents.inner_ix,
       block_height: chainEvents.block_height,
       tx_index: chainEvents.tx_index,
+      source: chainEvents.source,
     })
     .from(chainEvents)
     .where(inArray(chainEvents.signature, [...new Set(dupes.map((k) => k.signature))]));
   const mine = rows.filter((r) => incoming.has(keyOf(r)));
-  const backfilled = new Set<string>();
+  /** signature -> the source of its stored copy, for the Stream copies of this delivery. */
+  const backfilled = new Map<string, 'stream' | 'rpc_poll'>();
   for (const r of mine) {
     const d = incoming.get(keyOf(r))!;
     if (d.source !== 'stream') continue;
-    backfilled.add(r.signature);
+    backfilled.set(r.signature, r.source === 'rpc_poll' ? 'rpc_poll' : 'stream');
     const block_height = r.block_height ?? d.block_height;
     const tx_index = r.tx_index ?? d.tx_index;
     if (block_height !== r.block_height || tx_index !== r.tx_index)
       await tx.update(chainEvents).set({ block_height, tx_index }).where(eq(chainEvents.id, r.id));
   }
-  if (backfilled.size)
-    await tx
-      .update(chainTxs)
-      .set({ stream_seen_at: new Date(nowMs) })
-      .where(and(inArray(chainTxs.signature, [...backfilled]), isNull(chainTxs.stream_seen_at)));
-  return mine
-    .filter((r) => r.apply_error !== null && REFOLDABLE_ERRORS.includes(r.apply_error))
-    .map(({ id, bet_id, event_name, apply_error }) => ({ id, bet_id, event_name, apply_error }));
+  const stamped = backfilled.size
+    ? await tx
+        .update(chainTxs)
+        .set({ stream_seen_at: new Date(nowMs) })
+        .where(
+          and(inArray(chainTxs.signature, [...backfilled.keys()]), isNull(chainTxs.stream_seen_at)),
+        )
+        .returning({ ...streamSeenCols, signature: chainTxs.signature })
+    : [];
+  return {
+    parked: mine
+      .filter((r) => r.apply_error !== null && REFOLDABLE_ERRORS.includes(r.apply_error))
+      .map(({ id, bet_id, event_name, apply_error }) => ({ id, bet_id, event_name, apply_error })),
+    seen: stamped.map(({ signature, ...s }) => ({
+      ...s,
+      first_copy: backfilled.get(signature!) ?? 'stream',
+    })),
+  };
 }
 
 /**
