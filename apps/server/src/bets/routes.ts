@@ -28,6 +28,7 @@ import type { AppDeps, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
+import { demoRoomError, isDemoRoom, nonDemoPlayers } from '../demo/players';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
 import { declinedCue, inviteAcceptedCue } from './cues';
@@ -97,6 +98,15 @@ export const betsRoutes: RouteModule = {
       }
       if (!(await isActiveMember(deps.db, room.id, bId))) {
         throw new HttpError('NOT_IN_ROOM', "They're not in this room.", { party: 'B' });
+      }
+      // DEMO_MODE: the demo room (on the projector) is for the demo players, also for a member
+      // who joined before the stage opened (demo/players.ts).
+      if (await isDemoRoom(deps, room)) {
+        const outsider = (await nonDemoPlayers(deps, [aId, bId]))[0];
+        if (outsider)
+          throw demoRoomError('Only the demo players bet in this room.', {
+            party: outsider === aId ? 'A' : 'B',
+          });
       }
 
       const people = await deps.db
