@@ -60,6 +60,8 @@ export const devices = pgTable(
     push_token: text(),
     device_pubkey: text(),
     role: deviceRole().notNull().default('phone'),
+    /** Migration 0005: the room a `judge_cam` device is bound to (PATCH /v1/devices/current). */
+    judge_room_id: uuid().references((): AnyPgColumn => rooms.id, { onDelete: 'set null' }),
     app_version: text(),
     created_at: tstz().notNull().defaultNow(),
     last_seen_at: tstz().notNull().defaultNow(),
@@ -67,6 +69,7 @@ export const devices = pgTable(
   },
   (t) => [
     check('devices_push_provider', sql`push_provider IN ('expo','apns')`),
+    check('devices_judge_room_role', sql.raw(`judge_room_id IS NULL OR role = 'judge_cam'`)),
     pubkeyCheck('devices', 'device_pubkey'),
     uniqueIndex('devices_push_token_uq')
       .on(t.push_token)
