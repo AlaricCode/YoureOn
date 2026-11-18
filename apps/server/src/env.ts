@@ -49,6 +49,11 @@ export const EnvSchema = z.object({
   /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
   SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
+  /**
+   * SCHEMAS §2.2: real_world (Gemini BTC 5-minute) bets on our escrow are a devnet demo
+   * exception. Unset = follow DEMO_MODE. They also need the market relay (MARKETS_FEED).
+   */
+  ALLOW_P2P_REAL_WORLD: opt(boolStr),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
   // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)
@@ -112,8 +117,12 @@ export const EnvSchema = z.object({
   STAGE_KEY: opt(str),
   /** Comma-separated origins allowed to call the stage routes (CORS); unset = Vite dev origins. */
   STAGE_ORIGIN: opt(str),
-  /** Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test. */
-  MARKETS_FEED: opt(z.enum(['on', 'off'])),
+  /**
+   * Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test.
+   * 'replay' = on, serving the recorded round (markets/replay.ts, labelled REPLAY everywhere);
+   * POST /v1/demo/gemini switches live <-> replay at runtime.
+   */
+  MARKETS_FEED: opt(z.enum(['on', 'off', 'replay'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
   // --- optional

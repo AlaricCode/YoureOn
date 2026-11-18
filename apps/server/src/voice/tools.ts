@@ -22,6 +22,7 @@ import type { Context } from 'hono';
 import { auditLog, bets, voiceSessions } from '@youre-on/db';
 import { jcs } from '@youre-on/shared/jcs';
 import { MAX_STAKE } from '@youre-on/shared/constants';
+import { formatUsd } from '@youre-on/shared/money';
 import { Uuid } from '@youre-on/shared/primitives';
 import {
   evaluateProposeTerms,
@@ -34,7 +35,10 @@ import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
 import { lifecycleOf } from '../lock/runtime';
-import { confirmTerms, persistEvaluation } from '../lock/terms';
+import { newRoundLine } from '@youre-on/shared/judge/market-terms';
+import { confirmTerms, isNewRound, persistEvaluation } from '../lock/terms';
+import { realWorldEnabled } from '../markets/quote';
+import { realWorldReply } from '../markets/voice-tool';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
 
 /** States in which the judge may (re)propose terms (SCHEMAS §9.2: edits before the freeze). */
@@ -328,12 +332,17 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
 
       // 6. evaluate (pure: normText, map, strip-parse, prefilter, stake, market)
       const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
-      const evaluation = evaluateProposeTerms(body, { maxStake, realWorldEnabled: false });
+      // real_world (the Gemini BTC 5-minute closer) only with the relay on (markets/quote.ts).
+      const evaluation = evaluateProposeTerms(body, {
+        maxStake,
+        realWorldEnabled: realWorldEnabled(deps),
+      });
       const rev =
         evaluation.kind === 'proposal'
           ? opts.state.revision(betId, sha256Hex(jcs(evaluation.proposal)))
           : undefined;
-      const r = proposeTermsReply(evaluation, { rev, maxStake });
+      // real_world: Gemini's split (or its refusal) in the spoken reply (markets/voice-tool.ts)
+      const r = realWorldReply(deps, evaluation, proposeTermsReply(evaluation, { rev, maxStake }));
       opts.state.store(dedupeKey, now, r);
       if (evaluation.kind === 'refused') opts.state.markRefused(betId, r);
 
@@ -365,6 +374,7 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
 
 const CONFIRM_SAY = {
   NOT_PROPOSED: "Nothing to confirm yet. What's the bet?",
+  QUOTE_STALE: "Gemini can't price this round anymore. Let's take the next one.",
 } as const;
 
 /** "Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do." */
@@ -387,6 +397,30 @@ export async function confirmAndLock(
   } = {},
 ): Promise<ToolReply> {
   const r = await confirmTerms(deps, betId, o);
+  if (!r.ok && r.fix === 'REQUOTED') {
+    // A market quote too old to lock: re-quoted as new terms (terms.proposed already pushed).
+    // If the old round stopped pricing, the re-quote is the NEXT round: say so (new line, end).
+    const s = r.envelope.terms.stakes;
+    const m = r.envelope.terms.market!;
+    const split = `${formatUsd(s.a)} against ${formatUsd(s.b)}`;
+    const newRound = isNewRound(r);
+    return fitReply({
+      ok: false,
+      fix: 'REQUOTED',
+      terms_hash: r.envelope.terms_hash,
+      new_round: newRound,
+      say: newRound
+        ? `That round closed. ${newRoundLine(m)} ${split}. Say yes to lock it.`
+        : `Gemini's odds moved: ${split} now. Say yes to lock it.`,
+    });
+  }
+  if (!r.ok && r.fix === 'QUOTE_STALE')
+    return {
+      ok: false,
+      fix: 'QUOTE_STALE',
+      reason: r.refusal ?? 'QUOTE_STALE',
+      say: CONFIRM_SAY.QUOTE_STALE,
+    };
   if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
   if (!r.already) lifecycleOf(deps).lock.startInBackground(betId);
   const t = r.envelope.terms;

@@ -28,7 +28,8 @@
     "demo-claim-qr": "tsx scripts/demo-claim-qr.ts",
     "qn-stream": "tsx scripts/qn-stream.ts",
     "e2e:local": "bash scripts/e2e-local.sh",
-    "judge-eval": "tsx scripts/judge-eval.ts"
+    "judge-eval": "tsx scripts/judge-eval.ts",
+    "gemini-record": "tsx scripts/gemini-record.ts"
   },
   "devDependencies": {
     "@codama/nodes-from-anchor": "1.5.6",

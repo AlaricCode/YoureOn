@@ -263,6 +263,35 @@ describe('RealtimeEvent (§10)', () => {
       false,
     );
   });
+  it('Beat 6 market.settled carries the strict settlement record', () => {
+    const record = {
+      schema_version: 1,
+      kind: 'gemini_settlement',
+      bet_id: BET,
+      terms_hash: DOC_TERMS_HASH,
+      contract: {
+        eventTicker: 'BTC05M2611180240',
+        instrumentSymbol: 'GEMI-BTC05M2611180240-UP',
+        status: 'settled',
+        resolutionSide: 'no',
+        settlementValue: '64367.38366666667',
+        strike: { value: '64389.6', type: 'reference', availableAt: '2026-11-18T02:35:00.000Z' },
+        resolvedAt: '2026-11-18T02:40:05.521Z',
+      },
+      source_url: 'https://api.gemini.com/v1/prediction-markets/events/BTC05M2611180240',
+      response_sha256: sha256Hex('raw body'),
+      fetched_at: '2026-11-18T02:40:08.000Z',
+    };
+    const r = parseRealtimeEvent(
+      envOf('market.settled', { record, evidence_hash: sha256Hex('x') }),
+    );
+    expect(r.ok).toBe(true);
+    expect(
+      parseRealtimeEvent(
+        envOf('market.settled', { record: { ...record, extra: 1 }, evidence_hash: sha256Hex('x') }),
+      ).ok,
+    ).toBe(false);
+  });
   it('strict envelope: extra keys rejected', () => {
     expect(RealtimeEvent.safeParse({ ...betResolvedEvent(), extra: 1 }).success).toBe(false);
   });

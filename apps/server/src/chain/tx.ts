@@ -124,6 +124,12 @@ export interface ChainClient {
    */
   blockHeightAt?(slot: number): Promise<number | null>;
   /**
+   * The wire bytes of a transaction that landed and succeeded (`confirmed`), else null
+   * (unknown, failed, pruned). Optional: the settlement evidence reads a closed bet's resolve
+   * args from it (markets/onchain.ts).
+   */
+  transactionBytes?(sig: string): Promise<Uint8Array | null>;
+  /**
    * getProgramAccounts with memcmp filters (base58 bytes), at `confirmed`. Optional: the orphan
    * escrow sweep (src/payout/refund.ts) skips itself when the client cannot list accounts.
    */
@@ -851,6 +857,17 @@ export function rpcChainClient(
       };
     },
     blockHeightAt: (slot) => heightOf(BigInt(slot)),
+    async transactionBytes(sig) {
+      const res = await main
+        .getTransaction(sig as Signature, {
+          encoding: 'base64',
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        })
+        .send();
+      if (!res || res.meta?.err) return null;
+      return new Uint8Array(getBase64Encoder().encode(res.transaction[0]));
+    },
   };
 }
 

@@ -8,6 +8,10 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { MARKET_STAKES_USD, marketSideOf } from '@youre-on/shared/judge/market-terms';
+import { formatUsd, parseUsd } from '@youre-on/shared/money';
+import { splitPot } from '@youre-on/shared/gemini';
+
 import { initialLock, lockReducer, type EndReason } from '../bets/lock';
 import { betView, myResult } from '../bets/view';
 import { authorizeOwner } from '../device/authorize';
@@ -68,6 +72,7 @@ type Route =
   | 'scan'
   | 'incoming'
   | 'negotiate'
+  | 'marketPanel'
   | 'terms'
   | 'lockEnded'
   | 'live'
@@ -77,6 +82,7 @@ type Route =
   | 'payout'
   | 'hearing'
   | 'appeal'
+  | 'marketPanel'
   | 'market'
   | 'history'
   | 'profile'
@@ -96,6 +102,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [inRoom, setInRoom] = useState(true);
   const [balance, setBalance] = useState(startCents);
   const [market, setMarket] = useState(false);
+  // "Bet on Bitcoin" panel (Beat 6): A's call and stake, priced at the sample 62 % Up.
+  const [mSide, setMSide] = useState<'UP' | 'DOWN'>('UP');
+  const [mStake, setMStake] = useState<number>(2);
   const [me, setMe] = useState<'A' | 'B'>('A');
   const [lock, dispatch] = useReducer(lockReducer, initialLock);
   const [lockExpires, setLockExpires] = useState(0);
@@ -406,6 +415,52 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             }}
           />
         );
+      case 'marketPanel': {
+        const { a, b } = splitPot(2n * BigInt(parseUsd(String(mStake))), marketSideOf(mSide), 62n);
+        return (
+          <NegotiateScreen
+            view={view}
+            captions={[]}
+            speaking={false}
+            hasMic
+            micMuted
+            draft={null}
+            market={{
+              open: true,
+              side: mSide,
+              stakeUsd: mStake,
+              stakes: MARKET_STAKES_USD,
+              quote: {
+                ok: true,
+                refusal: null,
+                upPct: 62,
+                strikeUsd: '$97,250.03',
+                priceUsd: `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                split: `${formatUsd(a.toString())} vs ${formatUsd(b.toString())}`,
+                lockableUntilMs: expiry - 120_000,
+                replay: false,
+                nextWindowMs: null,
+              },
+              sending: false,
+              confirming: false,
+              canSubmit: true,
+              canConfirm: false,
+              waitingFor: null,
+              note: null,
+              onOpen: () => undefined,
+              onClose: () => go('menu'),
+              onSide: setMSide,
+              onStake: setMStake,
+              onSubmit: () => openTerms(false),
+              onConfirm: () => undefined,
+            }}
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      }
       case 'terms':
         return (
           <TermsCardScreen
@@ -543,7 +598,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   })();
 
   function openFromMenu(key: MenuKey) {
-    setMarket(key === 'market' || key === 'termsMarket');
+    setMarket(key === 'market' || key === 'termsMarket' || key === 'marketPanel');
     setMe('A');
     switch (key) {
       case 'signup':
@@ -565,6 +620,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return go('incoming');
       case 'negotiate':
         return startNegotiation();
+      case 'marketPanel':
+        // 3:20 to the contract's expiry: Gemini prices it for another 1:20
+        setExpiry(Date.now() + 200_000);
+        return go('marketPanel');
       case 'terms':
       case 'termsMarket':
         return openTerms(false);
@@ -659,6 +718,7 @@ type MenuKey =
   | 'payoutReverted'
   | 'hearing'
   | 'appeal'
+  | 'marketPanel'
   | 'market'
   | 'history'
   | 'profile'
@@ -721,11 +781,12 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     items: [
       ['hearing', '26  Hearing'],
       ['appeal', '27  Appeal panel'],
-      ['termsMarket', '28  Market terms card'],
-      ['market', '29  Waiting for market'],
+      ['marketPanel', '28  Bet on Bitcoin (odds)'],
+      ['termsMarket', '29  Market terms card'],
+      ['market', '30  Waiting for market'],
     ],
   },
-  { section: 'Demo', items: [['demo', '30  Demo account']] },
+  { section: 'Demo', items: [['demo', '31  Demo account']] },
 ];
 
 function Menu({ onClose, open }: { onClose: () => void; open: (k: MenuKey) => void }) {

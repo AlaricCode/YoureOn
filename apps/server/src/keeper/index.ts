@@ -8,6 +8,7 @@ import { lifecycleOf } from '../lock/runtime';
 import { HEALTH_LOG_MS, logChainHealth } from '../chain/health';
 import { bootReconcile } from '../chain/reconcile';
 import { ORPHAN_SWEEP_MS, REFUND_SWEEP_MS } from '../payout/refund';
+import { settlementTask } from '../markets/settlement';
 import { resolveDueTask } from '../payout/resolve-due';
 import { draftIdleTask, type SweepDeps } from './draft-idle';
 import { Keeper, type KeeperOptions, type KeeperTask } from './keeper';
@@ -92,6 +93,7 @@ export function createServerKeeper(
   for (const t of chainLifecycleTasks(chain)) keeper.register(t);
   // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
   keeper.register(resolveDueTask(chain));
+  keeper.register(settlementTask(chain));
   // The only best-effort RPC poller: after every money sweep, so a throttled RPC delays nothing.
   keeper.register(streamGapsTask(chain));
   // Every 10 min: one chain.unhealthy line when anything needs a human. Its first run (the boot
