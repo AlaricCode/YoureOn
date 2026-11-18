@@ -86,7 +86,9 @@ export function TermsCardScreen({
       ? t(COPY.terms.refused)
       : lock.authFailed
         ? t(COPY.terms.faceIdFailed)
-        : null;
+        : lock.sendFailed
+          ? t(COPY.app.failed)
+          : null;
 
   return (
     <Screen>

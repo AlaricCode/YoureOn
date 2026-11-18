@@ -55,6 +55,39 @@ describe('terms card lock state (SCHEMAS §9.4)', () => {
     expect(s.authFailed).toBe(true);
   });
 
+  it('a send that failed after Face ID passed is not a Face ID failure: try again', () => {
+    const s = run(
+      { type: 'policy', ok: true },
+      { type: 'hold_complete' },
+      { type: 'auth_result', ok: false, failure: 'send' },
+    );
+    expect(s.phase).toBe('ready');
+    expect(s.authFailed).toBe(false);
+    expect(s.sendFailed).toBe(true);
+    expect(holdEnabled(s)).toBe(true);
+    // The next hold clears it.
+    expect(lockReducer(s, { type: 'hold_complete' }).sendFailed).toBe(false);
+  });
+
+  it('a device-policy refusal at signing time refuses the card for good', () => {
+    const s = run(
+      { type: 'policy', ok: true },
+      { type: 'hold_complete' },
+      { type: 'auth_result', ok: false, failure: 'policy' },
+    );
+    expect(s.phase).toBe('refused');
+    expect(holdEnabled(s)).toBe(false);
+  });
+
+  it("an explicit 'auth' failure is the Face ID case", () => {
+    const s = run(
+      { type: 'policy', ok: true },
+      { type: 'hold_complete' },
+      { type: 'auth_result', ok: false, failure: 'auth' },
+    );
+    expect(s).toMatchObject({ phase: 'ready', authFailed: true, sendFailed: false });
+  });
+
   it('decline works after signing, but not once the lock is sent', () => {
     const signed = run(
       { type: 'policy', ok: true },
