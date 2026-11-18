@@ -15,3 +15,6 @@ dist/
 apps/mobile/assets/models/*.tflite
 # REPLAY clips ship in the server image (apps/server/Dockerfile), never in git
 apps/stage/public/replay/*.mp4
+.gstack/
+# drizzle-kit run from the repo root (not packages/db) writes an empty journal here
+/migrations/

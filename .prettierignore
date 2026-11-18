@@ -7,3 +7,4 @@ packages/shared/src/chain/generated/
 packages/db/migrations/meta/
 docs/reference/
 .claude/
+/migrations/
