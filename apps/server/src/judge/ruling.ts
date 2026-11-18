@@ -13,6 +13,7 @@ import { MAX_REDOS } from '@youre-on/shared/constants';
 import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { normText, type Party } from '@youre-on/shared/primitives';
 import {
+  CACHED_RULING_MODEL,
   Ruling,
   toOutcome,
   type ClaimResult,
@@ -31,8 +32,11 @@ import {
   type PromptFrame,
 } from './prompt';
 
-/** `Ruling.model` of a CACHED_RULING ruling (labelled REPLAY on stage, API-CONTRACT §2.17). */
-export const CACHED_RULING_MODEL = 'cache/demo-bottle@1';
+/**
+ * `Ruling.model` of a CACHED_RULING ruling (packages/shared ruling.ts, so the stage labels it
+ * "replay ruling": isCachedRulingModel).
+ */
+export { CACHED_RULING_MODEL };
 
 /** What the vision step produced for one attempt. */
 export type Judged =

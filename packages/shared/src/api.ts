@@ -22,6 +22,7 @@ import {
   Uuid,
 } from './primitives';
 import { OnchainOutcome, Ruling } from './ruling';
+import { StageVoiceName, VoicedEventType } from './stage-voice';
 import { TermsEnvelope } from './terms';
 
 // ---------------------------------------------------------------------------------------
@@ -692,6 +693,28 @@ export const WsStageCue = z.object({
   op: z.literal('stage.cue'),
   bet_id: BetId,
   kind: StageCueKind,
+  /**
+   * Additive: the cue's ElevenLabs Sound Effects clip (GET /v1/stage/sfx/:kind with the stage
+   * bearer), when the server generates them. Absent: the stage plays its own synthesized sound.
+   */
+  audio_url: z.string().max(200).optional(),
+});
+/**
+ * Additive (stage sessions only): the ElevenLabs TTS clip of the stage line for bet event
+ * (bet_id, seq), sent right after that event, before the clip is generated (the GET waits for
+ * it). The stage speaks `text` itself when no frame comes within ~800 ms or the clip fails.
+ */
+export const WsStageVoice = z.object({
+  op: z.literal('stage.voice'),
+  bet_id: BetId,
+  seq: z.number().int().nonnegative(),
+  type: VoicedEventType,
+  voice: StageVoiceName,
+  text: z.string().max(400),
+  /** sha256 hex of voice id, model and text. */
+  clip_id: Hex32,
+  /** GET with the stage bearer: /v1/stage/tts/:clip_id. */
+  audio_url: z.string().max(200),
 });
 
 export const WsServerControlFrame = z.discriminatedUnion('op', [
@@ -702,8 +725,22 @@ export const WsServerControlFrame = z.discriminatedUnion('op', [
   WsRoomPresence,
   WsStageMarket,
   WsStageCue,
+  WsStageVoice,
 ]);
 export type WsServerControlFrame = z.infer<typeof WsServerControlFrame>;
+
+/**
+ * GET /v1/stage/audio (stage bearer): what the server voices on the projector. `tts` false
+ * (`tts_off` says why): no stage.voice frames, the stage speaks with the browser's voice. `sfx`
+ * null: the stage synthesizes its cues; else each cue's ElevenLabs clip URL.
+ */
+export const StageAudioResponse = z.object({
+  tts: z.boolean(),
+  tts_off: z.enum(['no_key', 'off', 'spend_disabled']).nullable(),
+  model: z.string().nullable(),
+  sfx: z.record(StageCueKind, z.string()).nullable(),
+});
+export type StageAudioResponse = z.infer<typeof StageAudioResponse>;
 
 // ---------------------------------------------------------------------------------------
 // §2.3 Rooms and presence, §2.5 Challenge (rooms/challenge stream, TASKS D0-J4)
