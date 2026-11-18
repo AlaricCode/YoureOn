@@ -27,4 +27,12 @@ export { appendBetEvent, emitBetEvent, type BetEventEnvelope } from './realtime/
 export { verifyEd25519, sha256Hex, decodeBase64, decodeBase64Url, pubkeyBytes } from './crypto';
 export { createLogger, silentLogger, type Logger } from './log';
 export { routeModules } from './routes';
+export {
+  stageStatic,
+  stageStaticRoutes,
+  STAGE_CACHE,
+  STAGE_CSP,
+  STAGE_PREFIX,
+  type StageStaticOptions,
+} from './stage/static';
 export { Keeper, createServerKeeper, expireIdleDrafts, type KeeperTask } from './keeper';
