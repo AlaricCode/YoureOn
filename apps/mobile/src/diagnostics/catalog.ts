@@ -122,6 +122,13 @@ export const CHECKS = [
     hint: 'Reads the pubkey item (never creates a wallet), probes getRandomValues, pre-warms noble (D0-M3).',
   },
   {
+    id: 'faceid-gate',
+    label: 'Face ID prompt (the wallet gate)',
+    required: false,
+    kind: 'auto',
+    hint: 'Runs the GG / lock authorization prompt (Face ID, then passcode). Signs nothing.',
+  },
+  {
     id: 'jcs-vectors',
     label: 'JCS + terms hash vectors on Hermes',
     required: false,
