@@ -14,10 +14,16 @@
 // confirms (API-CONTRACT §3.4). A REDO keeps it in JUDGING with the attempt in status 'redo',
 // which is what lets POST …/attempts open attempt_no + 1.
 //
+// The performer never records: the judge cam must be the non-performer's device and
+// recorder:'self' is refused to the performer (§2.9). A lost ruling job (crash before its
+// commit, restart mid-call) never strands the bet in JUDGING: a throwing job commits REDO
+// 'unclear'; a replayed frames upload re-runs it from attempt_frames; the keeper task
+// 'judge-stuck' gives one older than STUCK_JUDGING_MS a REDO 'unclear' (no new model call).
+//
 // Not here yet (no object storage): clip PresignedUpload (`clip_upload` is null), clip-upload /
 // clip-complete, signed frame_urls in attempt.evidence (empty). Frames are kept in Postgres.
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { attemptFrames, attempts, auditLog, bets, devices, rulings, users } from '@youre-on/db';
 import { CameraEvidence } from '@youre-on/shared/evidence';
 import { jcs } from '@youre-on/shared/jcs';
@@ -31,7 +37,7 @@ import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
 import { chainAckOf, partyOf, toOnchainStatus, type BetRow } from '../bets/snapshot';
 import { attemptArmedCue, rulingCue } from './cues';
-import { buildRuling, judgeFrames, rulingCanonical } from './ruling';
+import { buildRuling, judgeFrames, rulingCanonical, type Judged } from './ruling';
 import {
   DevicePatchRequest,
   StartAttemptRequest,
@@ -53,6 +59,12 @@ export const MAX_FRAMES = 12;
 export const MAX_FRAME_BYTES = 200 * 1024;
 /** The frames multipart body: 12 × 200 KB + the evidence JSON + multipart overhead. */
 export const FRAMES_BODY_LIMIT = 3 * 1024 * 1024;
+/**
+ * A ruling job this much past its upload, with no job running for it in this process, is
+ * presumed lost (a restart mid vision call, or a crash before its commit) and is re-run by the
+ * keeper sweep. Above JUDGE_TIMEOUT_MS (10 s) + the commit, so a live job is never doubled.
+ */
+export const STUCK_JUDGING_MS = 20_000;
 /** gg_secs in the RULING cue when APPEAL_WINDOW_S is unset. */
 const DEFAULT_GG_SECS = 10;
 
@@ -72,6 +84,12 @@ export interface JudgeRoutesOptions {
 export interface JudgeRouteModule extends RouteModule {
   /** Resolves when every ruling job started so far has finished (tests, graceful shutdown). */
   idle(): Promise<void>;
+  /**
+   * Re-runs every ruling job that is lost: attempt 'judging' on a JUDGING bet, uploaded more
+   * than `olderThanMs` ago, with no job for it in this process. Registered as the keeper task
+   * 'judge-stuck'; returns how many it restarted.
+   */
+  resumeStuck(deps: AppDeps, nowMs: number, olderThanMs?: number): Promise<number>;
 }
 
 function uuidOr404(raw: string, what: string): string {
@@ -121,8 +139,12 @@ async function versionedState(tx: Tx, bet: BetRow, set: Partial<typeof bets.$inf
   if (updated.length !== 1) throw new HttpError('INVALID_STATE', undefined, { reason: 'raced' });
 }
 
-/** The room's judge-cam device that belongs to a party of the bet (most recently seen first). */
-async function findJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
+/**
+ * The room's judge-cam device of the NON-performer (most recently seen first). The performer can
+ * never be their own recorder (API-CONTRACT §2.9, ARCHITECTURE §6): a judge cam the performer
+ * binds to the room is ignored.
+ */
+async function findJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow, performer: Party) {
   if (!bet.room_id) return null;
   const [d] = await db
     .select({ id: devices.id, user_id: devices.user_id })
@@ -132,13 +154,16 @@ async function findJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
         eq(devices.role, 'judge_cam'),
         eq(devices.judge_room_id, bet.room_id),
         isNull(devices.revoked_at),
-        inArray(devices.user_id, [bet.party_a_id, bet.party_b_id]),
+        eq(devices.user_id, nonPerformerId(bet, performer)),
       ),
     )
     .orderBy(desc(devices.last_seen_at))
     .limit(1);
   return d ?? null;
 }
+
+const nonPerformerId = (bet: BetRow, performer: Party) =>
+  performer === 'A' ? bet.party_b_id : bet.party_a_id;
 
 function startResponse(a: AttemptRow, performer: Party): StartAttemptResponse {
   return {
@@ -152,7 +177,8 @@ function startResponse(a: AttemptRow, performer: Party): StartAttemptResponse {
 
 export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModule {
   const loadTerms = opts.loadTerms ?? loadFinalTerms;
-  const jobs = new Set<Promise<void>>();
+  /** Running ruling jobs by attempt id (one per attempt per process). */
+  const jobs = new Map<string, Promise<void>>();
 
   async function termsFor(deps: AppDeps, bet: BetRow): Promise<Terms> {
     const terms = await loadTerms(deps.db, bet);
@@ -184,15 +210,19 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
       frames: { t_ms: number; bytes: Uint8Array }[];
       received_at: number;
     },
+    /** Skip the vision call and commit this instead (the failure fallback of startJob). */
+    forced?: Judged,
   ): Promise<void> {
     const [bet0] = await deps.db.select().from(bets).where(eq(bets.id, job.bet_id)).limit(1);
     if (!bet0) return;
     const names = await displayNames(deps.db, bet0);
-    const judged = await judgeFrames(deps, {
-      terms: job.terms,
-      performer_name: names[job.terms.performer ?? 'B'],
-      frames: job.frames,
-    });
+    const judged =
+      forced ??
+      (await judgeFrames(deps, {
+        terms: job.terms,
+        performer_name: names[job.terms.performer ?? 'B'],
+        frames: job.frames,
+      }));
     const now = deps.now();
     const ruling = buildRuling(
       {
@@ -291,13 +321,115 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
     }
   }
 
-  function startJob(deps: AppDeps, job: Parameters<typeof runRuling>[1]): void {
-    const p = runRuling(deps, job)
-      .catch((e: unknown) =>
-        deps.log.error('judge.job_failed', { bet_id: job.bet_id, err: String(e) }),
+  type Job = Parameters<typeof runRuling>[1];
+
+  /**
+   * Runs the ruling job in the background, at most one per attempt in this process. If it
+   * throws (a DB error, a bug), it commits a REDO 'unclear' through the same path, as for a
+   * model failure (API-CONTRACT §7.1), so the bet never sits in JUDGING. If even that fails, the
+   * keeper sweep (resumeStuck) or a replayed frames upload re-runs it.
+   */
+  function startJob(deps: AppDeps, job: Job, forced?: Judged): boolean {
+    if (jobs.has(job.attempt_id)) return false;
+    const p = runRuling(deps, job, forced)
+      .catch(async (e: unknown) => {
+        deps.log.error('judge.job_failed', { bet_id: job.bet_id, err: String(e) });
+        try {
+          await runRuling(deps, job, {
+            kind: 'failure',
+            model: `anthropic/${deps.env.JUDGE_MODEL}`,
+            status: 'error',
+            message: String(e),
+          });
+        } catch (e2) {
+          deps.log.error('judge.job_fallback_failed', { bet_id: job.bet_id, err: String(e2) });
+        }
+      })
+      .finally(() => jobs.delete(job.attempt_id));
+    jobs.set(job.attempt_id, p);
+    return true;
+  }
+
+  /**
+   * Rebuilds a 'judging' attempt's job from the DB (attempt_frames) and starts it; `forced`
+   * commits that instead of calling the model again.
+   */
+  async function restartJob(
+    deps: AppDeps,
+    bet: BetRow,
+    att: AttemptRow,
+    forced?: Judged,
+  ): Promise<boolean> {
+    if (jobs.has(att.id) || att.status !== 'judging' || bet.state !== 'JUDGING') return false;
+    if (!att.client_clip_hash || !att.uploaded_at) return false;
+    const stored = await deps.db
+      .select({
+        t_ms: attemptFrames.t_ms,
+        sha256: attemptFrames.sha256,
+        bytes: attemptFrames.bytes,
+      })
+      .from(attemptFrames)
+      .where(eq(attemptFrames.attempt_id, att.id))
+      .orderBy(asc(attemptFrames.idx));
+    const terms = await termsFor(deps, bet);
+    deps.log.warn('judge.job_restarted', {
+      bet_id: bet.id,
+      attempt_no: att.attempt_no,
+      forced: forced?.kind ?? null,
+    });
+    return startJob(
+      deps,
+      {
+        bet_id: bet.id,
+        attempt_id: att.id,
+        attempt_no: att.attempt_no,
+        terms,
+        evidence_hash: att.client_clip_hash,
+        frame_hashes: att.frame_hashes,
+        frames: stored.map((f) => ({ t_ms: f.t_ms, bytes: new Uint8Array(f.bytes) })),
+        received_at: att.uploaded_at.getTime(),
+      },
+      forced,
+    );
+  }
+
+  /**
+   * The keeper sweep: a lost job gets a REDO 'unclear' through the normal commit path (no new
+   * model call, so a job that keeps dying never loops on a paid API), and the judge says
+   * "Run it back". A replayed frames upload instead re-runs the vision call.
+   */
+  async function resumeStuck(
+    deps: AppDeps,
+    nowMs: number,
+    olderThanMs: number = STUCK_JUDGING_MS,
+  ): Promise<number> {
+    const stuck = await deps.db
+      .select({ bet: bets, att: attempts })
+      .from(attempts)
+      .innerJoin(bets, eq(bets.id, attempts.bet_id))
+      .where(
+        and(
+          eq(attempts.status, 'judging'),
+          eq(bets.state, 'JUDGING'),
+          lt(attempts.uploaded_at, new Date(nowMs - olderThanMs)),
+        ),
       )
-      .finally(() => jobs.delete(p));
-    jobs.add(p);
+      .limit(20);
+    let n = 0;
+    for (const { bet, att } of stuck) {
+      try {
+        const lost: Judged = {
+          kind: 'failure',
+          model: `anthropic/${deps.env.JUDGE_MODEL}`,
+          status: 'lost',
+          message: 'ruling job lost (restart or crash before commit)',
+        };
+        if (await restartJob(deps, bet, att, lost)) n++;
+      } catch (e) {
+        deps.log.error('judge.resume_failed', { bet_id: bet.id, err: String(e) });
+      }
+    }
+    return n;
   }
 
   return {
@@ -305,10 +437,18 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
     bodyLimits: [{ path: FRAMES_PATH, maxBytes: FRAMES_BODY_LIMIT }],
 
     async idle() {
-      while (jobs.size) await Promise.allSettled([...jobs]);
+      while (jobs.size) await Promise.allSettled([...jobs.values()]);
     },
 
+    resumeStuck,
+
     register(app, deps) {
+      // Lost ruling jobs (restart mid-call, crash before commit) are re-run from the DB.
+      deps.keeper?.register({
+        name: 'judge-stuck',
+        run: (nowMs) => resumeStuck(deps, nowMs),
+      });
+
       // ---- PATCH /v1/devices/current (§2.15) ---------------------------------------------
       app.patch('/v1/devices/current', requireSignedRequest, async (c) => {
         const me = appAuth(c);
@@ -369,6 +509,12 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         }
         const terms = await termsFor(deps, bet0);
         const performer = terms.performer!;
+        // 'self' = the caller's phone records, so only the non-performer may ask for it (§2.9).
+        if (body.recorder === 'self' && partyOf(bet0, me.user_id) === performer) {
+          throw new HttpError('NOT_A_PARTY', "You can't record your own attempt.", {
+            reason: 'performer_cannot_record',
+          });
+        }
         const names = await displayNames(deps.db, bet0);
         const now = deps.now();
 
@@ -403,7 +549,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
 
           let recorder: { id: string; user_id: string };
           if (body.recorder === 'judge_cam') {
-            const cam = await findJudgeCam(tx, bet);
+            const cam = await findJudgeCam(tx, bet, performer);
             if (!cam) {
               throw new HttpError('INVALID_STATE', 'No judge cam is set up in this room.', {
                 state: bet.state,
@@ -412,6 +558,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             }
             recorder = cam;
           } else {
+            // checked above against bet0; party ids never change after creation
             recorder = { id: me.device_id, user_id: me.user_id };
           }
 
@@ -548,6 +695,10 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         // Idem (bet_id, n) + clip_sha256: the same upload replays the 202, another is refused.
         if (att.client_clip_hash !== null) {
           if (att.client_clip_hash === evidence.clip_sha256) {
+            // A lost job (no ruling yet, none running here) is restarted by the replay.
+            await restartJob(deps, bet0, att).catch((e: unknown) =>
+              deps.log.error('judge.resume_failed', { bet_id: betId, err: String(e) }),
+            );
             const replay: FramesAcceptedResponse = {
               judging: true,
               frame_hashes: att.frame_hashes,

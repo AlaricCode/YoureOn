@@ -3,17 +3,17 @@
 // MockLlm with scripted verdicts; no network. DB-backed suites skip without DATABASE_URL.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { attemptFrames, attempts, betEvents, bets, devices, rulings } from '@youre-on/db';
 import { requestSigningString } from '@youre-on/shared/api';
 import { ESCROW_ID, USDC_MINT_DEVNET } from '@youre-on/shared/chain/constants';
-import { hashJcs } from '@youre-on/shared/jcs';
+import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
 import { Ruling } from '@youre-on/shared/ruling';
 import { computeTermsHash, type Terms } from '@youre-on/shared/terms';
 import { issueAppSession } from '../src/auth/sessions';
-import { MockLlm, type MockReply } from '../src/providers/mock/llm';
+import { MockLlm, type MockReply, type MockResponder } from '../src/providers/mock/llm';
 import type { ChatRequest } from '../src/providers/types';
 import { routeModules } from '../src/routes';
 import { compareChecks, isBottleFlip } from '../src/judge/checks';
@@ -21,6 +21,9 @@ import { rulingCue } from '../src/judge/cues';
 import { JUDGE_TIMEOUT_MS } from '../src/judge/prompt';
 import { buildRuling, cachedVerdict, CACHED_RULING_MODEL, type Judged } from '../src/judge/ruling';
 import { createJudgeRoutes, MAX_FRAME_BYTES } from '../src/judge/routes';
+import { loadFinalTerms } from '../src/judge/terms';
+import { buildApp } from '../src/app';
+import { Keeper } from '../src/keeper';
 import {
   b64url,
   connectWs,
@@ -159,12 +162,15 @@ describe('cues (§4.5)', () => {
 describeDb('judge pipeline (DB)', () => {
   let ctx: Ctx;
   const termsByBet = new Map<string, Terms>();
+  // Injected terms first; otherwise the default loader (bet_terms_versions), as in production.
   const judge = createJudgeRoutes({
-    loadTerms: async (_db, bet) => termsByBet.get(bet.id) ?? null,
+    loadTerms: async (db, bet) => termsByBet.get(bet.id) ?? loadFinalTerms(db, bet),
   });
   const modules = routeModules.map((m) => (m.name === 'judge' ? judge : m));
   let llm: MockLlm;
   let replies: MockReply[] = [];
+  /** Overrides `replies` while set. */
+  let hook: MockResponder | null = null;
   const ruled: { betId: string; ruling: Ruling }[] = [];
   const sockets: WsClient[] = [];
 
@@ -190,7 +196,9 @@ describeDb('judge pipeline (DB)', () => {
 
   beforeAll(async () => {
     ctx = await startTestServer({ modules });
-    llm = new MockLlm(() => replies.shift() ?? { fail: 'error', message: 'no scripted reply' });
+    llm = new MockLlm(
+      (req) => hook?.(req) ?? replies.shift() ?? { fail: 'error', message: 'no scripted reply' },
+    );
     ctx.deps.providers.llm = llm;
     ctx.deps.onRuling = (betId, ruling) => {
       ruled.push({ betId, ruling });
@@ -227,6 +235,25 @@ describeDb('judge pipeline (DB)', () => {
     await judge.idle();
     await ctx?.server.close();
   });
+
+  /** A second device of `u` with its own session (a judge-cam iPhone). */
+  async function secondDevice(u: SignedUp): Promise<SignedUp> {
+    const key = newKey();
+    const [dev] = await ctx.deps.db
+      .insert(devices)
+      .values({ user_id: uid(u), device_pubkey: key.pubkey })
+      .returning({ id: devices.id });
+    const s = await issueAppSession(ctx.deps.db, {
+      user_id: uid(u),
+      device_id: dev!.id,
+      now: Date.now(),
+    });
+    return {
+      device: key,
+      wallet: u.wallet,
+      session: { ...u.session, token: s.token, session_id: s.session_id, device_id: dev!.id },
+    };
+  }
 
   /** A bet A→B in the room, frozen + LOCKED directly in the DB (the lock stream's job). */
   async function lockedBet(): Promise<string> {
@@ -469,6 +496,248 @@ describeDb('judge pipeline (DB)', () => {
       details: { reason: 'no_judge_cam' },
     });
     await bindCam();
+  });
+
+  // ---- the performer never records their own attempt (§2.9) ----
+
+  it("recorder 'self': the performer (B) is refused; the non-performer's phone records", async () => {
+    await bindCam();
+    const betId = await lockedBet(); // performer B
+    const mine = await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+    expect(mine.status).toBe(403);
+    expect(mine.json!.error).toMatchObject({
+      code: 'NOT_A_PARTY',
+      details: { reason: 'performer_cannot_record' },
+    });
+    expect((await betRow(betId)).state).toBe('LOCKED');
+    expect(await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId))).toEqual([]);
+    const theirs = await post(A, `/v1/bets/${betId}/attempts`, {
+      attempt_no: 1,
+      recorder: 'self',
+    });
+    expect(theirs.status).toBe(201);
+    expect(theirs.json!.recorder_device_id).toBe(A.session.device_id);
+    // B still can't replay it as 'self'; only A's phone may upload
+    expect(
+      (await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
+    ).toBe(403);
+    expect((await uploadFrames(B, betId, 1)).status).toBe(403);
+    replies = [met()];
+    expect((await uploadFrames(A, betId, 1)).status).toBe(202);
+    await judge.idle();
+    expect((await rulingRows(betId)).map((r) => r.outcome)).toEqual(['B_WINS']);
+  });
+
+  it("the performer's own judge cam is never chosen, even if it was seen last", async () => {
+    const bCam = await secondDevice(B);
+    try {
+      const bound = await signed(bCam, 'PATCH', '/v1/devices/current', {
+        role: 'judge_cam',
+        room_id: roomId,
+      });
+      expect(bound.status).toBe(204);
+      await ctx.deps.db
+        .update(devices)
+        .set({ last_seen_at: new Date(Date.now() + 3600_000) })
+        .where(eq(devices.id, bCam.session.device_id));
+
+      // with A's cam bound, A's cam records
+      await bindCam();
+      const betId = await lockedBet();
+      for (const u of [A, B]) {
+        const r = await post(u, `/v1/bets/${betId}/attempts`, { attempt_no: 1 });
+        expect(r.status).toBe(201);
+        expect(r.json!.recorder_device_id).toBe(CAM.session.device_id);
+      }
+      expect((await uploadFrames(bCam, betId, 1)).status).toBe(403);
+
+      // with only B's cam bound, there is no judge cam for this bet
+      await ctx.deps.db
+        .update(devices)
+        .set({ role: 'phone', judge_room_id: null })
+        .where(eq(devices.id, CAM.session.device_id));
+      const bet2 = await lockedBet();
+      const r = await post(B, `/v1/bets/${bet2}/attempts`, { attempt_no: 1 });
+      expect(r.json!.error).toMatchObject({
+        code: 'INVALID_STATE',
+        details: { reason: 'no_judge_cam' },
+      });
+    } finally {
+      await ctx.deps.db
+        .update(devices)
+        .set({ role: 'phone', judge_room_id: null })
+        .where(eq(devices.id, bCam.session.device_id));
+      await bindCam();
+    }
+  });
+
+  // ---- lost ruling jobs ----
+
+  /** Makes the next `n` db.transaction calls throw (the DB going away mid-job). */
+  function failTransactions(n: number) {
+    const db = ctx.deps.db as any;
+    const real = db.transaction;
+    let left = n;
+    db.transaction = (...args: unknown[]) => {
+      if (left-- > 0) return Promise.reject(new Error('connection terminated'));
+      delete db.transaction;
+      return real.apply(db, args);
+    };
+    return () => {
+      if (Object.prototype.hasOwnProperty.call(db, 'transaction')) delete db.transaction;
+    };
+  }
+
+  it('a job that throws before its commit falls back to a REDO unclear (never stuck)', async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    let restore = () => {};
+    replies = [];
+    hook = () => {
+      restore = failTransactions(1); // the vision call is done; its commit fails once
+      return met();
+    };
+    try {
+      expect((await uploadFrames(CAM, betId, 1)).status).toBe(202);
+      await judge.idle();
+    } finally {
+      restore();
+      hook = null;
+    }
+    const [r] = await rulingRows(betId);
+    expect(r).toMatchObject({ outcome: 'REDO', redo_reason: 'unclear', claim_result: 'UNCLEAR' });
+    expect(await betRow(betId)).toMatchObject({ state: 'JUDGING', redo_count: 1 });
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 2 })).status).toBe(201);
+  });
+
+  it('a lost job (commit and fallback both fail) is re-run by replaying the same upload', async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    let restore = () => {};
+    hook = () => {
+      restore = failTransactions(2);
+      return met();
+    };
+    let up: Awaited<ReturnType<typeof uploadFrames>>;
+    try {
+      up = await uploadFrames(CAM, betId, 1);
+      expect(up.status).toBe(202);
+      await judge.idle();
+    } finally {
+      restore();
+      hook = null;
+    }
+    const [att] = await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId));
+    expect(att!.status).toBe('judging'); // stuck: no ruling, no job
+    expect(await rulingRows(betId)).toEqual([]);
+
+    replies = [met()];
+    const calls0 = llm.calls.length;
+    const replay = await uploadFrames(CAM, betId, 1, {
+      frames: up.frames,
+      clipHash: up.evidence.clip_sha256,
+    });
+    expect(replay.status).toBe(202);
+    await judge.idle();
+    expect(llm.calls.length - calls0).toBe(1);
+    const call = llm.calls.at(-1)! as ChatRequest<unknown>;
+    expect(call.parts.filter((p) => p.kind === 'image')).toHaveLength(8);
+    const rows = await rulingRows(betId);
+    expect(rows.map((r) => r.outcome)).toEqual(['B_WINS']);
+    expect(rows[0]!.frame_hashes).toEqual(up.frames.map((f) => sha256Hex(f)));
+    // a further replay is a no-op (already ruled)
+    await uploadFrames(CAM, betId, 1, { frames: up.frames, clipHash: up.evidence.clip_sha256 });
+    await judge.idle();
+    expect((await rulingRows(betId)).length).toBe(1);
+  });
+
+  it('the keeper sweep gives a job lost to a restart a REDO unclear, once', async () => {
+    await bindCam();
+    const betId = await lockedBet();
+    expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+    // The vision call hangs (the process "dies" here); a fresh module = the rebooted process.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    hook = async () => {
+      await gate;
+      return met();
+    };
+    const rebooted = createJudgeRoutes({
+      loadTerms: async (_db, bet) => termsByBet.get(bet.id) ?? null,
+    });
+    try {
+      expect((await uploadFrames(CAM, betId, 1)).status).toBe(202);
+      expect(await rebooted.resumeStuck(ctx.deps, Date.now())).toBe(0); // not old enough yet
+      const calls0 = llm.calls.length;
+      expect(await rebooted.resumeStuck(ctx.deps, Date.now() + 25_000)).toBe(1);
+      await rebooted.idle();
+      expect(llm.calls.length).toBe(calls0); // no new model call
+      const [r] = await rulingRows(betId);
+      expect(r).toMatchObject({ outcome: 'REDO', redo_reason: 'unclear' });
+      expect(await betRow(betId)).toMatchObject({ state: 'JUDGING', redo_count: 1 });
+      expect(await rebooted.resumeStuck(ctx.deps, Date.now() + 25_000)).toBe(0);
+    } finally {
+      release();
+      await judge.idle();
+      hook = null;
+    }
+    // the original job finishing late changes nothing
+    expect((await rulingRows(betId)).map((r) => r.outcome)).toEqual(['REDO']);
+    const cue = (await events(betId)).at(-1)!;
+    expect((cue.envelope as any).payload.text).toMatch(/^\[EVENT\] REDO attempt=2/);
+  });
+
+  // ---- the default terms loader (bet_terms_versions, DATA-MODEL §5.7) ----
+
+  it('lock -> attempt -> ruling with the frozen terms read from bet_terms_versions', async () => {
+    // The lock stream's migration 0004 owns this table; create its shape here if it is not
+    // merged yet, and drop it again only if this test made it.
+    const [{ ok: had } = { ok: false }] = await ctx.deps.db.execute<{ ok: boolean }>(
+      sql`SELECT to_regclass('public.bet_terms_versions') IS NOT NULL AS ok`,
+    );
+    if (!had) {
+      await ctx.deps.db.execute(sql`CREATE TABLE bet_terms_versions (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        bet_id uuid NOT NULL REFERENCES bets(id) ON DELETE CASCADE,
+        version integer NOT NULL,
+        canonical_json text NOT NULL,
+        terms_hash text NOT NULL
+          CHECK (terms_hash = encode(sha256(convert_to(canonical_json, 'UTF8')), 'hex')),
+        is_final boolean NOT NULL DEFAULT false,
+        UNIQUE (bet_id, version))`);
+    }
+    try {
+      await bindCam();
+      const betId = await lockedBet();
+      const terms = termsByBet.get(betId)!;
+      termsByBet.delete(betId); // nothing injected from here on
+      const notFinal = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 });
+      expect(notFinal.json!.error.code).toBe('TERMS_NOT_FINAL');
+
+      const canonical = jcs(terms);
+      expect(sha256Hex(canonical)).toBe((await betRow(betId)).terms_hash);
+      await ctx.deps.db.execute(sql`INSERT INTO bet_terms_versions
+        (bet_id, version, canonical_json, terms_hash, is_final)
+        VALUES (${betId}, 1, ${canonical}, ${sha256Hex(canonical)}, false),
+               (${betId}, 2, ${canonical}, ${sha256Hex(canonical)}, true)`);
+      expect(await loadFinalTerms(ctx.deps.db, await betRow(betId))).toEqual(terms);
+
+      expect((await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 })).status).toBe(201);
+      replies = [met()];
+      expect((await uploadFrames(CAM, betId, 1)).status).toBe(202);
+      await judge.idle();
+      expect((await rulingRows(betId)).map((r) => r.outcome)).toEqual(['B_WINS']);
+    } finally {
+      if (!had) await ctx.deps.db.execute(sql`DROP TABLE IF EXISTS bet_terms_versions`);
+    }
+  });
+
+  it("registers the 'judge-stuck' sweep with the server keeper", () => {
+    const keeper = new Keeper({ now: Date.now, log: ctx.deps.log });
+    buildApp({ ...ctx.deps, keeper }, [createJudgeRoutes()]);
+    expect(keeper.taskNames).toContain('judge-stuck');
   });
 
   // ---- happy path ----
