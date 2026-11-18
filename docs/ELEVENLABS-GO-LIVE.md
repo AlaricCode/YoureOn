@@ -210,6 +210,10 @@ Speech and Sound Effects permissions.
   `stage_voice.line` (the text and the clip id), then `stage_voice.tts` (characters, bytes, ms).
   `stage_voice.tts_failed` gives `status` (401: the key; 429: the quota). A clip that is late or
   fails is spoken by the browser instead, so the hall always hears it.
+- In a bet the voice judge hosts (A's phone has relayed its transcript), the ruling and payout log
+  `stage_voice.phone_judge` instead, and the projector stays quiet for them: the judge on A's phone
+  says them, so the hall hears one voice. That needs no switch (`V` and `STAGE_TTS=off` are not
+  for it), and the appeal votes are still voiced on the stage.
 - Cost: one TTS request per new line (at most 300 characters). A repeated line is served from
   the cache, and nothing is generated while no stage is connected to the room.
 - Voices: the judge is `ELEVENLABS_JUDGE_VOICE_ID` (the Voice Design voice), else a premade voice;
