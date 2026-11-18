@@ -513,6 +513,17 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
   - `LOCK_SIGNER=server` (custodial demo): the signature may be omitted and the server signs as the appellant's demo key (as for concede). The operator's route is `POST /v1/demo/bets/:bet_id/appeal` (§2.17).
   - finalize (timer and `finalize-due`) skips a `RULED` bet whose appeal is signed / sent, and every `APPEALED` one. The keeper task `appeal-sweep` (also in the boot reconcile) settles 'sent' appeal / `resolve_appeal` txs whose confirm died and re-runs a lost panel (stored votes are reused); an undecided appeal past `appeal_resolve_deadline` is the timeout-refund keeper's (`EXPIRED`, both stakes back).
 
+### 2.12a Spoken review request ("check that again") and the GG moment
+
+Built 2026-11-18 (`feat/gg-moment`, `apps/server/src/review`, `apps/server/src/gg`; types `packages/shared/src/gg.ts`).
+
+- **The review never files an appeal.** Someone in the room asks the voice judge to check the ruling again; the judge calls `request_review` (§4.3) and the server asks the **loser's** phone (whichever phone that is) to confirm. The mic can't tell who spoke, so the loser is always the one asked; a request the winner made just shows the loser a sheet they can dismiss. Confirming is the normal appeal: `GET`/`POST /v1/bets/:bet_id/appeal` (§2.12), tap + Face ID, device policy screen `'appeal'`. Nothing in the review path spends the 3/h bucket.
+- **Window.** `confirm_by = appeal_deadline − 1 s` (the appeal POST's own cutoff). It is never extended: the program refuses an appeal at or after `appeal_deadline` (ESCROW I10), and `appeal_deadline` is fixed by `resolve`. A request is accepted only while `now < confirm_by − 1.5 s` (`REVIEW_MIN_LEAD_MS`, Face ID needs it). Finalize runs at or after `appeal_deadline` (chain clock), so a request and a finalize are ≥ 2.5 s apart. One review per ruling.
+- **`POST /v1/bets/:bet_id/review/decline`** (S, the loser of the open review): "Keep ruling". `200 {status:'closed'}`; idempotent (an already closed review answers the same). Effects: `review.closed {reason:'declined'}` + `judge.cue REVIEW_CLOSED` (speak:false). Errors: `NOT_A_PARTY`, `NOT_LOSER`, `INVALID_STATE {reason:'no_review'}`, `STATE_MOVED_ON` (the ruling moved on). After `confirm_by` it closes as `lapsed`.
+- **Lapse.** At `confirm_by` (in-memory timer) a review still open on a `RULED` bet with no appeal out closes: `review.closed {reason:'lapsed'}` + `judge.cue REVIEW_CLOSED` (speak:false). The original window rules resume: GG or "I appeal!" until the cutoff, else finalize. A timer lost to a restart only means no `review.closed`: clients close at `confirm_by` themselves, and the PAID cue reads the log (an unclosed request counts as `lapsed`).
+- **GG.** A GG (§2.10) accepted under the bet lock also appends `bet.gg` in the commit that moves the bet to `CONCEDED`: `{by, winner, to_a, to_b, record: {before, after} | null, conceded_at}`. `record.before` is the pair's head-to-head in this bet's parties (§2.14 `headToHead`: chain-settled bets plus labelled seed history; the bet being conceded is not settled yet), `after = recordAfter(before, winner)`. A record read that fails gives `record: null` and never fails the GG. A concede that never lands goes back to `RULED` (`reason: concede_failed`); clients drop the GG then (no new event). An open review never blocks a GG (a review is not an appeal) and the GG closes it on the clients.
+- **Order of the races** (all under the bet row lock): request vs GG — whichever takes the lock first wins (GG first → `GG_CALLED`); request vs appeal filing — the appeal answers as always, an open review is "confirmed" by the appeal's `tx.submitted {kind:'appeal'}`; confirm at the cutoff — the appeal answers `APPEAL_WINDOW_CLOSED` and the lapse closes the review; GG vs appeal and finalize vs appeal — unchanged (§2.10, §2.12).
+
 ### 2.13 Gemini market (Beat 6)
 
 - **`GET /v1/markets/btc5m/current`** (B) returns `MarketCurrent`:
@@ -573,6 +584,7 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `GET /v1/stage/audio` | API-owned `StageAudioResponse` `{tts: boolean, tts_off: 'no_key'\|'off'\|'spend_disabled'\|null, model: string\|null, sfx: {gavel, drumroll, buzzer, cheer}\|null}`: is the stage voiced, and the cue clip URLs when the Sound Effects are live |
 | `GET /v1/stage/tts/:clip_id` | One stage line's MP3 (`audio/mpeg`). `clip_id` = sha256 hex of `voice_id \n model \n text`, so the response is `Cache-Control: private, max-age=31536000, immutable` with `ETag` (304 on a match). It waits for a generation in flight. `404` when the TTS is off or the id unknown; `502 UPSTREAM_ERROR` / `504 UPSTREAM_TIMEOUT` when ElevenLabs fails |
 | `GET /v1/stage/sfx/:kind` | One cue's ElevenLabs Sound Effects clip, generated once (at boot) and cached; `404` unless they are live |
+- **`POST /v1/demo/bets/:bet_id/review`** (demo key, built 2026-11-18): the laptop fallback of the spoken review (§2.12a), `source:'demo'`. `200 {ok:true, say, review: ReviewRequestedPayload}` (or `already:true`), `409 {ok:false, fix, say}` with the §4.3 `request_review` fixes. Lets the stage and the phones be tested without voice.
 
 ### 2.18 API-owned types
 
@@ -709,6 +721,9 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | `hearing.opened` | `{hearing_id, trigger, order:['A','B'], turn_ms}` | → HEARING |
 | `hearing.turn_open` **NEW** | `{hearing_id, turn_index, party, closes_at}` | each turn's clock starts (after `open_hearing`, or the 5 s fallback) |
 | `hearing.turn` | `{turn: HearingTurn}` | each turn stored |
+| `bet.gg` **NEW** | `{by, winner, to_a, to_b, record: {before, after}\|null, conceded_at}` (`packages/shared/src/gg.ts` `BetGgPayload`) | the loser's GG accepted and sent: same commit as `bet.state CONCEDED` + `tx.submitted {concede}` (§2.12a) |
+| `review.requested` **NEW** | `{review_id, for_party, source:'voice'\|'demo', requested_at, confirm_by}` | `request_review` / the demo route accepted a review (RULED); the loser's phone opens the appeal confirmation. Never the words heard, never who spoke. |
+| `review.closed` **NEW** | `{review_id, reason:'declined'\|'lapsed'}` | the loser kept the ruling, or `confirm_by` passed unconfirmed. A confirmed review is the appeal (`tx.submitted {appeal}`), a GG is `bet.gg`: neither has its own close. |
 | `appeal.vote` | `{vote: AppealVote}` | each panel vote, late votes included (SCHEMAS §7) |
 | `appeal.result` | `{result: AppealResult, ruling_hash}` | → APPEAL_RESOLVED |
 | `market.tick` | `{snapshot: GeminiMarketSnapshot}` | 1 Hz while a gemini bet is in TERMS_PROPOSED…AWAITING_MARKET (persisted; ≤ ~400 rows per bet) |
@@ -729,7 +744,8 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | HEARING | `hearing.opened`, `hearing.turn_open` × 2, `hearing.turn` × 2, `ruling.issued` | `HEARING_REQUIRED`, `HEARING_TURN` (B), `HEARING_RULING` | — |
 | AWAITING_MARKET | `market.tick` | `MARKET_WAITING` (speak=false) | — |
 | RULED | `tx.confirmed(resolve)`, `tx.sign_request` (concede, appeal), `chain.BetResolved` | — (already voiced at `ruling.issued`) | `ruling` (A, B) |
-| CONCEDED / FINALIZED / APPEAL_RESOLVED | `tx.submitted`; `bet.state` at processed (**payout animation**); `tx.confirmed` | — | — |
+| CONCEDED / FINALIZED / APPEAL_RESOLVED | `tx.submitted` (+ `bet.gg` for CONCEDED, same commit); `bet.state` at processed (**payout animation**); `tx.confirmed` | — | — |
+| (RULED, a review asked) | `review.requested`; later `review.closed` (declined / lapsed) unless GG or the appeal came first | `REVIEW_CLOSED` (speak=false) at the close | — |
 | APPEALED | `chain.BetAppealed`, `appeal.vote` × 3, `appeal.result` | `APPEAL_FILED`, `APPEAL_VOTE` × 3 (speak=false; the stage voices them, §4.5), `APPEAL_RESULT` | `appeal_decided` |
 | (built order) | at the filing, still RULED: `tx.submitted {appeal}`, `judge.cue APPEAL_FILED`; at our confirm: `bet.state APPEALED` (`pending_tx` appeal), `tx.confirmed {appeal}`, then `appeal.vote` + `judge.cue APPEAL_VOTE` per seat, `appeal.result` + `judge.cue APPEAL_RESULT`; then `bet.state APPEAL_RESOLVED` + `tx.submitted {resolve_appeal}`, `bet.state` again at processed, `bet.state PAID`/`VOIDED` + `tx.confirmed` + `judge.cue PAID`/`VOIDED` | | not sent (no outbox push yet) |
 | PAID / VOIDED | `chain.BetConceded` \| `BetFinalized` \| `AppealResolved`, `chain.BetClosed` | `PAID` / `VOIDED` | `payout` (A, B) |
@@ -864,18 +880,30 @@ Responses (≤ 300 B):
 {"ok":false,"fix":"NO_HEARING","say":"There's no dispute on the docket."}
 ```
 
-#### `file_appeal` (`pre_tool_speech: "off"`)
+#### `request_review` (`pre_tool_speech: "off"`; replaces `file_appeal`, built 2026-11-18)
 
-- Params: ids + `party: {type:"string", enum:["A","B"], description:"Who said 'I appeal'."}`.
-- **It never files anything onchain.** It checks loser status and the window, then re-sends `tx.sign_request(appeal)` to that party with a `judge.cue`. The appeal only happens when the loser taps "I appeal!" with Face ID.
-- Responses:
+- Params: ids + `heard: {type:"string", description:"What you heard, a few words, e.g. \"check that again\"."}` (required). There is no `party`: the mic can't tell who spoke (`file_appeal`'s `party` is gone; it was never registered).
+- When: after `[EVENT] RULING`, when anyone asks to check, review, replay or appeal the ruling. Not for "GG" / "good game", not after `[EVENT] PAID` / `VOIDED` (persona `# After the ruling`).
+- **It never files or decides anything.** `ReviewService.request` (§2.12a) checks, under the bet lock, in this order, then appends `review.requested` for the loser. `heard` (≤ 80 chars) is kept only in `audit_log 'review.requested'`.
+- Same conventions as `confirm_terms`: 401 for a bad secret, `WRONG_BET` + audit row, the `el/tools` bucket → `SLOW_DOWN`, a success replayed within 10 s.
+- Responses (`say` speaks the loser's name, ASCII-folded):
 
 ```json
-{"ok":true,"secs_left":7,"say":"Logan, tap I appeal on your phone. Seven seconds."}
-{"ok":false,"fix":"NOT_LOSER","say":"Winners don't appeal."}
+{"ok":true,"say":"Review requested. Jake, confirm on your phone."}
+{"ok":true,"already":true,"say":"Already asked. Jake, it's on your phone."}
+{"ok":false,"fix":"NO_RULING","say":"No ruling to check yet."}
+{"ok":false,"fix":"GG_CALLED","say":"GG was called. The ruling stands."}
+{"ok":false,"fix":"WITH_PANEL","say":"It's already with the panel."}
+{"ok":false,"fix":"FINAL","say":"The ruling is final."}
+{"ok":false,"fix":"MARKET","say":"Gemini settled it. No reviews on the market."}
+{"ok":false,"fix":"NO_LOSER","say":"Nobody lost this one."}
+{"ok":false,"fix":"ONE_REVIEW","say":"One review per ruling. It stands."}
 {"ok":false,"fix":"WINDOW_CLOSED","say":"Too late. The ruling stands."}
-{"ok":false,"fix":"GEMINI_FINAL","say":"Gemini settled it. No appeals on the market."}
+{"ok":false,"fix":"NO_APPEALS_LEFT","say":"No appeals left this hour. It stands."}
 ```
+
+- Fix order: state before RULED (or a REDO) → `NO_RULING`; `CONCEDED` or PAID by concede → `GG_CALLED`; `APPEALED` / `APPEAL_RESOLVED`, or an appeal signed / sent / filed → `WITH_PANEL`; any other non-RULED state → `FINAL`; `evidence_source = gemini` → `MARKET`; outcome not party_a / party_b → `NO_LOSER`; an open review → `already`; an earlier review → `ONE_REVIEW`; `now ≥ confirm_by − 1.5 s` → `WINDOW_CLOSED`; the loser's 3/h appeal bucket empty (read-only `RateLimiter.remaining`) → `NO_APPEALS_LEFT`.
+- `skip_turn` (built-in system tool, `prompt.built_in_tools.skip_turn`, `wait_timeout_secs: -1`): the judge stays silent when the room is only celebrating after a ruling.
 
 #### `get_market_odds` (`pre_tool_speech: "force"`)
 
@@ -919,7 +947,7 @@ Grammar:
 | `DECLINED` / `EXPIRED` / `REFUSED` | `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` |
 | `INVITE_ACCEPTED` | `[EVENT] INVITE_ACCEPTED name=Jake :: Say Jake is in, then call confirm_terms again.` (only after a refused `INVITE_PENDING` for the same terms) |
 | `ATTEMPT_ARMED` (context) | `[EVENT] ATTEMPT_ARMED attempt=1 performer=Jake :: Stay quiet while the camera counts down.` |
-| `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan he can tap GG.` |
+| `RULING` | `[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Two full rotations, lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan to tap GG, or to say "check it again" for a review.` |
 | `REDO` | `[EVENT] REDO attempt=2 max=3 why=unclear :: Say "Run it back" and call request_attempt with attempt_no 2.` |
 | `HEARING_REQUIRED` | `[EVENT] HEARING_REQUIRED trigger=contested first=Logan secs=10 :: Call order in the court, then call open_hearing.` |
 | `HEARING_TURN` | `[EVENT] HEARING_TURN party=B name=Jake said="It ended standing up. Pay me." :: Acknowledge in three words. Do not rule yet.` |
@@ -928,7 +956,10 @@ Grammar:
 | `APPEAL_VOTE` (context) | `[EVENT] APPEAL_VOTE seat=2 judge=openai vote=A_WINS :: Do not speak; the stage reads the votes.` |
 | `APPEAL_RESULT` | `[EVENT] APPEAL_RESULT final=B_WINS tally=1-1-1 decided_by=upheld_no_majority :: Say the ruling stands: no majority.` |
 | `MARKET_SETTLED` | `[EVENT] MARKET_SETTLED side=yes line=97250.03 settle=97301.12 winner=Logan gg_secs=10 :: Announce Gemini settled UP and Logan wins.` |
-| `PAID` / `VOIDED` | `[EVENT] PAID winner=Jake amount=$10 :: Congratulate Jake in one line.` |
+| `PAID` / `VOIDED` | `[EVENT] PAID winner=Jake amount=$10 to_a=$0 to_b=$10 :: Congratulate Jake in one line.` (after `resolve_appeal`: unchanged) |
+| `PAID` after a GG | `[EVENT] PAID winner=Logan amount=$10 to_a=$10 to_b=$0 via=gg loser=Jake record="Logan 5-7 Jake" :: Jake said GG. Praise the sportsmanship in one short line, then congratulate Logan.` |
+| `PAID` after the clock | `… via=timeout loser=Jake :: No GG from Jake; the clock ran out. Congratulate Logan in one line.`; with `review=lapsed`: `Jake did not confirm the review, so the ruling stands. …`; with `review=declined`: `Jake kept the ruling. …` |
+| `REVIEW_CLOSED` (context) | `[EVENT] REVIEW_CLOSED by=Jake reason=declined :: Do not speak. Jake kept the ruling.` / `reason=lapsed :: Do not speak. The review was not confirmed; the ruling stands.` |
 
 **Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:clip_id` (§2.17). This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
 
@@ -937,7 +968,7 @@ Grammar:
 | Event | Voice | Line (`packages/shared/src/stage-voice.ts`, the same words on server and stage) |
 |---|---|---|
 | `ruling.issued` | judge | `Jake wins. <reason>`; REDO `Run it back. <reason>` (said once: a reason that already says "Run it back", as the server's own REDO reasons do, is read as it is); VOID why, then `It's void: both stakes go back.`; a Gemini settlement starts `Gemini settles it.` |
-| `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
+| `judge.cue PAID` / payout `VOIDED` | judge | `Paid. Jake takes $10.00.` (after a GG, `via=gg`: `Logan says GG. Jake takes $10.00.`) / `It's void. Both stakes went back: $5.00 each.` (from the `[EVENT]` values; the ruling-time `VOIDED` cue is not voiced: its `ruling.issued` is) |
 | `appeal.vote` | `seat_1` … `seat_3` | `Judge 2, GPT, votes Logan. <reason>` / `Judge 3, Gemini, abstains.` |
 
 - **Server.** After each bet event goes out, the line becomes a clip: `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128` with `{text, model_id}`, model `STAGE_TTS_MODEL` (default `eleven_v4_turbo`, §4.1). Voices: `ELEVENLABS_JUDGE_VOICE_ID` (else a premade voice) and `ELEVENLABS_PANEL_VOICE_IDS` (three ids, else three premade voices). Then a `stage.voice` frame (§3.1). The clip is cached (memory LRU, plus the OS tmp dir), so a repeated line costs nothing. On only with `ELEVENLABS_API_KEY` and `ALLOW_SPEND=true`; `STAGE_TTS=off` is the kill switch. Nothing is generated with no stage socket on the room, or for a stale event. Lines are capped at 300 characters.
@@ -1417,3 +1448,4 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 - **2026-11-18 (Beat 5 appeal, built without the hearing).** §2.12 gains "Built" notes: the exact GET / POST error set (`SIGNATURE_INVALID` for a signature that does not verify, as concede; the program's 6024 → `APPEAL_WINDOW_CLOSED`), the bucket spent only by an accepted filing, idempotent repeats, the filing written before the send, the failed-appeal path, the decision once all three votes are in (the `AppealResult` carries three votes), finalize skipping an appeal in flight, the `appeal-sweep` keeper task. §2.17 adds `POST /v1/demo/bets/:bet_id/appeal` (custodial, `LOCK_SIGNER=server`). §3.4 pins the push order (concede then appeal) and the built event order; `appeal_decided` push is not sent. §7.2 describes the built panel (abstentions, no 0.8 floor on votes).
 - **2026-11-18, the stage voice (feat/stage-voice):** §2.17 gains the stage audio routes (`GET /v1/stage/audio`, `/v1/stage/tts/:clip_id`, `/v1/stage/sfx/:kind`) and says `GET /v1/demo/health` takes the stage token alone. §3.1 gains the `stage.voice` control frame (stage sessions only) and `stage.cue.audio_url`. §4.5: the TTS route is `/v1/stage/tts/:clip_id` (content-addressed: sha256 of voice, model and text), not `:vote_id`, because the same route also voices the rulings and payouts; the stage voice table and the browser fallback after 800 ms are new. §2.6 / §4.4: the cue clips are live with the key (`SFX_PROVIDER=auto`). §4.5 "One judge at a time": in a bet a voice judge hosts (a relayed `judge.line`), the stage leaves the ruling and the payout to A's phone (no `stage.voice`, no browser voice), so the hall never hears both.
 - **2026-11-19, wave-3 review minors (fix/minors-server):** §2.10: GG is refused with `STATE_MOVED_ON {reason:'appeal_in_flight'}` once the loser's appeal is filed (signed / sent, the bet still `RULED`), so GG and the appeal are mutually exclusive. §2.12: the 3/h bucket token is taken last in the filing's own transaction and given back on a preflight refusal. §2.14: a `seed-h2h` row's `title` is its own ("Demo history: …"). §2.17: the judge / toggle health warnings alone never make the health log lines a WARN. §4.5: a REDO reason that already says "Run it back" is not prefixed again.
+- **2026-11-18, the GG moment + the spoken review (feat/gg-moment):** new §2.12a (the review request: loser-only confirm through the normal appeal, `confirm_by = appeal_deadline − 1 s`, never extended, once per ruling, lapse / decline, the race order; `bet.gg` with the record before / after). §2.17 adds `POST /v1/demo/bets/:bet_id/review`. §3.4 adds `bet.gg`, `review.requested`, `review.closed` (and `bet.gg` in the CONCEDED row). §4.3: `request_review` replaces `file_appeal` (no `party`: the mic can't tell who spoke) and the built-in `skip_turn`. §4.5: `RULING` tells the loser to tap GG or say "check it again"; `PAID` carries `via` / `loser` / `record` / `review` for a concede or a finalize (resolve_appeal unchanged); new `REVIEW_CLOSED` (speak:false); the stage says "Logan says GG." for `via=gg`.

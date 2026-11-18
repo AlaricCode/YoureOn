@@ -50,6 +50,8 @@ import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createServerFaceApi, type FaceStatus } from '../enroll/api';
 import { createLazyEmbedder } from '../enroll/embedder';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
+import { GgPayoutScreen, RulingReview } from '../gg/GgScreens';
+import { reviewable } from '../gg/model';
 import type { Balance } from '../net/api';
 import { ApiClientError } from '../net/signedFetch';
 import {
@@ -234,6 +236,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** The judge session's phase and whether the judge is talking (NegotiateScreen's mic/ring). */
   const [voicePhase, setVoicePhase] = useState<SessionPhase>('idle');
   const [judgeSpeaking, setJudgeSpeaking] = useState(false);
+  /** ../gg: the bet whose ruling the judge has finished saying (the RULED mic gate). */
+  const [rulingSpokenBet, setRulingSpokenBet] = useState<string | null>(null);
   const [walletKey, setWalletKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1049,6 +1053,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   };
 
+  /**
+   * ../gg review sheet "Check it again": the same appeal as "I appeal!" (same Idempotency-Key),
+   * but it throws, so the sheet can show why and stay up while the window runs.
+   */
+  const checkAgain = async () => {
+    if (!bet) throw new Error('no bet');
+    await appeal(
+      { wallet: rt.wallet, api: rt.api },
+      bet,
+      t(COPY.ruling.appealPrompt),
+      keyFor(`appeal:${bet.bet_id}`),
+    );
+  };
+
   /** Built uploads by Idempotency-Key: the judge cam's retry resends the exact same body. */
   const preparedUploads = useRef(new Map<string, PreparedAttempt>());
   const sendClip = useCallback(
@@ -1541,18 +1559,32 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             : Date.parse(bet.ruling?.ruling.created_at ?? new Date().toISOString()) +
               10_000 -
               rt.clock.offsetMs;
+        const reason = safeData(bet.ruling?.ruling.reason, FALLBACK_REASON);
+        // ../gg: a spoken "check that again" opens the loser's review sheet over the ruling.
         return (
-          <RulingScreen
-            view={view}
-            result={result}
-            judgeLabel={view.kind === 'market' ? t(COPY.market.gemini) : undefined}
-            reason={safeData(bet.ruling?.ruling.reason, FALLBACK_REASON)}
-            appealDeadlineMs={deadline}
-            busy={busy}
-            alert={alert}
-            onGG={() => void gg()}
-            onAppeal={result === 'lost' ? () => void appealNow() : undefined}
-          />
+          <RulingReview
+            bet={bet}
+            me={me}
+            offsetMs={rt.clock.offsetMs}
+            reason={reason}
+            confirm={checkAgain}
+            decline={() => rt.api.declineReview(bet.bet_id)}
+          >
+            {(tag) => (
+              <RulingScreen
+                view={view}
+                result={result}
+                judgeLabel={view.kind === 'market' ? t(COPY.market.gemini) : undefined}
+                reason={reason}
+                appealDeadlineMs={deadline}
+                busy={busy}
+                alert={alert}
+                onGG={() => void gg()}
+                onAppeal={result === 'lost' ? () => void appealNow() : undefined}
+                tag={tag}
+              />
+            )}
+          </RulingReview>
         );
       }
       case 'appeal': {
@@ -1572,6 +1604,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       case 'payout': {
         if (!view || !bet) return waiting;
         const phase: PayoutPhase = state === 'PAID' ? 'confirmed' : 'processed';
+        // ../gg: the loser said GG ("Jake said GG" / "Good game").
+        if (bet.gg && me)
+          return (
+            <GgPayoutScreen
+              view={view}
+              gg={bet.gg}
+              me={me}
+              balanceCents={balanceCents}
+              phase={phase === 'confirmed' ? 'confirmed' : 'processed'}
+              onHome={dismiss}
+            />
+          );
         return (
           <PayoutScreen
             view={view}
@@ -1604,7 +1648,15 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               betId={voiceBet.bet_id}
               dynamicVariables={voice}
               startAttempt={(n) => startAttemptFor(voiceBet, n, 'A')}
-              micMuted={micMutedFor(voiceBet.state)}
+              micMuted={micMutedFor(voiceBet.state, {
+                reviewable: reviewable(voiceBet),
+                rulingSpoken: rulingSpokenBet === voiceBet.bet_id,
+              })}
+              onRulingSpoken={(spoken) =>
+                setRulingSpokenBet((cur) =>
+                  spoken ? voiceBet.bet_id : cur === voiceBet.bet_id ? null : cur,
+                )
+              }
               onShowTermsCard={() => showTermsCard(voiceBet.bet_id)}
               onPhase={setVoicePhase}
               onSpeaking={setJudgeSpeaking}

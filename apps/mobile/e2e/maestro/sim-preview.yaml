@@ -273,6 +273,41 @@ name: sim-preview
 - runFlow:
     file: preview-screen.yaml
     env:
+      KEY: ggWinner
+# The GG moment: "Logan" won, Jake said GG; the record ticks 4-7 -> 5-7.
+- extendedWaitUntil:
+    visible: Jake said GG
+    timeout: 4000
+- assertVisible:
+    id: gg-record
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: ggLoser
+- assertVisible: Good game
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: reviewSheet
+# Someone said "check that again": the loser's review sheet opens over the ruling.
+- extendedWaitUntil:
+    visible:
+      id: review-sheet
+    timeout: 4000
+- assertVisible:
+    id: review-check
+- assertVisible:
+    id: review-keep
+- takeScreenshot: preview-review-sheet
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
       KEY: demo
 - tapOn:
     id: preview-menu

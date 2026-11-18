@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { StageErrorBoundary } from './boundary';
 import './stage.css';
+import './gg.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

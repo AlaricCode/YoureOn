@@ -182,7 +182,11 @@ describe('el-agent CLI (flags + env)', () => {
       `${BASE}/el/tools/propose_terms`,
       `${BASE}/el/tools/confirm_terms`,
       `${BASE}/el/tools/get_market_odds`,
+      `${BASE}/el/tools/request_review`,
     ]);
+    // The GG moment: the spoken review request, and the built-in skip_turn for room noise.
+    expect(prompt.prompt).toContain('# After the ruling');
+    expect(prompt.built_in_tools.skip_turn).toMatchObject({ type: 'system', name: 'skip_turn' });
     // The agent's prompt describes every registered tool, Beat 6's odds quote included.
     expect(prompt.prompt).toContain('- get_market_odds: for a Bitcoin up-or-down');
     expect(prompt.tool_ids).toContain('<tool_id of get_market_odds>');
@@ -198,6 +202,8 @@ describe('el-agent CLI (flags + env)', () => {
         .map((r) => r.path),
     );
     expect(DEFAULT_WEBHOOK_TOOLS).toContain('get_market_odds');
+    expect(DEFAULT_WEBHOOK_TOOLS).toContain('request_review');
+    expect(Object.keys(WEBHOOK_TOOL_SPECS)).not.toContain('file_appeal'); // never registered
     for (const t of DEFAULT_WEBHOOK_TOOLS)
       expect([t, posts.has(`/el/tools/${t}`)]).toEqual([t, true]);
   });
@@ -231,6 +237,9 @@ describe('el-agent CLI (flags + env)', () => {
     expect(err(['--tts-model=eleven_v9'])).toMatch(/--tts-model/);
     expect(err(['--reasoning-effort=extreme'])).toMatch(/--reasoning-effort/);
     expect(err(['--retention-days=1.5'])).toMatch(/--retention-days/);
+    expect(err(['--agent-name=Bad Name'])).toMatch(/--agent-name/);
+    expect(err(['--agent-name'])).toMatch(/--agent-name needs a value/);
+    expect(err(['--agent-name=youre-on-judge-test-x', '--rotate-secret'])).toMatch(/shared/);
     expect(err([], { ...ENV, PUBLIC_BASE_URL: 'http://youre-on.fly.dev' })).toMatch(/https/);
     expect(err([], { ...ENV, PUBLIC_BASE_URL: 'https://localhost:8080' })).toMatch(/not reachable/);
     expect(err([], { ...ENV, PUBLIC_BASE_URL: undefined })).toMatch(/PUBLIC_BASE_URL is not set/);
@@ -245,6 +254,18 @@ describe('el-agent CLI (flags + env)', () => {
       ok: true,
       cli: { checkOpenapi: 'https://api.elevenlabs.io/openapi.json' },
     });
+  });
+
+  it('--agent-name: a throwaway test agent (own name + test tag), the same tools and prompt', () => {
+    const plan = planFor(['--agent-name=youre-on-judge-test-gg']);
+    const agent = agentBodyOf(plan);
+    expect(agent.name).toBe('youre-on-judge-test-gg');
+    expect(agent.tags).toEqual(['youre-on', 'test']);
+    expect(agent.conversation_config.agent.prompt.prompt).toBe(
+      agentBodyOf(planFor()).conversation_config.agent.prompt.prompt,
+    );
+    expect(errorsOf(plan)).toEqual([]);
+    expect(agentBodyOf(planFor()).name).toBe('youre-on-judge');
   });
 
   it('the summary names the model, voice, URLs and the secret by reference only', () => {
