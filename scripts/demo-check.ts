@@ -2,19 +2,25 @@
 // Pitch-morning GO / NO-GO: one read-only command over everything the money path needs.
 //
 //   npm run demo-check -- [--server https://youre-on.fly.dev] [--demo-key <token>] [--url <rpc>]
-//                         [--fee-payer <pubkey>] [--json]
+//                         [--fee-payer <pubkey>] [--warmup] [--json]
 //
 //   server   GET /health (reachable, latency, clock skew) and GET /v1/demo/health (needs the admin
 //            key: --demo-key or env DEMO_ADMIN_TOKEN): chain configured, fee payer SOL, nonce
 //            pool, demo-a / demo-b / treasury USDC, RPC p50 / p95, keeper, orphan escrow, Gemini
-//            relay, and every other server warning.
+//            relay, the judge (last success / failure, p50 / p95; WARN with no success since
+//            boot), the cached_ruling toggle, and every other server warning.
+//   warmup   only with --warmup (needs the admin key), first: POST /v1/demo/warmup, i.e. ONE paid
+//            judge call on a stored 16 px JPEG, getLatestBlockhash, a Gemini relay poll and voice
+//            readiness (no bet, no money; the server allows one per 10 s). The health read after
+//            it then shows the judge's success.
 //   chain    with --url or env SOLANA_RPC_URL, independently of the server: cluster (mainnet is
 //            refused), the program is deployed, Config exists and is not paused, the fee payer's
 //            SOL, the nonce-pool accounts (authority = fee payer), demo wallets' USDC, live escrow
 //            bets past a deadline (what the crank would send).
 //   stream   with env QN_API_KEY + QN_STREAM_ID: the QuickNode Stream's status (REST GET).
 //
-// Sends nothing, signs nothing, reads no keypair. Exit 0 = GO (warnings allowed), 1 = NO-GO.
+// Signs nothing, reads no keypair, sends nothing except --warmup's one POST. Exit 0 = GO (warnings
+// allowed), 1 = NO-GO.
 import {
   address,
   getBase58Decoder,
@@ -41,6 +47,7 @@ import {
   evaluateBasicHealth,
   evaluateDemoHealth,
   evaluateStream,
+  evaluateWarmup,
   formatChecks,
   overall,
   THRESHOLDS,
@@ -49,10 +56,12 @@ import {
 } from './lib/demo-check';
 import { readPoolNonce } from './lib/nonce';
 
-const USAGE = `usage: npm run demo-check -- [--server <url>] [--demo-key <token>] [--url <rpc>] [--fee-payer <pubkey>] [--json]
+const USAGE = `usage: npm run demo-check -- [--server <url>] [--demo-key <token>] [--url <rpc>] [--fee-payer <pubkey>] [--warmup] [--json]
 Read-only GO / NO-GO for the pitch. Defaults: --server https://youre-on.fly.dev,
 --demo-key $DEMO_ADMIN_TOKEN, --url $SOLANA_RPC_URL (chain checks skipped without one),
-Stream status with $QN_API_KEY + $QN_STREAM_ID.`;
+Stream status with $QN_API_KEY + $QN_STREAM_ID.
+--warmup first POSTs /v1/demo/warmup: one paid judge call, getLatestBlockhash, a Gemini poll,
+voice readiness (no bet, no money; one per 10 s).`;
 
 const DEFAULT_SERVER = 'https://youre-on.fly.dev';
 const TIMEOUT_MS = 10_000;
@@ -75,10 +84,19 @@ const errText = (e: unknown) =>
 async function getJson(
   url: string,
   headers: Record<string, string> = {},
-): Promise<{ status: number; ms: number; body: unknown } | { error: string }> {
+  init: { method?: 'GET' | 'POST'; body?: string; timeoutMs?: number } = {},
+): Promise<
+  { status: number; ms: number; body: unknown; retryAfter: string | null } | { error: string }
+> {
   const t0 = Date.now();
   try {
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const res = await fetch(url, {
+      method: init.method ?? 'GET',
+      headers:
+        init.body === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+      body: init.body,
+      signal: AbortSignal.timeout(init.timeoutMs ?? TIMEOUT_MS),
+    });
     const text = await res.text();
     let body: unknown = null;
     try {
@@ -86,7 +104,12 @@ async function getJson(
     } catch {
       body = null;
     }
-    return { status: res.status, ms: Date.now() - t0, body };
+    return {
+      status: res.status,
+      ms: Date.now() - t0,
+      body,
+      retryAfter: res.headers.get('retry-after'),
+    };
   } catch (e) {
     return { error: errText(e) };
   }
@@ -250,6 +273,7 @@ run(async () => {
     server: { type: 'string' },
     'demo-key': { type: 'string' },
     'fee-payer': { type: 'string' },
+    warmup: { type: 'boolean' },
     json: { type: 'boolean' },
   });
   const server = (values.server ?? process.env['YO_SERVER_URL'] ?? DEFAULT_SERVER).replace(
@@ -261,10 +285,22 @@ run(async () => {
   const checks: Check[] = [];
 
   checks.push(...evaluateBasicHealth(await getJson(`${server}/health`), Date.now()));
+  // --warmup first, so the health read below already shows the judge's success.
+  const warm =
+    values.warmup && demoKey
+      ? await getJson(
+          `${server}/v1/demo/warmup`,
+          { 'X-YO-Demo-Key': demoKey },
+          { method: 'POST', body: '{}', timeoutMs: 30_000 },
+        )
+      : null;
+  if (values.warmup && !demoKey)
+    checks.push({ id: 'warmup', verdict: 'SKIP', detail: 'needs the admin key (--demo-key)' });
   const demo = demoKey
     ? await getJson(`${server}/v1/demo/health`, { 'X-YO-Demo-Key': demoKey })
     : null;
   checks.push(...evaluateDemoHealth(demo, Date.now()));
+  checks.push(...evaluateWarmup(warm));
   const h = demo && !('error' in demo) && demo.status === 200 ? (demo.body as DemoHealth) : null;
 
   if (rpcUrl) {
@@ -298,7 +334,18 @@ run(async () => {
   checks.push(evaluateStream(stream, h?.stream?.last_delivery_at));
 
   if (values.json)
-    console.log(JSON.stringify({ verdict: overall(checks), server, checks }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          verdict: overall(checks),
+          server,
+          checks,
+          ...(warm && !('error' in warm) ? { warmup: warm.body } : {}),
+        },
+        null,
+        2,
+      ),
+    );
   else {
     console.log(`demo-check ${new Date().toISOString()}  server ${server}\n`);
     console.log(formatChecks(checks));
