@@ -25,6 +25,7 @@ import { purgeExpiredEnrollments } from '../src/face/service';
 import {
   describeDb,
   signedHeaders,
+  connectWs,
   signUp,
   startTestServer,
   testEnv,
@@ -504,11 +505,25 @@ describeDb('face addressing API over Postgres', () => {
       'invalid',
     );
 
-    const ok = await challenge(A, B, tB);
-    expect(ok.status).toBe(201);
-    const [row] = await ctx.deps.db.select().from(bets).where(eq(bets.id, ok.json!.bet.bet_id));
-    expect(row!.challenge_method).toBe('face');
-    expect(row!.party_b_id).toBe(uid(B));
+    // Beat 1 end to end: B's phone is listening when A taps "Challenge Sol?".
+    const b = await connectWs(ctx.wsUrl);
+    try {
+      b.send({ op: 'hello', token: B.session.token, device_id: B.session.device_id });
+      await b.next((f) => f.op === 'welcome');
+      const ok = await challenge(A, B, tB);
+      expect(ok.status).toBe(201);
+      const [row] = await ctx.deps.db.select().from(bets).where(eq(bets.id, ok.json!.bet.bet_id));
+      expect(row!.challenge_method).toBe('face');
+      expect(row!.party_b_id).toBe(uid(B));
+      const invited = await b.next((f) => f.type === 'bet.invited');
+      expect(invited).toMatchObject({
+        bet_id: ok.json!.bet.bet_id,
+        seq: 1,
+        payload: { challenger: { user_id: uid(A), display_name: 'Rae' }, room_id: room.room_id },
+      });
+    } finally {
+      b.close();
+    }
 
     // Expiry: a ticket for Tam, used 60 s later.
     const tC = await ticketFor(A, 31);
