@@ -791,6 +791,37 @@ run('money path hardening over LiteSVM', () => {
     expect(await usdc(signerA)).toBe(aBefore);
   });
 
+  it('armOrphanSweep (timers on): the orphan sweep runs at the given time, then the follow-up', async () => {
+    const betId = await lockedBet();
+    await ctx.deps.db.delete(bets).where(eq(bets.id, betId));
+    advance(RESOLVE_WINDOW_MS + 1_000);
+    const timed = installLifecycle(
+      ctx.deps,
+      createLifecycle(ctx.deps, {
+        runtime: async () => rt,
+        signer: 'server',
+        send: { pollMs: 5, resendMs: 50, timeoutMs: 2_000 },
+        timers: true,
+      }),
+    );
+    try {
+      let followed = false;
+      expect(
+        timed.refund.armOrphanSweep(now() + 30, async () => {
+          followed = true;
+        }),
+      ).toBe(true);
+      await expect.poll(() => followed, { timeout: 5_000 }).toBe(true);
+      await timed.idle();
+      expect(timed.refund.lastOrphanScan?.sent).toContainEqual(
+        expect.objectContaining({ bet_id: betId, action: 'timeout_refund' }),
+      );
+      expect(await onchainBet(betId)).toBeNull();
+    } finally {
+      install('server');
+    }
+  });
+
   it('concurrent orphan sweeps send one exit per Bet, never two', async () => {
     const betId = await lockedBet();
     await ctx.deps.db.delete(bets).where(eq(bets.id, betId));

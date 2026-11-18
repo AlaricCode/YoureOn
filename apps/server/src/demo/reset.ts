@@ -27,6 +27,10 @@ import { syncNoncePool } from '../lock/service';
 import { FINALIZE_DELAY_MS } from '../payout/service';
 import { rebalanceDemoWallets, type RebalanceResult } from './rebalance';
 
+/** After the armed orphan sweep, how often (and how far apart) to re-sweep before rebalancing. */
+const RESET_SETTLE_TRIES = 5;
+const RESET_SETTLE_RETRY_MS = 2_000;
+
 export const DemoResetRequest = z.object({
   /** Even out demo-a / demo-b after the reset (default false). */
   rebalance: z.boolean().optional(),
@@ -153,7 +157,7 @@ export async function resetDemo(
       }
     }
 
-    // 3a. drop the pool's references to bets / txs about to be deleted.
+    // 3. drop the pool's references to bets / txs about to be deleted.
     await deps.db
       .update(noncePool)
       .set({
@@ -174,7 +178,7 @@ export async function resetDemo(
     result.deleted_bets = deleted.length;
     lc.payout.forget(deleted.map((d) => d.id));
 
-    // 3b. re-read the pool from chain: every account that is fine is free again.
+    // 5. re-read the pool from chain: every account that is fine is free again.
     if (rt) {
       await deps.db
         .update(noncePool)
@@ -184,7 +188,7 @@ export async function resetDemo(
       result.nonces_synced = await syncNoncePool(deps, rt);
     }
 
-    // 5. the follow-up orphan sweep, then the rebalance.
+    // 6. the follow-up orphan sweep, then the rebalance.
     const rebalance = async () => {
       if (!rt) return null;
       return rebalanceDemoWallets(deps, rt, {
@@ -194,12 +198,28 @@ export async function resetDemo(
         error: String((err as Error)?.message ?? err).slice(0, 160),
       }));
     };
+    // Rebalance only once the Resolved rehearsal bets are paid out: the devnet clock can trail
+    // ours (finalize then answers AppealWindowOpen), so re-sweep a few times before giving up.
+    const resolvedIds = new Set(
+      result.escrow.pending.filter((p) => p.status === 'Resolved').map((p) => p.bet_id),
+    );
+    const settleThenRebalance = async () => {
+      for (let i = 0; i < RESET_SETTLE_TRIES; i++) {
+        const scan = lc.refund.lastOrphanScan;
+        const sent = new Set(scan?.sent.map((x) => x.bet_id));
+        const left = (scan?.orphans ?? []).filter(
+          (x) => resolvedIds.has(x.bet_id) && !sent.has(x.bet_id),
+        );
+        if (!left.length) break;
+        await new Promise((r) => setTimeout(r, RESET_SETTLE_RETRY_MS));
+        await lc.refund.sweepOrphans(deps.now());
+      }
+      deps.log.info('demo.reset_rebalanced', { r: await rebalance() });
+    };
     if (settleAtMs !== null) {
       const armed = lc.refund.armOrphanSweep(
         settleAtMs,
-        o.rebalance
-          ? async () => deps.log.info('demo.reset_rebalanced', { r: await rebalance() })
-          : undefined,
+        o.rebalance ? settleThenRebalance : undefined,
       );
       result.escrow.settles_at = armed ? new Date(settleAtMs).toISOString() : null;
       if (o.rebalance) result.rebalance = armed ? 'scheduled' : 'skipped_escrow_pending';
