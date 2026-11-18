@@ -15,14 +15,17 @@
 // No paid call: ElevenLabs is a fake fetch, the chain is LiteSVM. Runs in its own database
 // (<DATABASE_URL db>_voice): the lock service leases from nonce_pool, which lifecycle.test.ts
 // owns in the shared one. Skips without DATABASE_URL or without programs/escrow/target/deploy/escrow.so.
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { and, asc, count, eq } from 'drizzle-orm';
 import {
   createKeyPairSignerFromPrivateKeyBytes,
+  getAddressEncoder,
   type Address,
   type KeyPairSigner,
 } from '@solana/kit';
@@ -102,6 +105,7 @@ const REFUSALS = ['09-roof-jump', '10-chug', '11-self-punch', '12-little-brother
 const SECRET = `tool-secret-${randomUUID()}`;
 const AGENT = 'agent_e2e_judge';
 const XI_KEY = 'xi-e2e-not-a-real-key';
+const ADMIN = 'demo-admin-for-voice-e2e';
 
 /**
  * A fake api.elevenlabs.io behind the REAL server client (createElevenLabsClient): it records
@@ -185,6 +189,10 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
         ELEVENLABS_API_KEY: XI_KEY,
         ELEVENLABS_TOOL_SECRET: SECRET,
         MAX_STAKE_MICRO: '20000000',
+        // For scripts/cp1-drive.ts --via-tools (it reads /v1/demo/* and the lock signer).
+        DEMO_MODE: 'true',
+        DEMO_ADMIN_TOKEN: ADMIN,
+        LOCK_SIGNER: 'server',
       },
     });
     svm = await newEnv();
@@ -795,4 +803,89 @@ run('voice judge e2e: tool webhooks -> LOCKED (LOCK_SIGNER=server, LiteSVM)', ()
       fetchSpy.mockRestore();
     }
   });
+
+  // ---- the operator's post-activation check, against this local server (never the live one) ----
+
+  /** Runs scripts/cp1-drive.ts with these wallets as demo-a / demo-b and this tool secret. */
+  function drive(args: string[], wallets: [TestKey, KeyPairSigner][], toolSecret: string) {
+    const secret = (k: TestKey, s: KeyPairSigner) =>
+      JSON.stringify([...k.secret, ...new Uint8Array(getAddressEncoder().encode(s.address))]);
+    const stateFile = join(tmpdir(), `cp1-drive-voice-${randomUUID()}.json`);
+    return new Promise<{ code: number | null; out: string }>((resolve) => {
+      const child = spawn(
+        'npx',
+        [
+          'tsx',
+          'scripts/cp1-drive.ts',
+          '--base-url',
+          ctx.base,
+          '--admin-token',
+          ADMIN,
+          '--state-file',
+          stateFile,
+          '--timeout',
+          '20',
+          ...args,
+        ],
+        {
+          cwd: join(here, '../../..'),
+          env: {
+            ...process.env,
+            DEMO_A_SECRET_KEY: secret(...wallets[0]!),
+            DEMO_B_SECRET_KEY: secret(...wallets[1]!),
+            ELEVENLABS_TOOL_SECRET: toolSecret,
+          },
+        },
+      );
+      let out = '';
+      child.stdout.on('data', (d) => (out += String(d)));
+      child.stderr.on('data', (d) => (out += String(d)));
+      child.on('close', (code) => {
+        rmSync(stateFile, { force: true });
+        resolve({ code, out });
+      });
+    });
+  }
+
+  async function fundedWallets(): Promise<[TestKey, KeyPairSigner][]> {
+    const out: [TestKey, KeyPairSigner][] = [];
+    for (const k of [newKey(), newKey()]) {
+      const s = await createKeyPairSignerFromPrivateKeyBytes(k.secret);
+      await fund(s);
+      out.push([k, s]);
+    }
+    return out;
+  }
+
+  it('scripts/cp1-drive.ts --via-tools: the webhook tools as ElevenLabs sends them -> LOCKED', async () => {
+    // A wrong secret is named as such, and stops before anything is proposed.
+    const bad = await drive(['--via-tools'], await fundedWallets(), 'not-the-servers-secret');
+    expect(bad.code).not.toBe(0);
+    expect(bad.out).toContain('401: ELEVENLABS_TOOL_SECRET is not the value the server has');
+
+    // The custodial signer signs as the wallets the drive registers (decision D-A).
+    const w = await fundedWallets();
+    const custodial = installLifecycle(
+      ctx.deps,
+      createLifecycle(ctx.deps, {
+        runtime: async () => ({ ...rt, keys: { ...rt.keys, demoA: w[0]![1], demoB: w[1]![1] } }),
+        signer: 'server',
+        send: { pollMs: 5, resendMs: 50, timeoutMs: 2_000 },
+        timers: false,
+      }),
+    );
+    try {
+      const b0 = await usdc(w[1]![1].address);
+      const ok = await drive(['--via-tools', '--name-a', 'Ava', '--name-b', 'Ben'], w, SECRET);
+      expect(ok.out).toMatch(/propose_terms: \{"ok":true,"rev":1,.*"next":"readback"\}/);
+      expect(ok.out).toMatch(/terms \S+ confirmed by the judge: "Ava, Ben: hold the button/);
+      expect(ok.out).toContain('LOCKED in');
+      expect(ok.code, ok.out).toBe(0);
+      expect(await usdc(w[1]![1].address)).toBe(b0 - 1n * USDC);
+    } finally {
+      await custodial.idle();
+      custodial.stop();
+      installLifecycle(ctx.deps, lc);
+    }
+  }, 90_000);
 });
