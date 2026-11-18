@@ -160,11 +160,13 @@ describe('spend guard (ALLOW_SPEND)', () => {
   it('defaults: ALLOW_SPEND=false and every provider mock', () => {
     const env = testEnv();
     expect(env.ALLOW_SPEND).toBe(false);
+    // SFX 'auto' is the mock unless the stage's voice is on (the key + ALLOW_SPEND, stage-tts.test.ts)
     expect([env.LLM_PROVIDER, env.STT_PROVIDER, env.SFX_PROVIDER]).toEqual([
       'mock',
       'mock',
-      'mock',
+      'auto',
     ]);
+    expect(providerModes(createProviders(env)).sfx).toBe('mock');
     expect(spendingModes(env)).toEqual([]);
     expect(() => enforceSpendGuard(env)).not.toThrow();
   });

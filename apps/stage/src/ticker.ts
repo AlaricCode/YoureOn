@@ -186,9 +186,15 @@ export interface TickerState {
     /** user_id -> online, for the per-party "offline" badge. */
     online_by_user?: Record<string, boolean>;
   } | null;
-  lastCue: { bet_id: string; kind: string } | null;
+  /** `audio_url`: the cue's ElevenLabs Sound Effects clip, when the server generates them. */
+  lastCue: { bet_id: string; kind: string; audio_url?: string } | null;
   /** Increments with every stage.cue (the page flashes / plays the cue on each). */
   cueCount: number;
+  /**
+   * The latest stage.voice frames (newest last, at most MAX_VOICE_CLIPS): the ElevenLabs clip of
+   * the line for bet event `key` = `${bet_id}:${seq}` (voice.ts plays it, or speaks the line).
+   */
+  voiceClips: VoiceClip[];
   marketTicks: number;
   market: GeminiMarketSnapshot | null;
   marketHistory: Array<{ t: number; price: number }>;
@@ -214,6 +220,16 @@ export interface TickerState {
   errors: string[];
 }
 
+export interface VoiceClip {
+  key: string;
+  bet_id: string;
+  seq: number;
+  url: string;
+  text: string;
+  voice: string;
+}
+export const MAX_VOICE_CLIPS = 20;
+
 export const initialTicker: TickerState = {
   status: 'idle',
   clockOffsetMs: null,
@@ -223,6 +239,7 @@ export const initialTicker: TickerState = {
   presence: null,
   lastCue: null,
   cueCount: 0,
+  voiceClips: [],
   marketTicks: 0,
   market: null,
   marketHistory: [],
@@ -906,9 +923,26 @@ export function applyFrame(s: TickerState, a: TickerAction): TickerState {
       case 'stage.cue':
         return {
           ...s,
-          lastCue: { bet_id: frame.bet_id, kind: frame.kind },
+          lastCue: {
+            bet_id: frame.bet_id,
+            kind: frame.kind,
+            ...(frame.audio_url ? { audio_url: frame.audio_url } : {}),
+          },
           cueCount: s.cueCount + 1,
         };
+      case 'stage.voice': {
+        const key = `${frame.bet_id}:${frame.seq}`;
+        if (s.voiceClips.some((v) => v.key === key)) return s;
+        const clip: VoiceClip = {
+          key,
+          bet_id: frame.bet_id,
+          seq: frame.seq,
+          url: frame.audio_url,
+          text: frame.text,
+          voice: frame.voice,
+        };
+        return { ...s, voiceClips: [...s.voiceClips, clip].slice(-MAX_VOICE_CLIPS) };
+      }
       case 'stage.market':
         return { ...withMarket(s, frame.snapshot, a.receivedAt), marketTicks: s.marketTicks + 1 };
       case 'subscribed':

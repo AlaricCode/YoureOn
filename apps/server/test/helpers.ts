@@ -19,6 +19,8 @@ import { createDeps, startServer, type RunningServer } from '../src/server';
 import type { AppDeps, RouteModule } from '../src/context';
 import { routeModules } from '../src/routes';
 import type { MarketService } from '../src/markets/service';
+import type { Providers } from '../src/providers/types';
+import type { StageTts } from '../src/voice/tts';
 import { sha256Hex } from '../src/crypto';
 
 export const DB_URL = process.env.DATABASE_URL;
@@ -105,6 +107,9 @@ export async function startTestServer(
     env?: Record<string, string>;
     /** The Gemini relay (e.g. over a fake fetch); default off under NODE_ENV=test. */
     markets?: MarketService;
+    /** The stage TTS (a fake ElevenLabs client); default from the env (off without a key). */
+    stageTts?: StageTts | null;
+    providers?: Partial<Providers>;
   } = {},
 ): Promise<Ctx> {
   const env = testEnv(opts.env);
@@ -117,6 +122,8 @@ export async function startTestServer(
     heartbeatMs: opts.heartbeatMs,
     helloTimeoutMs: opts.helloTimeoutMs,
     ...(opts.markets ? { markets: opts.markets } : {}),
+    ...(opts.stageTts !== undefined ? { stageTts: opts.stageTts } : {}),
+    ...(opts.providers ? { providers: opts.providers } : {}),
   });
   const server = await startServer(deps, {
     port: 0,

@@ -20,6 +20,7 @@ import { meRoutes } from './me/routes';
 import { demoRoutes } from './demo/routes';
 import { judgeRoutes } from './judge/routes';
 import { stageRoutes } from './stage/routes';
+import { stageAudioRoutes } from './stage/audio';
 import { stageStaticRoutes } from './stage/static';
 import { marketsRoutes } from './markets/routes';
 import { marketBetRoutes } from './markets/bet-routes';
@@ -42,6 +43,8 @@ export const routeModules: RouteModule[] = [
   appealRoutes,
   // hearingRoutes (Beat 5's hearing is cut, D-C)
   stageRoutes,
+  // after stageRoutes: its '/v1/stage/*' CORS middleware covers these
+  stageAudioRoutes,
   marketsRoutes,
   marketBetRoutes,
   // GET / and /stage/*: the built projector page (apps/stage/dist), same-origin with the API.

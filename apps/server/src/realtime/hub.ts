@@ -90,12 +90,15 @@ interface Conn {
 }
 
 export type PresenceListener = (userId: string, online: boolean) => void;
+/** Told of every envelope publishBetEvent fans out (after the fan-out); must not block. */
+export type BetEventListener = (env: BetEnvelope, roomId: string | null) => void;
 
 export class RealtimeHub {
   private readonly conns = new Set<Conn>();
   private readonly channels = new Map<string, Set<Conn>>();
   private readonly userConnCount = new Map<string, number>();
   private readonly presenceListeners = new Set<PresenceListener>();
+  private readonly betListeners = new Set<BetEventListener>();
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private nextId = 1;
   private readonly now: () => number;
@@ -174,6 +177,19 @@ export class RealtimeHub {
       }
     }
     for (const c of targets) this.deliverBet(c, env);
+    for (const l of this.betListeners) {
+      try {
+        l(env, roomId ?? null);
+      } catch (err) {
+        this.log.warn('hub.bet_listener_failed', { type: env.type, err: String(err) });
+      }
+    }
+  }
+
+  /** Listens to every published bet event (the stage's voice, src/stage/voice.ts). */
+  onBetEvent(listener: BetEventListener): () => void {
+    this.betListeners.add(listener);
+    return () => this.betListeners.delete(listener);
   }
 
   /**
@@ -210,6 +226,23 @@ export class RealtimeHub {
   /** Sends a control frame (room.presence, stage.*) to room:<room_id>. */
   publishToRoom(roomId: string, frame: WsServerControlFrame): void {
     for (const c of this.channels.get(`room:${roomId}`) ?? []) this.send(c, frame);
+  }
+
+  /** Stage sessions of the room that sent subscribe_room. */
+  private stageConns(roomId: string): Conn[] {
+    return [...(this.channels.get(`room:${roomId}`) ?? [])].filter(
+      (c) => c.auth?.scopes.includes('stage') && c.auth.room_id === roomId,
+    );
+  }
+
+  /** Is a stage (projector) of this room listening? */
+  hasStage(roomId: string): boolean {
+    return this.stageConns(roomId).length > 0;
+  }
+
+  /** A control frame for the room's stage sessions only (stage.voice): the phones never get it. */
+  publishToStage(roomId: string, frame: WsServerControlFrame): void {
+    for (const c of this.stageConns(roomId)) this.send(c, frame);
   }
 
   isUserOnline(userId: string): boolean {

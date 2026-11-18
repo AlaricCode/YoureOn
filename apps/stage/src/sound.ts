@@ -8,10 +8,20 @@
 //           BetFinalized, BetConceded, AppealResolved, BetRefunded, BetCancelled (Streams)
 // plus any stage.cue frame the server sends (gavel, drumroll, buzzer, cheer).
 //
+// When the server generates the cues with ElevenLabs Sound Effects (GET /v1/stage/audio lists
+// them), the page loads those clips once (setGenerated) and plays them instead: the gavel for a
+// ruling, the buzzer for a REDO, the cheer for a payout, and each stage.cue. Until a clip is
+// decoded, and without them, the synthesized sound plays. The judge's voice clips (voice.ts) go
+// through the same context (decode + playBuffer).
+//
 // Only fresh events sound (their server ts within FRESH_MS of the stage clock), so the seq-0 replay
 // of a bet that happened before the stage connected stays silent. Browsers keep audio suspended
 // until a user gesture: the first key press or click unlocks it; M mutes.
+import type { StageCueKind } from '@youre-on/shared/api';
+import type { z } from 'zod/v4';
 import type { TickerState } from './ticker';
+
+type CueKind = z.infer<typeof StageCueKind>;
 
 export const SFX = ['gavel', 'lock', 'redo', 'paid', 'drumroll', 'buzzer', 'cheer'] as const;
 export type Sfx = (typeof SFX)[number];
@@ -79,7 +89,18 @@ type Ctx = Pick<
   | 'createBiquadFilter'
   | 'createBuffer'
   | 'createBufferSource'
->;
+> &
+  Partial<Pick<AudioContext, 'decodeAudioData'>>;
+
+/** Which generated (ElevenLabs) cue clip a moment plays, when the server has them. */
+export const GENERATED_FOR: Partial<Record<Sfx, CueKind>> = {
+  gavel: 'gavel',
+  redo: 'buzzer',
+  buzzer: 'buzzer',
+  paid: 'cheer',
+  cheer: 'cheer',
+  drumroll: 'drumroll',
+};
 
 function noise(ctx: Ctx, seconds: number): AudioBufferSourceNode {
   const len = Math.max(1, Math.floor(ctx.sampleRate * seconds));
@@ -170,6 +191,8 @@ export function synth(ctx: Ctx, kind: Sfx, out: AudioNode = ctx.destination): vo
 export class StageAudio {
   private ctx: Ctx | null = null;
   muted = false;
+  /** ElevenLabs cue clips: the bytes as fetched, then the decoded buffer. */
+  private readonly generated = new Map<CueKind, { raw: ArrayBuffer; buf: AudioBuffer | null }>();
 
   constructor(private readonly make: () => Ctx | null = defaultContext) {}
 
@@ -182,13 +205,71 @@ export class StageAudio {
     try {
       this.ctx ??= this.make();
       if (this.ctx && this.ctx.state !== 'running') void this.ctx.resume();
+      for (const k of this.generated.keys()) void this.decodeGenerated(k);
     } catch {
       this.ctx = null; // no WebAudio: stay silent
     }
   }
 
+  /** A cue's ElevenLabs clip (MP3 bytes); decoded now if audio is unlocked, else at unlock. */
+  setGenerated(kind: CueKind, raw: ArrayBuffer): void {
+    this.generated.set(kind, { raw, buf: null });
+    if (this.ctx) void this.decodeGenerated(kind);
+  }
+
+  hasGenerated(kind: CueKind): boolean {
+    return this.generated.has(kind);
+  }
+
+  /** How many cue clips are decoded and playable (the health strip). */
+  get generatedReady(): number {
+    return [...this.generated.values()].filter((g) => g.buf).length;
+  }
+
+  private async decodeGenerated(kind: CueKind): Promise<void> {
+    const g = this.generated.get(kind);
+    if (!g || g.buf) return;
+    const buf = await this.decode(g.raw);
+    if (buf && this.generated.get(kind) === g) g.buf = buf;
+  }
+
+  /** MP3 / WAV bytes -> an AudioBuffer (the bytes are copied: decoding detaches them). */
+  async decode(raw: ArrayBuffer): Promise<AudioBuffer | null> {
+    const ctx = this.ctx;
+    if (!ctx?.decodeAudioData) return null;
+    try {
+      return await ctx.decodeAudioData(raw.slice(0));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Plays a decoded clip; resolves when it ends. null when muted or locked. */
+  playBuffer(buf: AudioBuffer): Promise<void> | null {
+    const ctx = this.ctx;
+    if (this.muted || !ctx || ctx.state !== 'running') return null;
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      return new Promise<void>((resolve) => {
+        const safety = setTimeout(resolve, (buf.duration || 0) * 1000 + 1_000);
+        src.onended = () => {
+          clearTimeout(safety);
+          resolve();
+        };
+        src.start(ctx.currentTime + 0.02);
+      });
+    } catch {
+      return null;
+    }
+  }
+
   play(kind: Sfx): boolean {
     if (this.muted || !this.ctx || this.ctx.state !== 'running') return false;
+    const gen = GENERATED_FOR[kind];
+    const buf = gen ? this.generated.get(gen)?.buf : null;
+    if (buf && this.playBuffer(buf)) return true;
     try {
       synth(this.ctx, kind);
       return true;

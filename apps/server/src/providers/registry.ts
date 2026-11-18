@@ -1,6 +1,8 @@
 // Provider registry: builds deps.providers from the env. The spend guard runs first, so a paid
 // mode without ALLOW_SPEND=true fails at boot with SPEND_DISABLED before anything is built.
-// Defaults (LLM_PROVIDER / STT_PROVIDER / SFX_PROVIDER unset) are the offline mocks.
+// Defaults (LLM_PROVIDER / STT_PROVIDER unset) are the offline mocks. SFX_PROVIDER defaults to
+// 'auto': ElevenLabs Sound Effects exactly when the stage's voice is on (ELEVENLABS_API_KEY,
+// ALLOW_SPEND=true, not STAGE_TTS=off: voice/tts.ts stageAudioGate), else the mock.
 //
 // Production fail-closed: with NODE_ENV=production the mock LLM (first enum value, confidence
 // 0.9) and the mock STT (echoes a caller-supplied transcript) would issue fake rulings that move
@@ -18,6 +20,7 @@ import { LiveSfx, LiveStt } from './live/voice';
 import { MockLlm } from './mock/llm';
 import { MockSfx, MockStt } from './mock/voice';
 import { enforceSpendGuard, type ProviderVar } from './spend';
+import { stageAudioGate } from '../voice/tts';
 import type { LlmProvider, Providers, SttProvider } from './types';
 
 export class MockProviderInProductionError extends Error {
@@ -76,11 +79,13 @@ export function createProviders(env: Env, o: CreateProvidersOptions = {}): Provi
         : production
           ? refusingStt
           : new MockStt()),
-    sfx:
-      overrides.sfx ??
-      (env.SFX_PROVIDER === 'live' ? LiveSfx.fromEnv(env, { fetch: o.fetch }) : new MockSfx()),
+    sfx: overrides.sfx ?? (sfxLive(env) ? LiveSfx.fromEnv(env, { fetch: o.fetch }) : new MockSfx()),
   };
 }
+
+/** SFX_PROVIDER=live, or 'auto' with the stage's voice on (the key is set and spend allowed). */
+export const sfxLive = (env: Env): boolean =>
+  env.SFX_PROVIDER === 'live' || (env.SFX_PROVIDER === 'auto' && stageAudioGate(env).on);
 
 /** Selected modes for the boot log line (no secrets). */
 export function providerModes(p: Providers): Record<keyof Providers, string> {

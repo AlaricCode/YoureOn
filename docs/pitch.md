@@ -168,8 +168,9 @@ yet.
 Do not fake it. The money path runs without phones: on the laptop, `npm run cp1-drive -- --base-url
 https://youre-on.fly.dev --through paid --gg` plays both players over the real API with the demo
 keys, and the stage shows the real devnet bet. Say so: "The phones aren't signed yet, so the laptop
-plays both of them; what you see on the stage is the real escrow." Its judge-cam frames are
-synthetic test images, so don't present the ruling as a real flip. Use `REPLAY 1` for the face scan
+plays both of them; what you see on the stage is the real escrow." No voice judge hosts a laptop
+bet, so the projector speaks its ruling and payout itself. Its judge-cam frames are synthetic test
+images, so don't present the ruling as a real flip. Use `REPLAY 1` for the face scan
 only if a recorded clip of the real app exists, and say "replay".
 
 ## Demo video (2–3 minutes)
@@ -178,19 +179,23 @@ Required by the rules and the ElevenLabs bounty: it must show the voice judge **
 the phones' screens (iOS screen recording with the mic on), one over-the-shoulder camera, and the
 stage page. Label any replayed segment.
 
-| #   | Time      | Shot                                                                                                                                  | Audio                                | Proves             |
-| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------ |
-| 1   | 0:00–0:10 | Title card; two friends, a water bottle.                                                                                              | VO: the one-line pitch               | Hook               |
-| 2   | 0:10–0:25 | Close-up: an argument over a flip; "you owe me five".                                                                                 | VO: the problem                      | Problem            |
-| 3   | 0:25–0:40 | Over the shoulder: A scans B's face → "Challenge B?" → B's phone buzzes.                                                              | Ambient                              | Beat 1             |
-| 4   | 0:40–1:10 | Phone A screen recording + room audio: the judge's voice, its edge-case question, the read-back. Cut to the stage captions.           | **The ElevenLabs judge, audible**    | Beat 2, ElevenLabs |
-| 5   | 1:10–1:25 | Split screen: both phones, hold → Face ID → Locked. Stage LOCKED; Explorer page of the lock transaction.                              | VO: "one transaction, three signers" | Beat 3, Solana     |
-| 6   | 1:25–1:55 | Judge cam POV of the flip; the ruling on the phones and stage; the loser taps GG; the winner's payout; Explorer link.                 | Judge announces the result           | Beat 4             |
-| 7   | 1:55–2:25 | Beat 6: "Bet on Bitcoin" with Gemini's odds; time-lapse to expiry; settled, "verified", paid.                                         | VO: fair odds, evidence on chain     | Gemini             |
-| 8   | 2:25–2:45 | Under the hood: the architecture diagram; the stage ticker reading "via QuickNode Streams"; the webhook log; the program on Explorer. | VO: Streams, the program, the tests  | QuickNode, Solana  |
-| 9   | 2:45–3:00 | End card: program ID, repo URL, team.                                                                                                 | VO: close                            |                    |
+| #   | Time      | Shot                                                                                                                                  | Audio                                      | Proves             |
+| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------ |
+| 1   | 0:00–0:10 | Title card; two friends, a water bottle.                                                                                              | VO: the one-line pitch                     | Hook               |
+| 2   | 0:10–0:25 | Close-up: an argument over a flip; "you owe me five".                                                                                 | VO: the problem                            | Problem            |
+| 3   | 0:25–0:40 | Over the shoulder: A scans B's face → "Challenge B?" → B's phone buzzes.                                                              | Ambient                                    | Beat 1             |
+| 4   | 0:40–1:10 | Phone A screen recording + room audio: the judge's voice, its edge-case question, the read-back. Cut to the stage captions.           | **The ElevenLabs judge, audible**          | Beat 2, ElevenLabs |
+| 5   | 1:10–1:25 | Split screen: both phones, hold → Face ID → Locked. Stage LOCKED; Explorer page of the lock transaction.                              | VO: "one transaction, three signers"       | Beat 3, Solana     |
+| 6   | 1:25–1:55 | Judge cam POV of the flip; the ruling on the phones and stage; the loser taps GG; the winner's payout; Explorer link.                 | The judge announces the result (A's phone) | Beat 4             |
+| 7   | 1:55–2:25 | Beat 6: "Bet on Bitcoin" with Gemini's odds; time-lapse to expiry; settled, "verified", paid.                                         | VO: fair odds, evidence on chain           | Gemini             |
+| 8   | 2:25–2:45 | Under the hood: the architecture diagram; the stage ticker reading "via QuickNode Streams"; the webhook log; the program on Explorer. | VO: Streams, the program, the tests        | QuickNode, Solana  |
+| 9   | 2:45–3:00 | End card: program ID, repo URL, team.                                                                                                 | VO: close                                  |                    |
 
-Gates: shot 4 needs the ElevenLabs key; shot 8's "via QuickNode Streams" needs the live Stream (the
+Gates: shot 4 needs the ElevenLabs key. The stage speaks a ruling only in a bet no voice judge is
+hosting (the "No phones" run, or typed terms before the judge spoke): with the voice judge on, A's
+phone announces it and the projector stays quiet, so the hall hears one judge. The stage's own
+voice is ElevenLabs only with the key (without it the strip says `Voice browser`, so don't present
+it as ElevenLabs). Shot 8's "via QuickNode Streams" needs the live Stream (the
 stage only says it when the Stream delivered). Without them those bounties lose their evidence, so
 record those shots last and don't substitute footage that implies otherwise. No Beat 5 shot: the
 hearing and panel are not built.
