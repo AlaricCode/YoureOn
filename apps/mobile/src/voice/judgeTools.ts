@@ -1,5 +1,5 @@
 // The judge session's phone-side logic (API-CONTRACT §4.4, §4.5, §2.6), pure so it is tested in
-// node; ./useJudgeSession.tsx binds it to the ElevenLabs RN SDK.
+// node; ./session.ts drives it and ./JudgeVoice.tsx binds that to the ElevenLabs RN SDK.
 //   client tools: request_attempt -> POST /attempts ("armed: …" | "error: <code>"),
 //                 show_terms_card -> bring the card forward, cue -> POST /cues (stage plays it)
 //   judge.cue:    speak ? sendUserMessage(text) : sendContextualUpdate(text), verbatim

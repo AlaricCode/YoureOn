@@ -570,6 +570,8 @@ export const JudgeCueName = z.enum([
   'MARKET_SETTLED',
   'PAID',
   'VOIDED',
+  // Additive: B tapped accept after a voiced confirm_terms was refused INVITE_PENDING (§2.5).
+  'INVITE_ACCEPTED',
 ]);
 export type JudgeCueName = z.infer<typeof JudgeCueName>;
 

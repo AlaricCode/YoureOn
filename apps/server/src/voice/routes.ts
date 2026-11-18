@@ -2,6 +2,9 @@
 //   POST /v1/voice/tokens       (S)  mint an ElevenLabs conversation token (API-CONTRACT §2.6)
 //   POST /el/tools/propose_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
 //   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
+//   POST /v1/bets/:bet_id/voice/lines (S, A)  transcript relay -> judge.line / party.line (./relay)
+//   POST /v1/bets/:bet_id/cues        (S, A)  `cue` client tool -> stage.cue (./relay)
+//   GET  /v1/demo/voice               (demo key) is the judge switched on? (./readiness)
 //
 // createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
 // sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
@@ -24,7 +27,10 @@ import type { AppDeps, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
+import { requireDemo } from '../demo/routes';
 import { createElevenLabsClient, UpstreamError, type ElevenLabsClient } from './elevenlabs';
+import { voiceReadiness } from './readiness';
+import { cuesHandler, LineDedupe, voiceLinesHandler } from './relay';
 import {
   confirmTermsHandler,
   proposeTermsHandler,
@@ -38,6 +44,7 @@ export interface VoiceRoutesOptions {
   elevenlabs?: ElevenLabsClient | ((deps: AppDeps) => ElevenLabsClient);
   sink?: ProposalSink;
   state?: ToolState;
+  lines?: LineDedupe;
 }
 
 export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
@@ -56,6 +63,8 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
           hint: 'ELEVENLABS_API_KEY is set but ALLOW_SPEND is not true: voice tokens are refused',
         });
       const state = o.state ?? new ToolState();
+      const readiness = voiceReadiness(deps.env, el !== null);
+      deps.log.info('voice.readiness', { ready: readiness.ready, missing: readiness.missing });
 
       app.post(VOICE_TOKENS_PATH, requireSignedRequest, async (c) => {
         const d = c.get('deps');
@@ -155,6 +164,17 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         proposeTermsHandler({ state, sink: o.sink ?? termsSink }),
       );
       app.post('/el/tools/confirm_terms', confirmTermsHandler({ state }));
+
+      app.post(
+        '/v1/bets/:bet_id/voice/lines',
+        requireSignedRequest,
+        voiceLinesHandler(o.lines ?? new LineDedupe()),
+      );
+      app.post('/v1/bets/:bet_id/cues', requireSignedRequest, cuesHandler());
+
+      app.get('/v1/demo/voice', requireDemo, (c) =>
+        c.json(voiceReadiness(c.get('deps').env, el !== null), 200),
+      );
     },
   };
 }

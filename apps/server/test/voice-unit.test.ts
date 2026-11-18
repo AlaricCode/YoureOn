@@ -24,7 +24,7 @@ import { createVoiceRoutes } from '../src/voice/routes';
 import { buildApp } from '../src/app';
 import { createDeps } from '../src/server';
 import { testEnv } from './helpers';
-import { CLIENT_EVENTS } from '@youre-on/shared/judge/el-config';
+import { AGENT_MAX_TOKENS, CLIENT_EVENTS } from '@youre-on/shared/judge/el-config';
 
 const okJson = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -323,7 +323,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     expect(prompt.llm).toBe('claude-haiku-5-5');
     expect(prompt).toHaveProperty('temperature', null); // omitted from the LLM request
     expect(prompt.backup_llm_config).toEqual({ preference: 'disabled' });
-    expect(prompt.max_tokens).toBe(300);
+    expect(prompt.max_tokens).toBe(AGENT_MAX_TOKENS); // room for adaptive thinking + a full tool call
     expect(prompt.enable_parallel_tool_calls).toBe(false);
     expect(prompt.tool_ids).toEqual(Object.values(r.tool_ids));
     expect(a.platform_settings.call_limits.bursting_enabled).toBe(false);
@@ -419,6 +419,18 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
       ].sort(),
     );
     expect(store.secrets[0]._value).toBe('new');
+  });
+
+  it('--rotate-secret is never a no-op (the stored value is write-only); without it a rerun is', async () => {
+    const { http, store } = fakeElevenLabs();
+    await syncAgent(http, { ...OPTS, rotateSecret: true });
+    store.writes.length = 0;
+    const again = await syncAgent(http, { ...OPTS, rotateSecret: true });
+    expect(store.writes).toEqual([`PATCH /v1/convai/secrets/${again.secret_id}`]);
+    store.writes.length = 0;
+    const check = await syncAgent(http, OPTS);
+    expect(store.writes).toEqual([]);
+    expect(check.actions.every((a) => a.action === 'noop')).toBe(true);
   });
 
   it('refuses to guess when two resources share a name', async () => {

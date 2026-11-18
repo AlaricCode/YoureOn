@@ -62,6 +62,7 @@ import { Label, PrimaryButton } from '../ui/kit';
 import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { palette } from '../ui/tokens';
+import { micMutedFor, type SessionPhase } from '../voice/session';
 import { WalletError } from '../wallet/wallet';
 import {
   authorizeLock,
@@ -113,6 +114,8 @@ const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
 /** EXPO_PUBLIC_MARKET=off hides "Bet on Bitcoin" (the server refuses it without the Gemini relay). */
 const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET !== 'off';
 const JudgeVoice = lazy(() => import('../voice/JudgeVoice'));
+/** How long A's judge session outlives its bet: the closing [EVENT] line, spoken (§4.5). */
+const VOICE_TAIL_MS = 20_000;
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
@@ -168,6 +171,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [market, marketDispatch] = useReducer(marketReducer, initialMarket);
   /** The bet whose voice session failed (no key, token refused, SDK error): type it instead. */
   const [voiceFailedBet, setVoiceFailedBet] = useState<string | null>(null);
+  /** The judge session's phase and whether the judge is talking (NegotiateScreen's mic/ring). */
+  const [voicePhase, setVoicePhase] = useState<SessionPhase>('idle');
+  const [judgeSpeaking, setJudgeSpeaking] = useState(false);
   const [walletKey, setWalletKey] = useState<string | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [busy, setBusy] = useState(false);
@@ -413,10 +419,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     }
   };
 
-  const voiceFailed = useCallback((id: string) => {
-    setVoiceFailedBet(id);
-    typedDispatch({ type: 'open' });
-  }, []);
+  const voiceFailed = useCallback(
+    (id: string) => {
+      // Unmounts JudgeVoice (the session is already ended) and opens the typed form, unless
+      // the bet is already over (a failure in the closing tail has nothing left to type).
+      setVoiceFailedBet(id);
+      setJudgeSpeaking(false);
+      if (!isOver(rt.hub.get(id)?.state ?? null)) typedDispatch({ type: 'open' });
+    },
+    [rt],
+  );
 
   const submitTyped = async () => {
     if (!bet || !canSubmit(typed) || typed.bet_id !== bet.bet_id) return;
@@ -452,14 +464,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const req = bet?.authorizeRequest ?? null;
   const betId = bet?.bet_id ?? null;
   const state = bet?.state ?? null;
-  useEffect(() => {
-    if (!betId || state !== 'AWAITING_AUTHORIZATIONS' || req) return;
-    let live = true;
-    const tm = setTimeout(() => {
-      rt.api.getLock(betId).then(
+  /** GET /lock into the hub, unless the push already brought it (`live` guards an unmount). */
+  const fetchLock = useCallback(
+    (id: string, live: () => boolean = () => true) => {
+      rt.api.getLock(id).then(
         (r) => {
-          if (!live) return;
-          rt.hub.patch(betId, (m) =>
+          if (!live()) return;
+          rt.hub.patch(id, (m) =>
             m.authorizeRequest
               ? m
               : {
@@ -473,12 +484,32 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         },
         () => undefined,
       );
-    }, 600);
+    },
+    [rt],
+  );
+  useEffect(() => {
+    if (!betId || state !== 'AWAITING_AUTHORIZATIONS' || req) return;
+    let live = true;
+    const tm = setTimeout(() => fetchLock(betId, () => live), 600);
     return () => {
       live = false;
       clearTimeout(tm);
     };
-  }, [rt, betId, state, req]);
+  }, [fetchLock, betId, state, req]);
+
+  /**
+   * The judge's show_terms_card client tool (§4.4, after confirm_terms): the card arrives anyway
+   * with terms.authorize_request; this brings it forward now. Back from the typed form to the
+   * draft card, and fetch the lock request if the push has not landed yet.
+   */
+  const showTermsCard = useCallback(
+    (id: string) => {
+      typedDispatch({ type: 'voice' });
+      const b = rt.hub.get(id);
+      if (b?.state === 'AWAITING_AUTHORIZATIONS' && !b.authorizeRequest) fetchLock(id);
+    },
+    [rt, fetchLock],
+  );
 
   const lockId = req?.lock_request_id ?? null;
   const mismatch = bet?.termsMismatch ?? false;
@@ -662,10 +693,42 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     refreshBalance();
   };
 
+  // ---- the judge session (A's phone only, D6) ------------------------------------------------
+  // It lives for the whole bet and VOICE_TAIL_MS past its end, so the last [EVENT] line (PAID,
+  // VOIDED, DECLINED, EXPIRED, LOCK_FAILED, which arrive with or after the terminal state) is
+  // still spoken after the screen moves on. Gone at once when it failed (the controller already
+  // ended it; unmounting also drops the error boundary's box) or when this phone stops hosting.
+  const hostsVoice =
+    VOICE_ENABLED &&
+    !app.judgeCam &&
+    bet !== null &&
+    me === 'A' &&
+    !isOver(bet.state) &&
+    voiceFailedBet !== bet.bet_id &&
+    voiceVars.current.has(bet.bet_id);
+  const [voiceBetId, setVoiceBetId] = useState<string | null>(null);
+  useEffect(() => {
+    if (hostsVoice && bet) setVoiceBetId(bet.bet_id);
+  }, [hostsVoice, bet?.bet_id]);
+  useEffect(() => {
+    if (app.judgeCam || app.auth !== 'signedIn') setVoiceBetId(null);
+  }, [app.judgeCam, app.auth]);
+  const voiceBet = voiceBetId ? (rt.hub.get(voiceBetId) ?? null) : null;
+  const voiceBetOver = voiceBet ? isOver(voiceBet.state) : false;
+  useEffect(() => {
+    if (!voiceBetId || !voiceBetOver) return;
+    const tm = setTimeout(
+      () => setVoiceBetId((cur) => (cur === voiceBetId ? null : cur)),
+      VOICE_TAIL_MS,
+    );
+    return () => clearTimeout(tm);
+  }, [voiceBetId, voiceBetOver]);
   const voice =
-    VOICE_ENABLED && !app.judgeCam && bet && me === 'A' && !isOver(bet.state)
-      ? (voiceVars.current.get(bet.bet_id) ?? null)
+    voiceBet && voiceFailedBet !== voiceBet.bet_id
+      ? (voiceVars.current.get(voiceBet.bet_id) ?? null)
       : null;
+  const voiceLive =
+    voice !== null && voiceBet?.bet_id === bet?.bet_id && voicePhase === 'connected';
 
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <Loading failed onRetry={boot} />;
@@ -809,9 +872,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <NegotiateScreen
             view={names}
             captions={captions}
-            speaking={captions.at(-1)?.who === 'judge'}
-            hasMic={me === 'A' && VOICE_ENABLED}
-            micMuted={view !== null}
+            speaking={voiceLive ? judgeSpeaking : captions.at(-1)?.who === 'judge'}
+            hasMic={me === 'A' && VOICE_ENABLED && !typedForced}
+            micMuted={!voiceLive || micMutedFor(state)}
             draft={view}
             typed={
               negotiating && typed.bet_id === bet?.bet_id
@@ -1028,23 +1091,29 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   return (
     <View style={styles.root}>
       {screen}
-      {voice && bet ? (
+      {voice && voiceBet ? (
         <PanelErrorBoundary
-          key={bet.bet_id}
+          key={voiceBet.bet_id}
           name="voice"
           onError={(m) => {
             console.warn('[yo] voice', m);
-            voiceFailed(bet.bet_id);
+            voiceFailed(voiceBet.bet_id);
           }}
         >
           <Suspense fallback={null}>
             <JudgeVoice
               rt={rt}
-              betId={bet.bet_id}
+              betId={voiceBet.bet_id}
               dynamicVariables={voice}
-              startAttempt={(n) => rt.api.startAttempt(bet.bet_id, n).then(() => undefined)}
-              onShowTermsCard={() => undefined}
-              onFailed={() => voiceFailed(bet.bet_id)}
+              startAttempt={(n) => rt.api.startAttempt(voiceBet.bet_id, n).then(() => undefined)}
+              micMuted={micMutedFor(voiceBet.state)}
+              onShowTermsCard={() => showTermsCard(voiceBet.bet_id)}
+              onPhase={setVoicePhase}
+              onSpeaking={setJudgeSpeaking}
+              onFailed={(reason) => {
+                console.warn('[yo] voice failed', reason);
+                voiceFailed(voiceBet.bet_id);
+              }}
             />
           </Suspense>
         </PanelErrorBoundary>

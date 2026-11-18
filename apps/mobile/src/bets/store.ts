@@ -126,7 +126,12 @@ export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
 
 const who = (p: Party): 'a' | 'b' => (p === 'A' ? 'a' : 'b');
 
-function upsertLine(lines: BetModel['lines'], id: string, w: 'judge' | 'a' | 'b', text: string) {
+export function upsertLine(
+  lines: BetModel['lines'],
+  id: string,
+  w: 'judge' | 'a' | 'b',
+  text: string,
+) {
   const i = lines.findIndex((l) => l.id === id);
   if (i < 0) return [...lines, { id, who: w, text }].slice(-40);
   const next = lines.slice();
