@@ -12,6 +12,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { recordLine } from '@youre-on/shared/gg';
 import { isCachedRulingModel } from '@youre-on/shared/ruling';
 import { formatPrice } from '@youre-on/shared/settlement';
 import {
@@ -41,6 +42,8 @@ import { qrSvg } from './qr';
 import { healthItems, type DemoHealth, type HealthItem } from './health';
 import { BEAT_TITLES, replayProgress, type ReplayStatus } from './replays';
 import { verifiedChain, type Verification } from './verify';
+import { liveGg, payoutLabel, reviewBannerOn } from './gg';
+import { ReviewBanner } from './gg-moment';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -161,9 +164,10 @@ function partyStatus(
   if (won)
     return won === p ? (
       <span className="status win">WINNER</span>
-    ) : (
+    ) : liveGg(b)?.by === p ? (
+      // ./gg: "GG" only once the loser actually said it (before that the ruling is still open)
       <span className="status muted">GG</span>
-    );
+    ) : null;
   if (b.declined === p) return <span className="status bad">declined</span>;
   const a = b.auth[p];
   const locked = b.lock && b.lock.status !== 'failed';
@@ -487,10 +491,19 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
       <div className="ruling-row">
         <div className="ruling-text">
           <p className="reason">{r.reason}</p>
-          {r.outcome !== 'REDO' && <AppealBar bet={bet} now={now} />}
-          {bet.appealed && !bet.payout && !bet.appeal_result && bet.votes.length === 0 && (
-            <span className="countdown">Appealed · the panel is reviewing</span>
-          )}
+          {r.outcome !== 'REDO' &&
+            (reviewBannerOn(bet, now) ? (
+              <ReviewBanner bet={bet} now={now} />
+            ) : (
+              <AppealBar bet={bet} now={now} />
+            ))}
+          {bet.appealed &&
+            !bet.payout &&
+            !bet.appeal_result &&
+            bet.votes.length === 0 &&
+            !reviewBannerOn(bet, now) && (
+              <span className="countdown">Appealed · the panel is reviewing</span>
+            )}
         </div>
         {citedUrl && (
           <figure className="cited">
@@ -571,12 +584,25 @@ function PaidPanel({ bet }: { bet: BetView }) {
     p.event === 'Refund' ||
     bet.state === 'VOIDED' ||
     finalOutcomeOf(bet) === 'VOID';
+  const via = payoutLabel(p.event);
+  const gg = liveGg(bet);
   return (
     <div className="paid">
       <div className="headline">
         <span className="stamp win">{refund ? 'REFUNDED' : 'PAID'}</span>
+        {!refund && via !== 'Paid' && (
+          <span className={`paid-via${via === 'GG' ? ' gg' : ''}`}>{via}</span>
+        )}
         <span className="pot muted">{p.event} · devnet</span>
       </div>
+      {gg && (
+        <p className="paid-record">
+          {nameOf(bet, gg.by)} said GG
+          {gg.record
+            ? ` · ${recordLine(gg.record.after, { A: nameOf(bet, 'A'), B: nameOf(bet, 'B') })}`
+            : ''}
+        </p>
+      )}
       <div className="payouts">
         {(['A', 'B'] as const).map((k) => {
           const amt = k === 'A' ? p.to_a : p.to_b;
@@ -964,7 +990,8 @@ export function PaidMoment({ bet }: { bet: BetView }) {
         )}
       </span>
       <span className="muted">
-        {p.event} on Solana devnet{p.signature ? ` · ${shortSig(p.signature)}` : ''}
+        {payoutLabel(p.event)} · {p.event} on Solana devnet
+        {p.signature ? ` · ${shortSig(p.signature)}` : ''}
       </span>
     </div>
   );

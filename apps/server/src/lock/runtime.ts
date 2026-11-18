@@ -7,7 +7,9 @@
 import type { AppDeps } from '../context';
 import { AppealService, type AppealDeps } from '../appeal/service';
 import { chainRuntimeFromEnv, type ChainRuntime, type SendOptions } from '../chain/tx';
+import { ggPayoutHooks } from '../gg/service';
 import { RefundService } from '../payout/refund';
+import { ReviewService } from '../review/service';
 import { PayoutService } from '../payout/service';
 import { Inflight, type LifecycleDeps } from './common';
 import { LockService } from './service';
@@ -21,6 +23,8 @@ export interface Lifecycle {
   refund: RefundService;
   /** Beat 5: the loser's appeal, the three-vendor panel, resolve_appeal (src/appeal). */
   appeal: AppealService;
+  /** The spoken "check that again": asks the loser's phone to confirm an appeal (src/review). */
+  review: ReviewService;
   /** Resolves once every background send/confirm started so far has settled (tests). */
   idle(): Promise<void>;
   /** The send / confirm options of every tx this lifecycle sends (tests shorten them). */
@@ -76,6 +80,8 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
     send: o.send,
     timers: o.timers,
     appealRequest: (rt, bet, loser) => appeal.pushRequest(rt, bet, loser),
+    // The GG moment: bet.gg with the CONCEDED commit, the PAID cue says GG / timeout (src/gg).
+    ...ggPayoutHooks(deps),
   });
   const refund = new RefundService({ deps, runtime, inflight, send: o.send, timers: o.timers });
   // The route deps bag carries the LLM providers (AppDeps); a bare LifecycleDeps has none, and
@@ -89,18 +95,21 @@ export function createLifecycle(deps: LifecycleDeps, o: LifecycleOptions = {}): 
     send: o.send,
     ...(o.appealVoteTimeoutMs !== undefined ? { voteTimeoutMs: o.appealVoteTimeoutMs } : {}),
   });
+  const review = new ReviewService({ deps, timers: o.timers });
   return {
     runtime,
     lock,
     payout,
     refund,
     appeal,
+    review,
     idle: () => inflight.idle(),
     sendOptions: o.send,
     run: (name, fn) => inflight.run(name, fn),
     stop: () => {
       payout.stop();
       refund.stop();
+      review.stop();
     },
   };
 }

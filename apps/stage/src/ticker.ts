@@ -32,6 +32,7 @@ import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { parseRealtimeEvent, type RealtimeEvent } from '@youre-on/shared/realtime';
 import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling';
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
+import { foldGg, type GgView, type ReviewView } from './gg';
 
 export const MAX_EVENTS = 200;
 export const MAX_MARKET_POINTS = 150;
@@ -180,6 +181,10 @@ export interface BetView {
   last_cue: string | null;
   /** Other tx signatures by kind (resolve, payout, close …) for Explorer links. */
   txs: Record<string, string>;
+  /** The loser's GG (bet.gg; gg.ts). */
+  gg: GgView | null;
+  /** A spoken review request (review.requested / review.closed; gg.ts). */
+  review: ReviewView | null;
   updated_at: number;
 }
 
@@ -343,6 +348,8 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     caption: null,
     last_cue: null,
     txs: {},
+    gg: null,
+    review: null,
     updated_at: at,
   };
 }
@@ -496,8 +503,12 @@ function foldState(b: BetView, e: Extract<RealtimeEvent, { type: 'bet.state' }>)
   return v;
 }
 
-/** Folds one event into its bet's view. */
+/** Folds one event into its bet's view (then the GG / review rules, gg.ts foldGg). */
 export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
+  return foldGg(foldCard(b, e, at), e);
+}
+
+function foldCard(b: BetView, e: RealtimeEvent, at: number): BetView {
   const v: BetView = { ...b, updated_at: at };
   switch (e.type) {
     case 'bet.invited':

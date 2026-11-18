@@ -2,7 +2,7 @@
 
 The server half of the voice judge is built and tested without a key: the token route
 (`POST /v1/voice/tokens`), the webhook tools (`/el/tools/propose_terms`, `confirm_terms`,
-`get_market_odds`), the post-call webhook (`POST /webhooks/elevenlabs`) and the agent-as-code
+`get_market_odds`, `request_review`), the post-call webhook (`POST /webhooks/elevenlabs`) and the agent-as-code
 script (`scripts/el-agent.ts`). Nothing calls ElevenLabs until the steps below. Run them in order,
 once the ElevenLabs API key exists. They take about 15 minutes.
 
@@ -55,9 +55,10 @@ used:
 npm run el-agent -- --dry-run --check-openapi
 ```
 
-Expect `every body matches`, then three webhook tools (`propose_terms`, `confirm_terms` and
-`get_market_odds`, each `POST https://youre-on.fly.dev/el/tools/<name>`), three client tools
-(`request_attempt`, `show_terms_card`, `cue`), and an `llm` line with `claude-haiku-5-5` and
+Expect `every body matches`, then four webhook tools (`propose_terms`, `confirm_terms`,
+`get_market_odds` and `request_review`, each `POST https://youre-on.fly.dev/el/tools/<name>`), three
+client tools (`request_attempt`, `show_terms_card`, `cue`), the built-in `skip_turn` in the agent
+body (`prompt.built_in_tools`), and an `llm` line with `claude-haiku-5-5` and
 `reasoning_effort=low`. The secret is printed by reference only.
 
 Then create the agent for real:

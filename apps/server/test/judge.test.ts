@@ -148,7 +148,7 @@ describe('cues (§4.5)', () => {
       disagreement: null,
     });
     expect(rulingCue(won, names, 10).text).toBe(
-      '[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan he can tap GG.',
+      '[EVENT] RULING outcome=B_WINS winner=Jake conf=0.93 frames=5,6,7 reason="Lands upright on its base in frame 7." gg_secs=10 :: Deliver the ruling in two short sentences using the reason, then tell Logan to tap GG, or to say "check it again" for a review.',
     );
     const fail: Judged = { kind: 'failure', model: 'm', status: 'error', message: '' };
     expect(rulingCue(buildRuling(ctxBase, fail), names, 10).text).toBe(

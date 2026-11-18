@@ -20,6 +20,7 @@ import type { RealtimeEvent } from '@youre-on/shared/realtime';
 import type { Ruling } from '@youre-on/shared/ruling';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
 
+import { foldGg, type GgFields } from '../gg/model';
 import type { EndReason, LockEvent } from './lock';
 
 export interface AttemptInfo {
@@ -70,6 +71,9 @@ export interface BetModel {
   appealVotes: readonly AppealVote[];
   /** Beat 5: the panel's decision (appeal.result, or BetSnapshot.appeal on a resync). */
   appealResult: AppealResult | null;
+  /** The GG moment (bet.gg) and the spoken review request (review.*): ../gg/model. */
+  gg: GgFields['gg'];
+  review: GgFields['review'];
 }
 
 export const emptyBet = (bet_id: string, my_party: Party | null = null): BetModel => ({
@@ -104,6 +108,8 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   settlement: null,
   appealVotes: [],
   appealResult: null,
+  gg: null,
+  review: null,
 });
 
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
@@ -173,7 +179,7 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       };
       // A new attempt after REDO clears the last ruling's screen.
       if (p.state === 'ATTEMPT' && m.state !== 'ATTEMPT') next.ruling = null;
-      return next;
+      return { ...next, ...foldGg(m, e) };
     }
     case 'terms.proposed': {
       const changed =
@@ -254,6 +260,12 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
     }
     case 'appeal.result':
       return { ...base, appealResult: e.payload.result, appealVotes: e.payload.result.votes };
+    // ../gg/model: bet.gg, the review request and its close, an appeal confirming the review.
+    case 'bet.gg':
+    case 'review.requested':
+    case 'review.closed':
+    case 'tx.submitted':
+      return { ...base, ...foldGg(m, e) };
     default:
       return base;
   }
