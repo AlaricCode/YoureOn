@@ -91,6 +91,7 @@ describe('ruling on each phone', () => {
   it('formats a signed head-to-head net', () => {
     expect(signedUsd('-7000000')).toBe('−$7.00');
     expect(signedUsd('5000000')).toBe('+$5.00');
-    expect(signedUsd('0')).toBe('$0');
+    expect(signedUsd('0')).toBe('$0.00');
+    expect(signedUsd('-5000000')).toBe('−$5.00');
   });
 });

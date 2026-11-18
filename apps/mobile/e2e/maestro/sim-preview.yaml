@@ -123,6 +123,12 @@ name: sim-preview
 - runFlow:
     file: preview-screen.yaml
     env:
+      KEY: termsLocked
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
       KEY: endDeclined
 - assertVisible: Declined. Nothing moved.
 - tapOn:

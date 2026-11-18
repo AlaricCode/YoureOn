@@ -50,9 +50,11 @@ import { SignupScreen } from '../signup/SignupScreen';
 import { SplashView } from '../ui/brand';
 import { Label } from '../ui/kit';
 import { ListRow, Screen, Section, TopBar } from '../ui/parts';
-import { palette, radius, space } from '../ui/tokens';
+import { half, palette, radius, space } from '../ui/tokens';
 import {
   BALANCE,
+  BALANCE_SERIES,
+  MARKET_TRAIL,
   bottleFlip,
   btcCloser,
   FILMING_TIP,
@@ -328,10 +330,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       case 'launchFailed':
         return <SplashView failed onRetry={() => go('launch')} />;
       case 'signup':
+        // No "Preview" step tag here: the harness's own Preview bar already says so.
         return (
           <SignupScreen
             api={signupApi}
-            preview
             onSignedUp={(u) => {
               setName(u.display_name);
               go('enroll');
@@ -343,6 +345,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
           <FaceEnrollFlow
             api={faceApi}
             embedder={embedder}
+            showPreviewTag={false}
             now={Date.now}
             onDone={() => {
               setFaceOn(true);
@@ -372,6 +375,10 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
           <HomeScreen
             name={name}
             balanceCents={balance}
+            series={
+              balance === BALANCE_SERIES.at(-1) ? BALANCE_SERIES : [...BALANCE_SERIES, balance]
+            }
+            change={{ cents: balance - BALANCE_SERIES[0]! }}
             pending={false}
             inBetsUsd={null}
             room={inRoom ? ROOM : null}
@@ -637,6 +644,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             strikeUsd="$97,250.03"
             side={bet.terms.market?.side === 'YES' ? 'Up' : 'Down'}
             expiryMs={expiry}
+            seedTrail={MARKET_TRAIL}
           />
         );
       case 'history':
@@ -705,6 +713,18 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return openTerms(false);
       case 'termsTheyFirst':
         return openTerms(true);
+      case 'termsLocked':
+        // Straight to the locked moment: both signatures in, the lock confirmed.
+        openTerms(false);
+        for (const e of [
+          { type: 'policy', ok: true },
+          { type: 'already_signed' },
+          { type: 'their_signature' },
+          { type: 'submitted' },
+          { type: 'confirmed' },
+        ] as const)
+          dispatch(e);
+        return;
       case 'endDeclined':
       case 'endExpired':
       case 'endFailed':
@@ -765,7 +785,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <PreviewStrip onMenu={route === 'menu' ? undefined : () => go('menu')} />
       <SafeAreaInsetsContext.Provider value={inner}>{screen}</SafeAreaInsetsContext.Provider>
-      <StatusBar style="light" />
+      {/* Every screen is on black, so the status bar is always light. Keyed by route: it
+          re-mounts after each screen and so stays last on the status bar stack. */}
+      <StatusBar key={route} style="light" />
     </View>
   );
 }
@@ -785,6 +807,7 @@ type MenuKey =
   | 'negotiate'
   | 'terms'
   | 'termsTheyFirst'
+  | 'termsLocked'
   | 'termsMarket'
   | 'endDeclined'
   | 'endExpired'
@@ -847,6 +870,7 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     items: [
       ['terms', '11  Terms card'],
       ['termsTheyFirst', '12  Terms card, they signed first'],
+      ['termsLocked', '12b  Locked'],
       ['endDeclined', '13  Declined'],
       ['endExpired', '14  Expired'],
       ['endFailed', '15  Lock failed'],
@@ -882,26 +906,35 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
 ];
 
 function Menu({ onClose, open }: { onClose: () => void; open: (k: MenuKey) => void }) {
+  // The list runs to the bottom edge (the inset is content padding instead): a row that has
+  // scrolled into the home-indicator band is still on screen and tappable, which Maestro's
+  // scrollUntilVisible relies on (it can stop with the last row there).
+  const insets = useSafeAreaInsets();
+  const edge = useMemo(() => ({ ...insets, bottom: 0 }), [insets]);
   return (
-    <Screen>
-      <TopBar onBack={onClose} title="Screens" />
-      <ScrollView contentContainerStyle={styles.menu}>
-        {MENU.map((s) => (
-          <Section key={s.section} label={s.section}>
-            {s.items.map(([key, label]) => (
-              <ListRow key={key} testID={`menu-${key}`} title={label} onPress={() => open(key)} />
-            ))}
-          </Section>
-        ))}
-      </ScrollView>
-    </Screen>
+    <SafeAreaInsetsContext.Provider value={edge}>
+      <Screen>
+        <TopBar onBack={onClose} title="Screens" />
+        <ScrollView
+          contentContainerStyle={[styles.menu, { paddingBottom: space.x5 + insets.bottom }]}
+        >
+          {MENU.map((s) => (
+            <Section key={s.section} label={s.section}>
+              {s.items.map(([key, label]) => (
+                <ListRow key={key} testID={`menu-${key}`} title={label} onPress={() => open(key)} />
+              ))}
+            </Section>
+          ))}
+        </ScrollView>
+      </Screen>
+    </SafeAreaInsetsContext.Provider>
   );
 }
 
 function PreviewStrip({ onMenu }: { onMenu: (() => void) | undefined }) {
   return (
     <View style={styles.strip}>
-      <Label variant="small">Preview</Label>
+      <Label variant="smallStrong">Preview</Label>
       {onMenu ? (
         <Pressable
           testID="preview-menu"
@@ -911,31 +944,32 @@ function PreviewStrip({ onMenu }: { onMenu: (() => void) | undefined }) {
           hitSlop={8}
           style={styles.menuButton}
         >
-          <Label variant="small">Screens</Label>
+          <Label variant="smallStrong">Screens</Label>
         </Pressable>
       ) : null}
     </View>
   );
 }
 
+// The dev strip is black like every screen, set off by a hairline underneath; its "Screens"
+// button is a #1C1C1F pill.
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
   menu: { paddingHorizontal: space.page, paddingBottom: space.x5 },
   strip: {
-    height: 28,
+    height: space.x5,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: space.page,
+    backgroundColor: palette.background,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: palette.hairline,
   },
   menuButton: {
-    paddingHorizontal: space.x1,
-    paddingVertical: 4,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.hairline,
-    backgroundColor: palette.background,
+    paddingHorizontal: half.x15,
+    paddingVertical: half.x05,
+    borderRadius: radius.pill,
+    backgroundColor: palette.fill,
   },
 });

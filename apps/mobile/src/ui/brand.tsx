@@ -1,9 +1,12 @@
-// The app's mark and the in-app splash. The mark is the icon's switch flipped "on" (accent track,
-// light knob), drawn with Views. SplashView repeats the native splash (app.json expo-splash-screen:
-// assets/splash-icon.png at 180 pt, centred on #0B0B0C) so the hand-off from the native launch
-// screen to JS has no jump, then adds the boot state under it: loading, or "Can't connect" with a
-// retry. After the src/app merge it replaces DemoApp's `Loading` (one component swap).
-import { StyleSheet, View } from 'react-native';
+// The app's mark and the in-app splash. The mark is the icon's switch flipped "on" (green track,
+// white knob), drawn with Views. SplashView repeats the native splash (app.json
+// expo-splash-screen: assets/splash-icon.png at 180 pt, centred on black #000000) so the hand-off
+// from the native launch screen to JS has no jump: the mark is pinned to the centre of the
+// window (not of the view, which may sit under other chrome), and the boot state is absolutely
+// placed 24 pt under it, so it never pushes the mark: loading, or "Can't connect" with a retry.
+// `bare` shows the mark alone (the app root, while fonts load).
+import { useRef, useState, type ComponentRef } from 'react';
+import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COPY, t } from '../screens/copy';
@@ -47,17 +50,40 @@ export const SPLASH_MARK_WIDTH = Math.round((180 * 560) / 1024);
 export function SplashView({
   failed = false,
   onRetry,
+  bare = false,
 }: {
   failed?: boolean;
   onRetry?: (() => void) | undefined;
+  /** The mark alone, no status line (no text before the fonts are loaded). */
+  bare?: boolean;
 }) {
   const insets = useSafeAreaInsets();
-  return (
-    <View style={styles.root} testID="splash">
-      <View style={styles.center} pointerEvents="none">
-        <AppMark width={SPLASH_MARK_WIDTH} />
+  const { height: windowH } = useWindowDimensions();
+  const root = useRef<ComponentRef<typeof View>>(null);
+  // Where this view starts in the window (0 at the app root; lower inside the design preview).
+  const [offsetY, setOffsetY] = useState(0);
+  const markH = SPLASH_MARK_WIDTH * 0.56;
+  const markTop = windowH / 2 - offsetY - markH / 2;
+  const mark = (
+    <View style={[styles.mark, { top: markTop }]} pointerEvents="none">
+      <AppMark width={SPLASH_MARK_WIDTH} />
+    </View>
+  );
+  const measure = () =>
+    root.current?.measureInWindow((_x: number, y: number) => {
+      if (Number.isFinite(y)) setOffsetY(y);
+    });
+  if (bare) {
+    return (
+      <View ref={root} onLayout={measure} style={styles.root} testID="splash">
+        {mark}
       </View>
-      <View style={[styles.status, { top: '50%' }]}>
+    );
+  }
+  return (
+    <View ref={root} onLayout={measure} style={styles.root} testID="splash">
+      {mark}
+      <View style={[styles.status, { top: markTop + markH + space.x3 }]}>
         {failed ? (
           <Label style={styles.failed}>{t(COPY.app.offline)}</Label>
         ) : (
@@ -75,14 +101,8 @@ export function SplashView({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.background },
-  center: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
-  status: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    marginTop: space.x6,
-    alignItems: 'center',
-  },
+  mark: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+  status: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   failed: { color: palette.textSecondary },
   retry: { position: 'absolute', left: space.page, right: space.page },
 });
