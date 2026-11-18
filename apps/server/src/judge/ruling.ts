@@ -153,7 +153,10 @@ export function cachedVerdict(frameCount: number): JudgeVerdict {
 export interface JudgeInput {
   terms: Terms;
   performer_name: string;
+  /** In send order; the landing crop (if any) last (planning D10). */
   frames: PromptFrame[];
+  /** CameraEvidence.duration_ms: where the landing window sits (the prompt's LANDING labels). */
+  duration_ms?: number | undefined;
 }
 
 /** One structured vision call through deps.providers.llm (or the cached verdict). Never throws. */
@@ -177,7 +180,7 @@ export async function judgeFrames(
       vendor: 'anthropic',
       model,
       system: JUDGE_SYSTEM_PROMPT,
-      parts: buildJudgeParts(input.terms, input.performer_name, input.frames),
+      parts: buildJudgeParts(input.terms, input.performer_name, input.frames, input.duration_ms),
       output: JUDGE_OUTPUT,
       effort: 'low',
       maxOutputTokens: JUDGE_MAX_OUTPUT_TOKENS,
