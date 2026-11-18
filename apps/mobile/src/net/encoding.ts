@@ -10,7 +10,8 @@ export function bytesToBase64(bytes: Uint8Array): string {
   let out = '';
   let i = 0;
   for (; i + 2 < bytes.length; i += 3) {
-    const n = ((bytes[i] as number) << 16) | ((bytes[i + 1] as number) << 8) | (bytes[i + 2] as number);
+    const n =
+      ((bytes[i] as number) << 16) | ((bytes[i + 1] as number) << 8) | (bytes[i + 2] as number);
     out += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]! + B64[(n >> 6) & 63]! + B64[n & 63]!;
   }
   const rest = bytes.length - i;

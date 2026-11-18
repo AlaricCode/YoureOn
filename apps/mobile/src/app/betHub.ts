@@ -11,10 +11,17 @@ import { ingest, initialSeq, needsResync, resetTo, type SeqState } from '../net/
 
 export interface BetHubApi {
   getBet(betId: string): Promise<BetSnapshot>;
-  getBetEvents(betId: string, after: number): Promise<{ events: RealtimeEvent[]; last_seq: number }>;
+  getBetEvents(
+    betId: string,
+    after: number,
+  ): Promise<{ events: RealtimeEvent[]; last_seq: number }>;
 }
 
-export type BetListener = (e: RealtimeEvent | null, before: BetModel | null, after: BetModel) => void;
+export type BetListener = (
+  e: RealtimeEvent | null,
+  before: BetModel | null,
+  after: BetModel,
+) => void;
 
 export class BetHub {
   private models = new Map<string, BetModel>();
@@ -54,12 +61,25 @@ export class BetHub {
   adopt(s: BetSnapshot): BetModel {
     const before = this.models.get(s.bet_id) ?? null;
     const model = fromSnapshot(s, before ?? undefined);
-    const { state, apply } = resetTo(this.seqs.get(s.bet_id) ?? initialSeq(), s.last_seq, this.now());
+    const { state, apply } = resetTo(
+      this.seqs.get(s.bet_id) ?? initialSeq(),
+      s.last_seq,
+      this.now(),
+    );
     this.seqs.set(s.bet_id, state);
     this.models.set(s.bet_id, model);
     this.emit(null, before, model);
     for (const e of apply) this.applyOne(e);
     return this.models.get(s.bet_id) as BetModel;
+  }
+
+  /** Local facts from REST reads (GET /lock, GET /concede) or this phone's own answers. */
+  patch(betId: string, f: (m: BetModel) => BetModel): void {
+    const before = this.models.get(betId) ?? emptyBet(betId);
+    const after = f(before);
+    if (after === before) return;
+    this.models.set(betId, after);
+    this.emit(null, before, after);
   }
 
   /** One realtime event (bet channel or user channel). */

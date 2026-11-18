@@ -10,19 +10,29 @@ export interface Part {
   body: string | Uint8Array;
 }
 
-export function buildMultipart(parts: readonly Part[], boundary = defaultBoundary()): {
+export function buildMultipart(
+  parts: readonly Part[],
+  boundary = defaultBoundary(),
+): {
   bytes: Uint8Array;
   contentType: string;
 } {
   const chunks: Uint8Array[] = [];
   for (const p of parts) {
     const disp = `form-data; name="${p.name}"${p.filename ? `; filename="${p.filename}"` : ''}`;
-    chunks.push(utf8(`--${boundary}\r\nContent-Disposition: ${disp}\r\nContent-Type: ${p.contentType}\r\n\r\n`));
+    chunks.push(
+      utf8(
+        `--${boundary}\r\nContent-Disposition: ${disp}\r\nContent-Type: ${p.contentType}\r\n\r\n`,
+      ),
+    );
     chunks.push(typeof p.body === 'string' ? utf8(p.body) : p.body);
     chunks.push(utf8('\r\n'));
   }
   chunks.push(utf8(`--${boundary}--\r\n`));
-  return { bytes: concatBytes(...chunks), contentType: `multipart/form-data; boundary=${boundary}` };
+  return {
+    bytes: concatBytes(...chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
 }
 
 function defaultBoundary(): string {

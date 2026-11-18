@@ -10,8 +10,18 @@ import { bottleFlip } from '../../preview/data';
 
 export const flip = bottleFlip('Logan', 'Jake');
 export const BET = flip.terms.bet_id;
-export const ME_A = { user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pubkey: flip.terms.party_a.pubkey, display_name: 'Logan', avatar_url: null };
-export const ME_B = { user_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', pubkey: flip.terms.party_b.pubkey, display_name: 'Jake', avatar_url: null };
+export const ME_A = {
+  user_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  pubkey: flip.terms.party_a.pubkey,
+  display_name: 'Logan',
+  avatar_url: null,
+};
+export const ME_B = {
+  user_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  pubkey: flip.terms.party_b.pubkey,
+  display_name: 'Jake',
+  avatar_url: null,
+};
 export const DEVICE_A = 'dddddddd-dddd-4ddd-8ddd-dddddddddd0a';
 export const DEVICE_CAM = 'dddddddd-dddd-4ddd-8ddd-dddddddddcaa';
 export const ROOM = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -65,7 +75,12 @@ export const ruling = (outcome: 'A_WINS' | 'B_WINS' | 'REDO', attempt_no = 1) =>
   });
 
 let seqCounter = 0;
-export function ev(type: string, payload: unknown, seq?: number, source: 'server' | 'chain' = 'server'): RealtimeEvent {
+export function ev(
+  type: string,
+  payload: unknown,
+  seq?: number,
+  source: 'server' | 'chain' = 'server',
+): RealtimeEvent {
   return RealtimeEvent.parse({
     v: 1,
     type,
@@ -78,7 +93,11 @@ export function ev(type: string, payload: unknown, seq?: number, source: 'server
 }
 
 export const stateEv = (state: string, seq?: number, reason: string | null = null) =>
-  ev('bet.state', { state, prev: null, onchain_status: null, chain_ack: 'none', pending_tx: null, reason }, seq);
+  ev(
+    'bet.state',
+    { state, prev: null, onchain_status: null, chain_ack: 'none', pending_tx: null, reason },
+    seq,
+  );
 
 export function snapshot(o: Partial<BetSnapshot> = {}): BetSnapshot {
   return {
@@ -95,7 +114,12 @@ export function snapshot(o: Partial<BetSnapshot> = {}): BetSnapshot {
     envelope: null,
     draft: null,
     authorizations: { A: null, B: null },
-    deadlines: { accept_deadline: null, resolve_deadline: null, appeal_deadline: null, appeal_resolve_deadline: null },
+    deadlines: {
+      accept_deadline: null,
+      resolve_deadline: null,
+      appeal_deadline: null,
+      appeal_resolve_deadline: null,
+    },
     attempt_no: null,
     redo_count: 0,
     latest_ruling: null,

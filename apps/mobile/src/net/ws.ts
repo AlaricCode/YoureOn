@@ -33,10 +33,18 @@ export interface SeqState {
   gapSince: number | null;
 }
 
-export const initialSeq = (lastSeq = 0): SeqState => ({ lastSeq, buffer: new Map(), gapSince: null });
+export const initialSeq = (lastSeq = 0): SeqState => ({
+  lastSeq,
+  buffer: new Map(),
+  gapSince: null,
+});
 
 /** Feeds one event; returns the events now applicable, in order. */
-export function ingest(s: SeqState, e: RealtimeEvent, nowMs: number): { state: SeqState; apply: RealtimeEvent[] } {
+export function ingest(
+  s: SeqState,
+  e: RealtimeEvent,
+  nowMs: number,
+): { state: SeqState; apply: RealtimeEvent[] } {
   if (e.seq <= s.lastSeq || s.buffer.has(e.seq)) return { state: s, apply: [] };
   const buffer = new Map(s.buffer);
   buffer.set(e.seq, e);
@@ -52,7 +60,7 @@ function drain(s: SeqState, nowMs: number): { state: SeqState; apply: RealtimeEv
     buffer.delete(last + 1);
     last += 1;
   }
-  const gapSince = buffer.size === 0 ? null : (apply.length > 0 ? nowMs : (s.gapSince ?? nowMs));
+  const gapSince = buffer.size === 0 ? null : apply.length > 0 ? nowMs : (s.gapSince ?? nowMs);
   return { state: { lastSeq: last, buffer, gapSince }, apply };
 }
 
@@ -61,7 +69,11 @@ export const needsResync = (s: SeqState, nowMs: number): boolean =>
   s.gapSince !== null && nowMs - s.gapSince >= GAP_WAIT_MS;
 
 /** After a REST snapshot at `lastSeq` (cold start / resync): drop what it covers, drain the rest. */
-export function resetTo(s: SeqState, lastSeq: number, nowMs: number): { state: SeqState; apply: RealtimeEvent[] } {
+export function resetTo(
+  s: SeqState,
+  lastSeq: number,
+  nowMs: number,
+): { state: SeqState; apply: RealtimeEvent[] } {
   if (lastSeq <= s.lastSeq) return { state: s, apply: [] };
   const buffer = new Map([...s.buffer].filter(([k]) => k > lastSeq));
   return drain({ lastSeq, buffer, gapSince: null }, nowMs);

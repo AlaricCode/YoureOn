@@ -58,16 +58,31 @@ export function runJcsVectors(vectors: readonly JcsVector[] = JCS_VECTORS): Vect
       const schema = SCHEMAS[v.schema];
       if (v.expect === 'throws') {
         const r = schema.safeParse(v.input);
-        out.push({ name: v.name, ok: !r.success, detail: r.success ? 'parsed but must throw' : 'rejected' });
+        out.push({
+          name: v.name,
+          ok: !r.success,
+          detail: r.success ? 'parsed but must throw' : 'rejected',
+        });
         continue;
       }
       const parsed = schema.parse(v.input);
       const canonical = jcs(parsed);
       const hash = hashJcs(parsed);
-      const ok = canonical === v.canonical && hash === v.hash && sha256Hex(v.canonical ?? '') === v.hash;
-      out.push({ name: v.name, ok, detail: ok ? hash.slice(0, 12) : `got ${hash.slice(0, 12)}, want ${(v.hash ?? '').slice(0, 12)}` });
+      const ok =
+        canonical === v.canonical && hash === v.hash && sha256Hex(v.canonical ?? '') === v.hash;
+      out.push({
+        name: v.name,
+        ok,
+        detail: ok
+          ? hash.slice(0, 12)
+          : `got ${hash.slice(0, 12)}, want ${(v.hash ?? '').slice(0, 12)}`,
+      });
     } catch (e) {
-      out.push({ name: v.name, ok: false, detail: e instanceof Error ? e.message.slice(0, 120) : String(e) });
+      out.push({
+        name: v.name,
+        ok: false,
+        detail: e instanceof Error ? e.message.slice(0, 120) : String(e),
+      });
     }
   }
   // NFC: NFD input normalizes (String.prototype.normalize on Hermes) to the NFC vector's hash.
@@ -79,7 +94,11 @@ export function runJcsVectors(vectors: readonly JcsVector[] = JCS_VECTORS): Vect
       const ok = h === nfc.hash && h === nfd.normalized_hash && 'Zoë'.normalize('NFC') === 'Zoë';
       out.push({ name: 'nfd->nfc', ok, detail: ok ? h.slice(0, 12) : `got ${h.slice(0, 12)}` });
     } catch (e) {
-      out.push({ name: 'nfd->nfc', ok: false, detail: e instanceof Error ? e.message.slice(0, 120) : String(e) });
+      out.push({
+        name: 'nfd->nfc',
+        ok: false,
+        detail: e instanceof Error ? e.message.slice(0, 120) : String(e),
+      });
     }
   }
   const t = vectors.find((v) => v.name === 'terms-v1-001');

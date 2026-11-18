@@ -77,7 +77,11 @@ export const initialApp: AppState = {
 const TERMINAL: ReadonlySet<BetState> = new Set(['PAID', 'VOIDED', 'CANCELLED', 'EXPIRED']);
 export const isOver = (s: BetState | null): boolean => s !== null && TERMINAL.has(s);
 
-export function appReducer(s: AppState, e: AppEvent, bets?: (id: string) => BetModel | undefined): AppState {
+export function appReducer(
+  s: AppState,
+  e: AppEvent,
+  bets?: (id: string) => BetModel | undefined,
+): AppState {
   switch (e.type) {
     case 'booted':
       return e.me
@@ -96,7 +100,8 @@ export function appReducer(s: AppState, e: AppEvent, bets?: (id: string) => BetM
     case 'bet_opened': {
       // One bet on screen at a time: a second invite while a live bet is up waits.
       const current = s.activeBetId ? bets?.(s.activeBetId) : undefined;
-      const busy = s.activeBetId !== null && s.activeBetId !== e.bet_id && current && !isOver(current.state);
+      const busy =
+        s.activeBetId !== null && s.activeBetId !== e.bet_id && current && !isOver(current.state);
       if (busy && !e.force) return s;
       return { ...s, activeBetId: e.bet_id, overlay: 'none' };
     }
@@ -123,7 +128,9 @@ export function routeForBet(app: AppState, b: BetModel): Route {
   switch (state) {
     case 'DRAFTING':
     case 'TERMS_PROPOSED':
-      return b.my_party === 'B' && b.inviteAnswer === null && b.challenger !== null ? 'incoming' : 'negotiate';
+      return b.my_party === 'B' && b.inviteAnswer === null && b.challenger !== null
+        ? 'incoming'
+        : 'negotiate';
     case 'AWAITING_AUTHORIZATIONS':
     case 'AWAITING_LOCK':
       return 'terms';
@@ -160,4 +167,5 @@ export function selectRoute(app: AppState, bet: BetModel | null | undefined): Ro
 }
 
 /** The attempt A's phone starts next: 1 from LOCKED, previous + 1 after a REDO (API-CONTRACT §2.9). */
-export const nextAttemptNo = (b: Pick<BetModel, 'lastAttemptNo'>): number => (b.lastAttemptNo ?? 0) + 1;
+export const nextAttemptNo = (b: Pick<BetModel, 'lastAttemptNo'>): number =>
+  (b.lastAttemptNo ?? 0) + 1;

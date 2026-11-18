@@ -204,9 +204,21 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
     const parsed = ApiError.safeParse(json);
     if (parsed.success) {
       const e = parsed.data.error;
-      return new ApiClientError(e.code, res.status, e.message, e.retryable, e.details, e.request_id);
+      return new ApiClientError(
+        e.code,
+        res.status,
+        e.message,
+        e.retryable,
+        e.details,
+        e.request_id,
+      );
     }
-    return new ApiClientError('HTTP_' + res.status, res.status, text.slice(0, 200), res.status >= 500);
+    return new ApiClientError(
+      'HTTP_' + res.status,
+      res.status,
+      text.slice(0, 200),
+      res.status >= 500,
+    );
   }
 
   const client: ApiClient = {
@@ -214,7 +226,8 @@ export function createApiClient(deps: ApiClientDeps): ApiClient {
     async request(method, path, opts = {}) {
       const auth = opts.auth ?? defaultAuth(method, path);
       let body: { sent: string | Uint8Array; bytes: Uint8Array; contentType: string } | null = null;
-      if (opts.raw) body = { sent: opts.raw.bytes, bytes: opts.raw.bytes, contentType: opts.raw.contentType };
+      if (opts.raw)
+        body = { sent: opts.raw.bytes, bytes: opts.raw.bytes, contentType: opts.raw.contentType };
       else if (opts.json !== undefined) {
         const s = JSON.stringify(opts.json);
         body = { sent: s, bytes: utf8(s), contentType: 'application/json' };

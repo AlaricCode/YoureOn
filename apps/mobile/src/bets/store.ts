@@ -131,7 +131,12 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
   const base = { ...m, lastSeq: Math.max(m.lastSeq, e.seq) };
   switch (e.type) {
     case 'bet.invited':
-      return { ...base, challenger: e.payload.challenger, room_id: e.payload.room_id, my_party: m.my_party ?? 'B' };
+      return {
+        ...base,
+        challenger: e.payload.challenger,
+        room_id: e.payload.room_id,
+        my_party: m.my_party ?? 'B',
+      };
     case 'bet.invite_answered':
       return { ...base, inviteAnswer: e.payload.answer };
     case 'bet.state': {
@@ -149,12 +154,14 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       return next;
     }
     case 'terms.proposed': {
-      const changed = m.envelope !== null && m.envelope.terms_hash !== e.payload.envelope.terms_hash;
+      const changed =
+        m.envelope !== null && m.envelope.terms_hash !== e.payload.envelope.terms_hash;
       return {
         ...base,
         envelope: e.payload.envelope,
         termsMismatch:
-          m.authorizeRequest !== null && m.authorizeRequest.envelope.terms_hash !== e.payload.envelope.terms_hash,
+          m.authorizeRequest !== null &&
+          m.authorizeRequest.envelope.terms_hash !== e.payload.envelope.terms_hash,
         // A revision after a lock request was built voids that request (SCHEMAS §9.2).
         authorizeRequest: changed ? null : m.authorizeRequest,
       };
@@ -163,7 +170,8 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       return {
         ...base,
         authorizeRequest: e.payload,
-        termsMismatch: m.envelope !== null && m.envelope.terms_hash !== e.payload.envelope.terms_hash,
+        termsMismatch:
+          m.envelope !== null && m.envelope.terms_hash !== e.payload.envelope.terms_hash,
         envelope: m.envelope ?? e.payload.envelope,
         authorized: { A: false, B: false },
         lockFailed: false,
@@ -179,9 +187,15 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
     case 'tx.failed':
       return e.payload.kind === 'atomic_lock' ? { ...base, lockFailed: true } : base;
     case 'judge.line':
-      return { ...base, lines: upsertLine(m.lines, e.payload.utterance_id, 'judge', e.payload.text) };
+      return {
+        ...base,
+        lines: upsertLine(m.lines, e.payload.utterance_id, 'judge', e.payload.text),
+      };
     case 'party.line':
-      return { ...base, lines: upsertLine(m.lines, e.payload.utterance_id, who(e.payload.party), e.payload.text) };
+      return {
+        ...base,
+        lines: upsertLine(m.lines, e.payload.utterance_id, who(e.payload.party), e.payload.text),
+      };
     case 'judge.cue':
       return { ...base, lastCue: e.payload };
     case 'attempt.started': {
@@ -228,7 +242,12 @@ export function endReasonOf(m: Pick<BetModel, 'state' | 'end_reason' | 'lockFail
 }
 
 /** The lock-card events one realtime event implies for this phone. */
-export function lockSignals(before: BetModel, after: BetModel, e: RealtimeEvent, me: Party): LockEvent[] {
+export function lockSignals(
+  before: BetModel,
+  after: BetModel,
+  e: RealtimeEvent,
+  me: Party,
+): LockEvent[] {
   switch (e.type) {
     case 'terms.authorize_request':
       return [{ type: 'reset' }];
@@ -246,8 +265,10 @@ export function lockSignals(before: BetModel, after: BetModel, e: RealtimeEvent,
       const s = e.payload.state;
       if (s === 'AWAITING_LOCK') return [{ type: 'submitted' }];
       // The custodial path: the server signed for both and just pushes LOCKED.
-      if (s === 'LOCKED' && before.state !== 'LOCKED') return [{ type: 'submitted' }, { type: 'confirmed' }];
-      if (s === 'CANCELLED' || s === 'EXPIRED') return [{ type: 'end', reason: endReasonOf(after) }];
+      if (s === 'LOCKED' && before.state !== 'LOCKED')
+        return [{ type: 'submitted' }, { type: 'confirmed' }];
+      if (s === 'CANCELLED' || s === 'EXPIRED')
+        return [{ type: 'end', reason: endReasonOf(after) }];
       return [];
     }
     default:

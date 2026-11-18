@@ -40,7 +40,10 @@ export interface SessionStoreLike {
 }
 
 export function secureSessionStore(store: SecureStoreLike): SessionStoreLike {
-  const opts = { keychainAccessible: store.WHEN_UNLOCKED_THIS_DEVICE_ONLY, requireAuthentication: false };
+  const opts = {
+    keychainAccessible: store.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    requireAuthentication: false,
+  };
   return {
     async load() {
       const raw = await store.getItemAsync(SESSION_KEY, opts);
@@ -89,7 +92,8 @@ export function demoSeedFrom(b64: string): Uint8Array {
   if (raw.length === 32) return raw;
   if (raw.length === 64) {
     const seed = raw.slice(0, 32);
-    if (!bytesEqual(ed.getPublicKey(seed), raw.slice(32))) throw new Error('demo seed: keypair halves disagree');
+    if (!bytesEqual(ed.getPublicKey(seed), raw.slice(32)))
+      throw new Error('demo seed: keypair halves disagree');
     raw.fill(0);
     return seed;
   }
@@ -122,7 +126,12 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
     bytesToBase64(
       d.deviceKey.sign(
         utf8(
-          authChallengeMessage({ purpose, nonce, device_pubkey: d.deviceKey.publicKey, wallet_pubkey: wallet }),
+          authChallengeMessage({
+            purpose,
+            nonce,
+            device_pubkey: d.deviceKey.publicKey,
+            wallet_pubkey: wallet,
+          }),
         ),
       ),
     );
@@ -142,7 +151,11 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
       await set(s);
       return s;
     } catch (e) {
-      if (e instanceof ApiClientError && e.code === 'SIGNATURE_INVALID' && e.details?.reason === 'unknown_device')
+      if (
+        e instanceof ApiClientError &&
+        e.code === 'SIGNATURE_INVALID' &&
+        e.details?.reason === 'unknown_device'
+      )
         return null;
       throw e;
     }
@@ -169,7 +182,11 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
       const { publicKey: wallet } = await d.wallet.ensureWallet();
       const ch = await challenge();
       const walletSig = await d.wallet.signWalletBinding(
-        walletBindMessage({ wallet_pubkey: wallet, device_pubkey: d.deviceKey.publicKey, nonce: ch.nonce }),
+        walletBindMessage({
+          wallet_pubkey: wallet,
+          device_pubkey: d.deviceKey.publicKey,
+          nonce: ch.nonce,
+        }),
       );
       const s = await d.api.request('POST', '/v1/auth/signup', {
         auth: 'none',
@@ -206,7 +223,12 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
       const derived = base58Encode(ed.getPublicKey(seed));
       if (derived !== r.user.pubkey) {
         seed.fill(0);
-        throw new ApiClientError('DEMO_SEED_MISMATCH', 0, 'demo seed does not match the account', false);
+        throw new ApiClientError(
+          'DEMO_SEED_MISMATCH',
+          0,
+          'demo seed does not match the account',
+          false,
+        );
       }
       // importSeed wipes `seed`.
       await d.wallet.importSeed(seed, { replaceExisting: true });
@@ -218,7 +240,9 @@ export function createSessionManager(d: SessionManagerDeps): SessionManager {
     async signOut() {
       const s = session;
       if (s) {
-        await d.api.request('DELETE', '/v1/auth/session', { auth: 'bearer' }).catch(() => undefined);
+        await d.api
+          .request('DELETE', '/v1/auth/session', { auth: 'bearer' })
+          .catch(() => undefined);
       }
       await set(null);
     },
