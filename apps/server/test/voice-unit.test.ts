@@ -24,7 +24,7 @@ import { createVoiceRoutes } from '../src/voice/routes';
 import { buildApp } from '../src/app';
 import { createDeps } from '../src/server';
 import { testEnv } from './helpers';
-import { CLIENT_EVENTS } from '@youre-on/shared/judge/el-config';
+import { AGENT_MAX_TOKENS, CLIENT_EVENTS } from '@youre-on/shared/judge/el-config';
 
 const okJson = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -323,7 +323,7 @@ describe('agent as code (scripts/el-agent.ts engine, D0-J2)', () => {
     expect(prompt.llm).toBe('claude-haiku-5-5');
     expect(prompt).toHaveProperty('temperature', null); // omitted from the LLM request
     expect(prompt.backup_llm_config).toEqual({ preference: 'disabled' });
-    expect(prompt.max_tokens).toBe(300);
+    expect(prompt.max_tokens).toBe(AGENT_MAX_TOKENS); // room for adaptive thinking + a full tool call
     expect(prompt.enable_parallel_tool_calls).toBe(false);
     expect(prompt.tool_ids).toEqual(Object.values(r.tool_ids));
     expect(a.platform_settings.call_limits.bursting_enabled).toBe(false);
