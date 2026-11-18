@@ -2,6 +2,9 @@
 // src/chain/decoder.ts, written independently so a round trip is a real check), sample payloads
 // for every escrow event, and getBlock-shaped blocks carrying emit_cpi! inner instructions.
 import { randomBytes, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { getAddressDecoder, getAddressEncoder, getBase58Decoder, type Address } from '@solana/kit';
 import { betIdToBytes } from '@youre-on/shared';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
@@ -493,6 +496,30 @@ export function delivery(
       })),
     })),
   };
+}
+
+/** infra/quicknode/<p> (filter.js, stream.json, fixtures/*). */
+export const INFRA_QN = (p: string): string =>
+  fileURLToPath(new URL(`../../../infra/quicknode/${p}`, import.meta.url));
+
+/** filter.js run the way QuickNode runs it: main(stream) in a sandbox without host APIs. */
+export interface QnFilter {
+  main(stream: unknown): ReturnType<typeof delivery> | null;
+  CONFIG: { programId: string; eventAuthority: string; eventIxTag: number[] };
+}
+export function loadQnFilter(): QnFilter {
+  const module = { exports: {} as QnFilter };
+  runInNewContext(readFileSync(INFRA_QN('filter.js'), 'utf8'), {
+    module,
+    BigInt: undefined,
+    atob: undefined,
+    btoa: undefined,
+    Buffer: undefined,
+    TextDecoder: undefined,
+    TextEncoder: undefined,
+    require: undefined,
+  });
+  return module.exports;
 }
 
 /** X-QN-* headers QuickNode would send for `body` (hex HMAC-SHA256(token, nonce ‖ ts ‖ body)). */
