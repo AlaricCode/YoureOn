@@ -82,6 +82,14 @@ import {
   walletBindMessage,
   type Session,
 } from '@youre-on/shared/api';
+import { poseSha256, type PoseSeries } from '@youre-on/shared/dance/pose';
+import {
+  getRoutine,
+  ROUTINE_IDS,
+  routineSha256,
+  type RoutineData,
+} from '@youre-on/shared/dance/routine';
+import { scoreRound } from '@youre-on/shared/dance/score';
 import { MAX_JUDGE_FRAMES, MIN_JUDGE_FRAMES } from '@youre-on/shared/judge/frames';
 
 import { expandPath, keysDirFrom, parseCli, run } from './lib/cli';
@@ -94,14 +102,17 @@ const MAX_429_RETRIES = 8;
 const USAGE = `usage: npm run cp1-drive -- [--base-url <url>] [--admin-token <token>] [--keys-dir <dir>]
           [--state-file <path>] [--reset] [--timeout 60] [--name-a Logan] [--name-b Jake]
           [--through locked|paid] [--gg | --appeal] [--frames 8] [--market up|down] [--amount 2]
-          [--via-tools]
+          [--via-tools] [--dance <routine_id> [--dance-winner a|b|tie]] [--rematch]
 Drives challenge -> terms -> confirm -> LOCKED against a running server (DEMO_MODE=true);
 --via-tools sends the terms + confirm as the ElevenLabs webhook tools (needs ELEVENLABS_TOOL_SECRET);
 --through paid goes on: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID
 (finalize after the appeal window, or the loser's GG with --gg; with --appeal the loser appeals
 in the window -> the three-model panel -> resolve_appeal -> PAID / VOIDED).
 --market up|down (Beat 6): Gemini BTC 5-minute terms at Gemini's odds instead of the fixture;
---through paid then waits for Gemini to settle (up to ~6 min) instead of the judge cam.`;
+--through paid then waits for Gemini to settle (up to ~6 min) instead of the judge cam.
+--dance <routine_id>: Dance Off terms at --amount a side; --through paid then plays A's phone:
+one round of two synthetic dancers (the --dance-winner follows the routine closely, the other
+lags and stops halfway; tie = both the same), the server's re-score + Claude's check -> payout.`;
 
 type Device = { d: string; x: string };
 type State = { A?: Device; B?: Device; CAM?: Device; base_url?: string };
@@ -464,7 +475,26 @@ run(async () => {
     market: { type: 'string' },
     amount: { type: 'string' },
     'via-tools': { type: 'boolean' },
+    dance: { type: 'string' },
+    'dance-winner': { type: 'string' },
+    rematch: { type: 'boolean' },
   });
+  const danceRoutine = values.dance ?? null;
+  const danceWinner = (values['dance-winner'] ?? 'a').toLowerCase();
+  if (danceRoutine !== null) {
+    if (!getRoutine(danceRoutine)) {
+      console.error(`--dance must be one of ${ROUTINE_IDS.join(', ')}\n\n${USAGE}`);
+      process.exit(2);
+    }
+    if (values.market || values['via-tools'] || values.appeal) {
+      console.error(`--dance is its own drive (no --market / --via-tools / --appeal)\n\n${USAGE}`);
+      process.exit(2);
+    }
+    if (!['a', 'b', 'tie'].includes(danceWinner)) {
+      console.error(`--dance-winner must be a, b or tie\n\n${USAGE}`);
+      process.exit(2);
+    }
+  }
   const marketSide = values.market?.toUpperCase();
   if (marketSide !== undefined && marketSide !== 'UP' && marketSide !== 'DOWN') {
     console.error(`--market must be up or down\n\n${USAGE}`);
@@ -598,6 +628,22 @@ run(async () => {
       expiryMs = await marketTerms(api, A, betId, marketSide, amountUsd, timeoutMs);
       if (expiryMs === null && round >= 2) throw new Error('Gemini stopped pricing twice');
     }
+  } else if (danceRoutine) {
+    const p = must(
+      await api.signed(A, 'POST', `/v1/bets/${betId}/terms/dance`, {
+        routine_id: danceRoutine,
+        amount_usd: amountUsd,
+      }),
+      [200],
+      'dance terms',
+    );
+    console.log(`terms ${p.code} (${p.terms_hash}) TERMS_PROPOSED (dance off): "${p.say}"`);
+    const c = must(
+      await api.signed(A, 'POST', `/v1/bets/${betId}/terms/confirm`, { terms_hash: p.terms_hash }),
+      [200],
+      'confirm',
+    );
+    console.log(`confirm: ${c.say}`);
   } else if (viaTools) {
     await termsViaTools(api, betId, conversationId!, toolSecret!, names.B, timeoutMs);
   } else {
@@ -696,8 +742,47 @@ run(async () => {
     console.log(`  ruling_hash ${ruling.ruling_hash}, evidence_hash ${r.evidence_hash}`);
   }
 
+  // ---- Dance Off: A's phone records one 15 s round, scores it, uploads poses + key frames ----
+  if (danceRoutine) {
+    const att = must(
+      await api.signed(A, 'POST', `/v1/bets/${betId}/attempts`, {
+        attempt_no: 1,
+        recorder: 'self',
+      }),
+      [201],
+      'dance attempt',
+    );
+    console.log(`\ndance round: attempt ${att.attempt_no ?? 1} open on ${A.name}'s phone`);
+    const sent = await uploadDance(
+      api,
+      A,
+      betId,
+      1,
+      danceRoutine,
+      danceWinner as 'a' | 'b' | 'tie',
+    );
+    console.log(
+      `  ${sent.frames} pose frames + ${sent.keyFrames} key frames uploaded: 202; local score A ${sent.local.a / 10} / B ${sent.local.b / 10}, server ${JSON.stringify(sent.accepted)}`,
+    );
+    ruling = await until(
+      timeoutMs,
+      'the dance ruling',
+      async () => {
+        const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
+        const r = snap.latest_ruling as LatestRuling | null;
+        return r && r.ruling.attempt_no === 1 ? r : null;
+      },
+      1_000,
+    );
+    const r = ruling.ruling;
+    console.log(
+      `\nruling.issued: ${r.outcome} (${r.claim_result}, ${r.model}${r.void_reason ? `, ${r.void_reason}` : ''}) "${r.reason}"`,
+    );
+    console.log(`  ruling_hash ${ruling.ruling_hash}, evidence_hash ${r.evidence_hash}`);
+  }
+
   // ---- Beat 4: judge cam -> attempt -> frames -> ruling.issued -> RULED -> PAID ------------
-  for (let n = 1; n <= 3 && expiryMs === null; n++) {
+  for (let n = 1; n <= 3 && expiryMs === null && !danceRoutine; n++) {
     if (n === 1) {
       const cam0 = await judgeCam(api, A, room.room_id, state);
       writeFileSync(stateFile, JSON.stringify(state, null, 2), { mode: 0o600 });
@@ -798,6 +883,21 @@ run(async () => {
   const snap = must(await api.get(A, `/v1/bets/${betId}`), [200], 'bet snapshot');
   if (snap.payout)
     console.log(`  payout: A ${snap.payout.to_a}, B ${snap.payout.to_b} (micro-USDC)`);
+
+  if (values.rematch) {
+    // Double or nothing (DANCE-OFF §7): B asks for the rematch, so B challenges A on a new bet;
+    // A turns it down here so the pair is free for the next drive.
+    const re = must(
+      await api.signed(B, 'POST', `/v1/bets/${betId}/rematch`, {}),
+      [201],
+      'double or nothing',
+    );
+    console.log(
+      `\ndouble or nothing: bet ${re.bet_id} ${re.bet.state}, suggested $${re.suggested_stake_usd} a side (B challenges A)`,
+    );
+    must(await api.signed(A, 'POST', `/v1/bets/${re.bet_id}/invite/decline`), [200], 'decline');
+    console.log('  declined by A (cleanup)');
+  }
 });
 
 type LatestRuling = {
@@ -810,6 +910,7 @@ type LatestRuling = {
     reason: string;
     model: string;
     redo_reason: string | null;
+    void_reason?: string | null;
     evidence_hash: string;
   };
   ruling_hash: string;
@@ -1116,4 +1217,109 @@ async function ggLoser(api: Api, players: Record<'A' | 'B', Player>, betId: stri
       throw new Error(`concede request: HTTP ${r.status} ${JSON.stringify(r.json)}`);
   }
   return null;
+}
+
+/** Integer pose of the routine at t (linear between its frames). */
+function routinePoseAt(r: RoutineData, t: number): number[] {
+  const f = r.frames;
+  if (t <= f[0]!.t) return [...f[0]!.k];
+  if (t >= f[f.length - 1]!.t) return [...f[f.length - 1]!.k];
+  let i = 0;
+  while (f[i + 1]!.t < t) i++;
+  const u = (t - f[i]!.t) / (f[i + 1]!.t - f[i]!.t);
+  return f[i]!.k.map((v, j) => Math.round(v + (f[i + 1]!.k[j]! - v) * u));
+}
+
+/**
+ * A synthetic dancer at 20 fps over the 15 s round: `good` follows the routine 80 ms late with a
+ * little jitter; otherwise 650 ms late and frozen from 7 s on. Shifted left (A) or right (B).
+ */
+function dancer(r: RoutineData, good: boolean, side: -1 | 1, seed: number): number[][] {
+  let s = seed >>> 0;
+  const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+  const out: number[][] = [];
+  for (let t = 0; t <= r.duration_ms; t += 50) {
+    const st = good ? t - 80 : Math.min(t, 7_000) - 650;
+    const k = routinePoseAt(r, st);
+    out.push(
+      k.map((v, j) =>
+        j % 3 === 2
+          ? v
+          : Math.max(
+              0,
+              Math.min(10_000, v + Math.round(rnd() * 25) + (j % 3 === 0 ? side * 1_800 : 0)),
+            ),
+      ),
+    );
+  }
+  return out;
+}
+
+/** A's phone after the round: the PoseSeries, its local score, 4 key frames, signed multipart. */
+async function uploadDance(
+  api: Api,
+  a: Player,
+  betId: string,
+  n: number,
+  routineId: string,
+  winner: 'a' | 'b' | 'tie',
+) {
+  const routine = getRoutine(routineId)!;
+  const pa = dancer(routine, winner !== 'b', -1, 11);
+  const pb = dancer(routine, winner !== 'a', 1, winner === 'tie' ? 11 : 29);
+  const series: PoseSeries = {
+    schema_version: 1,
+    w: routine.w,
+    h: routine.h,
+    fps_cap: 20,
+    sync_offset_ms: 0,
+    frames: pa.map((k, i) => ({ t: i * 50, n: 2, a: k, b: pb[i]! })),
+  };
+  const local = scoreRound(routine, series);
+  const tag = randomUUID().slice(0, 8);
+  const shots = Array.from({ length: 4 }, (_, i) => jpegFrame(i, `dance ${tag}`));
+  const upload = {
+    routine_id: routine.id,
+    routine_sha256: routineSha256(routine),
+    series,
+    pose_sha256: poseSha256(series),
+    client_scores: { a: local.a.score_x10, b: local.b.score_x10 },
+    clip_sha256: sha256Hex(Buffer.concat(shots)),
+    frames: shots.map((f, i) => ({
+      index: i,
+      t_ms: 1_000 + i * 3_500,
+      sha256: sha256Hex(f),
+      width: 16,
+      height: 16,
+      bytes: f.length,
+    })),
+  };
+  const form = new FormData();
+  form.append('upload', new Blob([JSON.stringify(upload)], { type: 'application/json' }));
+  shots.forEach((f, i) =>
+    form.append(
+      'frame',
+      new Blob([f as Uint8Array<ArrayBuffer>], { type: 'image/jpeg' }),
+      `${i}.jpg`,
+    ),
+  );
+  const req = new Request('http://local/', { method: 'POST', body: form });
+  const body = new Uint8Array(await req.arrayBuffer());
+  const accepted = must(
+    await api.signedRaw(
+      a,
+      'POST',
+      `/v1/bets/${betId}/attempts/${n}/dance`,
+      body,
+      req.headers.get('content-type')!,
+    ),
+    [202],
+    `dance round ${n}`,
+  );
+  return {
+    frames: series.frames.length,
+    keyFrames: shots.length,
+    local: { a: local.a.score_x10, b: local.b.score_x10 },
+    accepted,
+  };
 }
