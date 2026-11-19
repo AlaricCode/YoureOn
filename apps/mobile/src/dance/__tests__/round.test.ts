@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  attemptCountIn,
   ATTEMPT_WAIT_MS,
   beatAt,
   cameraWanted,
@@ -121,6 +122,32 @@ describe('start → count-in → dancing → scoring', () => {
     expect(s.goAt).toBe(2_000 + 3 * 500);
   });
 
+  it('a forced attempt (started on another phone) counts in straight from framing', () => {
+    // Nobody framed yet, or framing held: either way the judge cam counts in on its own.
+    for (const from of [initialRound(), ready()]) {
+      const s = run([{ type: 'attempt', at: 2_000, attemptNo: 1, force: true }], from);
+      expect(s.phase).toBe('countIn');
+      expect(s.attemptNo).toBe(1);
+      expect(s.countInAt).toBe(2_000);
+      expect(s.startedAt).toBe(2_000);
+      expect(s.goAt).toBe(2_000 + 3 * 500);
+    }
+    // Still never mid-round or after it.
+    const counting = run([{ type: 'attempt', at: 2_000, attemptNo: 1, force: true }]);
+    expect(run([{ type: 'attempt', at: 2_500, attemptNo: 2, force: true }], counting)).toBe(
+      counting,
+    );
+    const failed = run(
+      [
+        { type: 'start', at: 1_100 },
+        { type: 'start_failed', message: 'x' },
+      ],
+      ready(),
+    );
+    expect(failed.phase).toBe('failed');
+    expect(run([{ type: 'attempt', at: 2_000, attemptNo: 1, force: true }], failed)).toBe(failed);
+  });
+
   it('runs the routine plus the tail, then scores', () => {
     const counting = run(
       [{ type: 'start', at: 1_100 }, { type: 'attempt', at: 2_000, attemptNo: 1 }],
@@ -168,6 +195,33 @@ describe('start → count-in → dancing → scoring', () => {
     expect(run([{ type: 'scored', ok: true }], s)).toBe(s);
     expect(run([{ type: 'uploaded' }], s)).toBe(s);
     expect(run([{ type: 'round_failed', message: 'x' }], s)).toBe(s);
+  });
+});
+
+describe('attemptCountIn: which attempt the screen counts in on', () => {
+  const base = { phase: 'framing' as const, fresh: true, used: false, waiting: false };
+
+  it('after our own Start: any attempt not used yet', () => {
+    const w = { ...base, phase: 'starting' as const, waiting: true };
+    expect(attemptCountIn(w)).toBe('count_in');
+    // The open attempt given back by "Dance again" (seen before) still counts in.
+    expect(attemptCountIn({ ...w, fresh: false })).toBe('count_in');
+    expect(attemptCountIn({ ...w, used: true })).toBeNull();
+    // Starting but not waiting: the Start effect itself takes the open attempt.
+    expect(attemptCountIn({ ...w, waiting: false })).toBeNull();
+  });
+
+  it('while framing: a NEW attempt started on another phone, forced', () => {
+    expect(attemptCountIn(base)).toBe('forced');
+    expect(attemptCountIn({ ...base, phase: 'ready' })).toBe('forced');
+    // Open at mount, or given back by "Dance again": wait for Start.
+    expect(attemptCountIn({ ...base, fresh: false })).toBeNull();
+    expect(attemptCountIn({ ...base, used: true })).toBeNull();
+  });
+
+  it('never mid-round, after it or after a failure', () => {
+    for (const phase of ['countIn', 'dancing', 'scoring', 'result', 'failed'] as const)
+      expect(attemptCountIn({ ...base, phase, waiting: true })).toBeNull();
   });
 });
 

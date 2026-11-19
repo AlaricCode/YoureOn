@@ -307,6 +307,13 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
     expect(routeForBet(cam, fold(ruled, stateEv('PAID', 13)))).toBe('payout');
   });
 
+  it('the judge cam keeps the round (its result and announcer line) up through RULED', () => {
+    const ruled = fold(locked(), stateEv('ATTEMPT', 9), started(DEVICE_CAM), stateEv('RULED', 12));
+    expect(routeForBet(cam, ruled)).toBe('dance');
+    expect(routeForBet(ack(A), ruled)).toBe('ruling');
+    expect(routeForBet(cam, fold(locked(), stateEv('VOIDED', 12)))).toBe('ruling');
+  });
+
   it('other bets keep their routes (the bottle flip after the lock)', () => {
     const m = fromSnapshot(snapshot({ state: 'LOCKED', envelope: envelope() }));
     expect(routeForBet(ack(A), m)).toBe('live');

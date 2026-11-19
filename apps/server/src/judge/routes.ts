@@ -34,8 +34,9 @@
 // clip-complete, signed frame_urls in attempt.evidence (empty). Frames are kept in Postgres.
 //
 // Dance Off (docs/planning/DANCE-OFF.md §5; Terms.type 'dance_off'): both parties dance, so the
-// attempt names no single performer (attempt.started says the yes party, A), either party's phone
-// may record ('self'), and a judge cam of either party in the room is used. The round goes to
+// attempt names no single performer (attempt.started says the yes party, A), and the round is
+// filmed from A's side only (§6.2): A's judge cam in the room, else A's own phone ('self'); B's
+// phone or B's judge cam never records (the recorder uploads the whole PoseSeries). It goes to
 //   POST  /v1/bets/:bet_id/attempts/:n/dance     (S, recorder device; multipart) -> 202
 //         parts `upload` (DanceUpload JSON) + `frame` × 1..6 JPEG key frames. The server checks
 //         the routine against the terms, pose_sha256 = hashJcs(series) and each frame's sha256,
@@ -272,25 +273,14 @@ const nonPerformerId = (bet: BetRow, performer: Party) =>
   performer === 'A' ? bet.party_b_id : bet.party_a_id;
 
 /**
- * Dance Off: both parties dance, so there is no non-performer. The room's judge-cam device of
- * EITHER party (most recently seen first) films the round, side on, in front of both.
+ * Dance Off: both parties dance, so neither is neutral, and the round is filmed by A's side only
+ * (DANCE-OFF §6.2: the room's judge cam, else A's phone). The judge cam is a second device of A
+ * (the mobile judge-cam poll follows A's bets), so only A's judge-cam devices count: a judge cam
+ * B binds to the room never becomes a dance recorder (the recorder uploads the whole PoseSeries).
  */
 async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
-  if (!bet.room_id) return null;
-  const [d] = await db
-    .select({ id: devices.id, user_id: devices.user_id })
-    .from(devices)
-    .where(
-      and(
-        eq(devices.role, 'judge_cam'),
-        eq(devices.judge_room_id, bet.room_id),
-        isNull(devices.revoked_at),
-        inArray(devices.user_id, [bet.party_a_id, bet.party_b_id]),
-      ),
-    )
-    .orderBy(desc(devices.last_seen_at))
-    .limit(1);
-  return d ?? null;
+  // findJudgeCam takes the PERFORMER and returns the other party's cam: 'B' -> A's devices.
+  return findJudgeCam(db, bet, 'B');
 }
 
 /** The upload's CameraEvidence as stored (attempts.evidence_canonical), or null. */
@@ -899,12 +889,20 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           throw new HttpError('INVALID_STATE', undefined, { state: bet0.state });
         }
         const terms = await termsFor(deps, bet0);
-        // Dance Off: both dance, so either party's phone may record itself ('self'), and the
-        // attempt names the yes party (A) as `performer` (the event's field is a Party).
+        // Dance Off: both dance, so the round is filmed by A's side only (DANCE-OFF §6.2: the
+        // room's judge cam, which is A's, else A's own phone with 'self'), and the attempt names
+        // the yes party (A) as `performer` (the event's field is a Party).
         const dance = isDanceOff(terms);
         const performer: Party = terms.performer ?? terms.yes_party;
-        // 'self' = the caller's phone records, so only the non-performer may ask for it (§2.9).
-        if (!dance && body.recorder === 'self' && partyOf(bet0, me.user_id) === performer) {
+        if (dance) {
+          // The recorder uploads the whole PoseSeries, so B's phone never records a dance off.
+          if (body.recorder === 'self' && partyOf(bet0, me.user_id) !== 'A') {
+            throw new HttpError('NOT_A_PARTY', "A's phone films the dance off.", {
+              reason: 'recorder_is_a',
+            });
+          }
+        } else if (body.recorder === 'self' && partyOf(bet0, me.user_id) === performer) {
+          // 'self' = the caller's phone records, so only the non-performer may ask for it (§2.9).
           throw new HttpError('NOT_A_PARTY', "You can't record your own attempt.", {
             reason: 'performer_cannot_record',
           });
@@ -954,6 +952,13 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             }
             recorder = cam;
           } else {
+            // A dance off with a judge cam in the room is filmed by that cam, never a phone.
+            if (dance && (await findDanceJudgeCam(tx, bet))) {
+              throw new HttpError('INVALID_STATE', 'The judge cam films this dance off.', {
+                state: bet.state,
+                reason: 'judge_cam_present',
+              });
+            }
             // checked above against bet0; party ids never change after creation
             recorder = { id: me.device_id, user_id: me.user_id };
           }

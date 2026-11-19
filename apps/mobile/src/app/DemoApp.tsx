@@ -1263,6 +1263,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   /** Built dance uploads by Idempotency-Key: a retry resends the exact same body. */
   const preparedDances = useRef(new Map<string, PreparedDance>());
+  /**
+   * Bets whose dance screen this app session has shown. After a restart in JUDGING or RULED the
+   * round (and its upload) is gone with the old screen: a fresh DanceOffScreen would start back
+   * at framing, so that phone shows the watch screen (judging, then the score) instead.
+   */
+  const danceShown = useRef(new Set<string>());
   const uploadDance = useCallback(
     async (bundle: DanceUploadBundle, attemptNo: number): Promise<DanceAnswer> => {
       const id = appRef.current.activeBetId;
@@ -1794,6 +1800,27 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         // local result, the upload, then the ruling (which moves the bet to RULED).
         const terms = bet?.envelope?.terms;
         if (!bet || !terms || !me) return waiting;
+        const names = { a: terms.party_a.display_name, b: terms.party_b.display_name };
+        if (state === 'LOCKED' || state === 'ATTEMPT') danceShown.current.add(bet.bet_id);
+        if (!danceShown.current.has(bet.bet_id)) {
+          return (
+            <PanelErrorBoundary
+              key={bet.bet_id}
+              name={t(COPY.dance.panel)}
+              onError={(m) => console.warn('[yo] dance watch', m)}
+            >
+              <Suspense fallback={waiting}>
+                <DanceWatchScreen
+                  terms={terms}
+                  me={me}
+                  names={names}
+                  phase="judging"
+                  scored={bet.danceScored}
+                />
+              </Suspense>
+            </PanelErrorBoundary>
+          );
+        }
         const a = bet.attempt;
         return (
           <PanelErrorBoundary
@@ -1806,7 +1833,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 betId={bet.bet_id}
                 terms={terms}
                 me={me}
-                names={{ a: terms.party_a.display_name, b: terms.party_b.display_name }}
+                names={names}
                 // go_at on this phone's clock (as the judge cam's arm), so the count-in lands
                 // on the server's instant.
                 attempt={

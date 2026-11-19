@@ -20,8 +20,9 @@ quantizes and writes `packages/shared/src/dance/routines/<id>.ts`.
 
 ## Workflow
 
-Run every command from the repo root. Replace `<id>` with the routine id, for example `wave`. Raw
-files go in `tools/dance-ref/work/`, which git ignores.
+Run every command from the repo root. Replace `<id>` with the routine id, for example `wave`. Ids
+are kebab case: lowercase letters and digits in words joined by single `-`, at most 32 characters,
+as shared `RoutineId` requires. Raw files go in `tools/dance-ref/work/`, which git ignores.
 
 ### 1. Choreograph for two dancers side by side
 
@@ -150,8 +151,11 @@ sha256, so do it before the routine is used in any bet, and run `selftest` again
 ```
 dance-ref <video> -o <out.json>
   [--fps 15]                    analysis rate, 1..30
-  [--id <slug>]                 default: from the video file name
-  [--title <text>] [--song <text>] [--routine-version 1]
+  [--id <slug>]                 kebab case, max 32; default: from the video file name
+                                ('_' and other separators become '-')
+  [--title <text>]              max 40; default: the id
+  [--song <text>]               max 80; default: Unnamed track
+  [--routine-version 1]
   [--bpm <n>]                   default 120, with a warning
   [--first-beat-ms <ms>]        default 0, ms after the routine start
   [--key-moves ms,ms,... | --every K]

@@ -192,6 +192,18 @@ describe('the /terms/dance pipeline', () => {
     expect(paths({ success_criteria: ['Dance well.'] })).toContain('success_criteria');
   });
 
+  it('a voice webhook body cannot propose a dance_off, even with a correct routine line', () => {
+    const args = danceTermsArgs({ routine_id: 'wave-pop', amount_usd: '5' })!;
+    const webhook = { conversation_id: 'conv_1', bet_id: 'bet_1', ...args };
+    expect(evaluateProposeTerms(webhook)).toEqual({
+      kind: 'invalid',
+      issues: [{ path: 'type', message: 'dance_off only via /terms/dance' }],
+    });
+    expect(evaluateProposeTerms(webhook, { allowDanceOff: true }).kind).toBe('proposal');
+    expect(evaluateProposeTerms(args, { allowDanceOff: false }).kind).toBe('invalid');
+    expect(evaluateProposeTerms(args, { allowDanceOff: true }).kind).toBe('proposal');
+  });
+
   it('the voice agent and the typed endpoint never offer dance_off', () => {
     expect(PROPOSE_TERMS_BODY_SCHEMA.properties.type.enum).toEqual(['skill', 'real_world']);
     expect(

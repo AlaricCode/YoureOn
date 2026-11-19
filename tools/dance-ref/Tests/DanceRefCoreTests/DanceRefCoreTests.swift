@@ -196,6 +196,7 @@ final class OptionsTests: XCTestCase {
     XCTAssertEqual(o.fps, 15)
     XCTAssertEqual(o.id, "salsa-basic-01")
     XCTAssertEqual(o.title, "salsa-basic-01")
+    XCTAssertEqual(o.song, DEFAULT_SONG)
     XCTAssertEqual(o.durationMs, 15000)
     XCTAssertEqual(o.startMs, 0)
     XCTAssertFalse(o.mirrored)
@@ -205,13 +206,13 @@ final class OptionsTests: XCTestCase {
 
   func testAllFlags() throws {
     let o = try parseOptions([
-      "ref.mov", "--out", "r.json", "--fps", "30", "--id", "wave_1", "--title", "The Wave",
+      "ref.mov", "--out", "r.json", "--fps", "30", "--id", "wave-1", "--title", "The Wave",
       "--song", "Night Drive (ElevenLabs Music)", "--bpm", "118", "--first-beat-ms", "250",
       "--key-moves", "1000, 2000,3000", "--key-move-names", "A,B,C", "--mirrored",
       "--start-ms", "4200", "--duration-ms", "15000", "--routine-version", "2",
     ])
     XCTAssertEqual(o.fps, 30)
-    XCTAssertEqual(o.id, "wave_1")
+    XCTAssertEqual(o.id, "wave-1")
     XCTAssertEqual(o.title, "The Wave")
     XCTAssertEqual(o.bpm, 118)
     XCTAssertEqual(o.firstBeatMs, 250)
@@ -247,6 +248,13 @@ final class OptionsTests: XCTestCase {
     bad(["v.mp4", "-o", "o.json", "--key-moves", "1000,20000"], "outside")
     bad(["v.mp4", "-o", "o.json", "--key-moves", "1000,1000"], "duplicates")
     bad(["v.mp4", "-o", "o.json", "--id", "Bad Id"], "--id")
+    bad(["v.mp4", "-o", "o.json", "--id", "wave_1"], "--id")
+    bad(["v.mp4", "-o", "o.json", "--id", "a--b"], "--id")
+    bad(["v.mp4", "-o", "o.json", "--id", "-ab"], "--id")
+    bad(["v.mp4", "-o", "o.json", "--id", "ab-"], "--id")
+    bad(["v.mp4", "-o", "o.json", "--id", String(repeating: "a", count: 33)], "--id")
+    bad(["v.mp4", "-o", "o.json", "--title", String(repeating: "t", count: 41)], "--title")
+    bad(["v.mp4", "-o", "o.json", "--song", String(repeating: "s", count: 81)], "--song")
     bad(["v.mp4", "-o", "o.json", "--wat"], "unknown option")
     bad(["v.mp4", "-o", "o.json", "--bpm", "900"], "--bpm")
   }
@@ -258,9 +266,30 @@ final class OptionsTests: XCTestCase {
   func testSlug() {
     XCTAssertEqual(slugFromPath("/x/y/Hip-Hop  Groove!!.MOV"), "hip-hop-groove")
     XCTAssertEqual(slugFromPath("___.mp4"), "routine")
-    XCTAssertEqual(slugFromPath("_a_b.mp4"), "a_b")
+    XCTAssertEqual(slugFromPath("_a_b.mp4"), "a-b")
+    XCTAssertEqual(slugFromPath("salsa_basic.mov"), "salsa-basic")
+    XCTAssertEqual(slugFromPath("a--b.mov"), "a-b")
+    XCTAssertEqual(slugFromPath("wave_pop_take2.mov"), "wave-pop-take2")
     XCTAssertEqual(slugFromPath("!!!.mp4"), "routine")
-    XCTAssertTrue(isValidId(slugFromPath(String(repeating: "ab ", count: 40) + ".mp4")))
+    let long = slugFromPath(String(repeating: "ab ", count: 40) + ".mp4")
+    XCTAssertLessThanOrEqual(long.count, ID_MAX)
+    XCTAssertFalse(long.hasSuffix("-"))
+    XCTAssertTrue(isValidId(long))
+  }
+
+  func testIdRuleMatchesSharedRoutineId() {
+    let good = [
+      "wave-pop", "bounce-back", "side-shuffle", "a", "a1-b2-c3", String(repeating: "a", count: 32),
+    ]
+    for ok in good {
+      XCTAssertTrue(isValidId(ok), ok)
+    }
+    let rejected = [
+      "", "wave_pop", "a--b", "-a", "a-", "Wave", "a b", "a\n", String(repeating: "a", count: 33),
+    ]
+    for no in rejected {
+      XCTAssertFalse(isValidId(no), no)
+    }
   }
 }
 

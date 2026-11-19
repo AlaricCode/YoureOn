@@ -50,7 +50,7 @@ import { compileLock, lockBody } from '@youre-on/shared/chain/lock-tx';
 import { BetStatus } from '@youre-on/shared/escrow-client';
 import { formatUsd } from '@youre-on/shared/money';
 import { betIdToBytes, otherParty, type Party } from '@youre-on/shared/primitives';
-import { asciiFold, declinedCue, judgeCue } from '../bets/cues';
+import { asciiFold, declinedCue, judgeCue, lockedInstruction } from '../bets/cues';
 import { partyOf, type BetRow } from '../bets/snapshot';
 import { HttpError } from '../errors';
 import { sha256Hex, verifyEd25519 } from '../crypto';
@@ -855,7 +855,7 @@ export class LockService {
             },
             market
               ? `Announce both stakes are locked in one transaction at Gemini's odds, and that Gemini settles it at ${market.expiry.slice(11, 16)} UTC.`
-              : 'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.',
+              : lockedInstruction(final?.envelope.terms.type, names),
           ),
           now,
         }),

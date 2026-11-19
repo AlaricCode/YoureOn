@@ -8,6 +8,8 @@ keys/
 .keys/
 .expo/
 ios/
+# Local Expo modules keep their Swift sources in modules/<name>/ios/ (see .easignore)
+!apps/mobile/modules/*/ios/
 android/
 *.log
 dist/
