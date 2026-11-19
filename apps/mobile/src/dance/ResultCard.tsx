@@ -1,7 +1,7 @@
-// The round's result: both final scores (rolling up from 0 on the first reveal), the winner or "Too close to call",
-// and the per-move breakdown grid (PERFECT / GOOD / MISS for each player). Used by the judge-cam
-// phone right after the round (local scores) and by DanceResultBreakdown (the server's record).
-// Native-free, so the design preview can render it.
+// The round's result: both final scores (rolling up from 0 on the first reveal), the winner or
+// "Too close to call", and the per-move breakdown grid (PERFECT / GOOD / MISS for each player).
+// Used by the judge-cam phone right after the round (local scores) and by DanceResultBreakdown
+// (the server's record). Native-free, so the design preview can render it.
 import type { KeyMoveGrade } from '@youre-on/shared/dance/score';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';

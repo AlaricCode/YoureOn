@@ -152,6 +152,7 @@ import {
 } from './danceTerms';
 import { canRematch, chipAtMost, startRematch, withRematch } from './rematch';
 import {
+  appealReturns,
   appReducer,
   initialApp,
   isOver,
@@ -458,21 +459,33 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   /** The settled history (Home's change label and sparkline, the History screen). */
   const historySeq = useRef(0);
-  const loadHistory = useCallback(() => {
+  /** Resolves false when this request failed (a newer one that took over counts as landed). */
+  const loadHistory = useCallback((): Promise<boolean> => {
     // Only the newest request lands: a settle refresh and History opening never race.
     const seq = ++historySeq.current;
     setHistory((h) => ({ status: 'loading', items: h.items }));
-    rt.api.myBets('settled', HISTORY_LIMIT).then(
-      (r) =>
-        seq === historySeq.current && setHistory({ status: 'ready', items: historyFrom(r.items) }),
-      () => seq === historySeq.current && setHistory((h) => ({ status: 'failed', items: h.items })),
+    return rt.api.myBets('settled', HISTORY_LIMIT).then(
+      (r) => {
+        if (seq === historySeq.current)
+          setHistory({ status: 'ready', items: historyFrom(r.items) });
+        return true;
+      },
+      () => {
+        if (seq !== historySeq.current) return true;
+        setHistory((h) => ({ status: 'failed', items: h.items }));
+        return false;
+      },
     );
   }, [rt]);
   /** Once per bet that settles (./history settledOnce): Home's change and chart follow it. */
   const historySettled = useRef(new Set<string>());
   const historyAfterSettle = useCallback(
     (betId: string, state: BetModel['state']) => {
-      if (settledOnce(historySettled.current, betId, state)) loadHistory();
+      if (!settledOnce(historySettled.current, betId, state)) return;
+      // A failed refresh does not use up the bet's one request: Back home tries again.
+      void loadHistory().then((ok) => {
+        if (!ok) historySettled.current.delete(betId);
+      });
     },
     [loadHistory],
   );
@@ -758,6 +771,14 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         )
           feel('payout');
       }
+      // A bet this phone left (Back home on a VOID ruling) that the other side appeals: back on
+      // screen for the panel and its payout (a live bet on screen keeps its place).
+      if (
+        e?.type === 'bet.state' &&
+        !a.judgeCam &&
+        appealReturns(before?.state, after, a.activeBetId)
+      )
+        dispatch({ type: 'bet_opened', bet_id: after.bet_id });
       // Any of my bets settling, the one on screen or one this phone already left (a VOID ruling
       // offers Back home before its refund lands): the balance and Home's history catch up.
       if (
@@ -1140,7 +1161,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const historyOpen = app.overlay === 'history';
   useEffect(() => {
-    if (historyOpen) loadHistory();
+    if (historyOpen) void loadHistory();
   }, [historyOpen, loadHistory]);
 
   useEffect(() => {
@@ -2043,7 +2064,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <HistoryScreen
             items={history.items}
             status={history.status}
-            onRetry={loadHistory}
+            onRetry={() => void loadHistory()}
             onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
           />
         );

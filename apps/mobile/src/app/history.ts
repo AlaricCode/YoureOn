@@ -5,6 +5,7 @@
 // Pure TS: tested in node.
 import { MeBetItem } from '@youre-on/shared/api';
 import { formatUsd } from '@youre-on/shared/money';
+import { payout as payoutOf, toOnchainOutcome } from '@youre-on/shared/ruling';
 
 import type { HistoryItem } from '../preview/data';
 import { COPY, t } from '../screens/copy';
@@ -29,6 +30,25 @@ function titleOf(b: MeBetItem): string {
   return title && title !== UNTITLED ? `${demo}: ${title}` : demo;
 }
 
+/**
+ * A PAID row whose payout columns are not written yet: the bet moves to PAID when the payout tx
+ * confirms, and payout_a / payout_b land a moment later from the chain fold, so a list fetched on
+ * the PAID event can have neither. My share then comes from the outcome and both stakes (the
+ * escrow's own split, shared/ruling payout), never a $0 that reads a win as a loss. After an
+ * appeal the panel's final outcome decides (the server pays on it; the row's outcome column only
+ * catches up with the chain fold).
+ */
+function derivedPayout(b: MeBetItem): bigint | null {
+  const theirs = b.their_stake ?? null;
+  const outcome = b.appeal ? toOnchainOutcome(b.appeal.final_outcome) : b.outcome;
+  if (b.state !== 'PAID' || !outcome || !b.my_party || b.my_stake === null || theirs === null)
+    return null;
+  const mine = BigInt(b.my_stake);
+  const other = BigInt(theirs);
+  const split = payoutOf(outcome, b.my_party === 'A' ? mine : other, mine + other);
+  return b.my_party === 'A' ? split.to_a : split.to_b;
+}
+
 export function historyItemOf(b: MeBetItem): HistoryItem | null {
   if (!SETTLED.has(b.state)) return null;
   const stake = b.my_stake === null ? null : BigInt(b.my_stake);
@@ -36,7 +56,7 @@ export function historyItemOf(b: MeBetItem): HistoryItem | null {
   const split =
     b.payout && b.my_party ? (b.my_party === 'A' ? b.payout.to_a : b.payout.to_b) : null;
   const paid = b.my_payout ?? split;
-  const payout = paid === null ? null : BigInt(paid);
+  const payout = paid === null ? derivedPayout(b) : BigInt(paid);
   // A voided bet refunds the stake; a paid one I lost pays me nothing.
   const net = stake === null ? 0n : (payout ?? (b.state === 'VOIDED' ? stake : 0n)) - stake;
   const outcome: HistoryItem['outcome'] =

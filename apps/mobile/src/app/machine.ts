@@ -110,6 +110,23 @@ export const initialApp: AppState = {
 const TERMINAL: ReadonlySet<BetState> = new Set(['PAID', 'VOIDED', 'CANCELLED', 'EXPIRED']);
 export const isOver = (s: BetState | null): boolean => s !== null && TERMINAL.has(s);
 
+/**
+ * A bet of mine that goes APPEALED while this phone is off it comes back on screen (bet_opened,
+ * which still waits behind another live bet). A VOID ruling offers Back home while the bet is
+ * RULED, and either party may appeal a VOID (API-CONTRACT §2.17 demo appeal `party`): the phone
+ * that went home must still see the panel and the payout it decides, like the one that stayed.
+ * The judge cam is left out by its caller (it follows A's bets on its own).
+ */
+export const appealReturns = (
+  before: BetState | null | undefined,
+  after: Pick<BetModel, 'bet_id' | 'state' | 'my_party'>,
+  activeBetId: string | null,
+): boolean =>
+  after.my_party !== null &&
+  after.state === 'APPEALED' &&
+  before !== 'APPEALED' &&
+  after.bet_id !== activeBetId;
+
 export function appReducer(
   s: AppState,
   e: AppEvent,
