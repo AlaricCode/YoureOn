@@ -40,7 +40,16 @@ describe('wakeListening: where the phone listens for "Jarvis"', () => {
   });
 
   it('never on other screens (a dance round, the attempt, the terms card), a judge cam, signed out or flag off', () => {
-    for (const route of ['dance', 'danceWatch', 'live', 'terms', 'scan', 'incoming', 'ruling'])
+    for (const route of [
+      'dance',
+      'danceDisplay',
+      'danceWatch',
+      'live',
+      'terms',
+      'scan',
+      'incoming',
+      'ruling',
+    ])
       expect(wakeListening({ ...base, route, judgePending: true }), route).toBe(false);
     expect(wakeListening({ ...base, judgeCam: true })).toBe(false);
     expect(wakeListening({ ...base, signedIn: false })).toBe(false);

@@ -1,6 +1,6 @@
 // Guards the native-stack config for EAS build #1 (TASKS D0-M2 install checklist, FINDINGS §3.1-3.3,
 // §3.10, §7). These are cheap to break and expensive to find on a 90-minute cloud build.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -222,6 +222,44 @@ describe('Metro', () => {
   it('bundles .tflite as an asset', async () => {
     const src = readFileSync(here('../../metro.config.js'), 'utf8');
     expect(src).toMatch(/assetExts\.push\('tflite'\)/);
+  });
+
+  it('bundles a same-named file from assets/dance/local/ in place of a dance asset', () => {
+    type Res = { type: string; filePaths?: string[]; filePath?: string };
+    const config = createRequire(import.meta.url)(here('../../metro.config.js')) as {
+      resolver: {
+        assetExts: string[];
+        resolveRequest: (ctx: { resolveRequest: () => Res }, name: string, p: string) => Res;
+      };
+    };
+    expect(config.resolver.assetExts).toEqual(expect.arrayContaining(['tflite', 'mp4']));
+    const danceDir = here('../../assets/dance');
+    const localDir = join(danceDir, 'local');
+    const name = `__override-test-${process.pid}.mp4`;
+    const resolveTo = (res: Res) =>
+      config.resolver.resolveRequest({ resolveRequest: () => res }, 'x', 'ios');
+    const asset = (p: string): Res => ({ type: 'assetFiles', filePaths: [p] });
+    // No local file: the committed one.
+    expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual([join(danceDir, name)]);
+    mkdirSync(localDir, { recursive: true });
+    writeFileSync(join(localDir, name), '');
+    try {
+      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual([join(localDir, name)]);
+      // Only assets directly under assets/dance/, and never source files.
+      const other = here(`../../assets/${name}`);
+      expect(resolveTo(asset(other)).filePaths).toEqual([other]);
+      const src: Res = { type: 'sourceFile', filePath: join(danceDir, name) };
+      expect(resolveTo(src)).toBe(src);
+    } finally {
+      rmSync(join(localDir, name), { force: true });
+    }
+  });
+
+  it('never commits or uploads the local dance media (the original song)', () => {
+    expect(readFileSync(here('../../.gitignore'), 'utf8')).toMatch(/^\/assets\/dance\/local\/$/m);
+    expect(readFileSync(here('../../../../.easignore'), 'utf8')).toMatch(
+      /^\/apps\/mobile\/assets\/dance\/local$/m,
+    );
   });
 });
 

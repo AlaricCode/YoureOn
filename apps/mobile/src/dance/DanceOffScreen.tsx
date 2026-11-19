@@ -4,9 +4,13 @@
 //      framing has held for 1 s.
 //   2. Start → POST /attempts (onStartAttempt) → the attempt arrives. An attempt another phone
 //      started (A pressed Start; the server named this judge cam) counts in on its own.
-//   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic), then GO.
+//   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic) from the attempt's go_at, then
+//      GO at go_at + 3 beats: the same server instant the display phone uses (./model/schedule).
 //   4. GO: startRound and the reference start in the same tick; duration_ms of dancing with live meters
-//      and PERFECT / GOOD / MISS popups.
+//      and PERFECT / GOOD / MISS popups. With a display phone (the other party's phone, online in
+//      the room when the count-in starts), this phone is silent and shows the camera panel only:
+//      the display plays the mirrored reference and the music. Without one, today's layout: the
+//      reference panel beside the camera, and the music from here.
 //   5. stopRound → the local final score → the result (no network so far).
 //   6. Upload (onUpload) → "Sending to judge" → the announcer line once the ruling lands (the bet
 //      flow then moves on to the ruling screen).
@@ -24,9 +28,10 @@ import { half, palette, space, type } from '../ui/tokens';
 import { safeLine } from './DanceResultBreakdown';
 import { DANCE_COPY, dt, ERROR_COPY, firstName, FRAMING_COPY } from './copy';
 import { readFileBytes } from './fs';
-import { useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
+import { nowMs, useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
 import type { LiveStore } from './model/liveStore';
 import { attemptCountIn, framingProgress, type RoundState } from './model/round';
+import { serverIsoToLocalMs } from './model/schedule';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
 import { ResultCard, type ResultData } from './ResultCard';
 import { DanceStage } from './Stage';
@@ -40,7 +45,12 @@ export type DanceOffScreenProps = {
   terms: Terms;
   me: 'A' | 'B';
   names: { a: string; b: string };
+  /** The open attempt; go_at is the SERVER's instant (mapped onto this phone via clockOffsetMs). */
   attempt: { attempt_no: number; go_at: string; max_ms: number } | null;
+  /** Server time − this phone's Date.now() (net Clock.offsetMs). */
+  clockOffsetMs: number;
+  /** The other party's phone is the display (../app/danceFlow danceDisplayPresent). */
+  displayPhone: boolean;
   ruling: { outcome: string; reason: string } | null;
   onStartAttempt: () => Promise<{ ok: true } | { ok: false; message: string }>;
   onUpload: (
@@ -49,6 +59,10 @@ export type DanceOffScreenProps = {
   ) => Promise<{ ok: true } | { ok: false; message: string }>;
   onLeave?: () => void;
 };
+
+/** A server go_at on the round clock, read now (the offset can re-sync at any time). */
+const goAtOnRoundClock = (goAt: string, offsetMs: number): number | null =>
+  serverIsoToLocalMs(goAt, { offsetMs, wallNow: Date.now(), monoNow: nowMs() });
 
 /** A local round result → the result card. */
 export function resultFromRound(routine: RoutineData, r: DanceRoundResult): ResultData {
@@ -232,21 +246,26 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     pose: pose.mod,
     syncOffsetMs: settings.syncOffsetMs,
     snapshots: true,
+    displayPhone: props.displayPhone,
     onFinished,
   });
   engineRef.current = engine;
   const { state } = engine;
 
-  // 2. Start → the attempt. An attempt already open (and not danced) is used as is; otherwise
-  // POST /attempts and wait for an attempt not used yet. Attempts are compared by number only:
-  // go_at is shifted by the live clock offset, so it changes on every clock re-sync.
+  // 2. Start → the attempt. An attempt already open (and not danced) is used as is (its go_at is
+  // long past, so it counts in from now, out of step with the display); otherwise POST /attempts
+  // and wait for an attempt not used yet. Attempts are compared by number only.
   const attemptNo = props.attempt?.attempt_no ?? null;
   useEffect(() => {
     if (state.phase !== 'starting') return;
     const a = propsRef.current.attempt;
     if (a && !usedAttempts.current.has(a.attempt_no)) {
       usedAttempts.current.add(a.attempt_no);
-      engineRef.current?.beginCountIn(a.attempt_no);
+      engineRef.current?.beginCountIn(
+        a.attempt_no,
+        false,
+        goAtOnRoundClock(a.go_at, propsRef.current.clockOffsetMs),
+      );
       return;
     }
     waiting.current = true;
@@ -284,7 +303,11 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     if (go === null) return;
     waiting.current = false;
     usedAttempts.current.add(a.attempt_no);
-    engineRef.current?.beginCountIn(a.attempt_no, go === 'forced');
+    engineRef.current?.beginCountIn(
+      a.attempt_no,
+      go === 'forced',
+      goAtOnRoundClock(a.go_at, propsRef.current.clockOffsetMs),
+    );
   }, [state.phase, attemptNo]);
 
   const danceAgain = () => {
@@ -395,6 +418,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
         debug={settings.debugOverlay}
         syncOffsetMs={settings.syncOffsetMs}
         footer={footer}
+        reference={!engine.display}
       />
     </Screen>
   );

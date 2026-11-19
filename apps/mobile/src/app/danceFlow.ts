@@ -1,11 +1,27 @@
 // A locked Dance Off on the phones (docs/planning/DANCE-OFF.md §6.2): who records, how the round
 // starts, and the signed upload. Pure TS over injected deps, tested in node; the screens are
-// ../dance (DanceOffScreen on the recording phone, DanceWatchScreen on the other one).
+// ../dance (DanceOffScreen on the recording phone, DanceDisplayScreen on B's phone during the
+// round, DanceWatchScreen while it is judged and on A's phone when a judge cam records).
 //   recording phone  the room's judge cam when there is one, else A's phone (both players dance,
 //                    so neither is "the performer": A's own phone films for both). Once the
 //                    attempt is started the server's attempt.started names the recorder device.
 //   start            POST /attempts asking for the judge cam first; 409 no_judge_cam (the room has
 //                    none) means record yourself. A judge-cam device only ever asks for itself.
+//   display          B's phone. The recorder is always A's (A's phone, or a judge cam: the
+//                    server only ever picks one of A's devices for a dance off), so B's phone is
+//                    the non-recording party's phone in every room. It shows the mirrored
+//                    reference full screen with the music, from the attempt's go_at on the
+//                    server's clock (../dance/model/schedule), while the bet is LOCKED or in
+//                    ATTEMPT; JUDGING and on are the watch screen and the ruling as before.
+//   presence         Whether the recorder plays the music (and shows its own reference) or leaves
+//                    both to the display: party B online in the bet's room (the room presence the
+//                    app already keeps: a live socket now or within 30 s), read once when the
+//                    count-in starts. There is no display-to-recorder ack on the wire, and adding
+//                    one (an event type, a route) costs more than it buys for a phone that routes
+//                    to the display by itself whenever its socket is up. The failure modes: B's
+//                    socket dropped inside the 30 s grace (no music: the meters still run), or
+//                    B's phone online on another screen (it cannot be: a locked dance bet routes
+//                    it to the display).
 //   upload           POST /v1/bets/:id/attempts/:n/dance, multipart `upload` (DanceUpload JSON)
 //                    + `frame` JPEGs in upload.frames order, signed over the raw bytes. The first
 //                    build under an Idempotency-Key is the one every retry resends (a different
@@ -44,6 +60,38 @@ export function recordsDance(
   if (app.judgeCam) return true;
   if (b.attempt) return app.deviceId !== null && b.attempt.recorder_device_id === app.deviceId;
   return b.my_party === 'A';
+}
+
+/**
+ * Is this phone the display (DanceDisplayScreen) for this round? B's phone (never a judge cam:
+ * that one records), from LOCKED (acked) through ATTEMPT.
+ */
+export function showsDanceDisplay(
+  app: { judgeCam: boolean },
+  b: Pick<BetModel, 'state' | 'my_party'>,
+): boolean {
+  return !app.judgeCam && b.my_party === 'B' && (b.state === 'LOCKED' || b.state === 'ATTEMPT');
+}
+
+/**
+ * The recorder's presence check: is there a display phone for this round? Party B is online in
+ * the bet's room (the app's current room) and is not this phone's own user (a judge cam signed in
+ * as B would only see itself).
+ */
+export function danceDisplayPresent(p: {
+  members: readonly { user: { user_id: string }; online: boolean }[];
+  /** The room the members list is for (the app's current room). */
+  roomId: string | null;
+  /** The bet's room (null: unknown, taken as the current room). */
+  betRoomId: string | null;
+  /** Party B's user id. */
+  displayUserId: string | null;
+  myUserId: string | null;
+}): boolean {
+  if (p.displayUserId === null || p.roomId === null) return false;
+  if (p.betRoomId !== null && p.betRoomId !== p.roomId) return false;
+  if (p.displayUserId === p.myUserId) return false;
+  return p.members.some((m) => m.user.user_id === p.displayUserId && m.online);
 }
 
 /** What the watching phone shows: before the round, during it, and while it is scored. */

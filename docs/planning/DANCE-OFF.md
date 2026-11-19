@@ -91,12 +91,18 @@ ROUTINES: readonly RoutineData[]  // exactly 3, the first is the default card; g
 ```
 The bundled routines, in card order:
 - `bye-bye-shuffle` (32.6 s, 172.6 bpm, `source: 'vision'`): a real take extracted with the macOS tool (§8).
-  It ships poses only (`media.video = null`) plus music (`media.audio = 'bye-bye-shuffle.m4a'`, an ORIGINAL
-  synthesized drum track, first beat at 235 ms). The source footage is never bundled.
+  Its reference is a silhouette clip (`media.video = 'bye-bye-shuffle.mp4'`, `media.audio = null`: the music
+  is muxed in): a neon SAM 3.1 mask of the dancer on a dark `#0b0614` background, 720x808, 23.976 fps,
+  32.6 s, with an ORIGINAL synthesized drum track (first beat at 235 ms). The source footage is never
+  bundled. A local demo build may carry the original song instead: Metro (`apps/mobile/metro.config.js`)
+  bundles `apps/mobile/assets/dance/local/<name>` in place of `apps/mobile/assets/dance/<name>` when it
+  exists; that folder is gitignored and in `.easignore`, so only the drum version is ever committed or
+  uploaded. The routine (and its sha256) is the same either way.
 - `wave-pop`, `bounce-back` (15 s each): SYNTHETIC placeholders, generated procedurally by
   `scripts/dance-routine.ts synth`. Their bytes, sha256s and scores are unchanged by the per-routine length.
 
-The phone renders the reference as a mirrored animated skeleton when `media.video` is null.
+The phone renders the reference as a mirrored animated skeleton when `media.video` is null, and plays the
+mirrored clip (with its sound) otherwise.
 Everything timed on the round comes from the routine's `duration_ms`: the scorer's window and coverage bins
 (§4), the phone's round length, stop time, key-frame snapshot schedule, progress bar, beat counter and clock
 (§6), the stage's "N seconds" line, and the attempt's `max_ms` (`DANCE_MAX_MS` 50 s fits the longest).
@@ -231,17 +237,31 @@ worklets package is not installed.
 - On LOCKED, the recording phone (the room's judge cam, or else A's phone) routes to `dance`:
   1. Framing check (live skeletons, "A ← | → B"). Start is disabled until framing passes for 1 s.
   2. `POST /attempts`.
-  3. Count-in "3, 2, 1" on the routine's beat (visual + haptic).
-  4. At one shared instant t0: `startRound`, the reference video (or skeleton) and the music start, and
-     the live scoring starts.
+  3. Count-in "3, 2, 1" on the routine's beat (visual + haptic), starting at the attempt's `go_at`
+     (the server's instant, GO_DELAY_MS after POST /attempts).
+  4. At one shared instant t0 = `go_at` + 3 beats: `startRound`, the reference video (or skeleton) and the
+     music start, and the live scoring starts. Both phones map `go_at` onto their own monotonic clock
+     through the server-time offset the app keeps (`apps/mobile/src/dance/model/schedule.ts`), so they
+     agree to within the clock-sync error. A recorder handed an attempt too late to meet its t0 ("Dance
+     again" on an attempt already used, one open at mount) counts in from now and plays the music itself.
   5. The routine's `duration_ms` of dancing (the music, if any, plays from t0).
   6. `stopRound` → local final scoring → result screen, with no network so far.
   7. Upload → ruling → the existing RulingScreen, GG and payout.
-- The other phone shows a "Dance off live" status screen.
+- B's phone is the DISPLAY while the bet is LOCKED or in ATTEMPT (the recorder is always one of A's devices,
+  so B's phone never records): full screen, portrait, the reference MIRRORED and contain-fit on the
+  routine's dark backdrop, with its music, the screen kept awake, a big beat-synced "3, 2, 1" from `go_at`,
+  then the reference from t0. A routine without a clip shows its mirrored skeleton full screen. From
+  JUDGING on it shows the "Dance off live" screen with the score, then the usual ruling screens.
+- Presence: the recorder plays the music and shows its own reference only when there is no display
+  phone: party B online in the bet's room (room presence: a live socket now or within 30 s), read when
+  the count-in starts. With a display phone it is silent and shows the camera panel only. There is no
+  display-to-recorder ack on the wire (it would need a new event type and route).
+- A's phone, when a judge cam records, shows the "Dance off live" status screen.
 
 6.3 **Display layout** (it is what HDMI mirroring shows): the mirrored reference, the live camera view with
 skeleton overlays for A and B, two live match meters, PERFECT/GOOD/MISS popups at each key move, and the beat
-counter.
+counter. With a display phone in the room the recording phone drops the reference panel (the display phone
+shows it) and the camera panel takes the space.
 
 6.4 **Debug / calibration** (hidden; Diagnostics → "Dance calibration"):
 - Live readout of the raw scores, per-limb similarity, current lag and FPS.

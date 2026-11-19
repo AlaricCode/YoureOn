@@ -131,14 +131,14 @@ describe('per-routine round length (§2)', () => {
     expect(getRoutine('side-shuffle')).toBeNull();
   });
 
-  it('bye-bye-shuffle: a 32.6 s Vision take with music, no video, 11 on-beat key moves', () => {
+  it('bye-bye-shuffle: a 32.6 s Vision take with its silhouette video (music muxed in), 11 on-beat key moves', () => {
     expect(RoutineData.safeParse(BYE_BYE).success).toBe(true);
     expect(BYE_BYE).toMatchObject({
       duration_ms: 32_600,
       source: 'vision',
       bpm: 172.6,
       first_beat_ms: 235,
-      media: { video: null, audio: 'bye-bye-shuffle.m4a' },
+      media: { video: 'bye-bye-shuffle.mp4', audio: null },
     });
     expect(BYE_BYE.key_moves).toHaveLength(11);
     expect(BYE_BYE.key_moves.at(-1)!.t).toBeLessThanOrEqual(BYE_BYE.duration_ms - 500);
@@ -151,7 +151,7 @@ describe('per-routine round length (§2)', () => {
     expect(Object.keys(ROUTINE_SHA256_PINS).sort()).toEqual(ROUTINES.map((r) => r.id).sort());
     for (const r of ROUTINES) expect(routineSha256(r), r.id).toBe(ROUTINE_SHA256_PINS[r.id]);
     expect(ROUTINE_SHA256_PINS['bye-bye-shuffle']).toBe(
-      'c60e0f2b6a99e2229334d128777abf3cecb7b9e5f50afab496fc5489bef1ef35',
+      '6353beffad6ea6b1cb4071edaeb0d78b4ac14dbe524040de80abcad43549b4ba',
     );
     expect(jcs(BYE_BYE)).toContain('"bpm":172.6,');
     // Every other number a routine hashes is an int.

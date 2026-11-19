@@ -1,6 +1,8 @@
-// The other phone during a Dance Off (DANCE-OFF §6.2: "Dance off live"): the judge cam films
-// both dancers, so this phone just shows where the round is (getting ready, live, judging) and
-// then the server's scores, the per-move grid and the announcer line. Native-free.
+// "Dance off live" (DANCE-OFF §6.2): a phone that neither records nor displays the round (A's
+// phone while the room's judge cam films), and B's phone once the round is judged (during it,
+// B's phone is the display, DanceDisplayScreen). It shows where the round is (getting ready,
+// live, judging) and then the server's scores, the per-move grid and the announcer line.
+// Native-free.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import type { DanceScoredPayload } from '@youre-on/shared/realtime';
 import type { Terms } from '@youre-on/shared/terms';
