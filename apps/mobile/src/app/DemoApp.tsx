@@ -19,6 +19,12 @@
 // the same card and lock, then the round on the recording phone (../dance DanceOffScreen: the
 // judge cam, else A's phone) and "Dance off live" on the other (app/danceFlow); the usual ruling,
 // GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
+// "Jarvis" (../wake, ./wakeGate; EXPO_PUBLIC_WAKE): one recognizer, listening on Home (in a room)
+// and on A's negotiate screen until the judge starts. On Home "Jarvis, …" starts a challenge (the
+// person named, the face scan, or the one person online); on the negotiate screen A's judge waits
+// for "Jarvis" or "Tap to talk" and hears the sentence first. The rainbow loop (../wake RainbowLoop)
+// runs from the wake through the sentence and while the judge connects. Without the module in the
+// binary (or with the flag off) the judge starts on the negotiate screen as before.
 // No simulated Face ID here (that lives in src/preview only). Party screens never show chain
 // words: server text that reaches a screen goes through ui/copyRule first.
 import { StatusBar } from 'expo-status-bar';
@@ -32,7 +38,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, Linking, StyleSheet, View } from 'react-native';
 
 import type {
   BetSnapshot,
@@ -92,6 +98,9 @@ import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { half, palette, radius, space } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
+import { STATUS_COPY, WAKE_COPY, wt } from '../wake/copy';
+import { RainbowLoop } from '../wake/RainbowLoop';
+import { useWakeWord } from '../wake/useWakeWord';
 import { WalletError } from '../wallet/wallet';
 import type { DanceUploadBundle } from '../dance/index';
 import {
@@ -185,6 +194,20 @@ import {
   waitingForAccept,
 } from './typedTerms';
 import { oddsApply, oddsSettled } from './odds';
+import {
+  CONNECTED_GRACE_MS,
+  HEARD_REARM_MS,
+  heldUtterance,
+  homeWakeAction,
+  JUDGE_RELEASE_MS,
+  judgeAutoStarts,
+  judgeWaitsForWake,
+  loopReducer,
+  THINKING_MAX_MS,
+  wakeListening,
+  type HeldUtterance,
+  type LoopState,
+} from './wakeGate';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
@@ -212,6 +235,11 @@ const loadFaceEmbedder = () =>
   importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
 /** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
 const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
+/**
+ * EXPO_PUBLIC_WAKE=off turns "Jarvis" off (./wakeGate): A's judge then starts on the negotiate
+ * screen by itself, as before. It needs the voice judge (EXPO_PUBLIC_VOICE) to have anyone to hear.
+ */
+const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
 /**
  * The Dance Off screens (../dance) pull the pose camera's native view: loaded on first use and
  * through importSafely, like the voice SDK, so a build without it never fails at launch.
@@ -336,6 +364,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const pendingRoom = useRef<string | null>(null);
   /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
   const voiceVars = useRef(new Map<string, VoiceDynamicVariables>());
+  // ---- "Jarvis" state (./wakeGate; the hook and the gating are below the judge session) ----
+  /** The bet whose judge was asked for: a wake, "Tap to talk", or a sentence held from Home. */
+  const [judgeArmedBet, setJudgeArmedBet] = useState<string | null>(null);
+  /** The bet whose JudgeVoice is mounted: it stays until the bet's session ends as before. */
+  const [judgeMountedBet, setJudgeMountedBet] = useState<string | null>(null);
+  /** What was said after "Jarvis", per bet: the judge's first user message (JudgeVoice). */
+  const wakeUtterances = useRef(new Map<string, string>());
+  /** Said on Home: waits for the challenge it started (openNewBet). */
+  const heldWake = useRef<HeldUtterance | null>(null);
+  /** The rainbow loop. */
+  const [loop, loopDispatch] = useReducer(loopReducer, 'off' as LoopState);
 
   const refreshBalance = useCallback(() => {
     rt.api.balance().then(setBalance, () => undefined);
@@ -940,9 +979,26 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }, [homeNote]);
 
   // ---- actions -----------------------------------------------------------------------------
+  /**
+   * Start A's judge for this bet (a wake, "Tap to talk", or a sentence held from Home): it mounts
+   * with `text` as its first user message ('' = none) while the loop thinks.
+   */
+  const armJudge = (betId: string, text: string) => {
+    wakeUtterances.current.set(betId, text);
+    // A fresh session's phase: a stale 'stopped' from the last bet must not end the loop.
+    setVoicePhase('idle');
+    setJudgeSpeaking(false);
+    setJudgeArmedBet(betId);
+    loopDispatch({ type: 'tap' });
+  };
+
   /** A new challenge (list or face): A hosts the judge, follows the bet, and opens it. */
   const openNewBet = (r: CreateBetResponse) => {
     voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
+    // "Jarvis, …" on Home started this challenge: the judge hears it as the screen opens.
+    const held = heldUtterance(heldWake.current, Date.now());
+    heldWake.current = null;
+    if (held !== null && WAKE_ENABLED) armJudge(r.bet.bet_id, held);
     rt.hub.adopt(r.bet);
     rt.ws.subscribe(r.bet.bet_id);
     dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
@@ -1370,6 +1426,144 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const voiceLive =
     voice !== null && voiceBet?.bet_id === bet?.bet_id && voicePhase === 'connected';
 
+  // ---- "Jarvis" (../wake, ./wakeGate) -----------------------------------------------------------
+  // The judge is started for a bet: armed (a wake, a tap, a held sentence), already mounted, or
+  // the bet moved past the negotiation (typed terms, Bet on Bitcoin, Dance off: it hosts the lock,
+  // the attempt and the ruling as before).
+  const judgeStartedFor = (b: BetModel) =>
+    judgeArmedBet === b.bet_id ||
+    judgeMountedBet === b.bet_id ||
+    judgeAutoStarts({ waits: true, state: b.state, over: isOver(b.state) });
+  // As the wake gate sees it (a missing module makes the judge start anyway, and then nothing
+  // listens, so this view is enough to keep the mic off while a session holds it).
+  const judgeUp =
+    voice !== null && voiceBet !== null && (!WAKE_ENABLED || judgeStartedFor(voiceBet));
+  // The audio session settles before the recognizer takes it again (LiveKit tears down async).
+  const [judgeReleased, setJudgeReleased] = useState(true);
+  useEffect(() => {
+    if (judgeUp) {
+      setJudgeReleased(false);
+      return;
+    }
+    const tm = setTimeout(() => setJudgeReleased(true), JUDGE_RELEASE_MS);
+    return () => clearTimeout(tm);
+  }, [judgeUp]);
+  // A's voice view (not the typed form, Bet on Bitcoin or Dance off), its judge not started yet.
+  const voiceView =
+    !(typed.bet_id === bet?.bet_id && typed.mode === 'typed') &&
+    !(market.bet_id === bet?.bet_id && market.phase !== 'closed') &&
+    !(dance.bet_id === bet?.bet_id && danceOpen(dance));
+  const judgePendingBet =
+    negotiating && voiceView && bet && voice !== null && voiceBet?.bet_id === bet.bet_id
+      ? judgeStartedFor(bet)
+        ? null
+        : bet.bet_id
+      : null;
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const pendingRef = useRef(judgePendingBet);
+  pendingRef.current = judgePendingBet;
+
+  const wake = useWakeWord({
+    enabled: wakeListening({
+      flag: WAKE_ENABLED,
+      signedIn: app.auth === 'signedIn',
+      judgeCam: app.judgeCam,
+      route,
+      inRoom: app.room !== null,
+      judgePending: judgePendingBet !== null,
+      judgeBusy: judgeUp || !judgeReleased,
+    }),
+    onWake: () => {
+      loopDispatch({ type: 'wake' });
+      feel('wakeHeard');
+      AccessibilityInfo.announceForAccessibility(wt(WAKE_COPY.listening));
+    },
+    onUtterance: (text) => {
+      // The mic is already released here.
+      const pending = pendingRef.current;
+      if (routeRef.current === 'negotiate' && pending) {
+        armJudge(pending, text);
+        return;
+      }
+      loopDispatch({ type: 'utterance', toJudge: false });
+      if (routeRef.current !== 'home') return;
+      const a = appRef.current;
+      const opponents = a.members
+        .filter((m) => m.user.user_id !== a.me?.user_id)
+        .map(toPreviewUser);
+      const action = homeWakeAction({
+        text,
+        inRoom: a.room !== null,
+        canScan: faceOn && a.room !== null,
+        opponents,
+      });
+      // Kept for the challenge's negotiate screen (openNewBet), '' included: the judge starts
+      // there without waiting for another "Jarvis".
+      heldWake.current = action.kind === 'none' ? null : { text, atMs: Date.now() };
+      if (action.kind === 'challenge') {
+        const u = opponents.find((o) => o.user_id === action.userId);
+        if (u) challengeFromList(u);
+      } else if (action.kind === 'scan') {
+        dispatch({ type: 'overlay', overlay: 'scan' });
+      } else if (action.kind === 'pick') {
+        setHomeNote(wt(WAKE_COPY.pickOpponent));
+      }
+    },
+    onCancel: () => loopDispatch({ type: 'cancel' }),
+    onError: (message) => console.warn('[yo] wake', message),
+  });
+  // Missing from this binary (or the flag off): the judge starts by itself, as before.
+  const judgeWaits = judgeWaitsForWake({
+    flag: WAKE_ENABLED,
+    available: wake.available,
+    status: wake.status,
+  });
+  // The recognizer still holds the mic (its stop is async): the judge mounts once it let go.
+  const wakeHoldsMic = wake.status === 'listening' || wake.status === 'capturing';
+  const judgeOn =
+    voice !== null &&
+    voiceBet !== null &&
+    (judgeMountedBet === voiceBet.bet_id ||
+      !judgeWaits ||
+      (judgeStartedFor(voiceBet) && !wakeHoldsMic));
+  // Once mounted, a bet's judge stays (a status flip must never end a live session).
+  useEffect(() => {
+    if (judgeOn && voiceBet) setJudgeMountedBet(voiceBet.bet_id);
+  }, [judgeOn, voiceBet?.bet_id]);
+  /** On A's negotiate screen: the judge waits for "Jarvis" or "Tap to talk". */
+  const judgeWaiting = judgePendingBet !== null && judgeWaits && !judgeOn;
+  const wakeStatusLine = STATUS_COPY[wake.status];
+  const wakeLine = wakeStatusLine ? wt(wakeStatusLine) : null;
+
+  // Home: a sentence that stayed on Home ("pick one", a failed challenge) listens again shortly.
+  const resumeWake = wake.resume;
+  useEffect(() => {
+    if (route !== 'home' || wake.status !== 'heard') return;
+    const tm = setTimeout(resumeWake, HEARD_REARM_MS);
+    return () => clearTimeout(tm);
+  }, [route, wake.status, resumeWake]);
+  // A sentence held from Home is for the challenge it started, not one picked later.
+  const prevRoute = useRef(route);
+  useEffect(() => {
+    if (route === 'home' && prevRoute.current !== 'home') heldWake.current = null;
+    prevRoute.current = route;
+  }, [route]);
+
+  // The rainbow loop: off when the judge talks or fails, on another screen, or past its deadlines.
+  useEffect(() => {
+    loopDispatch({ type: 'judge', phase: voicePhase, speaking: judgeSpeaking });
+  }, [voicePhase, judgeSpeaking]);
+  useEffect(() => {
+    if (route !== 'home' && route !== 'negotiate') loopDispatch({ type: 'reset' });
+  }, [route]);
+  useEffect(() => {
+    if (loop !== 'thinking') return;
+    const ms = voicePhase === 'connected' ? CONNECTED_GRACE_MS : THINKING_MAX_MS;
+    const tm = setTimeout(() => loopDispatch({ type: 'reset' }), ms);
+    return () => clearTimeout(tm);
+  }, [loop, voicePhase]);
+
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <SplashView failed onRetry={boot} />;
 
@@ -1639,6 +1833,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 : undefined
             }
             odds={oddsPanel}
+            wake={
+              judgeWaiting && bet
+                ? {
+                    line: wakeLine,
+                    onTapToTalk: () => armJudge(bet.bet_id, ''),
+                    onOpenSettings:
+                      wake.status === 'denied' ? () => void Linking.openSettings() : undefined,
+                  }
+                : undefined
+            }
             market={
               negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id
                 ? {
@@ -2026,7 +2230,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     <View style={styles.root}>
       <StatusBar style="light" />
       {screen}
-      {voice && voiceBet ? (
+      {judgeOn && voice && voiceBet ? (
         <PanelErrorBoundary
           key={voiceBet.bet_id}
           name="voice"
@@ -2040,6 +2244,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               rt={rt}
               betId={voiceBet.bet_id}
               dynamicVariables={voice}
+              initialUtterance={wakeUtterances.current.get(voiceBet.bet_id)}
               // A dance round starts on the dance screen, after its framing check (never by voice).
               startAttempt={(n) =>
                 isDanceBet(voiceBet)
@@ -2071,6 +2276,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <Label variant="labelMedium">{alert}</Label>
         </View>
       ) : null}
+      {/* Last, above every screen and toast: "Jarvis" heard, then the judge connecting. */}
+      <RainbowLoop active={loop !== 'off'} mode={loop === 'listening' ? 'listening' : 'thinking'} />
     </View>
   );
 }

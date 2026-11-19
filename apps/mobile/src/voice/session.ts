@@ -6,6 +6,9 @@
 //                  POST /v1/voice/tokens (one retry after MINT_RETRY_MS for a retryable error:
 //                  a 504 / network blip, never not_configured) -> startSession({conversationToken,
 //                  dynamicVariables, clientTools}); connected within CONNECT_TIMEOUT_MS or it failed
+//   initialUtterance  what A said after "Jarvis" (../wake): sent once with sendUserMessage the
+//                  moment the session connects, before any queued cue (plain text, no [EVENT]),
+//                  and captioned as A's line
 //   onCue()        judge.cue -> sendUserMessage (speak) / sendContextualUpdate, verbatim (§4.5);
 //                  queued while connecting, never thrown into the bet hub's listener loop
 //   setMuted()     "mute, don't end" from the terms card on (FINDINGS §4), with
@@ -112,6 +115,11 @@ export interface JudgeSessionDeps {
   /** Rejections carry the server's `code` and `retryable` (net ApiClientError). */
   mintToken(): Promise<{ conversation_token: string; conversation_id: string }>;
   dynamicVariables: Record<string, string | number | boolean>;
+  /**
+   * The challenge A said after "Jarvis" (../wake), delivered as the first user message once the
+   * session connects. Blank or omitted: nothing is sent (the judge opens as usual).
+   */
+  initialUtterance?: string;
   postLines(lines: VoiceLine[]): Promise<void>;
   onCaption(c: Caption): void;
   onFailed(reason: FailReason): void;
@@ -166,6 +174,9 @@ export function createJudgeSession(d: JudgeSessionDeps) {
   let muted = false;
   let attemptAllowed = false;
   let queue: Array<{ send: 'user' | 'context'; text: string }> = [];
+  /** The wake utterance, until it is sent; then kept once to drop an SDK echo of it. */
+  let opening: string | null = d.initialUtterance?.trim() || null;
+  let openingEcho: string | null = null;
   const batcher = createLineBatcher(async (lines) => {
     await d.postLines(lines);
   });
@@ -208,7 +219,34 @@ export function createJudgeSession(d: JudgeSessionDeps) {
     }
   };
 
+  /** One finished line: a caption (same id as the server's echo) and the transcript relay. */
+  const record = (judge: boolean, text: string, key: string) => {
+    const id = utteranceId(d.betId, judge ? 'judge' : 'party', key);
+    d.onCaption({ id, who: judge ? 'judge' : 'a', text });
+    batcher.add({
+      utterance_id: id,
+      role: judge ? 'judge' : 'party',
+      ...(judge ? {} : { party: 'A' as const }),
+      text: text.slice(0, 600),
+      final: true,
+      at: new Date(now()).toISOString(),
+    });
+  };
+
+  /** The wake utterance goes first; false = not sent yet (kept for the next status change). */
+  const sendOpening = (): boolean => {
+    if (opening === null) return true;
+    const text = opening;
+    if (!safely('opening', (c) => c.sendUserMessage(text))) return false;
+    opening = null;
+    openingEcho = text;
+    record(false, text, `w:${text}`);
+    return true;
+  };
+
   const flush = () => {
+    // The wake utterance goes first; a cue never overtakes it (sendOpening).
+    if (!live() || !sendOpening()) return;
     while (live() && queue.length) {
       const a = queue[0]!;
       const ok = safely('cue', (c) =>
@@ -354,22 +392,18 @@ export function createJudgeSession(d: JudgeSessionDeps) {
       const judge = m.role === 'agent' || m.source === 'ai';
       const text = m.message.trim();
       if (!text || (!judge && isEventLine(text))) return;
+      // The wake utterance is already captioned (sendOpening): an echo of it is not a new line.
+      if (!judge && openingEcho !== null && text === openingEcho) {
+        openingEcho = null;
+        return;
+      }
       const key = utteranceKey({
         event_id: m.event_id,
         response_id: judge ? m.response_id : undefined,
         text,
         at: now(),
       });
-      const id = utteranceId(d.betId, judge ? 'judge' : 'party', key);
-      d.onCaption({ id, who: judge ? 'judge' : 'a', text });
-      batcher.add({
-        utterance_id: id,
-        role: judge ? 'judge' : 'party',
-        ...(judge ? {} : { party: 'A' as const }),
-        text: text.slice(0, 600),
-        final: true,
-        at: new Date(now()).toISOString(),
-      });
+      record(judge, text, key);
     },
 
     // ---- the server's side ------------------------------------------------------------

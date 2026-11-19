@@ -73,6 +73,8 @@ import { SplashView } from '../ui/brand';
 import { Label } from '../ui/kit';
 import { ListRow, Screen, Section, TopBar } from '../ui/parts';
 import { half, palette, radius, space } from '../ui/tokens';
+import { STATUS_COPY, wt } from '../wake/copy';
+import { RainbowLoop } from '../wake/RainbowLoop';
 import {
   BALANCE,
   BALANCE_SERIES,
@@ -139,7 +141,17 @@ type Route =
   | 'danceTerms'
   | 'danceWatch'
   | 'danceRuling'
-  | 'rematchInvite';
+  | 'rematchInvite'
+  | 'jarvis';
+
+/**
+ * The "Jarvis" preview (../wake, app/wakeGate): A's judge waiting for the wake word, the sentence
+ * coming in, the judge connecting (the rainbow loop thinking), then talking; or the mic-off
+ * fallback with "Tap to talk".
+ */
+type JarvisPhase = 'listening' | 'capturing' | 'thinking' | 'speaking' | 'denied';
+const JARVIS_SAID = "I bet Jake can't do ten pushups";
+const JARVIS_REPLY = 'Ten pushups, Jake. Full reps, chest to the floor. How much?';
 
 const APPEAL_WINDOW_MS = 10_000;
 const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
@@ -167,6 +179,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [danceBet, setDanceBet] = useState(false);
   const [dRoutine, setDRoutine] = useState('wave-pop');
   const [dStake, setDStake] = useState(5);
+  const [jarvis, setJarvis] = useState<JarvisPhase>('listening');
   const [danceVoid, setDanceVoid] = useState(false);
   const [rematchBusy, setRematchBusy] = useState(false);
   // History: 'loading' with no rows is the first-load skeleton; a pull on a loaded list reloads
@@ -896,6 +909,45 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             }}
           />
         );
+      case 'jarvis': {
+        // Waiting: the wake line and "Tap to talk"; then the sentence, the judge connecting, and
+        // its first answer.
+        const waiting = jarvis === 'listening' || jarvis === 'capturing' || jarvis === 'denied';
+        const line =
+          STATUS_COPY[
+            jarvis === 'denied' ? 'denied' : jarvis === 'capturing' ? 'capturing' : 'listening'
+          ];
+        const said: Caption[] = waiting ? [] : [{ who: 'a', text: JARVIS_SAID }];
+        return (
+          <NegotiateScreen
+            view={view}
+            captions={
+              jarvis === 'speaking' ? [...said, { who: 'judge', text: JARVIS_REPLY }] : said
+            }
+            speaking={jarvis === 'speaking'}
+            hasMic
+            micMuted={false}
+            draft={null}
+            wake={
+              waiting
+                ? {
+                    line: line ? wt(line) : null,
+                    onTapToTalk: () => {
+                      go('jarvis');
+                      setJarvis('thinking');
+                      later(2_500, () => setJarvis('speaking'));
+                    },
+                    onOpenSettings: jarvis === 'denied' ? () => undefined : undefined,
+                  }
+                : undefined
+            }
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      }
       case 'hearing':
         return (
           <HearingScreen
@@ -1135,6 +1187,16 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return openPayout(true);
       case 'rematchInvite':
         return go('rematchInvite');
+      case 'jarvis':
+        go('jarvis');
+        setJarvis('listening');
+        later(1_500, () => setJarvis('capturing'));
+        later(4_000, () => setJarvis('thinking'));
+        later(6_500, () => setJarvis('speaking'));
+        return;
+      case 'jarvisDenied':
+        go('jarvis');
+        return setJarvis('denied');
     }
   }
 
@@ -1149,6 +1211,11 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       {/* Every screen is on black, so the status bar is always light. Keyed by route: it
           re-mounts after each screen and so stays last on the status bar stack. */}
       <StatusBar key={route} style="light" />
+      {/* Last, above everything, as in DemoApp: the "Jarvis" preview's edge light. */}
+      <RainbowLoop
+        active={route === 'jarvis' && (jarvis === 'capturing' || jarvis === 'thinking')}
+        mode={jarvis === 'capturing' ? 'listening' : 'thinking'}
+      />
     </View>
   );
 }
@@ -1204,7 +1271,9 @@ type MenuKey =
   | 'danceResult'
   | 'danceVoid'
   | 'rematch'
-  | 'rematchInvite';
+  | 'rematchInvite'
+  | 'jarvis'
+  | 'jarvisDenied';
 
 /** The screen index, by beat. "Full run" entries play on into the next screens. */
 const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] = [
@@ -1305,6 +1374,13 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     items: [
       ['rematch', '37  Payout, double or nothing'],
       ['rematchInvite', '38  Incoming double or nothing'],
+    ],
+  },
+  {
+    section: 'Jarvis',
+    items: [
+      ['jarvis', '39  Jarvis, the rainbow loop'],
+      ['jarvisDenied', '40  Jarvis, mic off (tap to talk)'],
     ],
   },
 ];

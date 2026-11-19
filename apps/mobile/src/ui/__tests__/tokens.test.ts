@@ -22,6 +22,7 @@ import {
   scrub,
   skeleton,
   space,
+  spectrum,
   swatch,
   swipe,
   ticker,
@@ -90,6 +91,12 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
   it('exactly two chromatic colours, green and red; everything else is neutral', () => {
     const hues = [...ALLOWED_COLORS].filter(chromatic).sort();
     expect(hues).toEqual([swatch.green, swatch.red].sort());
+  });
+
+  it('the voice spectrum is a reserved exception, not a palette colour', () => {
+    expect(spectrum.reservedFor).toBe('voice-activation');
+    expect(Object.keys(palette)).not.toContain('spectrum');
+    expect(Object.keys(color)).not.toContain('spectrum');
   });
 
   it('roles resolve to palette values only', () => {

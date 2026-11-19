@@ -16,6 +16,8 @@ export const WAKE_COPY = {
   youSaid: ['You said', 'label'],
   // Only "Jarvis" was said.
   noChallenge: ['Say the challenge', 'label'],
+  // Home: "Jarvis" heard but there is no one obvious to challenge (no face scan, several people).
+  pickOpponent: ['Pick an opponent', 'label'],
   // Fallbacks when wake listening can't run.
   tapToTalk: ['Tap to talk', 'label'],
   denied: ['Mic access off', 'error'],

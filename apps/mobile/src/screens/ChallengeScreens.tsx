@@ -81,6 +81,7 @@ import {
 } from '../ui/parts';
 import { StakePicker } from '../ui/StakePicker';
 import { avatarSize, border, color, half, palette, radius, space, type } from '../ui/tokens';
+import { WAKE_COPY, wt } from '../wake/copy';
 import { COPY, fill, SCAN_MISS_COPY, t } from './copy';
 
 /**
@@ -427,6 +428,17 @@ export interface DanceTermsPanel {
   onConfirm: () => void;
 }
 
+/**
+ * A's judge before it starts (app/wakeGate): it waits for "Jarvis" (../wake) or a tap. The line
+ * is the wake status (wake/copy STATUS_COPY: 'Say “Jarvis”', 'Go ahead', 'Mic access off', …).
+ */
+export interface NegotiateWake {
+  line: string | null;
+  onTapToTalk: () => void;
+  /** Only while the mic or speech permission is off: opens the Settings app. */
+  onOpenSettings?: (() => void) | undefined;
+}
+
 /** A's typed-terms form (app/typedTerms TypedState, flattened for the screen). */
 export interface TypedTermsPanel {
   mode: 'voice' | 'typed';
@@ -465,6 +477,7 @@ export function NegotiateScreen({
   market,
   dance,
   odds,
+  wake,
   onBack,
   onDecline,
   tag,
@@ -490,6 +503,8 @@ export function NegotiateScreen({
   dance?: DanceTermsPanel | undefined;
   /** Both phones: the odds offer / counter / judge's suggestion (odds/useOdds useOddsPanel). */
   odds?: OddsOfferPanel | undefined;
+  /** Only on A's phone, while its judge waits for "Jarvis" or "Tap to talk". */
+  wake?: NegotiateWake | undefined;
   onBack?: (() => void) | undefined;
   onDecline: () => void;
   tag?: string | undefined;
@@ -631,10 +646,14 @@ export function NegotiateScreen({
             />
           ) : speaking ? (
             <DotsLabel text={t(COPY.negotiate.speaking)} variant="value" />
+          ) : wake ? (
+            <Label testID="wake-line" variant="value">
+              {wake.line ?? wt(WAKE_COPY.hint)}
+            </Label>
           ) : (
             <DotsLabel text={t(COPY.negotiate.listening)} variant="value" />
           )}
-          {hasMic ? (
+          {hasMic && !wake ? (
             <Chip
               label={micMuted ? t(COPY.negotiate.micMuted) : t(COPY.negotiate.micOn)}
               tone={micMuted ? 'muted' : 'accent'}
@@ -664,6 +683,21 @@ export function NegotiateScreen({
         {offerCard}
         {draftCard}
         <View style={styles.actions}>
+          {wake ? (
+            <PrimaryButton
+              testID="wake-tap"
+              label={wt(WAKE_COPY.tapToTalk)}
+              onPress={wake.onTapToTalk}
+            />
+          ) : null}
+          {wake?.onOpenSettings ? (
+            <TextButton
+              small
+              testID="wake-settings"
+              label={wt(WAKE_COPY.openSettings)}
+              onPress={wake.onOpenSettings}
+            />
+          ) : null}
           {typed ? (
             <QuietButton
               testID="typed-open"

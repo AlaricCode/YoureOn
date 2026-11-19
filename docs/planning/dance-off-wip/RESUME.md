@@ -38,7 +38,11 @@ findings may already be fixed. Re-verify each one against the code.
      `apps/server/src/judge/camera-checks.ts` gate only on `evidence_source === 'camera'`, and dance offs are camera bets;
    - skip `runAttemptChecks` and `warmForAttempt` for dance attempts;
    - keep both `checks.*` and `dance.scored` in the realtime union.
-3. **Wire up Jarvis.** The details are in `JARVIS-REPORT.md` under each "INTEGRATION" list:
+3. **Wire up Jarvis.** DONE (commit "mobile: Jarvis wake word + rainbow loop wired in"): gating rules in
+   `apps/mobile/src/app/wakeGate.ts` (+ tests), the hook / loop / Tap to talk in `DemoApp.tsx`, the first user
+   message in `voice/session.ts` (`initialUtterance`), preview entries `jarvis` / `jarvisDenied`.
+   `EXPO_PUBLIC_WAKE=off` restores the old auto-start. Not compiled or run yet (step 4). The original list,
+   from `JARVIS-REPORT.md` under each "INTEGRATION" list:
    - Add `NSSpeechRecognitionUsageDescription` to `apps/mobile/app.json` under `ios.infoPlist`. This is required.
    - In `apps/mobile/vitest.config.mts`, add `'modules/**/*.test.ts'` to `include`.
    - Add the `spectrum` exception to `ui/tokens.ts`.
