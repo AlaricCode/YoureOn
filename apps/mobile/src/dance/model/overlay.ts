@@ -4,6 +4,7 @@
 // people. The reference panel draws the routine MIRRORED (x → 1 − x): players copy it like a
 // mirror (§4.2). Pure, tested.
 import { SKELETON_EDGES } from '@youre-on/shared/dance/joints';
+import { hipCenter } from '@youre-on/shared/dance/track';
 
 export interface Size {
   width: number;
@@ -134,7 +135,21 @@ export const CAMERA_ASPECT = 720 / 1280;
 /** The two stage panels (reference + camera): equal, at the camera's aspect. */
 export const stagePanels = (box: Size, gap: number): Size => fitPanels(box, CAMERA_ASPECT, gap);
 
-/** Where a player's popup sits inside the camera panel: A over the left half, B the right. */
-export function popupAnchor(panel: Size, player: 'A' | 'B'): Point {
-  return { x: panel.width * (player === 'A' ? 0.25 : 0.75), y: panel.height * 0.22 };
+/**
+ * Where a player's popup sits inside the camera panel: over that player's half, A the left one
+ * unless A stands on the right (`aOnRight`: face-identified players, DANCE-OFF §3).
+ */
+export function popupAnchor(panel: Size, player: 'A' | 'B', aOnRight = false): Point {
+  const left = (player === 'A') !== aOnRight;
+  return { x: panel.width * (left ? 0.25 : 0.75), y: panel.height * 0.22 };
+}
+
+/** Whether A's hip centre is right of B's in this frame; null unless both are seen. */
+export function aRightOfB(
+  a: readonly number[] | null,
+  b: readonly number[] | null,
+): boolean | null {
+  const ha = a ? hipCenter(a) : null;
+  const hb = b ? hipCenter(b) : null;
+  return ha && hb ? ha[0] > hb[0] : null;
 }

@@ -1244,9 +1244,11 @@ export function Aurora({ tone }: { tone: AuroraTone }) {
 
 /**
  * A moment screen: black, safe-area padded, light status bar; its content eases in. Children
- * are centred; `footer` sits at the bottom (buttons); `top` above (e.g. a TopBar with the user
- * tag). The only colour field is the aurora: pass `aurora`, or let a MomentGroup inside ask for
- * it (its `glow`).
+ * are centred while they fit; a moment with more to show than the screen holds (a dance off's
+ * ruling and breakdown) scrolls, and never spills over the status bar, the top bar or the
+ * footer. `footer` sits at the bottom (buttons); `top` above (e.g. a TopBar with the user tag).
+ * The only colour field is the aurora: pass `aurora`, or let a MomentGroup inside ask for it
+ * (its `glow`).
  */
 export function MomentScreen({
   children,
@@ -1262,6 +1264,8 @@ export function MomentScreen({
   offline?: boolean;
   /** The aurora's tone; omit to take it from the MomentGroup inside (or to have none). */
   aurora?: AuroraTone | undefined;
+  /** Accepted for callers that ask for a scrolling body: every moment's body scrolls when it must. */
+  scroll?: boolean;
   testID?: string;
 }) {
   const i = useSafeAreaInsets();

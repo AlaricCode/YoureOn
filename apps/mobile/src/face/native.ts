@@ -67,6 +67,22 @@ function getDetector(): ImageFaceDetector {
   return detector;
 }
 
+/**
+ * The Dance Off still (DANCE-OFF §3) is a full-body shot of two people: their faces are small,
+ * about 5-9% of the frame's width, under the scan's 8% floor, so it gets its own detector.
+ */
+export const DANCE_MIN_FACE_SIZE = 0.04;
+let danceDetector: ImageFaceDetector | null = null;
+function getDanceDetector(): ImageFaceDetector {
+  danceDetector ??= createImageFaceDetector({
+    performanceMode: 'accurate',
+    runLandmarks: true,
+    runClassifications: false,
+    minFaceSize: DANCE_MIN_FACE_SIZE,
+  });
+  return danceDetector;
+}
+
 /** ML Kit on a file:// photo as it is (the preview stand-in only needs the pose). */
 export function detectFacesInPhoto(url: string): DetectedFace[] {
   return getDetector().detectFaces(url).map(toDetectedFace);
@@ -122,9 +138,23 @@ const natives: EmbedderNatives = {
 };
 
 let shared: FaceEmbedder | null = null;
+let dance: FaceEmbedder | null = null;
 
 /** The on-device embedder (one per JS runtime; the model loads on first use). */
 export function getNativeEmbedder(): FaceEmbedder {
   shared ??= createDeviceEmbedder(natives);
   return shared;
+}
+
+/**
+ * The Dance Off's embedder: the same model, alignment and embedding as the scan (so it matches
+ * the same enrollments), with the small-face detector. Its stills are the pose view's upright
+ * 720x1280 frames, already under the long-side cap.
+ */
+export function getDanceEmbedder(): FaceEmbedder {
+  dance ??= createDeviceEmbedder({
+    ...natives,
+    detect: (url) => getDanceDetector().detectFaces(url).map(toDetectedFace),
+  });
+  return dance;
 }

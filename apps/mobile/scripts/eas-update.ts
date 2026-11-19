@@ -12,6 +12,8 @@
 //     with the latest finished build of the profile (eas fingerprint:compare) and refuses on a
 //     difference: rebuild instead.
 //   - It refuses a dirty git tree, so every update is a commit.
+//   - It refuses a bundle that carries apps/mobile/assets/dance/local/ (the original song a local
+//     demo build may use, metro.config.js): the folder is gitignored, so the git check misses it.
 //
 // Usage: npx tsx apps/mobile/scripts/eas-update.ts --profile preview|preview-typed|pitch
 //          --message "what changed" [--dry-run] [--allow-dirty] [--allow-native-changes]
@@ -142,6 +144,28 @@ export function exportedIos(metadata: unknown): { bundle: string | null; assetEx
     bundle: typeof ios?.bundle === 'string' ? ios.bundle : null,
     assetExts: assets.map((x) => String(x.ext)),
   };
+}
+
+/** The Dance Off local media folder (metro.config.js): its files never go out in an update. */
+const DANCE_LOCAL_SEGMENT = /(^|[\\/])assets[\\/]dance[\\/]local([\\/]|$)/;
+
+/**
+ * Files from apps/mobile/assets/dance/local/ (the original song a local demo build may carry,
+ * metro.config.js) listed in an `expo export --dump-assetmap` assetmap.json. Any is a refusal:
+ * an update reaches every install on the channel.
+ */
+export function localDanceAssets(assetmap: unknown): string[] {
+  if (!assetmap || typeof assetmap !== 'object') return [];
+  const out: string[] = [];
+  for (const a of Object.values(assetmap as Record<string, unknown>)) {
+    const x = a as { files?: unknown; fileSystemLocation?: unknown } | null;
+    const paths = [
+      ...(Array.isArray(x?.files) ? x.files.map(String) : []),
+      ...(typeof x?.fileSystemLocation === 'string' ? [x.fileSystemLocation] : []),
+    ];
+    for (const p of paths) if (DANCE_LOCAL_SEGMENT.test(p) && !out.includes(p)) out.push(p);
+  }
+  return out;
 }
 
 export function updateCommand(p: {
@@ -300,6 +324,8 @@ export async function main(argv: string[]): Promise<number> {
     NODE_ENV: 'production',
   };
   for (const k of CONFIG_ENV) if (!(k in env)) delete exportEnv[k];
+  // Never the local Dance Off media (metro.config.js), whatever the shell has.
+  delete exportEnv.DANCE_LOCAL_MEDIA;
   for (const k of Object.keys(exportEnv)) {
     if (k.startsWith('EXPO_PUBLIC_') && !(k in env)) delete exportEnv[k];
   }
@@ -331,6 +357,14 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (!assetExts.includes('tflite'))
     return refuse('the export has no .tflite asset (face model missing?)');
+  const mapPath = join(dist, 'assetmap.json');
+  if (!existsSync(mapPath)) return refuse('expo export wrote no assetmap.json');
+  const local = localDanceAssets(JSON.parse(readFileSync(mapPath, 'utf8')));
+  if (local.length > 0) {
+    return refuse(
+      `the bundle carries local Dance Off media (never published): ${local.join(', ')}`,
+    );
+  }
   say(`bundle ok: ${bundle} carries ${url}; ${assetExts.length} assets incl. the face model`);
   say(`files: ${readdirSync(dist).join(', ')}`);
 

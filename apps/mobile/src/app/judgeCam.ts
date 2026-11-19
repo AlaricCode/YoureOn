@@ -233,7 +233,6 @@ export async function rejoinAndRebind(d: RejoinDeps): Promise<boolean> {
         linked: d.linked,
         lobby: joinLobby !== undefined,
         stored,
-        judgeCam: d.restored === 'judge_cam',
       }),
       { joinLobby: joinLobby ?? (() => Promise.resolve(null)), joinCode: d.join, live: d.live },
     );
