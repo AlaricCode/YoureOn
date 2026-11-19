@@ -1,8 +1,15 @@
-// You're On design tokens: "Obsidian". A black fintech look: pure OLED black, white type, hairline
-// rows instead of cards, and colour kept for two jobs only: green for the one action and money
-// going up (won, paid, "+$"), red for money going down, losses and fixable problems. One
-// typeface, Geist, in four weights; big money figures are thin (Light) and tightly tracked with
-// tabular numerals. No shadows, no gradients, no full-bleed colour screens.
+// You're On design tokens: "Limelight". The room is dark and the bet is what is lit.
+//
+// 1. Black is the room: pure OLED black, nothing tinted.
+// 2. White asks, green answers. Every action is white (the primary pill, selection, focus).
+//    Green appears only when something is on: live, locked, won, paid, online, and on the one
+//    control that moves money (swipe to lock in). Red is money leaving and fixable problems.
+// 3. Two voices. Geist for everything you operate (labels, buttons, figures with tabular
+//    numerals). Instrument Serif for what is said: the judge, the bet's claim, the headline of a
+//    moment, the wordmark.
+// 4. Objects are glass: the things you could hold (the bet slip, a sheet, the roster, the camera
+//    stage) are top-lit panels with a 1 pt rim (`material`). Plain rows stay on black.
+// 5. Light marks the moment: one aurora behind a moment's words, a bloom under what is on.
 //
 // Pure TS on purpose: no react-native / expo imports, so vitest can load it in Node and every
 // screen gets the same numbers. Haptics are named tokens only; the call site maps them to
@@ -25,13 +32,15 @@ export const swatch = {
   raised: '#0F0F11',
   /** Hairline dividers; also the fill of secondary buttons, chips and avatars. */
   line: '#1C1C1F',
-  /** Primary text. */
+  /** The rim of a glass object and of a control: one step brighter than `line`. */
+  edge: '#2A2A2E',
+  /** Primary text, and the primary action's fill. */
   white: '#FFFFFF',
   /** Secondary text (>= 4.5:1 on black). */
   grey: '#8D8D93',
   /** Tertiary text, disabled, offline. */
   dim: '#4A4A4F',
-  /** The one accent: the primary action, money up, live, selection. Ink on it is black. */
+  /** "On": live, locked, won, paid, online, and the swipe that moves money. Ink on it is black. */
   green: '#00D47A',
   /** Money down, losses, destructive actions, fixable capture problems. Sparingly. */
   red: '#FF4F45',
@@ -46,10 +55,12 @@ export const palette = {
   /** Secondary buttons, chips, avatar discs, toggles off. */
   fill: swatch.line,
   hairline: swatch.line,
+  /** The 1 pt rim of glass objects, secondary buttons, chips and avatar discs. */
+  rim: swatch.edge,
   text: swatch.white,
   textSecondary: swatch.grey,
   textTertiary: swatch.dim,
-  /** The accent: the primary action, live state, selection, the hold ring. */
+  /** "On": live state, a done step, a tick, the hold / swipe that moves money. Never a plain action. */
   accent: swatch.green,
   /** Money down, the loss cross, destructive actions, fixable capture problems. */
   danger: swatch.red,
@@ -60,8 +71,10 @@ export const palette = {
 /** Semantic roles. Every role resolves to a palette value. */
 export const color = {
   ...palette,
-  /** Text and icons on a green (accent) fill: black, never white. */
+  /** Text and icons on a green or white fill: black, never white. */
   onAccent: palette.black,
+  /** Text on the white primary pill and on a white selection. */
+  onPrimary: palette.black,
   /** Text on a green success fill. */
   onSuccess: palette.black,
   /** Text on a red fill (the filled "Yes, delete"). */
@@ -70,17 +83,20 @@ export const color = {
   error: palette.text,
   divider: palette.hairline,
   border: palette.hairline,
-  /** A focused input: a 1 pt green border (`border.focused`). */
-  borderFocused: palette.green,
-  /** Avatar discs: a grey disc with a white initial. No per-person tints. */
+  /** A focused input: a 1 pt white border (`border.focused`). */
+  borderFocused: palette.white,
+  /** Avatar discs: a glass disc with a white serif initial. No per-person tints. */
   avatar: palette.fill,
   disabled: palette.dim,
   /** The balance shown "+$" at processed, before confirmation (ARCHITECTURE §5.2). */
   pending: palette.textSecondary,
   live: palette.accent,
-  primaryAction: palette.accent,
-  /** The selected chip / stake. */
-  selected: palette.accent,
+  /** White asks: the one filled action on a screen is a white pill with black text. */
+  primaryAction: palette.white,
+  /** The selected chip / stake: white, like every other choice you make. */
+  selected: palette.white,
+  /** The one green control: the swipe (or hold) that locks money in. */
+  commit: palette.green,
   /** Destructive buttons and fixable capture problems (see palette.danger). */
   destructive: palette.danger,
   fixable: palette.danger,
@@ -110,6 +126,88 @@ export function moneyColor(deltaCents: number): string {
 export const glow = { size: 320, opacity: 0.22, lossOpacity: 0.1 } as const;
 
 /**
+ * The aurora: the one light on a moment screen. A wide ellipse of the moment's colour hung from
+ * the top of the screen, fading to nothing before the buttons (it runs past both sides, so the
+ * fade reads as a glow, not a shape).
+ */
+export const aurora = {
+  /** The ellipse's box, as fractions of the screen: wider than it, hung above its top edge. */
+  width: 1.8,
+  height: 0.74,
+  top: -0.22,
+  /** Centre opacity: money in / locked. */
+  opacity: 0.34,
+  /** Centre opacity: money out (the loss is quieter than the win). */
+  lossOpacity: 0.22,
+  /** Centre opacity: a neutral (white) moment, e.g. an incoming challenge. */
+  neutralOpacity: 0.1,
+  fadeMs: 280,
+  /**
+   * Once it is up the light is alive: it swells to `swellTo` and dims to `swellDim` of itself and
+   * back, `swellMs` each way. Slow enough to feel like light, not like an animation. Off under
+   * Reduce Motion.
+   */
+  swellMs: 4200,
+  swellTo: 1.06,
+  swellDim: 0.82,
+} as const;
+
+/**
+ * What objects are made of. Strings are React Native style values (`backgroundImage`,
+ * `boxShadow`), so a component spreads them straight into a style. Every colour inside is a
+ * palette swatch or white / the palette green at an alpha.
+ */
+export const material = {
+  /** A glass object's fill: lit from the top, falling to near black. */
+  glass: 'linear-gradient(180deg, #17171A 0%, #0B0B0D 100%)',
+  /** A glass object sitting on glass (a well inside a sheet): one step up. */
+  glassRaised: 'linear-gradient(180deg, #222226 0%, #17171A 100%)',
+  /** The lit top edge of a glass object or a control. */
+  highlight: 'inset 0 1px 0 rgba(255, 255, 255, 0.07)',
+  /** An avatar disc: lit from the upper left. */
+  disc: 'linear-gradient(145deg, #2E2E33 0%, #161618 58%, #0E0E10 100%)',
+  /** The bloom under the green control that moves money. */
+  bloomOn: '0 10px 32px -8px rgba(0, 212, 122, 0.6)',
+  /** The lit ring around what just won / locked. */
+  ringOn: '0 0 0 1px rgba(0, 212, 122, 0.55), 0 0 28px 0 rgba(0, 212, 122, 0.35)',
+  /** The lift under the white primary pill: barely there, it only separates it from black. */
+  bloomPrimary: '0 8px 28px -10px rgba(255, 255, 255, 0.28)',
+} as const;
+
+/**
+ * The judge's presence: a pearl sphere with a halo that breathes while it listens and beats
+ * faster while it speaks. It is the one object with a material of its own (cool greys, not
+ * palette swatches), so it reads as someone, not as a control. Drawn with react-native-svg.
+ */
+export const orb = {
+  size: 148,
+  /** Where the light falls on the sphere (fractions of its box). */
+  light: { x: 0.34, y: 0.28 },
+  /** The sphere's shading from the highlight out to the rim: [offset, colour]. */
+  stops: [
+    [0, '#FFFFFF'],
+    [0.14, '#E9ECF3'],
+    [0.42, '#9AA0B4'],
+    [0.74, '#2A2C36'],
+    [1, '#0B0B0E'],
+  ] as readonly (readonly [number, string])[],
+  /** The halo: a disc of this colour, `haloSize` times the sphere, fading out from its edge. */
+  halo: '#C8D2FF',
+  haloSize: 2.3,
+  haloOpacity: 0.34,
+  /** The two orbit rings, as multiples of `size`. */
+  rings: [1.42, 1.76] as readonly number[],
+  /** One breath (out and back) while listening; a faster beat while it speaks. */
+  breatheMs: 2400,
+  speakMs: 900,
+  /** Scale at the top of a breath / a beat. */
+  breatheTo: 1.04,
+  speakTo: 1.08,
+  /** The halo's opacity at rest (it reaches 1 at the top of a breath). */
+  restOpacity: 0.55,
+} as const;
+
+/**
  * Voice activation only ("Jarvis" heard, the judge listening/thinking): the full hue wheel,
  * computed by wake/spectrum as rgb() strings for the RainbowLoop edge light. Never a fill, never
  * text, never a screen colour. The one documented exception to "two chromatic colours";
@@ -122,17 +220,18 @@ export const spectrum = {
 } as const;
 
 // ---------------------------------------------------------------------------------------
-// Type: Geist, one family, four weights
+// Type: two voices. Geist (four weights) for everything you operate; Instrument Serif (regular
+// and italic) for what is said.
 // ---------------------------------------------------------------------------------------
 
 /**
- * Loaded font family names, one per weight (./fonts registers each file under exactly this
+ * Loaded font family names, one per face (./fonts registers each file under exactly this
  * name). iOS does not pick a weight inside a custom family from fontWeight, so each weight is its
  * own family; fontWeight is still set on every style so the system-font fallback (fonts failed to
  * load) keeps the hierarchy.
  */
 export const fontFamily = {
-  /** Geist 300: money figures and big numbers, the moment headline. */
+  /** Geist 300: money figures and big numbers. */
   light: 'Geist_300Light',
   /** Geist 400: body, inputs, mid-size amounts. */
   regular: 'Geist_400Regular',
@@ -140,6 +239,10 @@ export const fontFamily = {
   medium: 'Geist_500Medium',
   /** Geist 600: headings, buttons, titles. */
   semibold: 'Geist_600SemiBold',
+  /** Instrument Serif: the bet's claim, a moment's headline, monograms. */
+  voice: 'InstrumentSerif_400Regular',
+  /** Instrument Serif Italic: the judge speaking, the wordmark, "You're on". */
+  voiceItalic: 'InstrumentSerif_400Regular_Italic',
 } as const;
 
 export type FontFamilyName = (typeof fontFamily)[keyof typeof fontFamily];
@@ -155,15 +258,21 @@ type Weight = keyof typeof fontWeight;
 
 /** UI sizes. */
 export const typeScale = [13, 15, 17, 22, 28] as const;
-/** Display sizes: money figures, big numbers, the moment headline. Geist Light/Regular only. */
+/** Figure sizes: money and big numbers. Geist Light/Regular with tabular numerals only. */
 export const displayScale = [34, 44, 56] as const;
+/**
+ * Voice sizes (Instrument Serif). It is a narrow display face with a small x-height, so it runs
+ * about a fifth larger than Geist for the same presence, and never below 22.
+ */
+export const voiceScale = [22, 26, 30, 40, 52, 64] as const;
 
 /** Numerals all the same width, so a counting figure does not jitter. */
 export const TABULAR: ['tabular-nums'] = ['tabular-nums'];
 
 type TypeStyle = {
   readonly fontFamily: FontFamilyName;
-  readonly fontSize: (typeof typeScale)[number] | (typeof displayScale)[number];
+  readonly fontSize:
+    (typeof typeScale)[number] | (typeof displayScale)[number] | (typeof voiceScale)[number];
   readonly lineHeight: number;
   readonly fontWeight: FontWeight;
   readonly letterSpacing: number;
@@ -201,31 +310,57 @@ const figure = (
   fontVariant: TABULAR,
 });
 
+/** What is said: Instrument Serif, upright or italic, tracked a touch tight at display sizes. */
+const voice = (
+  fontSize: (typeof voiceScale)[number],
+  lineHeight: number,
+  face: 'voice' | 'voiceItalic' = 'voice',
+  c: string = palette.text,
+): TypeStyle => ({
+  fontFamily: fontFamily[face],
+  fontSize,
+  lineHeight,
+  fontWeight: fontWeight.regular,
+  letterSpacing: fontSize >= 40 ? -Math.round(fontSize * 0.012 * 10) / 10 : 0,
+  color: c,
+});
+
 export const type = {
   // --- Figures (Geist Light / Regular, tabular) ------------------------------------------
   /** The balance: 56 Light. The signature. */
   balance: figure(56, 62),
   /** The money figure on a moment ("+$5.00"): 56 Light, coloured by direction. */
   money: figure(56, 62),
-  /** The moment headline ("You're on", the ruling): 56 Light white. */
-  moment: figure(56, 62),
-  /** A longer moment line ("Logan challenged you"), or a moment on a small phone: 44 Light. */
-  momentSmall: figure(44, 50),
-  /** Big numbers that are not money: the countdown clock, the sign-up title. 44 Light. */
+  /** Big numbers that are not money: the countdown clock. 44 Light. */
   display: figure(44, 50),
   /** A mid-size figure (the pot, a stake on the terms card): 34 Light. */
   figure: figure(34, 40),
   /** Dollar amounts in rows ("$10"): 22 Regular. */
   amount: figure(22, 28, 'regular'),
-  /** End-state titles ("Declined. Nothing moved.", "Payout failed"): 34 Light, the moment voice. */
-  endTitle: figure(34, 40),
+  // --- The voice (Instrument Serif) ------------------------------------------------------
+  /** The moment headline ("You're on", the ruling): serif 64. */
+  moment: voice(64, 66),
+  /** A longer moment line ("Logan challenged you"), or a moment on a small phone: serif 52. */
+  momentSmall: voice(52, 54),
+  /** End-state titles ("Declined. Nothing moved.", "Payout failed"): serif 40. */
+  endTitle: voice(40, 44),
+  /** The bet statement (the claim on terms, live, hearing, market): serif 30. */
+  statement: voice(30, 34),
+  /** The claim where room is tight (the draft read back under the judge): serif 26. */
+  statementSmall: voice(26, 30),
+  /** The judge speaking (the caption under the orb, the ruling's reason): serif italic 26. */
+  spoken: voice(26, 32, 'voiceItalic'),
+  /** A quieter spoken line (the reason under a ruling): serif italic 22. */
+  spokenSmall: voice(22, 28, 'voiceItalic'),
+  /** The wordmark beside the mark: serif italic 22. */
+  wordmark: voice(22, 28, 'voiceItalic'),
+  /** The sign-up title (the name of the app, said once): serif italic 64. */
+  hero: voice(64, 66, 'voiceItalic'),
   // --- UI (Geist) ------------------------------------------------------------------------
   /** Screen titles: 28/600. */
   title: ui(28, 34, 'semibold', palette.text, -0.6),
   /** A sub-headline (sheet titles, "Face saved"): 22/600. */
   subtitle: ui(22, 28, 'semibold', palette.text, -0.3),
-  /** The bet statement (the claim on terms, live, hearing, market): 22/400, quiet. */
-  statement: ui(22, 28, 'regular', palette.text, -0.3),
   /** A large initial on a 56 pt avatar disc: 22/500. */
   initial: ui(22, 28, 'medium'),
   /** Names in lists, sheet titles, the stage prompt: 17/600. */
@@ -282,8 +417,11 @@ export const space = {
 /** Half-steps of the grid, for tight inner gaps (chip padding, label-to-field). */
 export const half = { x05: 4, x15: 12 } as const;
 
-/** sm: checkboxes; md: inputs, banners; lg: sheets and the camera stage; pill: buttons, chips. */
-export const radius = { sm: 6, md: 14, lg: 20, pill: 999 } as const;
+/**
+ * sm: checkboxes; md: inputs, banners; lg: sheets and the camera stage; xl: the bet slip and the
+ * other glass objects that sit on the page margin; pill: buttons, chips.
+ */
+export const radius = { sm: 6, md: 14, lg: 20, xl: 28, pill: 999 } as const;
 
 /** Hairline: use StyleSheet.hairlineWidth at the call site; this is the logical fallback. */
 export const border = { hairline: 0.5, focused: 1 } as const;
@@ -304,12 +442,14 @@ export const avatarSize = {
 
 /** The balance sparkline (Home): a 2 pt line, no axes, no grid. */
 export const sparkline = {
-  height: 56,
+  height: 72,
   strokeWidth: 2,
   endDot: 3,
   /** The soft halo around the end dot: an r = 6 disc at 0.2 opacity. */
   haloRadius: 6,
   haloOpacity: 0.2,
+  /** The wash under the line: the line's colour at this opacity, fading to nothing at the floor. */
+  areaOpacity: 0.26,
   /** Fewer points than this draw nothing (two points are just a ruler line). */
   minPoints: 3,
 } as const;

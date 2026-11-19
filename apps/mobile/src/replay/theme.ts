@@ -1,12 +1,11 @@
-// The replay player's look, written directly in the "Obsidian" style (feat/visual-refresh): pure
-// black, white type, one accent green for a win, red for a foul, Geist. These values are local on
-// purpose, so this feature does not touch ui/tokens while that branch restyles it.
-//
-// Integrator mapping once feat/visual-refresh lands (a straight swap, same values):
+// The replay player's look: the app's neutrals (ui/tokens, "Limelight": pure black, white type,
+// green for a win, red for a foul, Geist), kept as local values under their first name
+// (`obsidian`) so this feature stands alone. The hexes are the palette's own:
 //   obsidian.black -> palette.background   obsidian.raised -> palette.surface
-//   obsidian.line  -> palette.hairline     obsidian.white  -> palette.text
-//   obsidian.grey  -> palette.textSecondary obsidian.dim   -> palette.textTertiary
-//   obsidian.green -> palette.accent        obsidian.red   -> palette.danger
+//   obsidian.line  -> palette.hairline     obsidian.edge  -> palette.rim
+//   obsidian.white -> palette.text         obsidian.grey  -> palette.textSecondary
+//   obsidian.dim   -> palette.textTertiary obsidian.green -> palette.accent
+//   obsidian.red   -> palette.danger
 //   geist.*        -> fontFamily.* (ui/fonts loads exactly these family names)
 // Without the fonts registered, iOS falls back to the system font for an unknown family and the
 // fontWeight below keeps the hierarchy.
@@ -17,6 +16,8 @@ export const obsidian = {
   black: '#000000',
   raised: '#0F0F11',
   line: '#1C1C1F',
+  /** The 1 pt rim of a glass control. */
+  edge: '#2A2A2E',
   white: '#FFFFFF',
   grey: '#8D8D93',
   dim: '#4A4A4F',

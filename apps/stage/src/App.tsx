@@ -932,7 +932,7 @@ export function App() {
       ) : (
         <div className="stage connect">
           <h1>
-            You&apos;re <span className="on">On</span> <span className="muted">· stage</span>
+            You&rsquo;re <span className="on">On</span> <span className="muted">· stage</span>
           </h1>
           <form onSubmit={onSubmit}>
             {field('roomId', 'Room code (on phone A) or room id', { placeholder: 'ABC234' })}

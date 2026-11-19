@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALLOWED_COLORS,
+  aurora,
   border,
   color,
   displayScale,
@@ -12,10 +13,12 @@ import {
   GRID,
   haptics,
   hold,
+  material,
   MAX_MOMENT_MS,
   MAX_TRANSITION_MS,
   moneyColor,
   motion,
+  orb,
   palette,
   payout,
   radius,
@@ -28,6 +31,7 @@ import {
   ticker,
   type,
   typeScale,
+  voiceScale,
 } from '../tokens';
 
 const HEX = /^#[0-9A-F]{6}$/;
@@ -54,7 +58,7 @@ const rolesOf = (hex: string) =>
     .map(([k]) => k)
     .sort();
 
-describe('color: Obsidian (black, white, greys, one green, one red)', () => {
+describe('color: Limelight (black, white, greys, one green, one red)', () => {
   it('every swatch and palette value is #RRGGBB', () => {
     for (const v of Object.values(palette)) expect(v).toMatch(HEX);
   });
@@ -64,6 +68,7 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
       black: '#000000',
       raised: '#0F0F11',
       line: '#1C1C1F',
+      edge: '#2A2A2E',
       white: '#FFFFFF',
       grey: '#8D8D93',
       dim: '#4A4A4F',
@@ -78,6 +83,7 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
       surface: swatch.raised,
       fill: swatch.line,
       hairline: swatch.line,
+      rim: swatch.edge,
       text: swatch.white,
       textSecondary: swatch.grey,
       textTertiary: swatch.dim,
@@ -103,19 +109,17 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
     for (const v of Object.values(color)) expect(ALLOWED_COLORS.has(v)).toBe(true);
   });
 
-  it('green is the action, selection, live, money up and online; nothing else', () => {
+  it('white asks: the primary action, a selection and focus are white with black ink', () => {
+    expect(color.primaryAction).toBe(palette.white);
+    expect(color.selected).toBe(palette.white);
+    expect(color.borderFocused).toBe(palette.white);
+    expect(color.onPrimary).toBe(palette.black);
+    expect(ratio(color.onPrimary, color.primaryAction)).toBeGreaterThan(15);
+  });
+
+  it('green answers: on, live, money up, online and the one commit control; never a plain action', () => {
     expect(rolesOf(palette.green)).toEqual(
-      [
-        'accent',
-        'borderFocused',
-        'green',
-        'live',
-        'online',
-        'positive',
-        'primaryAction',
-        'selected',
-        'success',
-      ].sort(),
+      ['accent', 'commit', 'green', 'live', 'online', 'positive', 'success'].sort(),
     );
     expect(payout.deltaColor).toBe(palette.green);
   });
@@ -125,6 +129,12 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
       ['danger', 'destructive', 'fixable', 'negative', 'red'].sort(),
     );
     expect(color.error).toBe(palette.text);
+  });
+
+  it('the glass rim is a neutral one step brighter than the fill it outlines', () => {
+    expect(chromatic(palette.rim)).toBe(false);
+    expect(lum(palette.rim)).toBeGreaterThan(lum(palette.fill));
+    expect(lum(palette.rim)).toBeLessThan(lum(palette.textTertiary));
   });
 
   it('avatars are a grey disc (no per-person tints)', () => {
@@ -158,19 +168,22 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
   });
 });
 
-describe('type: Geist only, thin tabular figures', () => {
+describe('type: two voices, Geist to operate and Instrument Serif for what is said', () => {
   const styles = Object.values(type);
   const families = new Set<string>(Object.values(fontFamily));
+  const serif: readonly string[] = [fontFamily.voice, fontFamily.voiceItalic];
+  const isSerif = (s: { fontFamily: string }) => serif.includes(s.fontFamily);
 
-  it('every style uses a loaded Geist face, one family name per weight', () => {
+  it('every style uses a loaded face, one family name per face', () => {
     for (const s of styles) expect(families.has(s.fontFamily)).toBe(true);
-    for (const f of families) expect(f).toMatch(/^Geist_\d00[A-Za-z]+$/);
     // The fallback weight matches the face, so the system font keeps the hierarchy.
     const weightOf: Record<string, string> = {
       Geist_300Light: '300',
       Geist_400Regular: '400',
       Geist_500Medium: '500',
       Geist_600SemiBold: '600',
+      InstrumentSerif_400Regular: '400',
+      InstrumentSerif_400Regular_Italic: '400',
     };
     expect(Object.keys(weightOf).sort()).toEqual([...families].sort());
     for (const s of styles) expect(s.fontWeight).toBe(weightOf[s.fontFamily]);
@@ -179,30 +192,58 @@ describe('type: Geist only, thin tabular figures', () => {
   it('ui/fonts loads exactly the families the tokens name, from the matching files', () => {
     const src = readFileSync(fileURLToPath(new URL('../fonts.ts', import.meta.url)), 'utf8');
     for (const name of Object.values(fontFamily)) {
-      expect(src).toMatch(
-        new RegExp(`import ${name} from '@expo-google-fonts/geist/[^']+/${name}\\.ttf'`),
-      );
+      // Geist from its package (one folder per weight); the serif from the vendored files.
+      const from = name.startsWith('Geist_')
+        ? `@expo-google-fonts/geist/[^']+/${name}\\.ttf`
+        : `\\.\\./\\.\\./assets/fonts/${name}\\.ttf`;
+      expect(src).toMatch(new RegExp(`import ${name} from '${from}'`));
       expect(src).toMatch(new RegExp(`^\\s+${name},$`, 'm'));
     }
     expect(src.match(/\.ttf'/g)).toHaveLength(families.size);
     expect(src).not.toMatch(/big-shoulders|instrument-sans/);
   });
 
-  it('UI sizes come from 13/15/17/22/28; display sizes 34/44/56 are Light/Regular figures only', () => {
-    for (const s of styles) {
+  it('the vendored serif ships with its licence', () => {
+    const asset = (name: string) =>
+      readFileSync(fileURLToPath(new URL(`../../../assets/fonts/${name}`, import.meta.url)));
+    for (const face of serif) expect(asset(`${face}.ttf`).length).toBeGreaterThan(10_000);
+    expect(asset('OFL-InstrumentSerif.txt').toString('utf8')).toMatch(/SIL Open Font License/);
+  });
+
+  it('Geist sizes come from 13/15/17/22/28 (UI) and 34/44/56 (thin tabular figures)', () => {
+    for (const s of styles.filter((x) => !isSerif(x))) {
       expect([...typeScale, ...displayScale]).toContain(s.fontSize);
       if ((displayScale as readonly number[]).includes(s.fontSize)) {
         expect([fontFamily.light, fontFamily.regular]).toContain(s.fontFamily);
         expect(s.fontVariant).toEqual(['tabular-nums']);
       }
-      expect(ALLOWED_COLORS.has(s.color)).toBe(true);
     }
+    for (const s of styles) expect(ALLOWED_COLORS.has(s.color)).toBe(true);
     const used = new Set(styles.map((s) => s.fontSize));
-    for (const size of [...typeScale, ...displayScale]) expect(used).toContain(size);
+    for (const size of [...typeScale, ...displayScale, ...voiceScale]) expect(used).toContain(size);
+  });
+
+  it('the serif is a display face: never under 22, never a figure, tight only when large', () => {
+    for (const s of styles.filter(isSerif)) {
+      expect(voiceScale).toContain(s.fontSize);
+      expect(s.fontSize).toBeGreaterThanOrEqual(22);
+      expect('fontVariant' in s).toBe(false);
+      if (s.fontSize < 40) expect(s.letterSpacing).toBe(0);
+      else expect(s.letterSpacing).toBeLessThan(0);
+    }
+  });
+
+  it('what is said is in the serif: moments, the claim, the judge, the wordmark', () => {
+    for (const k of ['moment', 'momentSmall', 'endTitle', 'statement', 'statementSmall'] as const)
+      expect(type[k].fontFamily).toBe(fontFamily.voice);
+    for (const k of ['spoken', 'spokenSmall', 'wordmark', 'hero'] as const)
+      expect(type[k].fontFamily).toBe(fontFamily.voiceItalic);
+    expect(type.moment.fontSize).toBeGreaterThan(type.momentSmall.fontSize);
+    expect(type.momentSmall.fontSize).toBeGreaterThan(type.endTitle.fontSize);
   });
 
   it('money and big numbers are big, thin, tabular and tightly tracked', () => {
-    for (const k of ['balance', 'money', 'moment', 'momentSmall', 'display', 'figure'] as const) {
+    for (const k of ['balance', 'money', 'display', 'figure'] as const) {
       expect(type[k].fontFamily).toBe(fontFamily.light);
       expect(type[k].fontVariant).toEqual(['tabular-nums']);
       expect(type[k].letterSpacing).toBeLessThan(0);
@@ -210,7 +251,6 @@ describe('type: Geist only, thin tabular figures', () => {
     expect(type.amount.fontVariant).toEqual(['tabular-nums']);
     expect(type.balance.fontSize).toBe(56);
     expect(type.money.fontSize).toBe(56);
-    expect(type.moment.fontSize).toBeGreaterThanOrEqual(44);
   });
 
   it('headings 600, body 400, labels 500; small UI type is untracked with room to breathe', () => {
@@ -234,12 +274,84 @@ describe('space and shape', () => {
     expect(space.page).toBe(20);
   });
 
-  it('controls are 56 pt pills; inputs radius 14; sheets radius 20; focus is a 1 pt border', () => {
+  it('controls are 56 pt pills; inputs radius 14; the stage 20; glass objects 28; focus 1 pt', () => {
     expect(space.control).toBe(56);
     expect(radius.pill).toBe(999);
     expect(radius.md).toBe(14);
     expect(radius.lg).toBe(20);
+    expect(radius.xl).toBe(28);
     expect(border.focused).toBe(1);
+  });
+});
+
+describe('materials and light', () => {
+  const hexes = (s: string) => s.match(/#[0-9A-Fa-f]{6}\b/g) ?? [];
+  const alphas = (s: string) =>
+    [...s.matchAll(/rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\s*\)/g)].map((m) => ({
+      rgb: `#${[m[1], m[2], m[3]].map((c) => Number(c).toString(16).padStart(2, '0')).join('')}`,
+      a: Number(m[4]),
+    }));
+
+  it('glass is neutral, lit from the top, and never brighter than its rim', () => {
+    for (const fill of [material.glass, material.glassRaised, material.disc]) {
+      const stops = hexes(fill);
+      expect(stops.length).toBeGreaterThanOrEqual(2);
+      for (const c of stops) expect(chromatic(c.toUpperCase())).toBe(false);
+      const lums = stops.map((c) => lum(c.toUpperCase()));
+      expect([...lums].sort((a, b) => b - a)).toEqual(lums);
+    }
+    const top = lum((hexes(material.glass)[0] as string).toUpperCase());
+    expect(top).toBeLessThan(lum(palette.rim));
+  });
+
+  it('light is only white or the palette green, always at an alpha', () => {
+    const green = palette.green.toLowerCase();
+    for (const [name, value] of Object.entries(material)) {
+      for (const { rgb, a } of alphas(value)) {
+        expect(a, name).toBeGreaterThan(0);
+        expect(a, name).toBeLessThan(1);
+        expect(['#ffffff', green], name).toContain(rgb);
+      }
+    }
+    for (const k of ['bloomOn', 'ringOn'] as const)
+      expect(alphas(material[k]).every((c) => c.rgb === green)).toBe(true);
+    expect(alphas(material.bloomPrimary).every((c) => c.rgb === '#ffffff')).toBe(true);
+  });
+
+  it('the aurora hangs from above the screen, runs past both sides, and the loss is quieter', () => {
+    expect(aurora.width).toBeGreaterThan(1);
+    expect(aurora.top).toBeLessThan(0);
+    expect(aurora.top + aurora.height).toBeGreaterThan(0.4);
+    expect(aurora.top + aurora.height).toBeLessThan(0.7);
+    expect(aurora.lossOpacity).toBeLessThan(aurora.opacity);
+    expect(aurora.neutralOpacity).toBeLessThan(aurora.lossOpacity);
+    expect(aurora.fadeMs).toBeLessThanOrEqual(MAX_MOMENT_MS);
+  });
+
+  it('the aurora swells slowly and slightly: light, not an animation', () => {
+    expect(aurora.swellMs).toBeGreaterThanOrEqual(3_000);
+    expect(aurora.swellTo).toBeGreaterThan(1);
+    expect(aurora.swellTo).toBeLessThanOrEqual(1.1);
+    expect(aurora.swellDim).toBeGreaterThanOrEqual(0.7);
+    expect(aurora.swellDim).toBeLessThan(1);
+  });
+
+  it('the judge orb is shaded from a white highlight to a near-black rim and breathes gently', () => {
+    const offsets = orb.stops.map(([o]) => o);
+    expect(offsets[0]).toBe(0);
+    expect(offsets.at(-1)).toBe(1);
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
+    const lums = orb.stops.map(([, c]) => lum(c));
+    expect([...lums].sort((a, b) => b - a)).toEqual(lums);
+    expect(orb.stops[0]?.[1]).toBe('#FFFFFF');
+    expect(orb.breatheTo).toBeGreaterThan(1);
+    expect(orb.breatheTo).toBeLessThanOrEqual(1.06);
+    expect(orb.speakTo).toBeGreaterThan(orb.breatheTo);
+    expect(orb.speakTo).toBeLessThanOrEqual(1.1);
+    expect(orb.speakMs).toBeLessThan(orb.breatheMs);
+    expect([...orb.rings].sort((a, b) => a - b)).toEqual(orb.rings);
+    for (const r of orb.rings) expect(r).toBeGreaterThan(1);
+    expect(orb.haloSize).toBeGreaterThanOrEqual(orb.rings.at(-1) as number);
   });
 });
 

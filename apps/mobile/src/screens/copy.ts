@@ -95,6 +95,8 @@ export const COPY = {
     round: ['Round', 'label'],
     odds: ['Odds', 'label'],
     code: ['Terms code', 'label'],
+    /** Between the two stakes on the slip. */
+    pot: ['Pot', 'label'],
     timeLeft: ['Time left', 'label'],
     nothingMoves: ['Nothing moves until you both lock in', 'contract'],
     checking: ['Checking', 'label'],
@@ -238,6 +240,8 @@ export const COPY = {
     demo: ['Demo account', 'label'],
   },
   app: {
+    // The wordmark at the top of Home, beside the switch.
+    name: ["You're On", 'label'],
     loading: ['Loading', 'label'],
     offline: ["Can't connect", 'error'],
     failed: ['Try again', 'error'],

@@ -40,7 +40,8 @@ const frame = (raw: unknown): TickerAction => ({
 describe('stage page', () => {
   it('renders the connect form with the no-typing URL tip', () => {
     const html = renderToString(<App />);
-    expect(html).toContain('You&#x27;re <span class="on">On</span>');
+    // the wordmark is set in the italic serif, with a real apostrophe
+    expect(html).toContain('You’re <span class="on">On</span>');
     expect(html).toContain('Room code');
     expect(html).toContain('Stage key');
     expect(html).toContain('Connect');
