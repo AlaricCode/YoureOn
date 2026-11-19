@@ -13,7 +13,7 @@
 // activation is the one place the full spectrum is allowed; the colours are computed here as
 // rgb() strings from a hue wheel, never as hex literals scattered through screens.
 
-import { MAX_TRANSITION_MS, motion } from '../ui/tokens';
+import { MAX_TRANSITION_MS, motion, spectrum } from '../ui/tokens';
 
 // ---------------------------------------------------------------------------------------
 // Tuning
@@ -37,9 +37,9 @@ export const LOOP = {
   haloWidth: 48,
   /** The halo's opacity inside the glow layer (the glow itself is opaque there). */
   haloOpacity: 0.4,
-  /** The hue wheel: vivid, a touch lighter than pure so blue does not sink on black. */
-  saturation: 1,
-  lightness: 0.6,
+  /** The hue wheel (ui/tokens spectrum): vivid, a touch light so blue does not sink on black. */
+  saturation: spectrum.saturation,
+  lightness: spectrum.lightness,
   /** One full lap of the spectrum. Listening sweeps faster than thinking. */
   listeningTurnMs: 3200,
   thinkingTurnMs: 7000,

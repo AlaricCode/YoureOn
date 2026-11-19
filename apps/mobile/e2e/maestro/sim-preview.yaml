@@ -397,3 +397,18 @@ name: sim-preview
     id: incoming-rematch
 - tapOn:
     id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: jarvis
+- tapOn:
+    id: preview-menu
+- runFlow:
+    file: preview-screen.yaml
+    env:
+      KEY: jarvisDenied
+# Mic off: the judge waits for a tap instead of "Jarvis".
+- assertVisible:
+    id: wake-tap
+- tapOn:
+    id: preview-menu
