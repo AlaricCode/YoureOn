@@ -405,6 +405,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const lobbyInFlight = useRef<Promise<string | null> | null>(null);
   /** The lobby's room id, from the last lobby answer (a private choice leaves it on the server). */
   const lobbyRoomId = useRef<string | null>(null);
+  /** The launch rejoin (./judgeCam rejoinAndRebind) while it runs; the live retry waits on it. */
+  const launchJoin = useRef<Promise<unknown> | null>(null);
   /** The signed-in room rejoin (./resume createLiveRetry), for the lobby's retries. */
   const roomRetryRef = useRef<LiveRetry | null>(null);
   /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
@@ -497,11 +499,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     // phone on home, room-less, and its open bet stranded.
     // No room: the last private room's code, then the lobby when it is wanted (./lobby).
     const roomRetry = createLiveRetry(async () => {
+      // The launch rejoin may still be in flight (the socket goes live mid-join): let it land
+      // first, or this would join a second room alongside it (a private room join takes the
+      // phone out of the lobby on the server).
+      await launchJoin.current;
       if (appRef.current.room) return true;
       const S = await import('expo-secure-store');
       const stored = await S.getItemAsync(LAST_ROOM_KEY);
       const r = await runJoinPlan(
-        homeJoinPlan({ linked: null, lobby: lobbyWanted(lobbyIntent()), stored }),
+        homeJoinPlan({
+          linked: null,
+          lobby: lobbyWanted(lobbyIntent()),
+          stored,
+          judgeCam: appRef.current.judgeCam,
+        }),
         {
           joinLobby: () => joinLobbyId(true),
           joinCode: joinRoomId,
@@ -521,7 +532,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     // restored judge cam then re-binds itself to that room on the server, which may hold another
     // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
     // room comes from the join, not from appRef (a render behind right after it).
-    void cam
+    launchJoin.current = cam
       .then((restored) =>
         rejoinAndRebind({
           restored,
@@ -547,6 +558,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       .then((joined) => {
         if (!joined) roomRetry.markPending();
       })
+      .catch(() => roomRetry.markPending())
       .finally(() => setLobbyJoining(false));
     // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
     const betsRetry = createLiveRetry(async () => {
