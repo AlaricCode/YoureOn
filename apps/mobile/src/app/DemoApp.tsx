@@ -61,7 +61,14 @@ import { extractFrames, readClip } from '../attempt/capture';
 import { startAttemptVia, startsAttempt, type Recorder } from '../attempt/recorder';
 import { initialLock, lockReducer, type AuthFailure } from '../bets/lock';
 import { emptyBet, endReasonOf, finalOutcome, lockSignals, type BetModel } from '../bets/store';
-import { appealSeats, appealVerdict, betView, myResult, type BetView } from '../bets/view';
+import {
+  appealSeats,
+  appealVerdict,
+  betView,
+  myResult,
+  screenResult,
+  type BetView,
+} from '../bets/view';
 import { feel } from '../device/feedback';
 import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createServerFaceApi, type FaceStatus } from '../enroll/api';
@@ -1817,8 +1824,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   // After an appeal the panel's outcome pays (and may differ from the ruling's).
   const outcome = bet ? finalOutcome(bet) : null;
-  const result =
-    outcome && me ? (bet?.state === 'VOIDED' ? 'void' : myResult(outcome, me)) : 'void';
+  const result = screenResult(outcome, bet?.state ?? null, me);
   const balanceCents = balance ? Number(BigInt(balance.usdc) / 10_000n) : 0;
   // Home's sparkline and delta come from the settled history the app already holds (loaded when
   // History opens); no extra request. Hidden until there is history. No caption: the list is
@@ -2517,7 +2523,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return (
           <PayoutScreen
             view={view}
-            won={result === 'won'}
+            result={result}
             balanceCents={balanceCents}
             phase={phase}
             onRetry={refreshBalance}

@@ -129,7 +129,36 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   callOff: null,
 });
 
+const TERMINAL: ReadonlySet<BetState> = new Set(['PAID', 'VOIDED', 'CANCELLED', 'EXPIRED']);
+/** The onchain statuses that may revive a CANCELLED / EXPIRED bet (a lock that landed late). */
+const REVIVES: ReadonlySet<OnchainStatus> = new Set(['Locked', 'Resolved', 'Appealed', 'Settled']);
+
+/**
+ * A frame (bet.state or a snapshot) that would move a finished bet back. PAID and VOIDED are
+ * final; CANCELLED / EXPIRED move on only when the chain shows the lock landed after all
+ * (locked..settled, the server's one exception in bets_guard). Anything else is a stale or
+ * wrong frame (a FINALIZED after VOIDED would show a refunded player the loser's payout), so
+ * the phone keeps what it settled on.
+ */
+export function movesFinishedBetBack(
+  from: BetState | null,
+  to: BetState,
+  onchain: OnchainStatus | null,
+): boolean {
+  if (from === null || from === to || !TERMINAL.has(from)) return false;
+  if ((from === 'CANCELLED' || from === 'EXPIRED') && onchain !== null && REVIVES.has(onchain))
+    return false;
+  return true;
+}
+
+const warnKept = (m: BetModel, to: BetState, what: string) =>
+  console.warn(`[yo] bet ${m.bet_id}: ${m.state} is final, ignored ${what} ${to}`);
+
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
+  if (prev && movesFinishedBetBack(prev.state, s.state, s.onchain_status)) {
+    warnKept(prev, s.state, `snapshot (last_seq ${s.last_seq})`);
+    return { ...prev, lastSeq: Math.max(prev.lastSeq, s.last_seq) };
+  }
   const base = prev ?? emptyBet(s.bet_id, s.my_party);
   return {
     ...base,
@@ -188,6 +217,10 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       return { ...base, inviteAnswer: e.payload.answer };
     case 'bet.state': {
       const p = e.payload;
+      if (movesFinishedBetBack(m.state, p.state, p.onchain_status)) {
+        warnKept(m, p.state, `bet.state (seq ${e.seq})`);
+        return base;
+      }
       const next: BetModel = {
         ...base,
         state: p.state,

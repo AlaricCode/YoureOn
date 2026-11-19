@@ -1,6 +1,6 @@
 // Helpers shared by the terms sink, LockService and the payout service: the Drizzle tx type,
 // bet row locking, bet.state payloads, fan-out to both parties + the bet channel + the stage.
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { ReadonlyUint8Array } from '@solana/kit';
 import { bets, type Db } from '@youre-on/db';
 import type { BetState } from '@youre-on/shared/bet-state';
@@ -18,6 +18,28 @@ export type LifecycleDeps = Pick<AppDeps, 'db' | 'hub' | 'log' | 'now' | 'env'>;
 /** SELECT … FOR UPDATE the bet (null when unknown). */
 export async function lockBet(tx: Tx, betId: string): Promise<BetRow | null> {
   const [row] = await tx.select().from(bets).where(eq(bets.id, betId)).for('update').limit(1);
+  return row ?? null;
+}
+
+/**
+ * Compare-and-set of bets.state: `UPDATE bets SET … WHERE id = $1 AND state IN (from) RETURNING *`.
+ * Call it under lockBet, after checking the state there: the predicate makes the write itself
+ * refuse a bet that has moved on, so a settled bet (PAID / VOIDED) never moves back and
+ * FINALIZED / CONCEDED are never re-entered from it, whatever the caller checked. (bets_guard
+ * also rejects leaving a terminal state; this keeps the write a no-op instead of an exception.)
+ * null = not written: the caller emits no bet.state event.
+ */
+export async function casBetState(
+  tx: Tx,
+  betId: string,
+  from: readonly BetState[],
+  set: Partial<typeof bets.$inferInsert> & { state: BetState },
+): Promise<BetRow | null> {
+  const [row] = await tx
+    .update(bets)
+    .set(set)
+    .where(and(eq(bets.id, betId), inArray(bets.state, [...from])))
+    .returning();
   return row ?? null;
 }
 

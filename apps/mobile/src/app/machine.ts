@@ -7,7 +7,7 @@ import type { RoomMember } from '@youre-on/shared/api';
 import type { BetState } from '@youre-on/shared/bet-state';
 import type { UserRef } from '@youre-on/shared/primitives';
 
-import { isAppealed, type BetModel } from '../bets/store';
+import { finalOutcome, isAppealed, type BetModel } from '../bets/store';
 import { inDanceRound, isDanceBet, recordsDance, showsDanceDisplay } from './danceFlow';
 
 export type Route =
@@ -219,9 +219,13 @@ export function routeForBet(app: AppState, b: BetModel): Route {
     case 'APPEAL_RESOLVED':
     case 'PAID':
       return appealOpen(app, b) ? 'appeal' : 'payout';
+    // A VOID ruling (called off, too close to call, three REDOs) is settled by a finalize too:
+    // its ruling ("No contest") stays up while the refund settles, as VOIDED does after it. The
+    // payout screen is for a win or a loss (FINALIZED + VOID read "GG -$1" there). A panel's
+    // outcome is never VOID (Appealable), so APPEAL_RESOLVED / PAID always pay someone.
     case 'CONCEDED':
     case 'FINALIZED':
-      return 'payout';
+      return finalOutcome(b) === 'VOID' ? 'ruling' : 'payout';
     case 'CANCELLED':
     case 'EXPIRED':
       return 'lockEnded';

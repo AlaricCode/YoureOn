@@ -589,7 +589,7 @@ export type PayoutPhase = 'processed' | 'confirmed' | 'reverted';
 
 export function PayoutScreen({
   view,
-  won,
+  result,
   balanceCents,
   phase,
   onRetry,
@@ -600,7 +600,8 @@ export function PayoutScreen({
   tag,
 }: {
   view: BetView;
-  won: boolean;
+  /** 'void' (a refund) never reads as a loss: "No contest", both stakes back. */
+  result: MyResult;
   balanceCents: number;
   phase: PayoutPhase;
   onRetry: () => void;
@@ -611,6 +612,7 @@ export function PayoutScreen({
   alert?: string | null;
   tag?: string | undefined;
 }) {
+  const won = result === 'won';
   // micro-USDC → cents, for the figure that counts up.
   const winCents = Number(BigInt(view.theirStake) / 10_000n);
   // The balance is one quiet grey line under the hero, never a second big figure.
@@ -658,6 +660,14 @@ export function PayoutScreen({
             {balance}
           </MomentGroup>
         )
+      ) : result === 'void' ? (
+        // A refund: no glow, no money moving either way (routeForBet sends a VOID to the ruling
+        // screen; this is the fallback when the outcome is not known on this phone).
+        <MomentGroup>
+          <MomentHeadline>{RESULT_TITLE.void}</MomentHeadline>
+          <BodyText style={styles.centerText}>{t(COPY.ruling.refund)}</BodyText>
+          {balance}
+        </MomentGroup>
       ) : (
         // The mirror image: red, static, the same soft glow in red at a lower opacity.
         <MomentGroup glow="out">
