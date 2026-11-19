@@ -82,7 +82,7 @@ enum DancePoseFiles {
     return hex(SHA256.hash(data: data))
   }
 
-  /// Streams the file through SHA-256 in 1 MB chunks (a 15 s 720p clip is ~10 MB).
+  /// Streams the file through SHA-256 in 1 MB chunks (a 15 s 720p clip is ~10 MB, a 40 s one ~27 MB).
   static func sha256Hex(ofFileAt url: URL) throws -> String {
     let handle = try FileHandle(forReadingFrom: url)
     defer {

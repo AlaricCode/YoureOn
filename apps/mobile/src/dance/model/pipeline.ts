@@ -6,7 +6,7 @@
 // Clocks. Before startRound, a frame's `t` is ms since the camera session started; from the first
 // round frame on it is ms since t0. Every frame also carries `ts` (always session ms). Count-in
 // frames are buffered by `ts` and, once the first round frame fixes the offset (ts₀ − t₀), land
-// in the series at negative t (PoseSeries allows −3000..20000). The tracker runs on `ts`, so its
+// in the series at negative t (PoseSeries allows −3000..45000). The tracker runs on `ts`, so its
 // velocities never see the clock switch.
 import {
   dequantizePerson,

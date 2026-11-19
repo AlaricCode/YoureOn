@@ -13,6 +13,7 @@ import {
   danceRulingOutcome,
   danceTermsText,
   DanceUpload,
+  getRoutine,
   parseDanceRoutineLine,
   parseDanceTermsRoutine,
   parseRealtimeEvent,
@@ -40,7 +41,8 @@ import { stageLineFor } from '../src/stage-voice';
 import { lcg, makePlayer, seriesOf } from './dance-helpers';
 import { rulingExample, skillTerms } from './fixtures';
 
-const R = ROUTINES[0]!;
+/** The 15 s synthetic routine these hashed-text tests were written against. */
+const R = getRoutine('wave-pop')!;
 
 /** What the server's composeTerms makes of a dance proposal over the §2.5 base. */
 function danceTerms(over: Record<string, unknown> = {}) {

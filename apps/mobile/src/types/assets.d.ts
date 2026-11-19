@@ -11,3 +11,10 @@ declare module '*.ttf' {
   const assetId: number;
   export default assetId;
 }
+
+// Dance Off music (Metro's default asset extensions include .m4a). expo-audio's
+// createAudioPlayer accepts the numeric asset id.
+declare module '*.m4a' {
+  const assetId: number;
+  export default assetId;
+}

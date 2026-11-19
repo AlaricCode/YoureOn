@@ -17,7 +17,7 @@ import { poseSha256, type PoseSeries } from '@youre-on/shared/dance/pose';
 import { getRoutine, routineSha256 } from '@youre-on/shared/dance/routine';
 import { scoreRound } from '@youre-on/shared/dance/score';
 import { danceRoutineLine, danceTermsText } from '@youre-on/shared/dance/terms';
-import { DanceEvidence } from '@youre-on/shared/evidence';
+import { DANCE_FRAME_MAX_BYTES, DanceEvidence } from '@youre-on/shared/evidence';
 import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { parseRealtimeEvent } from '@youre-on/shared/realtime';
@@ -459,9 +459,9 @@ describeDb('dance terms: POST /v1/bets/:id/terms/dance (DB)', () => {
     });
     expect(unknown.status).toBe(404);
     expect(unknown.json!.error.details.routines).toEqual([
+      'bye-bye-shuffle',
       'wave-pop',
       'bounce-back',
-      'side-shuffle',
     ]);
     expect(
       (await post(A, danceTermsPath(betId), { routine_id: 'wave-pop', amount_usd: 'lots' })).status,
@@ -623,14 +623,17 @@ describeDb('dance judge pipeline (DB)', () => {
       routine?: { id: string; sha: string };
       frames?: Uint8Array[];
       tamper?: number;
+      /** The bet's routine (default ROUTINE): local score and the routine id / hash. */
+      of?: typeof ROUTINE;
     } = {},
   ) {
     const s = o.series ?? series('dance', 'still');
-    const local = scoreRound(ROUTINE, s);
+    const R = o.of ?? ROUTINE;
+    const local = scoreRound(R, s);
     const frames = o.frames ?? [0, 1, 2, 3].map((i) => jpeg(i));
     const upload = {
-      routine_id: o.routine?.id ?? ROUTINE.id,
-      routine_sha256: o.routine?.sha ?? routineSha256(ROUTINE),
+      routine_id: o.routine?.id ?? R.id,
+      routine_sha256: o.routine?.sha ?? routineSha256(R),
       series: s,
       pose_sha256: o.poseSha ?? poseSha256(s),
       client_scores: { a: local.a.score_x10, b: local.b.score_x10 },
@@ -1006,6 +1009,61 @@ describeDb('dance judge pipeline (DB)', () => {
       hook = null;
     }
     expect(await rulingRows(betId)).toHaveLength(1);
+  });
+
+  it('a 32.6 s routine: a 30 fps round + count-in and 6 full-size key frames fit the body limit and score', async () => {
+    await unbindCam();
+    const LONG = getRoutine('bye-bye-shuffle')!;
+    expect(LONG.duration_ms).toBe(32_600);
+    const betId = await lockedDance(LONG);
+    const [bet] = await ctx.deps.db.select().from(bets).where(eq(bets.id, betId));
+    expect(termsByBet.get(betId)!.claim).toMatch(/^Dance Off: Bye Bye Shuffle, 33 seconds,/);
+    expect(bet!.state).toBe('LOCKED');
+    const started = await post(A, `/v1/bets/${betId}/attempts`, {
+      attempt_no: 1,
+      recorder: 'self',
+    });
+    expect(started.status).toBe(201);
+    expect(started.json!.max_ms).toBeGreaterThanOrEqual(LONG.duration_ms + 3 * (60_000 / LONG.bpm));
+    // What the phone sends: 30 fps from the count-in (−1.1 s) to the end + the 600 ms tail, A on
+    // the reference, B standing still, every int at full width.
+    const first = LONG.frames[0]!.k;
+    const frames: PoseSeries['frames'] = [];
+    for (let t = -1_100; t <= LONG.duration_ms + 600; t += 33) {
+      let k = first;
+      for (const f of LONG.frames) if (f.t <= t) k = f.k;
+      frames.push({ t, n: 2, a: [...k], b: [...first] });
+    }
+    const long: PoseSeries = {
+      schema_version: 1,
+      w: LONG.w,
+      h: LONG.h,
+      fps_cap: 30,
+      sync_offset_ms: 0,
+      frames,
+    };
+    const big = (i: number) => {
+      const b = randomBytes(DANCE_FRAME_MAX_BYTES - 16);
+      return new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...b, i & 0xff, 0xff, 0xd9]);
+    };
+    const up = await uploadDance(A, betId, 1, {
+      of: LONG,
+      series: long,
+      frames: [0, 1, 2, 3, 4, 5].map(big),
+    });
+    expect(up.status).toBe(202);
+    expect(up.json!.scores.a).toBeGreaterThanOrEqual(990);
+    expect(up.json!.client_mismatch).toBe(false);
+    await judge.idle();
+    const [att] = await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId));
+    const stored = DanceEvidence.parse(JSON.parse(att!.evidence_canonical!));
+    expect(stored).toMatchObject({
+      routine: { id: LONG.id, sha256: routineSha256(LONG) },
+      pose_frames: frames.length,
+      winner: 'A',
+      failed: null,
+    });
+    expect(stored.key_moves).toHaveLength(LONG.key_moves.length);
   });
 
   it('a skill bet refuses the /dance upload', async () => {

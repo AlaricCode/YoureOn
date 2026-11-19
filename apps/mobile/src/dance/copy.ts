@@ -105,3 +105,9 @@ export const scoreText = (x10: number): string => {
 /** A live meter 0..100 → "87" (data). */
 export const meterText = (meter: number): string =>
   String(Math.max(0, Math.min(100, Math.round(meter))));
+
+/** Seconds left → "0:33" (data; a routine is at most 40 s, but minutes are kept anyway). */
+export const clockText = (seconds: number): string => {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};

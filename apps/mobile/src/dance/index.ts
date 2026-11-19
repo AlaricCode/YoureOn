@@ -1,5 +1,5 @@
 // Dance Off on the phone (docs/planning/DANCE-OFF.md §6). What the bet flow uses:
-// - DanceOffScreen: the judge-cam phone's round (framing → count-in → 15 s → result → upload).
+// - DanceOffScreen: the judge-cam phone's round (framing → count-in → dance → result → upload).
 //   It loads the native pose module lazily (importSafely), so importing this file is safe.
 // - DanceWatchScreen / DanceResultBreakdown: the other phone, and the server's verdict.
 // - DANCE_ROUTINE_CHOICES: the negotiate panel's routine cards (also from ./routines alone).

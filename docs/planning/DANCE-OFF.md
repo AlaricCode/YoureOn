@@ -6,8 +6,9 @@ one of them in the same change.
 
 ## 0. What it is
 
-A new bet type. Two players dance side by side, at the same time, to a 15 s reference routine in front of one
-judge-cam phone. Each is scored on-device (Apple Vision body pose → deterministic pure-TS scorer) on how closely
+A new bet type. Two players dance side by side, at the same time, to a reference routine in front of one
+judge-cam phone. Each routine has its own length, 5 to 40 s (`RoutineData.duration_ms`): the bundled ones are
+15 s and 32.6 s. Each is scored on-device (Apple Vision body pose → deterministic pure-TS scorer) on how closely
 they match the reference. Higher score wins the escrow. Claude never picks the winner: it only validates the
 round (danced the whole time, nobody left, no third person, no side swap) and writes a 1–2 sentence announcer
 line. Settlement, GG, the 10 s window and payout are the existing paths, unchanged.
@@ -36,7 +37,9 @@ a three-way branch. For `dance_off`:
 - `edge_cases = []` is allowed
 
 The routine is hashed through the text fields. No new keys:
-- `claim`: `Dance Off: <routine title>, 15 seconds, higher match score wins, $X each` (A = challenger)
+- `claim`: `Dance Off: <routine title>, <N> seconds, higher match score wins, $X each` (A = challenger), where
+  N = `Math.round(routine.duration_ms / 1000)` (`routineSeconds`). A 15 s routine reads "15 seconds" exactly as
+  before, so its Terms text and terms hash are unchanged; the 32.6 s `bye-bye-shuffle` reads "33 seconds".
 - `success_criteria[0]`: `Routine <routine_id> v<version> sha256:<first 16 hex of routine sha256>`
 - `success_criteria[1]`: `Higher match score wins; scores within <TIE_MARGIN> points are too close to call (refund)`
 - `failure_criteria`: `[]`
@@ -66,24 +69,35 @@ PoseSeries = strict {
   w: int, h: int,                 // upright image size, for aspect-correct vectors
   fps_cap: int,                   // ≤ 30
   sync_offset_ms: int,            // −500..500, already-applied A/V offset (see §4.4)
-  frames: { t: int /*ms since round t0, −3000..20000*/, n: int /*people seen*/, a: int[57] | null, b: int[57] | null }[]  // ≤ 700
+  frames: { t: int /*ms since round t0, −3000..45000*/, n: int /*people seen*/, a: int[57] | null, b: int[57] | null }[]  // ≤ 1500
+  // POSE_MAX_FRAMES 1500 / POSE_T_MAX_MS 45000: a 40 s round + the count-in + the tail at the 30 fps cap
 }
 pose_sha256 = hashJcs(PoseSeries)
 ```
 
 **Routine** (`packages/shared/src/dance/routines/<id>.ts`, generated):
 ```ts
-RoutineData = { schema_version: 1, id, version: int, title, song, bpm, duration_ms: 15000, first_beat_ms,
+RoutineData = { schema_version: 1, id, version: int, title, song, bpm,
+  duration_ms: int,                      // 5000..40000 (ROUTINE_MIN/MAX_DURATION_MS), per routine
+  first_beat_ms,                         // ≤ duration_ms
   count_in_beats: 3, w, h, mirrored_source: false, source: 'synthetic' | 'vision',
-  frames: { t: int, k: int[57] }[],      // quantized, ~15–30 fps
-  key_moves: { id: string, t: int, name: string }[],   // 8–16, beat-aligned
+  frames: { t: int, k: int[57] }[],      // quantized, ~15–30 fps, ≤ 1500, every t ≤ duration_ms
+  key_moves: { id: string, t: int, name: string }[],   // 8–16, beat-aligned, every t ≤ duration_ms
   media: { video: string | null, audio: string | null } }
 routineSha256(r) = hashJcs(r)   // cached
-ROUTINES: readonly RoutineData[]  // exactly 3; getRoutine(id)
+ROUTINES: readonly RoutineData[]  // exactly 3, the first is the default card; getRoutine(id)
 ```
-Three bundled routines are SYNTHETIC placeholders, generated procedurally by `scripts/dance-routine.ts synth`
-until we record the real reference videos and run the macOS tool (§8). The phone renders the reference
-as a mirrored animated skeleton when `media.video` is null.
+The bundled routines, in card order:
+- `bye-bye-shuffle` (32.6 s, 172.6 bpm, `source: 'vision'`): a real take extracted with the macOS tool (§8).
+  It ships poses only (`media.video = null`) plus music (`media.audio = 'bye-bye-shuffle.m4a'`, an ORIGINAL
+  synthesized drum track, first beat at 235 ms). The source footage is never bundled.
+- `wave-pop`, `bounce-back` (15 s each): SYNTHETIC placeholders, generated procedurally by
+  `scripts/dance-routine.ts synth`. Their bytes, sha256s and scores are unchanged by the per-routine length.
+
+The phone renders the reference as a mirrored animated skeleton when `media.video` is null.
+Everything timed on the round comes from the routine's `duration_ms`: the scorer's window and coverage bins
+(§4), the phone's round length, stop time, key-frame snapshot schedule, progress bar, beat counter and clock
+(§6), the stage's "N seconds" line, and the attempt's `max_ms` (`DANCE_MAX_MS` 50 s fits the longest).
 
 ## 3. Identity tracking + framing (shared, `dance/track.ts`)
 
@@ -164,8 +178,10 @@ DanceEvidence = strict {           // packages/shared/src/evidence.ts; evidence_
 
 - Upload: `POST /v1/bets/:bet_id/attempts/:n/dance` (multipart, signed). The parts are `upload` (JSON
   `DanceUpload = {routine_id, routine_sha256, series: PoseSeries, pose_sha256, client_scores:{a,b}, clip_sha256,
-  frames: [{index, t_ms, sha256, width, height, bytes}]}`) and `frame` × 4 JPEGs (≤ 200 KB each). The server
-  verifies the frame hashes and pose_sha256, recomputes the scores with the shared scorer, builds
+  frames: [{index, t_ms, sha256, width, height, bytes}]}`) and `frame` × 4 JPEGs (≤ 200 KB each). The body cap
+  (`DANCE_BODY_LIMIT`) is 4 MiB: a 40 s round at 30 fps is ~1300 frames, ≤ ~1.1 MB of JSON. The server
+  verifies the frame hashes and pose_sha256, recomputes the scores with the shared scorer (against the bundled
+  routine, so the round window is that routine's `duration_ms`), builds
   DanceEvidence, and stores `attempts.evidence_canonical = jcs(DanceEvidence)`. The bet moves to JUDGING.
 - Validation job (Claude, `apps/server/src/judge/dance.ts`) gets the terms, both scores, the per-move breakdown,
   the deterministic checks and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
@@ -216,7 +232,7 @@ worklets package is not installed.
   3. Count-in "3, 2, 1" on the routine's beat (visual + haptic).
   4. At one shared instant t0: `startRound`, the reference video (or skeleton) and the music start, and
      the live scoring starts.
-  5. 15 s of dancing.
+  5. The routine's `duration_ms` of dancing (the music, if any, plays from t0).
   6. `stopRound` → local final scoring → result screen, with no network so far.
   7. Upload → ruling → the existing RulingScreen, GG and payout.
 - The other phone shows a "Dance off live" status screen.

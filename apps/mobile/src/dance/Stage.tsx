@@ -11,7 +11,7 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { importSafely } from '../app/importSafely';
 import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
-import { DANCE_COPY, dt } from './copy';
+import { clockText, DANCE_COPY, dt } from './copy';
 import { useFrameClock } from './hooks';
 import { CameraSkeletons, DebugReadout, LiveMeters, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
@@ -119,7 +119,9 @@ export function BeatBar({ routine, startAt }: { routine: RoutineData; startAt: n
             </>
           ) : null}
         </View>
-        <Text style={styles.clock}>{running ? `0:${String(left).padStart(2, '0')}` : '0:15'}</Text>
+        <Text style={styles.clock}>
+          {clockText(running ? left : Math.ceil(routine.duration_ms / 1000))}
+        </Text>
       </View>
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
