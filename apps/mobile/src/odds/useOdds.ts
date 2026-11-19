@@ -20,6 +20,7 @@ import {
   readout,
   suggestOdds,
   typedSuggestBody,
+  typedSuggestShown,
   withdrawOdds,
   type OddsControl,
 } from '../app/odds';
@@ -146,8 +147,8 @@ export function useTypedOdds(i: {
     typed.phase === 'sending' || typed.phase === 'confirming' || typed.phase === 'confirmed';
   const stakes = typedStakes(typed);
   // Nothing proposed yet: the suggestion fills the picker. Once the card is out, the judge's
-  // offer goes to both phones (the offer card) instead.
-  const drafting = bet.state === 'DRAFTING' || bet.envelope === null;
+  // offer goes to both phones through the offer card's own "Suggest odds" (this one hides).
+  const drafting = typedSuggestShown(bet);
   const suggest = async () => {
     setBusy(true);
     setNote(null);
@@ -168,11 +169,13 @@ export function useTypedOdds(i: {
       disabled: frozen,
       onChange: (control) => dispatch({ type: 'odds', control }),
     },
-    suggest: {
-      busy,
-      disabled: frozen || typed.claim.trim().length === 0,
-      onPress: () => void suggest(),
-    },
+    suggest: drafting
+      ? {
+          busy,
+          disabled: frozen || typed.claim.trim().length === 0,
+          onPress: () => void suggest(),
+        }
+      : null,
     note,
   };
 }

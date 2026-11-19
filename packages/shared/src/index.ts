@@ -18,6 +18,7 @@ export * from './authorization';
 export * from './bet-state';
 export * from './chain-events';
 export * from './gg';
+export * from './call-off';
 export * from './realtime';
 export * from './replay';
 export * from './dance/index';

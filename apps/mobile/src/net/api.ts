@@ -24,6 +24,7 @@ import {
   SignRequest,
   type PartySignature,
 } from '@youre-on/shared/api';
+import { callOffPath, CallOffResponse } from '@youre-on/shared/call-off';
 import {
   AuthorizeRequest,
   type PartyAuthorization,
@@ -407,6 +408,18 @@ export function createYoApi(c: ApiClient) {
      */
     declineReview: (betId: string) =>
       c.request('POST', `${bet(betId)}/review/decline`, { schema: ReviewDeclined }),
+
+    /**
+     * §2.9a "Call it off": ask (agree:true), agree to the other party's ask (agree:true,
+     * answer:true: never opens a request of its own), or decline / withdraw (agree:false). The
+     * server dedupes by bet state (a repeat is the same request, or 'agreed' once it is voided),
+     * so no pinned key is needed.
+     */
+    callOff: (betId: string, agree: boolean, answer = false) =>
+      c.request('POST', callOffPath(betId), {
+        json: answer ? { agree, answer } : { agree },
+        schema: CallOffResponse,
+      }),
 
     // §2.15 judge-cam role
     setDeviceRole: (role: 'phone' | 'judge_cam', roomId?: string) =>

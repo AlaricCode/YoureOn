@@ -275,6 +275,15 @@ export const COPY = {
     continue: ['Continue', 'label'],
     useLink: ['Use this account', 'label'],
   },
+  // "Call it off" (app/callOff, screens/CallOff): a mutual stop of a locked bet, both refunded.
+  callOff: {
+    button: ['Call it off', 'label'],
+    confirmTitle: ['Call it off?', 'label'],
+    keepPlaying: ['Keep playing', 'label'],
+    agree: ['Agree', 'label'],
+    refundBoth: ['Both of you get your money back.', 'body'],
+    failed: ['Not called off', 'error'],
+  },
 } as const satisfies Record<string, Record<string, Line>>;
 
 export const t = (line: Line): string => line[0];
@@ -316,4 +325,10 @@ export const fill = {
   bpm: (bpm: number) => `${Math.round(bpm)} bpm`,
   /** A routine card's tempo and length: "120 bpm · 15s" (data; each routine has its own). */
   routineMeta: (bpm: number, seconds: number) => `${Math.round(bpm)} bpm · ${seconds}s`,
+  /** The call-off confirm sheet's body (body copy). First name only. */
+  callOffBody: (name: string) =>
+    `Both of you get your money back. ${name.trim().split(/\s+/)[0] || 'They'} has to agree.`,
+  /** The other phone's prompt (contract copy, ui/copyRule). First name only. */
+  callOffAsk: (name: string) =>
+    `${name.trim().split(/\s+/)[0] || 'They'} wants to call it off. Refund both?`,
 } as const;

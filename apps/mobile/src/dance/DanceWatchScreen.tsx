@@ -10,7 +10,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { DotsLabel, Screen, TopBar } from '../ui/parts';
 import { half, palette, space, type } from '../ui/tokens';
-import { DANCE_COPY, dt, firstName } from './copy';
+import { DANCE_COPY, danceLabels, dt } from './copy';
 import { DanceResultBreakdown } from './DanceResultBreakdown';
 import { PLAYER_TINT } from './theme';
 
@@ -28,7 +28,7 @@ function Versus({ names, me }: { names: { a: string; b: string }; me: 'A' | 'B' 
     <View style={styles.vsSide}>
       <View style={[styles.swatch, { backgroundColor: PLAYER_TINT[p] }]} />
       <Text style={styles.vsName} numberOfLines={1}>
-        {firstName(p === 'A' ? names.a : names.b)}
+        {danceLabels(names)[p === 'A' ? 'a' : 'b']}
       </Text>
       {me === p ? <Text style={styles.tag}>{you}</Text> : null}
     </View>
