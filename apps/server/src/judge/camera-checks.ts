@@ -19,10 +19,17 @@
 // Active only when env CHECKS_ENABLED=true, SAM3_URL + SAM3_API_TOKEN are set (deps.sam), and the
 // runtime toggle 'checks' is on (POST /v1/demo/toggles). A ruling under cached_ruling skips them
 // (the stored verdict is a replay; vetoing it would make the demo fallback unreliable).
+//
+// Never for a Dance Off (DANCE-OFF.md): its terms are evidence_source 'camera', but the pose score
+// decides. checksEligible() refuses dance terms, so scheduleCompile never writes a bet_checks row
+// for one; onTermsFrozen / warmForAttempt / runAttemptChecks act only on a row whose terms_hash is
+// the bet's current one, so they are no-ops too (and the judge routes skip them for dance anyway:
+// produceDance never calls runAttemptChecks, POST …/attempts never warms for a dance off).
 import { eq } from 'drizzle-orm';
 import { attemptChecks, betChecks, bets } from '@youre-on/db';
 import { checksVeto, evaluateChecks, P1, type CheckReport } from '@youre-on/shared/checks/evaluate';
 import { fromTerms } from '@youre-on/shared/checks/compile';
+import { isDanceOff } from '@youre-on/shared/dance/terms';
 import type { ChecksBox, ChecksReportPayload } from '@youre-on/shared/checks/events';
 import type { SamSegmentReply } from '@youre-on/shared/checks/sam-reply';
 import {
@@ -198,6 +205,13 @@ const canCompile = (deps: ChecksDeps): deps is ChecksDeps & Pick<AppDeps, 'provi
   deps.providers !== undefined && checksActive(deps);
 
 /**
+ * Which terms get camera checks: camera (skill) bets only, and never a dance off (camera
+ * evidence, but the pose score decides; the SAM checks would have nothing to measure).
+ */
+export const checksEligible = (terms: Pick<Terms, 'evidence_source' | 'type'>): boolean =>
+  terms.evidence_source === 'camera' && !isDanceOff(terms);
+
+/**
  * Fire-and-forget: compile this terms version (one in flight per bet + terms_hash). A no-op while
  * checks are inactive. Returns the promise for tests; callers never await it.
  */
@@ -207,8 +221,9 @@ export function scheduleCompile(
   terms: Terms,
   termsHash: string,
 ): Promise<StoredChecks | null> {
-  // Only camera (skill) bets have a ref cam; a market bet gets no row and no checks.compiled.
-  if (!canCompile(deps) || terms.evidence_source !== 'camera') return Promise.resolve(null);
+  // Only camera (skill) bets have a ref cam; a market bet or a dance off gets no row and no
+  // checks.compiled.
+  if (!canCompile(deps) || !checksEligible(terms)) return Promise.resolve(null);
   return track(deps, `compile:${betId}:${termsHash}`, () =>
     compileAndStore(deps, betId, terms, termsHash),
   );

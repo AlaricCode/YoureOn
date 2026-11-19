@@ -45,7 +45,8 @@ export interface TypedState {
   bet_id: string | null;
   mode: 'voice' | 'typed';
   claim: string;
-  stakeUsd: TypedStakeUsd;
+  /** A chip (TYPED_STAKES_USD), or a double or nothing's suggested stake (app/rematch). */
+  stakeUsd: number;
   phase: TypedPhase;
   /** The server's answer to show under the form (a judge line or a short error), or null. */
   note: string | null;
@@ -82,13 +83,15 @@ export type TypedEvent =
       bName: string;
       typed: boolean;
       shown?: ShownTypedCard | null;
+      /** A double or nothing (app/rematch): the stake the form starts on. */
+      stakeUsd?: number | null;
     }
   /** "Type it instead", or the voice session failed. */
   | { type: 'open' }
   /** Back to the judge (only offered while voice is available). */
   | { type: 'voice' }
   | { type: 'claim'; text: string }
-  | { type: 'stake'; usd: TypedStakeUsd }
+  | { type: 'stake'; usd: number }
   /** The odds picker changed (a preset, the direction, or the judge's suggestion). */
   | { type: 'odds'; control: OddsControl }
   /**
@@ -115,9 +118,16 @@ export const initialTyped: TypedState = {
 
 const busy = (s: TypedState) => s.phase === 'sending' || s.phase === 'confirming';
 
+/**
+ * A double or nothing's suggested stake as the form can take it: whole dollars (the odds picker
+ * works in whole-dollar bases), at least $1; null for none.
+ */
+export const typedStakeFor = (usd: number | null | undefined): number | null =>
+  typeof usd === 'number' && Number.isFinite(usd) && usd >= 1 ? Math.floor(usd) : null;
+
 export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
   switch (e.type) {
-    case 'init':
+    case 'init': {
       if (s.bet_id === e.bet_id) return e.typed && s.mode === 'voice' ? { ...s, mode: 'typed' } : s;
       if (e.typed && e.shown)
         return {
@@ -130,12 +140,15 @@ export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
           phase: 'sent',
           proposedHash: e.shown.terms_hash,
         };
+      const usd = typedStakeFor(e.stakeUsd);
       return {
         ...initialTyped,
         bet_id: e.bet_id,
         mode: e.typed ? 'typed' : 'voice',
         claim: bottleFlipClaim(e.bName),
+        ...(usd !== null ? { stakeUsd: usd, odds: evenControl(usd) } : {}),
       };
+    }
     case 'open':
       return s.mode === 'typed' ? s : { ...s, mode: 'typed' };
     case 'voice':
@@ -202,7 +215,8 @@ export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
 export function typedCardOf(
   env: Pick<TermsEnvelope, 'terms' | 'terms_hash'> | null | undefined,
 ): ShownTypedCard | null {
-  if (!env || env.terms.market !== null || env.terms.type === 'real_world') return null;
+  // Only the form's own kind: a skill bet (not a market card, not a Dance Off card).
+  if (!env || env.terms.market !== null || env.terms.type !== 'skill') return null;
   const { a, b } = env.terms.stakes;
   // The form is A's: the picker reads the stakes from A's side.
   const odds = controlOf({ a, b }, 'A');

@@ -15,6 +15,8 @@
 //   cues:    judge.cue for this bet -> session.onCue (verbatim [EVENT] line, queued until live)
 //   mute:    props.micMuted (DemoApp: micMutedFor(bet state)) -> session.setMuted
 //   lines:   captions into the bet hub + batched POST /v1/bets/:id/voice/lines (the stage)
+//   wake:    props.initialUtterance (what A said after "Jarvis", ../wake) -> the first user
+//            message once connected (read at mount: DemoApp mounts this once the wake is heard)
 import { ConversationProvider, useConversation } from '@elevenlabs/react-native';
 import { useEffect, useMemo, useRef } from 'react';
 
@@ -37,6 +39,8 @@ export interface JudgeVoiceProps {
   rt: Runtime;
   betId: string;
   dynamicVariables: VoiceDynamicVariables;
+  /** The challenge said after "Jarvis" (../wake): the judge hears it first. Read at mount. */
+  initialUtterance?: string | undefined;
   /** Mute, don't end (FINDINGS §4): true from the terms card on, except in a hearing. */
   micMuted: boolean;
   /** Resolves with who films (../attempt/recorder): the judge cam, or this phone. */
@@ -79,6 +83,7 @@ function Session(p: JudgeVoiceProps) {
     },
     mintToken: () => rt.api.voiceToken(betId),
     dynamicVariables: { ...props.current.dynamicVariables },
+    ...(props.current.initialUtterance ? { initialUtterance: props.current.initialUtterance } : {}),
     postLines: async (lines) => {
       await rt.client.request('POST', voiceLinesPath(betId), { json: { lines } });
     },

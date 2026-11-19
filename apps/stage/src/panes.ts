@@ -10,6 +10,14 @@
 // on each slot, which phone "acts" in the bet's current phase, the slim status rail of the
 // "Phones big" layout, and acquiring a source with the media APIs injected (tests run in Node).
 import type { BetView, PartyKey } from './ticker';
+import {
+  DANCE_RECORDER,
+  danceResult,
+  danceScoreLine,
+  dancePlayStep,
+  danceRoutineOf,
+  isDanceBet,
+} from './dance';
 import { usd } from './format';
 import { endedEarly, isMarketBet, phaseOf, phaseSteps } from './phase';
 
@@ -584,8 +592,9 @@ function winner(b: BetView): PartyKey | null {
  * Which phone glows in the bet's current phase, from the state the stage already folds:
  * the challenged phone (B) while the challenge waits; each phone that still has to confirm in
  * the lock; the filming phone (the non-performer's: it records the attempt) in a skill bet's
- * attempt; the winner and the loser once it is ruled. Nothing for a Gemini bet's market wait,
- * a redo, a void, or a bet that ended early.
+ * attempt; both phones in a dance off's round (both players dance; cueText says which one
+ * films); the winner and the loser once it is ruled. Nothing for a Gemini bet's market wait,
+ * a redo, a void, a dance off being scored, or a bet that ended early.
  */
 export function phoneCues(bet: BetView | null): Record<SlotId, PhoneCue | null> {
   const none = { A: null, B: null };
@@ -602,6 +611,7 @@ export function phoneCues(bet: BetView | null): Record<SlotId, PhoneCue | null> 
     return { A: bet.auth.A ? null : 'act', B: bet.auth.B ? null : 'act' };
   }
   if (phase === 'play') {
+    if (isDanceBet(bet)) return dancePlayStep(bet) === 'scoring' ? none : { A: 'act', B: 'act' };
     if (isMarketBet(bet) || bet.evidence) return none;
     const redoPending =
       bet.ruling?.outcome === 'REDO' && (bet.attempt_no ?? 0) <= (bet.ruling.attempt_no ?? 0);
@@ -613,11 +623,16 @@ export function phoneCues(bet: BetView | null): Record<SlotId, PhoneCue | null> 
   return none;
 }
 
-/** The badge under a phone that has a cue: what it is doing, in the bet's current phase. */
-export function cueText(bet: BetView | null, cue: PhoneCue): string {
+/**
+ * The badge under a phone that has a cue: what it is doing, in the bet's current phase. In a
+ * dance off's round both players dance: the recording phone (DANCE_RECORDER) reads "filming",
+ * the other "dancing".
+ */
+export function cueText(bet: BetView | null, cue: PhoneCue, slot?: SlotId): string {
   if (cue === 'win') return 'WINNER';
   if (cue === 'lose') return 'GG';
   const phase = bet ? phaseOf(bet) : null;
+  if (phase === 'play' && isDanceBet(bet)) return slot === DANCE_RECORDER ? 'filming' : 'dancing';
   return phase === 'challenge'
     ? 'challenged'
     : phase === 'lock'
@@ -676,11 +691,30 @@ export function railSummary(bet: BetView | null): RailSummary {
     const o = bet.appeal_result?.final_outcome ?? bet.ruling?.outcome;
     if (bet.appealed && !bet.appeal_result)
       return { ...base, status: 'Appealed · the panel is voting', tone: 'live' };
-    if (o === 'A_WINS' || o === 'B_WINS')
-      return { ...base, status: `${o === 'A_WINS' ? a : b} wins`, tone: 'good' };
+    if (o === 'A_WINS' || o === 'B_WINS') {
+      const score = isDanceBet(bet) && bet.dance ? ` · ${danceScoreLine(bet.dance)}` : '';
+      return { ...base, status: `${o === 'A_WINS' ? a : b} wins${score}`, tone: 'good' };
+    }
+    const dance = isDanceBet(bet) ? danceResult(bet) : null;
+    if (dance?.kind === 'too_close')
+      return { ...base, status: 'Too close to call · stakes refunded', tone: 'bad' };
+    if (dance?.kind === 'no_contest')
+      return { ...base, status: 'No contest · stakes refunded', tone: 'bad' };
     if (o === 'VOID') return { ...base, status: 'Void · stakes refunded', tone: 'bad' };
     if (bet.hearing) return { ...base, status: 'Hearing · each side argues', tone: 'live' };
     return { ...base, status: 'The judge is ruling…', tone: 'live' };
+  }
+  if (phase === 'play' && isDanceBet(bet)) {
+    const step = dancePlayStep(bet);
+    const title = danceRoutineOf(bet)?.title;
+    if (step === 'scoring') return { ...base, status: 'Scored · checking the round', tone: 'live' };
+    if (step === 'dancing')
+      return {
+        ...base,
+        status: `Dance off${title ? ` · ${title}` : ''} · ${a} and ${b} are dancing`,
+        tone: 'live',
+      };
+    return { ...base, status: `Locked · ${a} left, ${b} right`, tone: 'good' };
   }
   if (phase === 'play') {
     if (bet.ruling?.outcome === 'REDO') return { ...base, status: 'Redo · go again', tone: 'live' };

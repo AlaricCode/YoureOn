@@ -15,6 +15,16 @@
 // Beat 6 (the closer): on A's negotiate screen "Bet on Bitcoin" (app/marketTerms) shows Gemini's
 // live odds and the fair split, proposes at the binding quote, then the same terms card and lock;
 // a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
+// Dance Off (docs/planning/DANCE-OFF.md): "Dance off" on A's negotiate screen (app/danceTerms),
+// the same card and lock, then the round on the recording phone (../dance DanceOffScreen: the
+// judge cam, else A's phone) and "Dance off live" on the other (app/danceFlow); the usual ruling,
+// GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
+// "Jarvis" (../wake, ./wakeGate; EXPO_PUBLIC_WAKE): one recognizer, listening on Home (in a room)
+// and on A's negotiate screen until the judge starts. On Home "Jarvis, …" starts a challenge (the
+// person named, the face scan, or the one person online); on the negotiate screen A's judge waits
+// for "Jarvis" or "Tap to talk" and hears the sentence first. The rainbow loop (../wake RainbowLoop)
+// runs from the wake through the sentence and while the judge connects. Without the module in the
+// binary (or with the flag off) the judge starts on the negotiate screen as before.
 // No simulated Face ID here (that lives in src/preview only). Party screens never show chain
 // words: server text that reaches a screen goes through ui/copyRule first.
 import { StatusBar } from 'expo-status-bar';
@@ -28,7 +38,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, Linking, StyleSheet, View } from 'react-native';
 
 import type {
   BetSnapshot,
@@ -88,8 +98,13 @@ import { isCopyOk } from '../ui/copyRule';
 import { Page, Screen, StatusHero } from '../ui/parts';
 import { half, palette, radius, space } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
+import { STATUS_COPY, WAKE_COPY, wt } from '../wake/copy';
+import { RainbowLoop } from '../wake/RainbowLoop';
+import { useWakeWord } from '../wake/useWakeWord';
 import { WalletError } from '../wallet/wallet';
+import type { DanceUploadBundle } from '../dance/index';
 import {
+  ActionError,
   appeal,
   authorizeLock,
   checkLockPolicy,
@@ -97,6 +112,29 @@ import {
   sendAttempt,
   type PreparedAttempt,
 } from './actions';
+import {
+  danceStartNote,
+  danceWatchPhase,
+  isDanceBet,
+  sendDanceUpload,
+  startDanceAttemptVia,
+  type PreparedDance,
+} from './danceFlow';
+import {
+  canConfirmDance,
+  canSubmitDance,
+  DANCE_ROUTINE_CHOICES,
+  DANCE_STAKES_USD,
+  danceCardOf,
+  danceClaimPreview,
+  danceOpen,
+  danceReducer,
+  initialDance,
+  stakeChips,
+  submitDanceTerms,
+  waitingForAcceptDance,
+} from './danceTerms';
+import { canRematch, chipAtMost, startRematch, withRematch } from './rematch';
 import {
   appReducer,
   initialApp,
@@ -151,11 +189,25 @@ import {
   TYPED_STAKES_USD,
   typedCardOf,
   typedReducer,
+  typedStakeFor,
   typedStakes,
   waitingForAccept,
-  type TypedStakeUsd,
 } from './typedTerms';
 import { oddsApply, oddsSettled } from './odds';
+import {
+  CONNECTED_GRACE_MS,
+  HEARD_REARM_MS,
+  heldUtterance,
+  homeWakeAction,
+  JUDGE_RELEASE_MS,
+  judgeAutoStarts,
+  judgeWaitsForWake,
+  loopReducer,
+  THINKING_MAX_MS,
+  wakeListening,
+  type HeldUtterance,
+  type LoopState,
+} from './wakeGate';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 
 const LAST_ROOM_KEY = 'youreon.room.v1';
@@ -181,9 +233,29 @@ const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
  */
 const loadFaceEmbedder = () =>
   importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
+/** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
+const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
+/**
+ * EXPO_PUBLIC_WAKE=off turns "Jarvis" off (./wakeGate): A's judge then starts on the negotiate
+ * screen by itself, as before. It needs the voice judge (EXPO_PUBLIC_VOICE) to have anyone to hear.
+ */
+const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
+/**
+ * The Dance Off screens (../dance) pull the pose camera's native view: loaded on first use and
+ * through importSafely, like the voice SDK, so a build without it never fails at launch.
+ */
+const loadDance = () => importSafely(() => import('../dance/index'));
+const DanceOffScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceOffScreen })));
+const DanceWatchScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceWatchScreen })));
+const DanceResultBreakdown = lazy(() =>
+  loadDance().then((m) => ({ default: m.DanceResultBreakdown })),
+);
 const JUDGE_CAM_POLL_MS = 3_000;
 const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat after it lands.';
 const FALLBACK_REASON = 'The judge ruled on the clip.';
+const DANCE_FALLBACK_REASON = 'The scores are in.';
+/** What the dance screen's Start and upload get back (its retry line says `message`). */
+type DanceAnswer = { ok: true } | { ok: false; message: string };
 
 export default function DemoApp({ onOperator }: { onOperator: () => void }) {
   const [rt, setRt] = useState<Runtime | null>(null);
@@ -235,6 +307,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [lock, lockDispatch] = useReducer(lockReducer, initialLock);
   const [typed, typedDispatch] = useReducer(typedReducer, initialTyped);
   const [market, marketDispatch] = useReducer(marketReducer, initialMarket);
+  const [dance, danceDispatch] = useReducer(danceReducer, initialDance);
+  /** Double or nothing (./rematch) in flight from this phone. */
+  const [rematchBusy, setRematchBusy] = useState(false);
   /** The bet whose voice session failed (no key, token refused, SDK error): type it instead. */
   const [voiceFailedBet, setVoiceFailedBet] = useState<string | null>(null);
   /** The judge session's phase and whether the judge is talking (NegotiateScreen's mic/ring). */
@@ -289,6 +364,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const pendingRoom = useRef<string | null>(null);
   /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
   const voiceVars = useRef(new Map<string, VoiceDynamicVariables>());
+  // ---- "Jarvis" state (./wakeGate; the hook and the gating are below the judge session) ----
+  /** The bet whose judge was asked for: a wake, "Tap to talk", or a sentence held from Home. */
+  const [judgeArmedBet, setJudgeArmedBet] = useState<string | null>(null);
+  /** The bet whose JudgeVoice is mounted: it stays until the bet's session ends as before. */
+  const [judgeMountedBet, setJudgeMountedBet] = useState<string | null>(null);
+  /** What was said after "Jarvis", per bet: the judge's first user message (JudgeVoice). */
+  const wakeUtterances = useRef(new Map<string, string>());
+  /** Said on Home: waits for the challenge it started (openNewBet). */
+  const heldWake = useRef<HeldUtterance | null>(null);
+  /** The rainbow loop. */
+  const [loop, loopDispatch] = useReducer(loopReducer, 'off' as LoopState);
 
   const refreshBalance = useCallback(() => {
     rt.api.balance().then(setBalance, () => undefined);
@@ -591,6 +677,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const typedForced =
     !VOICE_ENABLED ||
     (bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id)));
+  /** Double or nothing (./rematch): every stake picker starts on the suggested stake. */
+  const rematchStake = bet?.rematchOf ? bet.suggestedStakeUsd : null;
   useEffect(() => {
     if (!negotiating || !bet) return;
     // After a restart mid-bet the card is already on screen: start the form on it (./typedTerms).
@@ -600,8 +688,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       bName: opponentName,
       typed: typedForced,
       shown: typedCardOf(bet.envelope),
+      stakeUsd: rematchStake,
     });
-  }, [negotiating, bet?.bet_id, opponentName, typedForced]);
+  }, [negotiating, bet?.bet_id, opponentName, typedForced, rematchStake]);
   // ---- odds (both phones): offers, counters, the judge's suggestion (../odds/useOdds) --------
   const oddsTheirName =
     (me === 'A' ? bet?.party_b?.display_name : bet?.party_a?.display_name) ?? '';
@@ -627,7 +716,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   // ---- Bet on Bitcoin (A only, Beat 6): reset per bet; poll Gemini's odds while it is open ----
   useEffect(() => {
     if (!negotiating || !bet || !MARKET_ENABLED) return;
-    marketDispatch({ type: 'init', bet_id: bet.bet_id, shown: marketCardOf(bet.envelope) });
+    marketDispatch({
+      type: 'init',
+      bet_id: bet.bet_id,
+      shown: marketCardOf(bet.envelope),
+      stakeUsd: chipAtMost(MARKET_STAKES_USD, rematchStake),
+    });
   }, [negotiating, bet?.bet_id]);
   const polling = negotiating && market.bet_id === bet?.bet_id && shouldPoll(market);
   useEffect(() => {
@@ -673,6 +767,46 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         marketDispatch({ type: 'requoted', terms_hash: r.terms_hash, note: r.note });
       else if (r.kind === 'round_over') marketDispatch({ type: 'round_over', note: r.note });
       else marketDispatch({ type: 'confirm_failed', note: r.note });
+      feel('failed');
+    }
+  };
+
+  // ---- Dance off (A only, ./danceTerms): reset per bet; a card already shown reopens on it ------
+  useEffect(() => {
+    if (!negotiating || !bet || !DANCE_ENABLED) return;
+    danceDispatch({
+      type: 'init',
+      bet_id: bet.bet_id,
+      shown: danceCardOf(bet.envelope),
+      stakeUsd: rematchStake,
+    });
+  }, [negotiating, bet?.bet_id]);
+
+  const submitDance = async () => {
+    if (!bet || !canSubmitDance(dance) || dance.bet_id !== bet.bet_id) return;
+    danceDispatch({ type: 'submit' });
+    const outcome = await submitDanceTerms(
+      { api: rt.api },
+      { betId: bet.bet_id, routineId: dance.routineId, stakeUsd: dance.stakeUsd },
+    );
+    danceDispatch({ type: 'submitted', outcome });
+    if (outcome.kind !== 'proposed') feel('failed');
+  };
+
+  const confirmDance = async () => {
+    const hash = bet?.envelope?.terms_hash ?? null;
+    if (!bet || !hash || !canConfirmDance(dance, hash, bet.inviteAnswer)) return;
+    danceDispatch({ type: 'confirm' });
+    const keyName = `confirm:${bet.bet_id}:${hash}`;
+    // The same confirm as the typed form (POST …/terms/confirm with the card's hash).
+    const r = await confirmTypedTerms(
+      { api: rt.api },
+      { betId: bet.bet_id, termsHash: hash, idempotencyKey: keyFor(keyName) },
+    );
+    if (r.ok) danceDispatch({ type: 'confirmed' });
+    else {
+      if (r.freshKey) keys.current.delete(keyName);
+      danceDispatch({ type: 'confirm_failed', note: r.note });
       feel('failed');
     }
   };
@@ -845,9 +979,26 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }, [homeNote]);
 
   // ---- actions -----------------------------------------------------------------------------
+  /**
+   * Start A's judge for this bet (a wake, "Tap to talk", or a sentence held from Home): it mounts
+   * with `text` as its first user message ('' = none) while the loop thinks.
+   */
+  const armJudge = (betId: string, text: string) => {
+    wakeUtterances.current.set(betId, text);
+    // A fresh session's phase: a stale 'stopped' from the last bet must not end the loop.
+    setVoicePhase('idle');
+    setJudgeSpeaking(false);
+    setJudgeArmedBet(betId);
+    loopDispatch({ type: 'tap' });
+  };
+
   /** A new challenge (list or face): A hosts the judge, follows the bet, and opens it. */
   const openNewBet = (r: CreateBetResponse) => {
     voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
+    // "Jarvis, …" on Home started this challenge: the judge hears it as the screen opens.
+    const held = heldUtterance(heldWake.current, Date.now());
+    heldWake.current = null;
+    if (held !== null && WAKE_ENABLED) armJudge(r.bet.bet_id, held);
     rt.hub.adopt(r.bet);
     rt.ws.subscribe(r.bet.bet_id);
     dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
@@ -1128,6 +1279,98 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [rt, keyFor],
   );
 
+  // ---- Dance Off round (./danceFlow): the recording phone's Start and upload ----------------
+  /**
+   * DanceOffScreen's Start (after its framing check): POST /attempts asking for the judge cam,
+   * then (A's phone, none in the room) this phone. The count-in follows attempt.started.
+   */
+  const startDance = useCallback(async (): Promise<DanceAnswer> => {
+    const a = appRef.current;
+    const b = a.activeBetId ? rt.hub.get(a.activeBetId) : undefined;
+    if (!b) return { ok: false, message: t(COPY.app.failed) };
+    try {
+      const { result: started } = await startDanceAttemptVia(
+        (recorder) => rt.api.startAttempt(b.bet_id, nextAttemptNo(b), recorder),
+        a.judgeCam,
+        b.my_party,
+      );
+      // The answer already names the recorder and go_at: the count-in need not wait for the
+      // attempt.started push (which brings the same facts).
+      rt.hub.patch(b.bet_id, (m) =>
+        m.attempt?.attempt_no === started.attempt_no
+          ? m
+          : {
+              ...m,
+              attempt: {
+                attempt_no: started.attempt_no,
+                performer: started.performer,
+                max_ms: started.max_ms,
+                recorder_device_id: started.recorder_device_id,
+                go_at: started.go_at,
+              },
+              lastAttemptNo: started.attempt_no,
+            },
+      );
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, message: danceStartNote(e) };
+    }
+  }, [rt]);
+
+  /** Built dance uploads by Idempotency-Key: a retry resends the exact same body. */
+  const preparedDances = useRef(new Map<string, PreparedDance>());
+  /**
+   * Bets whose dance screen this app session has shown. After a restart in JUDGING or RULED the
+   * round (and its upload) is gone with the old screen: a fresh DanceOffScreen would start back
+   * at framing, so that phone shows the watch screen (judging, then the score) instead.
+   */
+  const danceShown = useRef(new Set<string>());
+  const uploadDance = useCallback(
+    async (bundle: DanceUploadBundle, attemptNo: number): Promise<DanceAnswer> => {
+      const id = appRef.current.activeBetId;
+      if (!id) return { ok: false, message: t(COPY.app.failed) };
+      const keyName = `dance:${id}:${attemptNo}`;
+      const r = await sendDanceUpload(
+        { api: rt.api },
+        { betId: id, attemptNo, bundle, idempotencyKey: keyFor(keyName) },
+        preparedDances.current,
+      );
+      if (r.ok) return { ok: true };
+      // A 4xx is replayed for its key: the next try is a new request with a new key.
+      if (r.freshKey) keys.current.delete(keyName);
+      feel('failed');
+      return { ok: false, message: r.message };
+    },
+    [rt, keyFor],
+  );
+
+  // ---- Double or nothing (./rematch): any finished bet, either party --------------------------
+  const rematch = async () => {
+    if (!bet || rematchBusy || !canRematch(bet.state)) return;
+    const from = bet.bet_id;
+    setRematchBusy(true);
+    setAlert(null);
+    const keyName = `rematch:${from}`;
+    const r = await startRematch({ api: rt.api }, from, keyFor(keyName));
+    setRematchBusy(false);
+    if (!r.ok) {
+      if (r.freshKey) keys.current.delete(keyName);
+      setAlert(r.note);
+      feel('failed');
+      return;
+    }
+    // The new bet, as a new challenge from this phone (A): the negotiate screen, typed (no
+    // voice variables for it), every stake picker on the suggested stake.
+    if (r.snapshot) rt.hub.adopt(r.snapshot);
+    rt.hub.patch(r.betId, (m) => withRematch(m, from, r.suggestedStakeUsd));
+    rt.ws.subscribe(r.betId);
+    dispatch({ type: 'bet_opened', bet_id: r.betId, force: true });
+    refreshBalance();
+  };
+  /** The button shows once the bet is over (the server refuses a rematch before). */
+  const onRematch =
+    bet && !app.judgeCam && canRematch(bet.state) ? () => void rematch() : undefined;
+
   const arm: CamArm | null =
     bet?.attempt &&
     app.deviceId &&
@@ -1182,6 +1425,144 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       : null;
   const voiceLive =
     voice !== null && voiceBet?.bet_id === bet?.bet_id && voicePhase === 'connected';
+
+  // ---- "Jarvis" (../wake, ./wakeGate) -----------------------------------------------------------
+  // The judge is started for a bet: armed (a wake, a tap, a held sentence), already mounted, or
+  // the bet moved past the negotiation (typed terms, Bet on Bitcoin, Dance off: it hosts the lock,
+  // the attempt and the ruling as before).
+  const judgeStartedFor = (b: BetModel) =>
+    judgeArmedBet === b.bet_id ||
+    judgeMountedBet === b.bet_id ||
+    judgeAutoStarts({ waits: true, state: b.state, over: isOver(b.state) });
+  // As the wake gate sees it (a missing module makes the judge start anyway, and then nothing
+  // listens, so this view is enough to keep the mic off while a session holds it).
+  const judgeUp =
+    voice !== null && voiceBet !== null && (!WAKE_ENABLED || judgeStartedFor(voiceBet));
+  // The audio session settles before the recognizer takes it again (LiveKit tears down async).
+  const [judgeReleased, setJudgeReleased] = useState(true);
+  useEffect(() => {
+    if (judgeUp) {
+      setJudgeReleased(false);
+      return;
+    }
+    const tm = setTimeout(() => setJudgeReleased(true), JUDGE_RELEASE_MS);
+    return () => clearTimeout(tm);
+  }, [judgeUp]);
+  // A's voice view (not the typed form, Bet on Bitcoin or Dance off), its judge not started yet.
+  const voiceView =
+    !(typed.bet_id === bet?.bet_id && typed.mode === 'typed') &&
+    !(market.bet_id === bet?.bet_id && market.phase !== 'closed') &&
+    !(dance.bet_id === bet?.bet_id && danceOpen(dance));
+  const judgePendingBet =
+    negotiating && voiceView && bet && voice !== null && voiceBet?.bet_id === bet.bet_id
+      ? judgeStartedFor(bet)
+        ? null
+        : bet.bet_id
+      : null;
+  const routeRef = useRef(route);
+  routeRef.current = route;
+  const pendingRef = useRef(judgePendingBet);
+  pendingRef.current = judgePendingBet;
+
+  const wake = useWakeWord({
+    enabled: wakeListening({
+      flag: WAKE_ENABLED,
+      signedIn: app.auth === 'signedIn',
+      judgeCam: app.judgeCam,
+      route,
+      inRoom: app.room !== null,
+      judgePending: judgePendingBet !== null,
+      judgeBusy: judgeUp || !judgeReleased,
+    }),
+    onWake: () => {
+      loopDispatch({ type: 'wake' });
+      feel('wakeHeard');
+      AccessibilityInfo.announceForAccessibility(wt(WAKE_COPY.listening));
+    },
+    onUtterance: (text) => {
+      // The mic is already released here.
+      const pending = pendingRef.current;
+      if (routeRef.current === 'negotiate' && pending) {
+        armJudge(pending, text);
+        return;
+      }
+      loopDispatch({ type: 'utterance', toJudge: false });
+      if (routeRef.current !== 'home') return;
+      const a = appRef.current;
+      const opponents = a.members
+        .filter((m) => m.user.user_id !== a.me?.user_id)
+        .map(toPreviewUser);
+      const action = homeWakeAction({
+        text,
+        inRoom: a.room !== null,
+        canScan: faceOn && a.room !== null,
+        opponents,
+      });
+      // Kept for the challenge's negotiate screen (openNewBet), '' included: the judge starts
+      // there without waiting for another "Jarvis".
+      heldWake.current = action.kind === 'none' ? null : { text, atMs: Date.now() };
+      if (action.kind === 'challenge') {
+        const u = opponents.find((o) => o.user_id === action.userId);
+        if (u) challengeFromList(u);
+      } else if (action.kind === 'scan') {
+        dispatch({ type: 'overlay', overlay: 'scan' });
+      } else if (action.kind === 'pick') {
+        setHomeNote(wt(WAKE_COPY.pickOpponent));
+      }
+    },
+    onCancel: () => loopDispatch({ type: 'cancel' }),
+    onError: (message) => console.warn('[yo] wake', message),
+  });
+  // Missing from this binary (or the flag off): the judge starts by itself, as before.
+  const judgeWaits = judgeWaitsForWake({
+    flag: WAKE_ENABLED,
+    available: wake.available,
+    status: wake.status,
+  });
+  // The recognizer still holds the mic (its stop is async): the judge mounts once it let go.
+  const wakeHoldsMic = wake.status === 'listening' || wake.status === 'capturing';
+  const judgeOn =
+    voice !== null &&
+    voiceBet !== null &&
+    (judgeMountedBet === voiceBet.bet_id ||
+      !judgeWaits ||
+      (judgeStartedFor(voiceBet) && !wakeHoldsMic));
+  // Once mounted, a bet's judge stays (a status flip must never end a live session).
+  useEffect(() => {
+    if (judgeOn && voiceBet) setJudgeMountedBet(voiceBet.bet_id);
+  }, [judgeOn, voiceBet?.bet_id]);
+  /** On A's negotiate screen: the judge waits for "Jarvis" or "Tap to talk". */
+  const judgeWaiting = judgePendingBet !== null && judgeWaits && !judgeOn;
+  const wakeStatusLine = STATUS_COPY[wake.status];
+  const wakeLine = wakeStatusLine ? wt(wakeStatusLine) : null;
+
+  // Home: a sentence that stayed on Home ("pick one", a failed challenge) listens again shortly.
+  const resumeWake = wake.resume;
+  useEffect(() => {
+    if (route !== 'home' || wake.status !== 'heard') return;
+    const tm = setTimeout(resumeWake, HEARD_REARM_MS);
+    return () => clearTimeout(tm);
+  }, [route, wake.status, resumeWake]);
+  // A sentence held from Home is for the challenge it started, not one picked later.
+  const prevRoute = useRef(route);
+  useEffect(() => {
+    if (route === 'home' && prevRoute.current !== 'home') heldWake.current = null;
+    prevRoute.current = route;
+  }, [route]);
+
+  // The rainbow loop: off when the judge talks or fails, on another screen, or past its deadlines.
+  useEffect(() => {
+    loopDispatch({ type: 'judge', phase: voicePhase, speaking: judgeSpeaking });
+  }, [voicePhase, judgeSpeaking]);
+  useEffect(() => {
+    if (route !== 'home' && route !== 'negotiate') loopDispatch({ type: 'reset' });
+  }, [route]);
+  useEffect(() => {
+    if (loop !== 'thinking') return;
+    const ms = voicePhase === 'connected' ? CONNECTED_GRACE_MS : THINKING_MAX_MS;
+    const tm = setTimeout(() => loopDispatch({ type: 'reset' }), ms);
+    return () => clearTimeout(tm);
+  }, [loop, voicePhase]);
 
   // ---- render ------------------------------------------------------------------------------
   if (bootFailed && app.auth === 'booting') return <SplashView failed onRetry={boot} />;
@@ -1377,6 +1758,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <IncomingScreen
             challenger={bet?.challenger?.display_name ?? bet?.party_a?.display_name ?? ''}
             roomName={app.room?.name ?? t(COPY.home.room)}
+            rematch={bet?.rematchOf != null}
             onAccept={() => {
               if (!bet) return;
               rt.hub.patch(bet.bet_id, (m) => ({ ...m, inviteAnswer: 'accepted' }));
@@ -1421,7 +1803,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     canVoice: !typedForced,
                     claim: typed.claim,
                     stakeUsd: typed.stakeUsd,
-                    stakes: TYPED_STAKES_USD,
+                    stakes: stakeChips(TYPED_STAKES_USD, typedStakeFor(rematchStake)),
                     sending: typed.phase === 'sending',
                     confirming: typed.phase === 'confirming' || typed.phase === 'confirmed',
                     canSubmit: canSubmit(typed),
@@ -1443,7 +1825,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     onOpen: () => typedDispatch({ type: 'open' }),
                     onVoice: () => typedDispatch({ type: 'voice' }),
                     onClaim: (text) => typedDispatch({ type: 'claim', text }),
-                    onStake: (usd) => typedDispatch({ type: 'stake', usd: usd as TypedStakeUsd }),
+                    onStake: (usd) => typedDispatch({ type: 'stake', usd }),
                     onSubmit: () => void submitTyped(),
                     onConfirm: () => void confirmTyped(),
                     odds: typedOdds,
@@ -1451,6 +1833,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 : undefined
             }
             odds={oddsPanel}
+            wake={
+              judgeWaiting && bet
+                ? {
+                    line: wakeLine,
+                    onTapToTalk: () => armJudge(bet.bet_id, ''),
+                    onOpenSettings:
+                      wake.status === 'denied' ? () => void Linking.openSettings() : undefined,
+                  }
+                : undefined
+            }
             market={
               negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id
                 ? {
@@ -1499,6 +1891,40 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     onStake: (usd) => marketDispatch({ type: 'stake', usd: usd as MarketStakeUsd }),
                     onSubmit: () => void submitMarket(),
                     onConfirm: () => void confirmMarket(),
+                  }
+                : undefined
+            }
+            dance={
+              negotiating && DANCE_ENABLED && dance.bet_id === bet?.bet_id
+                ? {
+                    open: danceOpen(dance),
+                    routines: DANCE_ROUTINE_CHOICES,
+                    routineId: dance.routineId,
+                    stakeUsd: dance.stakeUsd,
+                    stakes: stakeChips(DANCE_STAKES_USD, rematchStake),
+                    preview: danceClaimPreview(dance.routineId, dance.stakeUsd),
+                    sending: dance.phase === 'sending',
+                    confirming: dance.phase === 'confirming' || dance.phase === 'confirmed',
+                    canSubmit: canSubmitDance(dance),
+                    canConfirm: canConfirmDance(
+                      dance,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    ),
+                    waitingFor: waitingForAcceptDance(
+                      dance,
+                      bet?.envelope?.terms_hash ?? null,
+                      bet?.inviteAnswer ?? null,
+                    )
+                      ? names.theirName
+                      : null,
+                    note: dance.note,
+                    onOpen: () => danceDispatch({ type: 'open' }),
+                    onClose: () => danceDispatch({ type: 'close' }),
+                    onRoutine: (id) => danceDispatch({ type: 'routine', id }),
+                    onStake: (usd) => danceDispatch({ type: 'stake', usd }),
+                    onSubmit: () => void submitDance(),
+                    onConfirm: () => void confirmDance(),
                   }
                 : undefined
             }
@@ -1573,6 +1999,94 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           />
         );
       }
+      case 'dance': {
+        // The recording phone (./danceFlow recordsDance): framing, count-in, the round, the
+        // local result, the upload, then the ruling (which moves the bet to RULED).
+        const terms = bet?.envelope?.terms;
+        if (!bet || !terms || !me) return waiting;
+        const names = { a: terms.party_a.display_name, b: terms.party_b.display_name };
+        if (state === 'LOCKED' || state === 'ATTEMPT') danceShown.current.add(bet.bet_id);
+        if (!danceShown.current.has(bet.bet_id)) {
+          return (
+            <PanelErrorBoundary
+              key={bet.bet_id}
+              name={t(COPY.dance.panel)}
+              onError={(m) => console.warn('[yo] dance watch', m)}
+            >
+              <Suspense fallback={waiting}>
+                <DanceWatchScreen
+                  terms={terms}
+                  me={me}
+                  names={names}
+                  phase="judging"
+                  scored={bet.danceScored}
+                />
+              </Suspense>
+            </PanelErrorBoundary>
+          );
+        }
+        const a = bet.attempt;
+        return (
+          <PanelErrorBoundary
+            key={bet.bet_id}
+            name={t(COPY.dance.panel)}
+            onError={(m) => console.warn('[yo] dance', m)}
+          >
+            <Suspense fallback={waiting}>
+              <DanceOffScreen
+                betId={bet.bet_id}
+                terms={terms}
+                me={me}
+                names={names}
+                // go_at on this phone's clock (as the judge cam's arm), so the count-in lands
+                // on the server's instant.
+                attempt={
+                  a
+                    ? {
+                        attempt_no: a.attempt_no,
+                        go_at: new Date(Date.parse(a.go_at) - rt.clock.offsetMs).toISOString(),
+                        max_ms: a.max_ms,
+                      }
+                    : null
+                }
+                ruling={
+                  bet.ruling
+                    ? {
+                        outcome: bet.ruling.ruling.outcome,
+                        reason: safeData(bet.ruling.ruling.reason, DANCE_FALLBACK_REASON),
+                      }
+                    : null
+                }
+                onStartAttempt={startDance}
+                onUpload={uploadDance}
+                onLeave={app.judgeCam ? () => setJudgeCam(false) : undefined}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        );
+      }
+      case 'danceWatch': {
+        // The other phone: "Dance off live" while the recording phone runs the round.
+        const terms = bet?.envelope?.terms;
+        if (!bet || !terms || !me) return waiting;
+        return (
+          <PanelErrorBoundary
+            key={bet.bet_id}
+            name={t(COPY.dance.panel)}
+            onError={(m) => console.warn('[yo] dance watch', m)}
+          >
+            <Suspense fallback={waiting}>
+              <DanceWatchScreen
+                terms={terms}
+                me={me}
+                names={{ a: terms.party_a.display_name, b: terms.party_b.display_name }}
+                phase={danceWatchPhase(state)}
+                scored={bet.danceScored}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        );
+      }
       case 'judgeCam':
         // This phone films: as the room's judge cam, or (two phones) as the non-performer's own
         // phone for this attempt only, which has no judge-cam mode to leave.
@@ -1602,7 +2116,27 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             : Date.parse(bet.ruling?.ruling.created_at ?? new Date().toISOString()) +
               10_000 -
               rt.clock.offsetMs;
-        const reason = safeData(bet.ruling?.ruling.reason, FALLBACK_REASON);
+        const isDance = view.kind === 'dance';
+        // A dance off's ruling reason is the announcer's line (DANCE-OFF §5).
+        const reason = safeData(
+          bet.ruling?.ruling.reason,
+          isDance ? DANCE_FALLBACK_REASON : FALLBACK_REASON,
+        );
+        const scored = isDance ? bet.danceScored : null;
+        // VOID 'undecidable': the scores within the margin, or a player the camera missed. An
+        // invalid round (someone left, a third person) stays "No contest".
+        const tooClose =
+          result === 'void' &&
+          scored !== null &&
+          scored.validation.verdict !== 'invalid' &&
+          (scored.evidence.too_close || scored.evidence.failed !== null);
+        const breakdown = scored ? (
+          <PanelErrorBoundary name={t(COPY.dance.panel)} onError={() => undefined}>
+            <Suspense fallback={null}>
+              <DanceResultBreakdown scored={scored} names={partyNames(view)} />
+            </Suspense>
+          </PanelErrorBoundary>
+        ) : null;
         // ../gg: a spoken "check that again" opens the loser's review sheet over the ruling.
         return (
           <RulingReview
@@ -1617,13 +2151,25 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               <RulingScreen
                 view={view}
                 result={result}
-                judgeLabel={view.kind === 'market' ? t(COPY.market.gemini) : undefined}
+                judgeLabel={
+                  view.kind === 'market'
+                    ? t(COPY.market.gemini)
+                    : isDance
+                      ? t(COPY.dance.announcer)
+                      : undefined
+                }
+                title={tooClose ? t(COPY.dance.tooClose) : undefined}
+                note={isDance && result === 'void' ? t(COPY.dance.refund) : null}
+                detail={breakdown}
                 reason={reason}
                 appealDeadlineMs={deadline}
                 busy={busy}
                 alert={alert}
                 onGG={() => void gg()}
-                onAppeal={result === 'lost' ? () => void appealNow() : undefined}
+                // No appeal on a dance off: its score is deterministic (DANCE-OFF §5).
+                onAppeal={result === 'lost' && !isDance ? () => void appealNow() : undefined}
+                onRematch={onRematch}
+                rematchBusy={rematchBusy}
                 tag={tag}
               />
             )}
@@ -1657,6 +2203,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               balanceCents={balanceCents}
               phase={phase === 'confirmed' ? 'confirmed' : 'processed'}
               onHome={dismiss}
+              onRematch={onRematch}
+              rematchBusy={rematchBusy}
+              alert={alert}
             />
           );
         return (
@@ -1667,6 +2216,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             phase={phase}
             onRetry={refreshBalance}
             onHome={dismiss}
+            onRematch={onRematch}
+            rematchBusy={rematchBusy}
+            alert={alert}
           />
         );
       }
@@ -1678,7 +2230,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     <View style={styles.root}>
       <StatusBar style="light" />
       {screen}
-      {voice && voiceBet ? (
+      {judgeOn && voice && voiceBet ? (
         <PanelErrorBoundary
           key={voiceBet.bet_id}
           name="voice"
@@ -1692,7 +2244,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               rt={rt}
               betId={voiceBet.bet_id}
               dynamicVariables={voice}
-              startAttempt={(n) => startAttemptFor(voiceBet, n, 'A')}
+              initialUtterance={wakeUtterances.current.get(voiceBet.bet_id)}
+              // A dance round starts on the dance screen, after its framing check (never by voice).
+              startAttempt={(n) =>
+                isDanceBet(voiceBet)
+                  ? Promise.reject(new ActionError('INVALID_STATE'))
+                  : startAttemptFor(voiceBet, n, 'A')
+              }
               micMuted={micMutedFor(voiceBet.state, {
                 reviewable: reviewable(voiceBet),
                 rulingSpoken: rulingSpokenBet === voiceBet.bet_id,
@@ -1713,11 +2271,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           </Suspense>
         </PanelErrorBoundary>
       ) : null}
-      {alert && route !== 'ruling' && route !== 'terms' ? (
+      {alert && route !== 'ruling' && route !== 'terms' && route !== 'payout' ? (
         <View style={styles.toast} pointerEvents="none">
           <Label variant="labelMedium">{alert}</Label>
         </View>
       ) : null}
+      {/* Last, above every screen and toast: "Jarvis" heard, then the judge connecting. */}
+      <RainbowLoop active={loop !== 'off'} mode={loop === 'listening' ? 'listening' : 'thinking'} />
     </View>
   );
 }
@@ -1735,6 +2295,10 @@ function authFailureOf(e: unknown): AuthFailure {
 function lockSignalsSafe(...args: Parameters<typeof lockSignals>) {
   return lockSignals(...args).filter((s) => s.type !== 'reset');
 }
+
+/** A's and B's names as the dance screens take them (this phone's view is mine/theirs). */
+const partyNames = (v: Pick<BetView, 'me' | 'myName' | 'theirName'>) =>
+  v.me === 'A' ? { a: v.myName, b: v.theirName } : { a: v.theirName, b: v.myName };
 
 /** This phone wins the payout: the panel's outcome after an appeal, else the ruling's. */
 function wonBet(b: BetModel): boolean {

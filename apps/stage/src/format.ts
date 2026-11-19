@@ -116,6 +116,12 @@ export function eventLabel(
       ? `Ruling: ${who(o[0])} wins`
       : `Ruling: ${o.toLowerCase()}`;
   }
+  if (type === 'dance.scored') {
+    const ev = (p.evidence ?? {}) as Record<string, unknown>;
+    const s = (ev.scores ?? {}) as Record<string, unknown>;
+    const pts = (x: unknown) => (typeof x === 'number' ? (x / 10).toFixed(1) : '?');
+    return `Dance scored · ${who('A')} ${pts(s.a)} · ${who('B')} ${pts(s.b)}`;
+  }
   if (type === 'bet.state') return `State ${String(p.state ?? '?').replace(/_/g, ' ')}`;
   if (type === 'attempt.started') return `Attempt ${String(p.attempt_no ?? '')}`.trim();
   if (type === 'appeal.vote') return 'Panel vote';

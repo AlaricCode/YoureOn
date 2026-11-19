@@ -283,7 +283,7 @@ export const TermsV1 = z
     escrow: EscrowRef,
     party_a: TermsParty,
     party_b: TermsParty,
-    type: z.enum(['skill', 'real_world']),
+    type: z.enum(['skill', 'real_world', 'dance_off']),   // 'dance_off' widened in place (§2.7, §11 rule 4)
     claim: NText(200),
     performer: Party.nullable(),
     yes_party: Party,
@@ -311,6 +311,14 @@ export const TermsV1 = z
         const [hi, lo] = [BigInt(t.stakes.a), BigInt(t.stakes.b)].sort((x, y) => (x > y ? -1 : 1));
         if (hi > MAX_ODDS_RATIO * lo) bad(['stakes'], 'skill => odds at most 10:1');
       }
+    } else if (t.type === 'dance_off') {
+      // Dance Off (widened in place, no version bump, §11): both perform; "A out-dances B".
+      if (t.evidence_source !== 'camera') bad(['evidence_source'], "dance_off => 'camera'");
+      if (t.market !== null) bad(['market'], 'dance_off => null');
+      if (t.performer !== null) bad(['performer'], 'dance_off => null (both perform)');
+      if (t.yes_party !== 'A') bad(['yes_party'], "dance_off => 'A'");
+      if (t.attempts.rule !== 'single') bad(['attempts'], "dance_off => 'single'");
+      if (t.stakes.a !== t.stakes.b) bad(['stakes'], 'dance_off => equal stakes');
     } else {
       if (t.evidence_source !== 'gemini') bad(['evidence_source'], "real_world => 'gemini'");
       if (t.performer !== null) bad(['performer'], 'real_world => null');
@@ -338,17 +346,17 @@ All fields below are **binding** (they are inside `Terms`, so they are in `terms
 | `bet_id` | server | Binds the hash to one escrow account, so terms can't be replayed onto another bet. |
 | `escrow` | server | `{cluster, program_id, mint}`. Binds the hash to one deployment and one token. Proposed addition; see §12. |
 | `party_a`, `party_b` | server | `{pubkey, display_name}`. `accept_bet` must be signed by `party_b.pubkey`. The display name is a snapshot at proposal time. |
-| `type` | judge | `skill` = settled by camera. `real_world` = settled by a Gemini contract (devnet demo only; see the note below). |
+| `type` | judge | `skill` = settled by camera. `real_world` = settled by a Gemini contract (devnet demo only; see the note below). `dance_off` = two players dance one bundled routine side by side, scored by the shared deterministic scorer (§2.7, §4.2). |
 | `claim` | judge | One **proposition** in the third person that resolves TRUE or FALSE, e.g. "Jake lands a water bottle flip upright on the table." Not phrased as the bet ("bet you can't…"). |
-| `performer` | judge | Who attempts it (skill). `null` for real_world. Drives "Jake, you're on" and which phone records. |
+| `performer` | judge | Who attempts it (skill). `null` for real_world and dance_off (both dance). Drives "Jake, you're on" and which phone records. |
 | `yes_party` | judge | The party who wins if the claim resolves TRUE. "Bet you can't flip it" → claim "Jake flips it", performer B, `yes_party` B. LLMs never output winner letters directly (§5.1). |
 | `attempts` | judge | `single` (count 1), `first_success` (up to N tries, TRUE on the first success), `best_of` (odd N, TRUE if successes > N/2, may stop once decided), `all_of` (N in a row). All tries happen inside **one recording**. A REDO re-records the whole set. |
 | `success_criteria[]` | judge | Observable conditions that make the claim TRUE. All must hold. Order is significant for hashing. |
 | `failure_criteria[]` | judge | Conditions that make it FALSE. These are explicit fouls; the criteria not being met is also FALSE. |
 | `edge_cases[]` | judge | `{question, answer, asked_by: 'judge'}`. The answer is written as a crisp rule, not the raw transcript. Holds at most 2 clarifications plus up to 2 defaults the judge states without asking. |
-| `evidence_source` | judge | `camera` ⇔ `skill`, `gemini` ⇔ `real_world`. |
+| `evidence_source` | judge | `camera` for `skill` and `dance_off`, `gemini` ⇔ `real_world`. |
 | `market` | server | Required iff `real_world`. Copied from a `GeminiMarketSnapshot`, never typed by the LLM. See §2.6 and §8. |
-| `stakes` | server | `{a, b, currency: 'USDC'}`, micro-USDC strings. Skill: `a = amount`, `b = amount_b ?? amount` (odds: unequal stakes agreed on both phones, at most 10:1, §3.5). Real world: fair split of `pot = 2 × amount` (§8). Each side is checked against `MAX_STAKE`. |
+| `stakes` | server | `{a, b, currency: 'USDC'}`, micro-USDC strings. Skill: `a = amount`, `b = amount_b ?? amount` (odds: unequal stakes agreed on both phones, at most 10:1, §3.5). Dance off: `a = b = amount` (even money, no odds). Real world: fair split of `pot = 2 × amount` (§8). Each side is checked against `MAX_STAKE`. |
 | `deadline` | server | Whole-second UTC. Skill: attempt done by `created_at + 10 min` (or + the judge's `deadline_minutes`, ≤ 45), rounded to the nearest whole minute. Real world: `market.expiry + 10 min` (confirmed: spike 05: `resolvedAt` is 5.5–8.8 s after expiry over 173 contracts, and the REST side is visible by ~T+9 s; spike 05 also recommends expiry + 10 min). It is an offchain term, not an onchain deadline. The onchain `resolve_deadline` is `locked_at + Config.resolve_deadline_secs` (3600 s demo, ESCROW §5.2), so the server enforces `deadline + RESOLVE_GRACE_SECS ≤ created_at + resolve_deadline_secs`. That always leaves ≥ 10 min for judging, REDOs and the hearing (§9.3). |
 | `created_at` | server | When the terms were finalized (the instant `terms_hash` is computed). |
 
@@ -497,6 +505,21 @@ These fields differ from §2.5. A says "Bitcoin's up by the end of this pitch", 
 - Ticker shapes come from spike 05 samples (event `BTC05M2611072140`, instrument `GEMI-BTC05M2611072140-UP`, contract ticker `UP`). Always copy them from the API; never build them by hand.
 - `strike.value` is `null` until `availableAt` (the start of the 5-minute window). A bet on a contract whose window hasn't opened yet binds to "the reference price Gemini captures at `availableAt`". That is still unambiguous, because Gemini settles it. For the **current** window the server quotes only once the strike is known (`STRIKE_PENDING`, §8.2). Spike 05 (confirmed) saw the strike arrive on the WS `contractStatus` frame 4–6 s into the window, on REST `/strike` after 14–22 s, and still `null` in the discovery list after 44 s. Never take the strike from the discovery list.
 - **`priceAtLock` is the price when the terms are finalized (`quotedAt`, when the server builds the lock), not when the second party authorizes.** The quote expires after `QUOTE_TTL_SECS` (60 s), which is enforced onchain through the `accept_deadline` argument of `create_bet` (§8.3). The name is kept from the baseline; see §12.
+
+### 2.7 Dance Off variant
+
+`docs/planning/DANCE-OFF.md` is the build contract. A dance off is `type: 'dance_off'` with `evidence_source: 'camera'`, `market: null`, `performer: null` (both perform), `yes_party: 'A'` (the claim reads "A out-dances B", so `claim_result` MET ⇔ A wins), `attempts: {count: 1, rule: 'single'}`, `stakes.a === stakes.b`, and `edge_cases: []` allowed. **No new keys:** the routine is bound through the text fields (`packages/shared/src/dance/terms.ts`):
+
+| Field | Text |
+|---|---|
+| `claim` | `Dance Off: <routine title>, 15 seconds, higher match score wins, $X each` (A = challenger) |
+| `success_criteria[0]` | `Routine <routine_id> v<version> sha256:<first 16 hex of routineSha256>` |
+| `success_criteria[1]` | `Higher match score wins; scores within 2 points are too close to call (refund)` (`TIE_MARGIN_X10` 20) |
+| `failure_criteria` | `[]` |
+
+- `parseDanceTermsRoutine(terms)` extracts `{routine_id, version, sha16}` from `success_criteria[0]` and verifies it against the bundled registry (`ROUTINES`, exactly 3). `Terms` itself checks only the structure, never the registry.
+- Producer: `POST /v1/bets/:bet_id/terms/dance` `DanceTermsRequest {routine_id, amount_usd}` → `danceTermsArgs()` (`packages/shared/src/judge/dance-terms.ts`) → `evaluateProposeTerms` → `persistEvaluation`, the same pipeline as typed and market terms. The `propose_terms` cross rules also check performer `none`, yes_party `A`, one round, no `stake_b_usd` and a verified routine line. The voice agent's `PROPOSE_TERMS_BODY_SCHEMA` does **not** offer `dance_off` in v1, and `evaluateProposeTerms` enforces it: a `dance_off` from a body carrying `conversation_id` (every ElevenLabs webhook) is `invalid` (`type: dance_off only via /terms/dance`) unless `EvaluateOptions.allowDanceOff` is `true`; the id-less `danceTermsArgs()` projection is allowed by default. `TypedTermsRequest.type` stays `skill | real_world`.
+- The challenge category of a dance off is `other` (no odds prior). Dance offs have no odds and no appeal.
 
 ---
 
@@ -720,6 +743,7 @@ export const GeminiSettlementRecord = z.strictObject({
 |---|---|
 | `camera` | `sha256(clip bytes)` = `CameraEvidence.clip_sha256` of the deciding recording |
 | `gemini` | `hashJcs(GeminiSettlementRecord)`. The record contains `bet_id` and `terms_hash`, so it is per bet, not per market (DATA-MODEL stores it on the settlement `rulings` row). |
+| `camera`, `type: 'dance_off'` | `hashJcs(DanceEvidence)` (§4.2). Stored as `attempts.evidence_canonical = jcs(DanceEvidence)`. |
 
 - Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: spike 02: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). Since D10 the build uses expo-video-thumbnails and the shared sampler `packages/shared/src/judge/frames.ts` (12 frames: 4 spread over the clip, 8 in its last ~1.2 s; plus the landing crop); the server labels the frames inside the landing window and the crop in the prompt. `landing_crop` is optional, so 8-frame records from earlier builds still parse, and an absent flag is not part of the JCS bytes. `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (spike 02 estimate).
 - The settlement record is built from the **event details endpoint** (`GET /v1/prediction-markets/events/{eventTicker}`). Confirmed by spike 05: `resolutionSide` shows there ~7.5–8.7 s after expiry, while `recently-settled` lags 26–36 s. `response_sha256` pins the exact body. What an `invalid` contract looks like is still unseen (0 of 173).
@@ -799,6 +823,63 @@ export const ReplayFoulInput = z.strictObject({
 
 - **Precedence:** a confirmed foul beats a win. **Never a fake foul:** the ruling has no structured foul and its free-text `reason` is never parsed; until a detector supplies a confirmed foul, `kind` is always `'win'`.
 - These are live evidence frames, so the stage does **not** badge them "REPLAY" (ARCHITECTURE §7.1); its badges read `SLOW-MO · WINNING MOMENT` / `SLOW-MO · FOUL`.
+
+### 4.2 Dance Off: PoseSeries and DanceEvidence
+
+Pose data and the scorer live in `packages/shared/src/dance/` (`joints`, `pose`, `routine`, `track`, `score`, `terms`, `evidence`). Joint order is the fixed 19 Apple Vision joints (`JOINT_NAMES`); a raw person is `k: number[57]` = `[x, y, c] × 19` (x, y in [0, 1] in the upright, unmirrored image; c = 0 for a missing joint).
+
+```ts
+// packages/shared/src/dance/pose.ts — every value an int; pose_sha256 = hashJcs(PoseSeries)
+export const PoseKeypoints = z.array(z.number().int().min(0).max(10_000)).length(57)   // x, y 0..10000; c ≤ 1000 (refined)
+export const PoseFrame = z.strictObject({
+  t: z.number().int().min(-3_000).max(20_000),   // ms since round t0 (count-in frames are negative)
+  n: z.number().int().min(0).max(32),             // people seen; extra people are never scored
+  a: PoseKeypoints.nullable(),                    // A = left in the image at round start
+  b: PoseKeypoints.nullable(),
+});
+export const PoseSeries = z.strictObject({
+  schema_version: z.literal(1),
+  w: z.number().int().min(1).max(8192), h: z.number().int().min(1).max(8192),   // upright image size (aspect-correct vectors)
+  fps_cap: z.number().int().min(1).max(30),
+  sync_offset_ms: z.number().int().min(-500).max(500),   // the scorer subtracts it from every t
+  frames: z.array(PoseFrame).max(700),                    // t never decreases (refined)
+});
+
+// packages/shared/src/evidence.ts — strict, hashed: evidence_hash = hashJcs(DanceEvidence)
+export const DanceEvidence = z.strictObject({
+  schema_version: z.literal(1),
+  kind: z.literal('dance'),
+  bet_id: BetId,
+  attempt_no: z.number().int().min(1),
+  terms_hash: Hex32,
+  routine: z.strictObject({ id: z.string().min(1).max(32), version: z.number().int().min(1), sha256: Hex32 }),
+  scorer_version: z.literal('dance-score@1'),
+  pose_sha256: Hex32,
+  pose_frames: z.number().int().min(0).max(700),
+  sync_offset_ms: z.number().int().min(-500).max(500),
+  scores: z.strictObject({ a: ScoreX10, b: ScoreX10 }),     // int tenths 0..1000, SERVER-recomputed from the series
+  winner: Party.nullable(),
+  too_close: z.boolean(),                                    // |a − b| < TIE_MARGIN_X10 (20)
+  failed: z.enum(['coverage_a', 'coverage_b', 'no_frames']).nullable(),
+  key_moves: z.array(z.strictObject({ id: z.string().min(1).max(24), a: Grade, b: Grade })).max(16),   // Grade = PERFECT | GOOD | MISS
+  checks: z.strictObject({ coverage_a_pct: Pct, coverage_b_pct: Pct, max_people: z.number().int().min(0), side_swaps: z.number().int().min(0) }),
+  frames: z.array(EvidenceFrame).min(1).max(6),              // the uploaded key frames (= the ruling's frame_hashes)
+  clip_sha256: Hex32.nullable(),
+});
+
+// POST /v1/bets/:bet_id/attempts/:n/dance, multipart part `upload` (+ `frame` × 4 JPEGs ≤ 200 KB)
+export const DanceUpload = z.object({
+  routine_id: z.string().min(1).max(32), routine_sha256: Hex32,
+  series: PoseSeries, pose_sha256: Hex32,
+  client_scores: z.object({ a: ScoreX10, b: ScoreX10 }),   // only to flag a phone/server mismatch
+  clip_sha256: Hex32.nullable(),
+  frames: z.array(z.object({ index: FrameIndex, t_ms, sha256: Hex32, width, height, bytes })).min(1).max(6),
+});
+```
+
+- A routine (`RoutineData`, generated into `dance/routines/<id>.ts` by `scripts/dance-routine.ts`) is `{schema_version: 1, id, version, title, song, bpm, duration_ms: 15000, first_beat_ms, count_in_beats: 3, w, h, mirrored_source: false, source: 'synthetic' | 'vision', frames: {t, k}[], key_moves: {id, t, name}[] (8–16), media: {video, audio}}`; `routineSha256(r) = hashJcs(r)`. A routine never changes once a bet locks on it: a new take is a new `version`. `scripts/dance-routine.ts import` (pure half: `dance/routine-import.ts`, not in the barrel) keeps key-move times as given (clamped to 0..15000, de-duplicated, thinned to 16, never snapped to a frame, since the scorer finds the nearest reference frame), and without `--key-moves`, `--every K` or JSON `key_moves` it picks every K beats from `first_beat_ms` (smallest K giving ≤ 16, 500 ms clear of both ends).
+- The scorer (`scoreRound(routine, series)`, `dance-score@1`, every constant in `DANCE_SCORING`) runs on DEQUANTIZED values with only + − × ÷ and `Math.sqrt` (plus `Math.pow` in the display curve), so the phone (Hermes) and the server (V8) agree bit for bit. `buildDanceEvidence()` (`dance/evidence.ts`) re-scores the series and builds the record; `seriesChecks()` recomputes `max_people` and `side_swaps`.
+- No float is ever hashed: `PoseSeries`, `RoutineData` and `DanceEvidence` hold ints, strings and booleans only.
 
 ---
 
@@ -886,8 +967,8 @@ export const Ruling = z
       ctx.addIssue({ code: 'custom', path: ['redo_reason'], message: 'set iff outcome = REDO' });
     if ((r.outcome === 'VOID') !== (r.void_reason !== null))
       ctx.addIssue({ code: 'custom', path: ['void_reason'], message: 'set iff outcome = VOID' });
-    if (r.void_reason === 'undecidable')
-      ctx.addIssue({ code: 'custom', path: ['void_reason'], message: "'undecidable' is HearingRuling-only" });
+    if (r.void_reason === 'undecidable' && r.model !== 'rule/dance-off@1')   // widened for Dance Off (§11 rule 4)
+      ctx.addIssue({ code: 'custom', path: ['void_reason'], message: "'undecidable' is HearingRuling-only (or a dance-off ruling)" });
     if (isDecisive(r.outcome) && r.confidence < REDO_BELOW)
       ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'confidence < 0.8 must be REDO' });
     checkFrames(r, ctx);
@@ -943,10 +1024,11 @@ export const OnchainOutcome = z.enum(['PartyA', 'PartyB', 'Split', 'Refund']);  
 | `outcome` | Bet-level result for this recording. `REDO` ⇔ `claim_result = UNCLEAR` or `confidence < 0.8`, with re-attempts left. `REDO` never goes onchain. `VOID` comes only from a server rule (`void_reason`) and goes onchain as `Refund`. |
 | `claim_result` | The raw model answer, kept for audit. Example: "MET at 0.75" is stored as `REDO / low_confidence`. |
 | `redo_reason` | Set iff `REDO`. `unclear` (can't see it, no attempt, bad footage) or `low_confidence` → re-attempt (`ATTEMPT`, `attempt_no + 1`). `contested` → `HEARING`. |
-| `void_reason` | Set iff `VOID`. `max_redos` (3rd non-decisive result and hearings disabled), `market_invalid` (Gemini voided the contract), `safety_stop` (the judge halts an unsafe attempt after lock). `undecidable` is used only by `HearingRuling`. |
+| `void_reason` | Set iff `VOID`. `max_redos` (3rd non-decisive result and hearings disabled), `market_invalid` (Gemini voided the contract), `safety_stop` (the judge halts an unsafe attempt after lock). `undecidable` is used by `HearingRuling`, and by a Dance Off ruling (`model: 'rule/dance-off@1'`, `DANCE_OFF_MODEL`): too close to call, a failed round or an invalid one, both refunded. |
 | `cited_frames` | 0-based indices into `frame_hashes` (the same order as the `frames[]` of the recording `evidence_hash` refers to). The stage view highlights them. |
 | `frame_hashes` | O3 (D7): the SHA-256 of every JPEG this model was sent, in send order. `[]` for `stage: 'settlement'`. A reviewer can check the frames against the stored `CameraEvidence` and the clip. If a model is sent a subset (e.g. a re-check), its ruling lists that subset. |
 | `attempt_no` | Recording number. After `MAX_REDOS` (2) re-records, a 3rd non-decisive result goes to `HEARING`. If hearings are disabled, it is `VOID / max_redos` instead. |
+| `model: 'rule/dance-off@1'` | Dance Off (§4.2): `stage: 'attempt'`, `confidence: 1`, `frame_hashes` = the uploaded key frames, `evidence_hash = hashJcs(DanceEvidence)`, `reason` = the cleaned announcer line. A winner on a valid round is decisive (`claim_result` MET ⇔ A wins); `too_close`, `failed` or an invalid round is `VOID / undecidable` (`danceRulingOutcome`). The scorer decides; Claude only validates the round and writes the line. |
 | `stage: 'settlement'` | Gemini bets. Built deterministically from `GeminiSettlementRecord`: `yes` → MET, `no` → NOT_MET, `invalid` → `VOID / market_invalid`. `confidence: 1`, `cited_frames: []`, `frame_hashes: []`, `model: "rule/gemini-settlement@1"`. No LLM is involved. |
 
 `ruling_hash` commits to the clip through `evidence_hash` **and** to the exact frames the model saw through `frame_hashes` (O3 adopted, D7). The frames come from `CameraEvidence.frames[]`, which is stored (DATA-MODEL `attempts.frame_hashes`) and sent with `attempt.evidence`.
@@ -1607,7 +1689,9 @@ const env = <T extends string, S extends 'server' | 'chain', P extends z.ZodType
 
 export const RealtimeEvent = z.discriminatedUnion('type', [
   env('bet.invited',      'server', z.object({ challenger: UserRef, room_id: Uuid,
-                                                 rivalry: StageRivalry.optional() })),    // to B's user channel; rivalry: API-CONTRACT §2.18 / §3.4 (the pair's record before the bet, A's view)
+                                                 rivalry: StageRivalry.optional(),
+                                                 rematch_of: BetId.optional(),
+                                                 suggested_stake_usd: z.number().positive().optional() })),    // to B's user channel; rivalry: API-CONTRACT §2.18 / §3.4 (the pair's record before the bet, A's view); rematch_of / suggested_stake_usd: double or nothing (DANCE-OFF §7)
   env('bet.state',        'server', z.object({ state: BetState, prev: BetState.nullable(), onchain_status: OnchainStatus.nullable(),
                                                chain_ack: z.enum(['none', 'rpc', 'stream']), pending_tx: PendingTx.nullable(),
                                                reason: z.string().max(80).nullable() })),
@@ -1705,6 +1789,7 @@ export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
 | `bet.gg` | `BetGgPayload {by, winner, to_a, to_b, record: {before: PairRecord, after: PairRecord} \| null, conceded_at}` (`packages/shared/src/gg.ts`; `by ≠ winner`) | The GG moment: the loser's concede went out (same commit as `bet.state CONCEDED`). `PairRecord {a_wins, b_wins, pushes, total, streak: {party, length} \| null, rival, includes_seed}` in this bet's parties; `= StageRivalry.omit({challenge_method})` after feat/rivalry-scan |
 | `review.requested` | `{review_id, for_party, source: 'voice' \| 'demo', requested_at, confirm_by}` | Someone asked the judge to check the ruling again; the loser's phone opens the appeal confirmation (API §2.12a). No speech text, no speaker. `confirm_by = appeal_deadline − 1 s`, never extended (ESCROW I10) |
 | `review.closed` | `{review_id, reason: 'declined' \| 'lapsed'}` | The loser kept the ruling, or `confirm_by` passed. A confirmed review is the appeal (`tx.submitted {appeal}`); a GG is `bet.gg` |
+| `dance.scored` | `DanceScoredPayload {evidence: DanceEvidence, evidence_hash, validation: {verdict: 'valid' \| 'invalid' \| 'skipped', notes, skipped}, announcer_line}` (`packages/shared/src/realtime.ts`; `skipped` ⇔ verdict `skipped`) | Dance Off (§4.2): the server's re-scored record and Claude's round check, appended in the same commit as `ruling.issued` (the `market.settled` precedent). `skipped`: the LLM failed or timed out and the round settled on the score with a canned line |
 
 Not bet-scoped, so not `RealtimeEvent`s: the unsequenced WS control frames `room.presence`, `stage.market` (≤ 2/s chart feed), `stage.cue {bet_id, kind, audio_url?}` (`audio_url`: the cue's ElevenLabs Sound Effects clip; absent, the stage synthesizes it) and `stage.voice {bet_id, seq, type, voice, text, clip_id, audio_url}` (stage sessions only: the TTS clip of the stage line for bet event `(bet_id, seq)`, `packages/shared/src/stage-voice.ts`) (API §3.1, §4.5; `WsServerControlFrame` in `packages/shared/src/api.ts`). Other API-owned types (`PartySignature`, `AuthorizationResult`, `BetSnapshot`, `SignedMicroUsdc`, `SealedEmbedding`, `HeadToHead`) live in API-CONTRACT §2.18 and import from this doc.
 
@@ -1790,11 +1875,12 @@ The Streams filter recognizes our events as `emit_cpi!` **inner instructions**, 
 
 ## 11. Versioning
 
-1. **Every persisted or hashed record carries `schema_version`**: `Terms`, `Ruling`, `HearingRuling`, `HearingTurn`, `AppealVote`, `AppealResult`, `CameraEvidence`, `GeminiSettlementRecord`. The realtime envelope carries `v`.
+1. **Every persisted or hashed record carries `schema_version`**: `Terms`, `Ruling`, `HearingRuling`, `HearingTurn`, `AppealVote`, `AppealResult`, `CameraEvidence`, `GeminiSettlementRecord`, `DanceEvidence`, `PoseSeries`, `RoutineData`. The realtime envelope carries `v`.
 2. **A hashed record version is frozen once it ships.** Its fields, limits, normalization and canonicalization never change. Any change (add, remove or rename a field; change a limit; change normalization) means `V2` plus `z.discriminatedUnion('schema_version', [V1, V2])`. Readers keep every version they have ever accepted, because old hashes onchain must stay verifiable. Writers emit only the latest.
 3. **Non-hashed wire payloads** (`TermsDraft`, `TermsPresentation`, realtime payloads) can gain optional or nullable fields without a bump; readers use `z.object`, which strips unknown keys. Removing or renaming a field, or changing its meaning, bumps envelope `v`. The server serves `v` and `v-1` for the rest of the hackathon, since phones run EAS builds that lag the server.
 4. **Enums:** adding a realtime `type` is non-breaking, because clients ignore unknown types. Adding a value to `BetState`, `RulingOutcome`, `OnchainOutcome` or any hashed enum is breaking: bump. (`VOID` and the BetState renames were made before anything shipped, so they are still v1.)
    *Widened refinements:* the skill stakes rule went from "equal" to "at most 10:1" (odds, 2026-11-18) **without a version bump**: no field, limit or normalization changed, every terms_hash that ever validated still validates and hashes the same, and only previously-rejected terms became valid. Older shared builds reject unequal skill terms, so phones and the stage must run a build with the widened rule.
+   *Dance Off (2026-11-18), the same precedent:* `Terms.type` gained `'dance_off'` with its own refinement branch (§2.7), and the `Ruling` refinement allows `void_reason: 'undecidable'` when `model === 'rule/dance-off@1'`. No field, limit or normalization changed, every terms_hash and ruling_hash that ever validated still validates and hashes the same (the golden vectors are untouched), and only previously-rejected records became valid. `undecidable` already exists in the pg `void_reason` enum, so no migration. Phones and the stage must run a build that knows `dance_off` (an older build rejects the envelope, so it cannot lock one).
 5. **Onchain:** the Bet account carries `version: u8 = 1`. A program redeploy with a new layout gets a new program id. `Terms.escrow.program_id` makes old terms unmistakably bound to the old program.
 6. **Test vectors** live in `packages/shared/test/vectors/`, as `{name, input, canonical, hash}` JSON. The first is `terms-v1-001`, the §2.5 example with hash `05860f0a…f998f`. Add:
    - the §5.2 ruling (`997ce278…5daa`) and the §6 hearing ruling (`a7721bbc…d368`), both recomputed 2026-11-08 with `frame_hashes`;
@@ -1934,3 +2020,4 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
 - **2026-11-18, live rivalry scan (feat/rivalry-scan; additive).** §10.1: `bet.invited` gains optional `rivalry: StageRivalry` (API-CONTRACT §2.18 / §3.4: the pair's record before the bet, A's view, for the projector line). The API-owned `HeadToHead` gains optional `total`, `last_result`, `streak`, `rival`, and `FaceMatchRequest` optional `mode: 'tap'|'live'` (API-CONTRACT §2.4, §2.18). Older payloads still parse.
 - **2026-11-18, the GG moment + spoken review (feat/gg-moment; API-CONTRACT §2.12a, §3.4, §4.3, §4.5).** §10.1: three API-owned events, `bet.gg`, `review.requested`, `review.closed`, from the new `packages/shared/src/gg.ts` (`PairRecord`, `GgRecord`, `BetGgPayload`, `ReviewRequestedPayload`, `ReviewClosedPayload`, `ReviewFix`, `PayoutVia`, `recordAfter`, `recordLine`, `reviewOpen`, `REVIEW_MIN_LEAD_MS` 1.5 s). `JudgeCueName` gains `REVIEW_CLOSED`. Additive: older clients drop the unknown types (§11 rule 4). O6 note: the appeal window stays 10 s (`config.appeal_window_secs`); with it the spoken review only works when asked at once; `update_config appeal_window_secs 10 → 20` (decision D1, runbook) would give it room.
 - **2026-11-18 (odds).** §2.1: the skill rule "equal stakes (v1)" becomes "odds at most 10:1" (`MAX_ODDS_RATIO`), a widened refinement with no version bump (§11 rule 2 note); golden hashes unchanged. §2.2 `stakes`. §3: `TermsProposal.amount_b` (B's stake, null = even) and `DraftIssue` `ODDS_TOO_LONG`. New §3.5 (OddsOffer, OddsSuggestion, PerformerStats, the derived challenge category, the math). §10.1: `odds.offered`, `odds.answered`, `odds.agreed`.
+- **2026-11-18, Dance Off (feat/dance-off; `docs/planning/DANCE-OFF.md`).** §2.1/§2.2 + new §2.7: `Terms.type` widened in place to `'dance_off'` (camera, no market, no performer, yes_party A, single, even stakes; the routine bound through `claim` / `success_criteria` text, no new keys). New §4.2: `PoseSeries`, `DanceEvidence` (`evidence_hash = hashJcs`), `DanceUpload`, the routine and scorer modules in `packages/shared/src/dance/`. §5.2: `Ruling` allows `undecidable` for `model: 'rule/dance-off@1'`. §10.1: new event `dance.scored`; `bet.invited` gains optional `rematch_of` + `suggested_stake_usd` (double or nothing, any bet type). §11 rule 4: both widenings noted. Golden hashes unchanged; no new control frames. Fix pass: `evaluateProposeTerms` refuses a `dance_off` from a voice webhook body (`allowDanceOff`); the routine importer keeps key moves on the beat and picks beats when the tool JSON has none.

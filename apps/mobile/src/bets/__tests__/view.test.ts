@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { bottleFlip, btcCloser } from '../../preview/data';
+import { bottleFlip, btcCloser, danceOff } from '../../preview/data';
 import {
   betView,
   canAppeal,
@@ -53,6 +53,33 @@ describe('betView (SCHEMAS §2.6 BTC closer)', () => {
       mySide: null,
       lineUsd: null,
     });
+  });
+});
+
+describe('betView (DANCE-OFF §1 dance off)', () => {
+  const { terms, termsHash } = danceOff('Logan', 'Jake');
+  it('is its own kind: even money, no performer, no odds, the round instead of tries', () => {
+    const a = betView(terms, termsHash, 'A');
+    const b = betView(terms, termsHash, 'B');
+    expect(a.kind).toBe('dance');
+    expect([a.myStakeUsd, a.theirStakeUsd, a.potUsd]).toEqual(['$5', '$5', '$10']);
+    expect([a.odds, a.ratio, a.toWin, a.mySide, a.lineUsd]).toEqual([null, null, null, null, null]);
+    expect(a.performerName).toBeNull();
+    expect(a.evidence).toBe('Pose score');
+    expect(a.attempts).toBe('15 seconds');
+    expect([a.myName, b.myName]).toEqual(['Logan', 'Jake']);
+  });
+  it('reads the routine line as the routine, only for the bundled routine', () => {
+    const v = betView(terms, termsHash, 'A');
+    expect(v.routineTitle).toBe('Wave Pop');
+    expect(v.success[0]).toBe('Wave Pop, 15 seconds');
+    expect(v.success[1]).toBe(terms.success_criteria[1]);
+    expect(betView(bottleFlip('Logan').terms, 'ab'.repeat(32), 'A').routineTitle).toBeNull();
+  });
+  it('no appeal on a dance off: the score is deterministic', () => {
+    const v = betView(terms, termsHash, 'B');
+    expect(canAppeal(v, 'lost', 10_000, 0)).toBe(false);
+    expect(canConcede('lost', 10_000, 0)).toBe(true);
   });
 });
 

@@ -109,6 +109,18 @@ export function moneyColor(deltaCents: number): string {
  */
 export const glow = { size: 320, opacity: 0.22, lossOpacity: 0.1 } as const;
 
+/**
+ * Voice activation only ("Jarvis" heard, the judge listening/thinking): the full hue wheel,
+ * computed by wake/spectrum as rgb() strings for the RainbowLoop edge light. Never a fill, never
+ * text, never a screen colour. The one documented exception to "two chromatic colours";
+ * ALLOWED_COLORS stays palette-only.
+ */
+export const spectrum = {
+  saturation: 1,
+  lightness: 0.6,
+  reservedFor: 'voice-activation',
+} as const;
+
 // ---------------------------------------------------------------------------------------
 // Type: Geist, one family, four weights
 // ---------------------------------------------------------------------------------------
@@ -508,6 +520,8 @@ export const haptics = {
   scrubTick: once({ kind: 'selection' }),
   /** A chip / stake selection changed. */
   select: once({ kind: 'selection' }),
+  /** "Jarvis" heard: the rainbow loop starts (wake/RainbowLoop). */
+  wakeHeard: once({ kind: 'impact', style: 'soft' }),
 } as const satisfies Record<string, HapticPattern>;
 
 export type HapticMoment = keyof typeof haptics;

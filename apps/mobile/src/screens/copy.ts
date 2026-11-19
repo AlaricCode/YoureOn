@@ -81,6 +81,8 @@ export const COPY = {
     evidence: ['Evidence', 'label'],
     deadline: ['Deadline', 'label'],
     tries: ['Tries', 'label'],
+    /** A Dance Off's round length on the card ("15 seconds"). */
+    round: ['Round', 'label'],
     odds: ['Odds', 'label'],
     code: ['Terms code', 'label'],
     timeLeft: ['Time left', 'label'],
@@ -178,6 +180,32 @@ export const COPY = {
     replay: ['Replay', 'label'],
     nextRound: ['Next round', 'label'],
   },
+  // Dance Off (app/danceTerms, app/danceFlow; DANCE-OFF §6.2): the negotiate panel, the ruling
+  // and the app's side of the round. The dance screens' own lines live with them (../dance).
+  dance: {
+    open: ['Dance off', 'label'],
+    panel: ['Dance off', 'label'],
+    routine: ['Routine', 'label'],
+    stake: ['Stake each', 'label'],
+    theBet: ['The bet', 'label'],
+    propose: ['Send terms', 'label'],
+    back: ['Back', 'label'],
+    /** Who wrote the ruling's line (Claude checks the round; the score decides it). */
+    announcer: ['Announcer', 'label'],
+    /** A VOID 'undecidable' round: the scores are within the margin, or a player was missed. */
+    tooClose: ['Too close to call', 'body'],
+    refund: ['Both stakes go back.', 'body'],
+    unknownRoutine: ['Routine not found', 'error'],
+    uploadFailed: ['Upload failed', 'error'],
+    roundOver: ['Round closed', 'error'],
+    unavailable: ['Dance off unavailable', 'error'],
+  },
+  // Double or nothing (app/rematch; DANCE-OFF §7), every bet type.
+  rematch: {
+    button: ['Double or nothing', 'label'],
+    /** B's incoming invite when it follows a finished bet (bet.invited rematch_of). */
+    incoming: ['Double or nothing', 'label'],
+  },
   history: {
     title: ['History', 'label'],
     empty: ['No bets yet', 'label'],
@@ -272,4 +300,6 @@ export const fill = {
   judgeSuggests: (ratio: string) => `Judge suggests ${ratio}`,
   /** "31% for Jake" under the judge's odds. First name only. */
   chanceFor: (pct: number, name: string) => `${pct}% for ${name.trim().split(/\s+/)[0] || 'them'}`,
+  /** A routine card's tempo: "120 bpm" (data). */
+  bpm: (bpm: number) => `${Math.round(bpm)} bpm`,
 } as const;

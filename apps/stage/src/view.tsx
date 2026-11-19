@@ -12,6 +12,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
+import { DANCE_ROUND_SECONDS } from '@youre-on/shared/dance/terms';
 import { recordLine } from '@youre-on/shared/gg';
 import { isCachedRulingModel } from '@youre-on/shared/ruling';
 import { formatPrice } from '@youre-on/shared/settlement';
@@ -36,6 +37,20 @@ import {
   usd,
   usdPrice,
 } from './format';
+import {
+  DANCE_GRADES,
+  danceResult,
+  danceRoutineOf,
+  danceScoreText,
+  danceSummaryLine,
+  dancePlayStep,
+  danceVerdictLine,
+  gradeTally,
+  isDanceBet,
+  keyMoveRows,
+  tallyLine,
+  type DanceGrade,
+} from './dance';
 import { marketView, type MarketView } from './market';
 import { OddsChip, OddsMoment, showsOdds } from './odds';
 import { endedEarly, isDecisiveOrVoid, isMarketBet, phaseOf, phaseSteps } from './phase';
@@ -254,7 +269,8 @@ export function TermsCard({ bet }: { bet: BetView }) {
             </span>
           )}
         </div>
-        {t.evidence_source === 'camera' && (
+        {/* a dance off is camera evidence too, but the pose score decides: no ref cam line */}
+        {t.evidence_source === 'camera' && !isDanceBet(bet) && (
           <RefCamTermsLine checks={bet.checks} termsHash={env.terms_hash} />
         )}
       </div>
@@ -383,11 +399,11 @@ function AppealBar({ bet, now }: { bet: BetView; now: number }) {
   const left = bet.appeal_deadline * 1000 - now;
   const total = bet.resolved_at ? (bet.appeal_deadline - bet.resolved_at) * 1000 : 10_000;
   const frac = Math.max(0, Math.min(1, left / Math.max(1, total)));
+  // A dance off's score is deterministic: there is no appeal, only the loser's GG before payout.
+  const what = isDanceBet(bet) ? 'GG window' : 'Appeal window';
   return (
     <div className={`appeal ${left > 0 ? 'open' : 'closed'}`}>
-      <span className="countdown">
-        {left > 0 ? `Appeal window ${clock(left)}` : 'Appeal window closed'}
-      </span>
+      <span className="countdown">{left > 0 ? `${what} ${clock(left)}` : `${what} closed`}</span>
       <span className="bar" aria-hidden="true">
         <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
       </span>
@@ -472,6 +488,7 @@ function HearingPanel({ bet, now }: { bet: BetView; now: number }) {
 function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
   const r = bet.ruling;
   if (!r) return null;
+  if (isDanceBet(bet)) return <DanceRulingPanel bet={bet} now={now} />;
   const cited = r.cited_frames[0];
   const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
   // the ref cam's result for this attempt (checks.report, sent just before the ruling)
@@ -538,6 +555,7 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
 }
 
 function PlayPanel({ bet, now, market }: { bet: BetView; now: number; market: MarketView | null }) {
+  if (isDanceBet(bet)) return <DancePlayPanel bet={bet} />;
   const redoPending =
     bet.ruling?.outcome === 'REDO' && (bet.attempt_no ?? 0) <= (bet.ruling.attempt_no ?? 0);
   if (redoPending) return <RulingPanel bet={bet} now={now} />;
@@ -616,6 +634,7 @@ function PaidPanel({ bet }: { bet: BetView }) {
         )}
         <span className="pot muted">{p.event} · devnet</span>
       </div>
+      {bet.dance && <p className="paid-record">{danceSummaryLine(bet, (k) => nameOf(bet, k))}</p>}
       {gg && (
         <p className="paid-record">
           {nameOf(bet, gg.by)} said GG
@@ -639,9 +658,213 @@ function PaidPanel({ bet }: { bet: BetView }) {
   );
 }
 
+// ---- Dance Off ------------------------------------------------------------------------------
+
+const GRADE_CLASS: Record<DanceGrade, string> = {
+  PERFECT: 'perfect',
+  GOOD: 'good',
+  MISS: 'miss',
+};
+
+const potOf = (bet: BetView): string | null =>
+  bet.envelope
+    ? usd((BigInt(bet.envelope.terms.stakes.a) + BigInt(bet.envelope.terms.stakes.b)).toString())
+    : null;
+
+/** "Wave Pop · 15 seconds": the routine both dance to (a dance off has no single performer). */
+function DanceRoutineLine({ bet }: { bet: BetView }) {
+  const title = danceRoutineOf(bet)?.title ?? 'Dance off';
+  return (
+    <p className="dance-routine">
+      <span className="title">{title}</span>
+      <span className="len">{`${DANCE_ROUND_SECONDS} seconds`}</span>
+    </p>
+  );
+}
+
+/** Both dancers, A on the left of the judge cam and B on the right (DANCE-OFF §3). */
+function DanceDuo({ bet, dancing }: { bet: BetView; dancing: boolean }) {
+  const dancer = (p: PartyKey) => (
+    <span className={`dancer dancer-${p.toLowerCase()}${dancing ? ' moving' : ''}`}>
+      <Avatar name={bet.names[p]} url={bet.avatars[p]} size="sm" />
+      <span className="who">{nameOf(bet, p)}</span>
+      <span className="side">{p === 'A' ? 'left' : 'right'}</span>
+    </span>
+  );
+  return (
+    <div className="dance-duo" aria-label="dancers">
+      {dancer('A')}
+      <span className="beat" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      {dancer('B')}
+    </div>
+  );
+}
+
+/**
+ * The scoreboard: both match scores big (the winner's lit once ruled), each dancer's PERFECT /
+ * GOOD / MISS tally, and the per-move grid. Scores, not confidence: never a percent.
+ */
+export function DanceBoard({ bet }: { bet: BetView }) {
+  const d = bet.dance;
+  if (!d) return null;
+  const rows = keyMoveRows(bet);
+  const result = danceResult(bet);
+  const won = result?.kind === 'win' ? result.winner : null;
+  const score = (p: PartyKey) => (p === 'A' ? d.scores.a : d.scores.b);
+  return (
+    <div className="dance-board" aria-label="dance scores">
+      <div className="dance-scores">
+        {(['A', 'B'] as const).map((p) => (
+          <div
+            key={p}
+            className={`dance-score${won === p ? ' won' : won ? ' lost' : ''}`}
+            aria-label={`${nameOf(bet, p)} ${danceScoreText(score(p))}`}
+          >
+            <span className="who">{nameOf(bet, p)}</span>
+            <span className="pts">{danceScoreText(score(p))}</span>
+            <span className="tally">{tallyLine(gradeTally(d.key_moves, p))}</span>
+          </div>
+        ))}
+      </div>
+      {rows.length > 0 && (
+        <table className="dance-grid" aria-label="key moves">
+          <thead>
+            <tr>
+              <th scope="col" className="corner" />
+              {rows.map((r) => (
+                <th key={r.id} scope="col" title={r.name}>
+                  {r.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(['A', 'B'] as const).map((p) => (
+              <tr key={p}>
+                <th scope="row">{nameOf(bet, p)}</th>
+                {rows.map((r) => {
+                  const g = p === 'A' ? r.a : r.b;
+                  return (
+                    <td key={r.id} className={`grade ${GRADE_CLASS[g]}`}>
+                      {g}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+/** The play phase of a dance off: lining up, the 15 s round, then the server scoring it. */
+function DancePlayPanel({ bet }: { bet: BetView }) {
+  const step = dancePlayStep(bet);
+  const total = potOf(bet);
+  const a = nameOf(bet, 'A');
+  const b = nameOf(bet, 'B');
+  return (
+    <div className={`play dance-play ${step}`}>
+      <div className="headline">
+        <span className="stamp good">{step === 'framing' ? 'LOCKED' : 'DANCE OFF'}</span>
+        {total && <span className="pot">{total} in escrow</span>}
+      </div>
+      <DanceRoutineLine bet={bet} />
+      {step === 'framing' ? (
+        <>
+          <p className="sub">Both stakes, one atomic transaction, three signatures:</p>
+          <SignerSlots bet={bet} />
+          <p className="big muted">
+            Get in frame: {a} on the left, {b} on the right.
+          </p>
+        </>
+      ) : step === 'dancing' ? (
+        <>
+          <DanceDuo bet={bet} dancing />
+          <p className="big">
+            {a} and {b} are dancing <span className="rec">● REC</span>
+          </p>
+        </>
+      ) : bet.dance ? (
+        <DanceBoard bet={bet} />
+      ) : (
+        <>
+          <DanceDuo bet={bet} dancing={false} />
+          <p className="big">Scoring the round…</p>
+          <p className="muted">
+            Same scorer on the phone and the server. Highest match score wins.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The dance off's ruling: the verdict ("Too close to call" for a void), the line, the board. */
+function DanceRulingPanel({ bet, now }: { bet: BetView; now: number }) {
+  const r = bet.ruling!;
+  const result = danceResult(bet);
+  const verdict = result
+    ? danceVerdictLine(result, (p) => nameOf(bet, p))
+    : r.outcome === 'VOID'
+      ? 'Too close to call'
+      : outcomeLine(bet);
+  const routine = danceRoutineOf(bet);
+  return (
+    <div className={`ruling dance ${r.outcome === 'VOID' ? 'void' : 'decisive'}`}>
+      <span className="label">Dance off{routine ? ` · ${routine.title}` : ''}</span>
+      <div className="verdict">{verdict}</div>
+      {result?.kind !== 'win' && r.outcome === 'VOID' && (
+        <p className="dance-refund muted">Both stakes go back.</p>
+      )}
+      <p className="reason">{r.reason}</p>
+      <DanceBoard bet={bet} />
+      {r.outcome !== 'VOID' && <AppealBar bet={bet} now={now} />}
+    </div>
+  );
+}
+
+/** Terms for a dance off: the routine (not its hash line), the scoring rule, the refund rule. */
+function DanceRulesPanel({ bet }: { bet: BetView }) {
+  const t = bet.envelope!.terms;
+  const routine = danceRoutineOf(bet);
+  const n = routine ? Object.keys(routine.moves).length : 0;
+  return (
+    <div className="rules">
+      <p className="big">Terms are set. Both confirm on their phones.</p>
+      <ul>
+        <li className="yes">
+          <span aria-hidden="true">✓</span> {routine?.title ?? 'The routine'}: {DANCE_ROUND_SECONDS}{' '}
+          seconds, side by side
+          {n > 0 ? `, ${n} key moves` : ''}
+        </li>
+        {t.success_criteria.slice(1, 3).map((c, i) => (
+          <li key={`s${i}`} className="yes">
+            <span aria-hidden="true">✓</span> {c}
+          </li>
+        ))}
+        <li className="edge">
+          <span aria-hidden="true">?</span> Each key move is graded{' '}
+          <b>{DANCE_GRADES.join(' / ')}</b>
+        </li>
+      </ul>
+      <p className="muted">
+        Same terms code on both phones and up here: everyone agrees to the same routine.
+      </p>
+    </div>
+  );
+}
+
 /** Beat 2: the rules the judge wrote, and the edge cases it asked about. */
 function RulesPanel({ bet }: { bet: BetView }) {
   const t = bet.envelope!.terms;
+  if (isDanceBet(bet)) return <DanceRulesPanel bet={bet} />;
   return (
     <div className="rules">
       <p className="big">Terms are set. Both confirm on their phones.</p>

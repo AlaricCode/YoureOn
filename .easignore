@@ -80,3 +80,8 @@ programs/escrow/.surfpool
 *.dSYM.zip
 # Sample videos (mirrors .gitignore)
 *.mov
+
+# --- Local Expo modules (apps/mobile/modules/*) -------------------------------------------------
+# Their Swift sources live in modules/<name>/ios/, which the repo-wide `ios/` rule above would drop.
+# Re-included last so it wins (the root .gitignore carries the same exception).
+!apps/mobile/modules/*/ios/

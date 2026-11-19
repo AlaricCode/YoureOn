@@ -77,7 +77,8 @@ export const TermsV1 = z
     escrow: EscrowRef,
     party_a: TermsParty,
     party_b: TermsParty,
-    type: z.enum(['skill', 'real_world']),
+    /** 'dance_off' widened in place (DANCE-OFF §1, SCHEMAS §11 widened refinements). */
+    type: z.enum(['skill', 'real_world', 'dance_off']),
     claim: NText(200),
     performer: Party.nullable(),
     yes_party: Party,
@@ -110,6 +111,15 @@ export const TermsV1 = z
         const lo = a > b ? b : a;
         if (hi > MAX_ODDS_RATIO * lo) bad(['stakes'], 'skill => odds at most 10:1');
       }
+    } else if (t.type === 'dance_off') {
+      // Dance Off (widened in place, no version bump, SCHEMAS §11): both perform side by side in
+      // one round; the claim reads "A out-dances B", so MET <=> A wins. Even money, no odds.
+      if (t.evidence_source !== 'camera') bad(['evidence_source'], "dance_off => 'camera'");
+      if (t.market !== null) bad(['market'], 'dance_off => null');
+      if (t.performer !== null) bad(['performer'], 'dance_off => null (both perform)');
+      if (t.yes_party !== 'A') bad(['yes_party'], "dance_off => 'A'");
+      if (t.attempts.rule !== 'single') bad(['attempts'], "dance_off => 'single'");
+      if (t.stakes.a !== t.stakes.b) bad(['stakes'], 'dance_off => equal stakes');
     } else {
       if (t.evidence_source !== 'gemini') bad(['evidence_source'], "real_world => 'gemini'");
       if (t.performer !== null) bad(['performer'], 'real_world => null');

@@ -4,10 +4,20 @@
 // menu that opens any screen directly. Timers stand in for the server's pushes. Nothing here moves
 // money or talks to a server; Face ID is real on a phone that has it.
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { DANCE_STAKES_USD } from '@youre-on/shared/judge/dance-terms';
 import { MARKET_STAKES_USD, marketSideOf } from '@youre-on/shared/judge/market-terms';
 import { formatUsd, parseUsd } from '@youre-on/shared/money';
 import { splitPot } from '@youre-on/shared/gemini';
@@ -19,11 +29,13 @@ import {
   type OddsControl,
   type OddsState,
 } from '../app/odds';
+import { DANCE_ROUTINE_CHOICES, danceClaimPreview, stakeChips } from '../app/danceTerms';
 import { initialLock, lockReducer, type EndReason } from '../bets/lock';
 import { betView, myResult } from '../bets/view';
 import { importSafely } from '../app/importSafely';
 import { authorizeOwner } from '../device/authorize';
 import { feel } from '../device/feedback';
+import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createPreviewFaceApi } from '../enroll/api';
 import { createPreviewEmbedder } from '../enroll/embedder';
 import { FaceEnrollFlow, FaceSettings } from '../enroll/EnrollScreens';
@@ -61,12 +73,16 @@ import { SplashView } from '../ui/brand';
 import { Label } from '../ui/kit';
 import { ListRow, Screen, Section, TopBar } from '../ui/parts';
 import { half, palette, radius, space } from '../ui/tokens';
+import { STATUS_COPY, wt } from '../wake/copy';
+import { RainbowLoop } from '../wake/RainbowLoop';
 import {
   BALANCE,
   BALANCE_SERIES,
   MARKET_TRAIL,
   bottleFlip,
   btcCloser,
+  danceOff,
+  DANCE_REASON,
   FILMING_TIP,
   HEAD_TO_HEAD,
   HISTORY,
@@ -75,10 +91,22 @@ import {
   NEGOTIATION_SCRIPT,
   ODDS_STAKES,
   PANEL,
+  previewDanceScored,
   previewOdds,
   ROOM,
   RULING_REASON,
 } from './data';
+
+/**
+ * The Dance Off screens (../dance) sit next to the pose camera's native view: loaded lazily and
+ * through importSafely, so the preview never reaches the native module statically. The round
+ * itself (DanceOffScreen) needs the camera: the preview shows the other phone and the result.
+ */
+const loadDance = () => importSafely(() => import('../dance/index'));
+const DanceWatchScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceWatchScreen })));
+const DanceResultBreakdown = lazy(() =>
+  loadDance().then((m) => ({ default: m.DanceResultBreakdown })),
+);
 
 type Route =
   | 'menu'
@@ -109,7 +137,21 @@ type Route =
   | 'profile'
   | 'demo'
   | 'ggPayout'
-  | 'review';
+  | 'review'
+  | 'danceTerms'
+  | 'danceWatch'
+  | 'danceRuling'
+  | 'rematchInvite'
+  | 'jarvis';
+
+/**
+ * The "Jarvis" preview (../wake, app/wakeGate): A's judge waiting for the wake word, the sentence
+ * coming in, the judge connecting (the rainbow loop thinking), then talking; or the mic-off
+ * fallback with "Tap to talk".
+ */
+type JarvisPhase = 'listening' | 'capturing' | 'thinking' | 'speaking' | 'denied';
+const JARVIS_SAID = "I bet Jake can't do ten pushups";
+const JARVIS_REPLY = 'Ten pushups, Jake. Full reps, chest to the floor. How much?';
 
 const APPEAL_WINDOW_MS = 10_000;
 const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
@@ -133,6 +175,13 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [inRoom, setInRoom] = useState(true);
   const [balance, setBalance] = useState(startCents);
   const [market, setMarket] = useState(false);
+  /** Dance Off (DANCE-OFF §6): the bet is a dance off; the panel's pick; a too-close round. */
+  const [danceBet, setDanceBet] = useState(false);
+  const [dRoutine, setDRoutine] = useState('wave-pop');
+  const [dStake, setDStake] = useState(5);
+  const [jarvis, setJarvis] = useState<JarvisPhase>('listening');
+  const [danceVoid, setDanceVoid] = useState(false);
+  const [rematchBusy, setRematchBusy] = useState(false);
   // History: 'loading' with no rows is the first-load skeleton; a pull on a loaded list reloads
   // it (the refresh spinner over the rows, for a moment).
   const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready'>('ready');
@@ -179,9 +228,19 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
   const [expiry, setExpiry] = useState(0);
 
   const bet = useMemo(
-    () => (market ? btcCloser(name) : bottleFlip(name, 'Jake', atOdds ? ODDS_STAKES : undefined)),
-    [market, name, atOdds],
+    () =>
+      market
+        ? btcCloser(name)
+        : danceBet
+          ? danceOff(name)
+          : bottleFlip(name, 'Jake', atOdds ? ODDS_STAKES : undefined),
+    [market, danceBet, name, atOdds],
   );
+  const danceScored = useMemo(
+    () => (danceBet ? previewDanceScored(bet, danceVoid) : null),
+    [bet, danceBet, danceVoid],
+  );
+  const danceNames = { a: bet.terms.party_a.display_name, b: bet.terms.party_b.display_name };
   const view = useMemo(() => betView(bet.terms, bet.termsHash, me), [bet, me]);
 
   // One set of timers per route: leaving a route cancels its pending "server pushes".
@@ -615,7 +674,13 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
               setEndReason('declined');
               go('lockEnded');
             }}
-            onContinue={() => startLive()}
+            onContinue={() => {
+              if (!danceBet) return startLive();
+              // A dance off: this phone watches while the judge cam films the round.
+              setLivePhase('filming');
+              go('danceWatch');
+              later(15_000, () => setLivePhase('judging'));
+            }}
           />
         );
       case 'lockEnded':
@@ -705,6 +770,8 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             phase={payoutPhase}
             onRetry={() => openPayout(true)}
             onHome={() => go('home')}
+            onRematch={payoutPhase === 'confirmed' ? rematch : undefined}
+            rematchBusy={rematchBusy}
           />
         );
       case 'ggPayout':
@@ -716,6 +783,8 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             balanceCents={balance}
             phase={payoutPhase === 'confirmed' ? 'confirmed' : 'processed'}
             onHome={() => go('home')}
+            onRematch={payoutPhase === 'confirmed' ? rematch : undefined}
+            rematchBusy={rematchBusy}
           />
         );
       case 'review':
@@ -749,6 +818,136 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             )}
           </RulingReview>
         );
+      case 'danceTerms':
+        // A's "Dance off" panel: a routine, an even stake, the claim the card will read.
+        return (
+          <NegotiateScreen
+            view={view}
+            captions={[]}
+            speaking={false}
+            hasMic
+            micMuted
+            draft={null}
+            dance={{
+              open: true,
+              routines: DANCE_ROUTINE_CHOICES,
+              routineId: dRoutine,
+              stakeUsd: dStake,
+              stakes: stakeChips(DANCE_STAKES_USD),
+              preview: danceClaimPreview(dRoutine, dStake),
+              sending: false,
+              confirming: false,
+              canSubmit: true,
+              canConfirm: false,
+              waitingFor: null,
+              note: null,
+              onOpen: () => undefined,
+              onClose: () => go('menu'),
+              onRoutine: setDRoutine,
+              onStake: setDStake,
+              onSubmit: () => openTerms(false),
+              onConfirm: () => undefined,
+            }}
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      case 'danceWatch':
+        // The phone that does not film: the round live on the other phone, then its score.
+        return (
+          <PanelErrorBoundary name="Dance off" onError={() => undefined}>
+            <Suspense fallback={null}>
+              <DanceWatchScreen
+                terms={bet.terms}
+                me={me}
+                names={danceNames}
+                phase={livePhase === 'judging' ? 'judging' : 'dancing'}
+                scored={null}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        );
+      case 'danceRuling':
+        return (
+          <RulingScreen
+            view={view}
+            result={myResult(result, me)}
+            judgeLabel={t(COPY.dance.announcer)}
+            title={danceVoid ? t(COPY.dance.tooClose) : undefined}
+            note={danceVoid ? t(COPY.dance.refund) : null}
+            reason={danceScored?.announcer_line ?? DANCE_REASON}
+            detail={
+              danceScored ? (
+                <PanelErrorBoundary name="Dance off" onError={() => undefined}>
+                  <Suspense fallback={null}>
+                    <DanceResultBreakdown scored={danceScored} names={danceNames} />
+                  </Suspense>
+                </PanelErrorBoundary>
+              ) : null
+            }
+            appealDeadlineMs={appealDeadline}
+            busy={ggBusy}
+            alert={ggAlert}
+            onGG={() => void gg()}
+            onRematch={danceVoid ? rematch : undefined}
+            rematchBusy={rematchBusy}
+          />
+        );
+      case 'rematchInvite':
+        // B's side of a double or nothing: the usual invite, labelled.
+        return (
+          <IncomingScreen
+            challenger={name}
+            roomName={ROOM.name}
+            rematch
+            onAccept={() => startNegotiation(true)}
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      case 'jarvis': {
+        // Waiting: the wake line and "Tap to talk"; then the sentence, the judge connecting, and
+        // its first answer.
+        const waiting = jarvis === 'listening' || jarvis === 'capturing' || jarvis === 'denied';
+        const line =
+          STATUS_COPY[
+            jarvis === 'denied' ? 'denied' : jarvis === 'capturing' ? 'capturing' : 'listening'
+          ];
+        const said: Caption[] = waiting ? [] : [{ who: 'a', text: JARVIS_SAID }];
+        return (
+          <NegotiateScreen
+            view={view}
+            captions={
+              jarvis === 'speaking' ? [...said, { who: 'judge', text: JARVIS_REPLY }] : said
+            }
+            speaking={jarvis === 'speaking'}
+            hasMic
+            micMuted={false}
+            draft={null}
+            wake={
+              waiting
+                ? {
+                    line: line ? wt(line) : null,
+                    onTapToTalk: () => {
+                      go('jarvis');
+                      setJarvis('thinking');
+                      later(2_500, () => setJarvis('speaking'));
+                    },
+                    onOpenSettings: jarvis === 'denied' ? () => undefined : undefined,
+                  }
+                : undefined
+            }
+            onDecline={() => {
+              setEndReason('declined');
+              go('lockEnded');
+            }}
+          />
+        );
+      }
       case 'hearing':
         return (
           <HearingScreen
@@ -826,6 +1025,18 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
     }
   })();
 
+  /** Double or nothing: a moment for the POST, then the new challenge (the typed form there). */
+  function rematch() {
+    setRematchBusy(true);
+    later(700, () => {
+      setRematchBusy(false);
+      setDanceBet(false);
+      setDanceVoid(false);
+      setMarket(false);
+      startNegotiation();
+    });
+  }
+
   /** History ready, or (`firstLoad`) still on its first page: the skeleton, held there. */
   function openHistory(firstLoad: boolean) {
     setHistoryFirstLoad(firstLoad);
@@ -835,6 +1046,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
 
   function openFromMenu(key: MenuKey) {
     setMarket(key === 'market' || key === 'termsMarket' || key === 'marketPanel');
+    setDanceBet(key.startsWith('dance'));
+    setDanceVoid(key === 'danceVoid');
+    setRematchBusy(false);
     setAtOdds(key === 'termsOdds');
     setOdds(null);
     setOddsCounter(null);
@@ -949,6 +1163,40 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       case 'reviewSheet':
         setMe('B');
         return openReview();
+      case 'danceTerms':
+        setDRoutine('wave-pop');
+        setDStake(5);
+        return go('danceTerms');
+      case 'danceCard':
+        return openTerms(false);
+      case 'danceLive':
+        setMe('B');
+        setLivePhase('filming');
+        go('danceWatch');
+        later(15_000, () => setLivePhase('judging'));
+        return;
+      case 'danceResult':
+      case 'danceVoid': {
+        setResult(key === 'danceVoid' ? 'VOID' : 'A_WINS');
+        setGgAlert(null);
+        setAppealDeadline(Date.now() + APPEAL_WINDOW_MS);
+        return go('danceRuling');
+      }
+      case 'rematch':
+        setResult('A_WINS');
+        return openPayout(true);
+      case 'rematchInvite':
+        return go('rematchInvite');
+      case 'jarvis':
+        go('jarvis');
+        setJarvis('listening');
+        later(1_500, () => setJarvis('capturing'));
+        later(4_000, () => setJarvis('thinking'));
+        later(6_500, () => setJarvis('speaking'));
+        return;
+      case 'jarvisDenied':
+        go('jarvis');
+        return setJarvis('denied');
     }
   }
 
@@ -963,6 +1211,11 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
       {/* Every screen is on black, so the status bar is always light. Keyed by route: it
           re-mounts after each screen and so stays last on the status bar stack. */}
       <StatusBar key={route} style="light" />
+      {/* Last, above everything, as in DemoApp: the "Jarvis" preview's edge light. */}
+      <RainbowLoop
+        active={route === 'jarvis' && (jarvis === 'capturing' || jarvis === 'thinking')}
+        mode={jarvis === 'capturing' ? 'listening' : 'thinking'}
+      />
     </View>
   );
 }
@@ -1011,7 +1264,16 @@ type MenuKey =
   | 'demo'
   | 'ggWinner'
   | 'ggLoser'
-  | 'reviewSheet';
+  | 'reviewSheet'
+  | 'danceTerms'
+  | 'danceCard'
+  | 'danceLive'
+  | 'danceResult'
+  | 'danceVoid'
+  | 'rematch'
+  | 'rematchInvite'
+  | 'jarvis'
+  | 'jarvisDenied';
 
 /** The screen index, by beat. "Full run" entries play on into the next screens. */
 const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] = [
@@ -1097,6 +1359,30 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     ],
   },
   { section: 'Demo', items: [['demo', '31  Demo account']] },
+  {
+    section: 'Dance off',
+    items: [
+      ['danceTerms', '32  Dance off (routine, stake)'],
+      ['danceCard', '33  Dance off terms card'],
+      ['danceLive', '34  Dance off live, other phone'],
+      ['danceResult', '35  Dance off ruling, scores'],
+      ['danceVoid', '36  Too close to call'],
+    ],
+  },
+  {
+    section: 'Double or nothing',
+    items: [
+      ['rematch', '37  Payout, double or nothing'],
+      ['rematchInvite', '38  Incoming double or nothing'],
+    ],
+  },
+  {
+    section: 'Jarvis',
+    items: [
+      ['jarvis', '39  Jarvis, the rainbow loop'],
+      ['jarvisDenied', '40  Jarvis, mic off (tap to talk)'],
+    ],
+  },
 ];
 
 function Menu({ onClose, open }: { onClose: () => void; open: (k: MenuKey) => void }) {

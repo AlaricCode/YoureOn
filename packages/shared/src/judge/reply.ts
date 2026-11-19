@@ -30,7 +30,17 @@ export interface EvaluateOptions {
    * the Gemini market service (D1-J3). Until both are on, real_world gets NO_MARKET.
    */
   realWorldEnabled?: boolean;
+  /**
+   * DANCE-OFF §1: a dance off is proposed only through POST /terms/dance (danceTermsArgs), never
+   * by the voice agent. Default: allowed only for a projection with no `conversation_id`, which
+   * every ElevenLabs webhook body carries; pass `true` from the /terms/dance route to be explicit.
+   */
+  allowDanceOff?: boolean;
 }
+
+/** The voice webhook body always carries the conversation id; the /terms/dance projection never. */
+const fromConversation = (raw: unknown): boolean =>
+  typeof raw === 'object' && raw !== null && 'conversation_id' in raw;
 
 const ID_KEYS = new Set(['conversation_id', 'bet_id']);
 function strings(v: unknown, out: string[] = [], key = ''): string[] {
@@ -60,6 +70,11 @@ export function evaluateProposeTerms(raw: unknown, opts: EvaluateOptions = {}): 
     return { kind: 'invalid', issues: mapped.issues };
   }
   const p = mapped.proposal;
+  if (p.type === 'dance_off' && !(opts.allowDanceOff ?? !fromConversation(raw)))
+    return {
+      kind: 'invalid',
+      issues: [{ path: 'type', message: 'dance_off only via /terms/dance' }],
+    };
   const refusal = prefilterRefusal(p);
   if (refusal) return { kind: 'refused', refusal, proposal: p };
   const stake = stakeIssue(p, opts.maxStake ?? MAX_STAKE);
@@ -149,7 +164,9 @@ export function readbackSay(p: TermsProposal, names?: PartyNames): string {
   const stake =
     p.type === 'skill'
       ? stakeSentence(p, names)
-      : `${cap(spokenUsd(p.amount))} a side at even money, Gemini sets the odds.`;
+      : p.type === 'dance_off'
+        ? DANCE_READBACK_TAIL
+        : `${cap(spokenUsd(p.amount))} a side at even money, Gemini sets the odds.`;
   for (let keep = edges.length; keep >= 0; keep--) {
     for (const d of [deadline, []]) {
       const s = [...head, ...edges.slice(0, keep), ...d, stake].join(' ');
@@ -159,6 +176,9 @@ export function readbackSay(p: TermsProposal, names?: PartyNames): string {
   const s = [...head, stake].join(' ');
   return s.length <= SAY_MAX_CHARS ? s : `${s.slice(0, SAY_MAX_CHARS - 1)}…`;
 }
+
+/** A dance off's claim already says the stake ("$5 each"); its read-back adds the refund rule. */
+export const DANCE_READBACK_TAIL = 'One round, even money. Too close to call is a refund.';
 
 /** Display names for the read-back ("Logan puts in fifteen, Jake puts in five"). */
 export interface PartyNames {

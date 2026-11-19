@@ -8,6 +8,7 @@ import type { BetState } from '@youre-on/shared/bet-state';
 import type { UserRef } from '@youre-on/shared/primitives';
 
 import { isAppealed, type BetModel } from '../bets/store';
+import { inDanceRound, isDanceBet, recordsDance } from './danceFlow';
 
 export type Route =
   | 'boot'
@@ -31,7 +32,14 @@ export type Route =
   /** Beat 5: the three-model panel voting live, then its result (SCHEMAS §7). */
   | 'appeal'
   | 'redo'
-  | 'payout';
+  | 'payout'
+  /**
+   * A Dance Off round on the phone that records it (the room's judge cam, else A's phone):
+   * framing, count-in, the 15 s dance with live scoring, the upload, then waiting for the ruling.
+   */
+  | 'dance'
+  /** A Dance Off round on the other phone: "Dance off live", then the score. */
+  | 'danceWatch';
 
 export interface RoomInfo {
   room_id: string;
@@ -159,6 +167,16 @@ export function appReducer(
 export function routeForBet(app: AppState, b: BetModel): Route {
   const state = b.state;
   if (state === null) return b.challenger && b.my_party === 'B' ? 'incoming' : 'home';
+  // Dance Off (DANCE-OFF §6.2): both players dance, one phone films for both. The ruling, GG and
+  // payout below are the usual screens.
+  // A judge-cam device never signs: it goes straight to the round, and (the projector, §6.3)
+  // keeps the round's result and announcer line up through RULED instead of dropping to the
+  // standby camera screen; once the bet settles it shows the payout like any phone.
+  if (isDanceBet(b) && app.judgeCam && (inDanceRound(state) || state === 'RULED')) return 'dance';
+  if (isDanceBet(b) && inDanceRound(state)) {
+    if (state === 'LOCKED' && !app.lockAcked.includes(b.bet_id)) return 'terms';
+    return recordsDance(app, b) ? 'dance' : 'danceWatch';
+  }
   // The recording device films whatever attempt names it, whoever's phone it is.
   const recording =
     b.attempt !== null && app.deviceId !== null && b.attempt.recorder_device_id === app.deviceId;

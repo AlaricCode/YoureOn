@@ -12,7 +12,7 @@
 //   AppealScreen    the three-model panel voting live (D4-M3, SCHEMAS §7)
 //   MarketScreen    a Gemini bet waiting for settlement (D4-M4)
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { RECORDING_CAMERA } from '../attempt/recorder';
@@ -409,18 +409,29 @@ export function RulingScreen({
   result,
   reason,
   judgeLabel,
+  title,
+  note,
+  detail,
   appealDeadlineMs,
   busy,
   alert,
   onGG,
   onAppeal,
+  onRematch,
+  rematchBusy = false,
   tag,
 }: {
   view: BetView;
   result: MyResult;
   reason: string;
-  /** Who ruled: "Judge" (default), "Gemini" for a market bet (Beat 6). */
+  /** Who ruled: "Judge" (default), "Gemini" for a market bet (Beat 6), "Announcer" for a dance. */
   judgeLabel?: string | undefined;
+  /** The headline in place of RESULT_TITLE (a dance off's "Too close to call"). */
+  title?: string | undefined;
+  /** One line under the claim (a dance off's refund: "Both stakes go back."). */
+  note?: string | null | undefined;
+  /** Under the call: a dance off's per-move breakdown (../dance DanceResultBreakdown). */
+  detail?: ReactNode;
   /** BetResolved.appeal_deadline (10 s window). */
   appealDeadlineMs: number;
   busy: boolean;
@@ -428,6 +439,9 @@ export function RulingScreen({
   onGG: () => void;
   /** Omitted when appeals are off (the live panel is cut from the demo): no "I appeal!". */
   onAppeal?: (() => void) | undefined;
+  /** Double or nothing, once the bet is over (a void round's refund is done): DANCE-OFF §7. */
+  onRematch?: (() => void) | undefined;
+  rematchBusy?: boolean;
   tag?: string | undefined;
 }) {
   const now = useNow(200);
@@ -466,6 +480,13 @@ export function RulingScreen({
                 />
               ) : null}
             </>
+          ) : onRematch ? (
+            <PrimaryButton
+              testID="ruling-rematch"
+              label={t(COPY.rematch.button)}
+              busy={rematchBusy}
+              onPress={onRematch}
+            />
           ) : (
             <View style={styles.waiting}>
               <DotsLabel text={t(COPY.ruling.waiting)} variant="value" />
@@ -475,10 +496,11 @@ export function RulingScreen({
       }
     >
       <View style={styles.momentWords} accessibilityLiveRegion="polite">
-        <MomentHeadline>{RESULT_TITLE[result]}</MomentHeadline>
+        <MomentHeadline>{title ?? RESULT_TITLE[result]}</MomentHeadline>
         <DataText muted style={styles.centerText}>
           {view.claim}
         </DataText>
+        {note ? <BodyText style={styles.centerText}>{note}</BodyText> : null}
       </View>
       <View style={styles.call}>
         <Label variant="small">{judgeLabel ?? t(COPY.ruling.judge)}</Label>
@@ -486,6 +508,7 @@ export function RulingScreen({
           {reason}
         </DataText>
       </View>
+      {detail ? <View style={styles.detail}>{detail}</View> : null}
     </MomentScreen>
   );
 }
@@ -529,6 +552,9 @@ export function PayoutScreen({
   phase,
   onRetry,
   onHome,
+  onRematch,
+  rematchBusy = false,
+  alert,
   tag,
 }: {
   view: BetView;
@@ -537,6 +563,10 @@ export function PayoutScreen({
   phase: PayoutPhase;
   onRetry: () => void;
   onHome: () => void;
+  /** Double or nothing, once the bet is over (DANCE-OFF §7): any bet type, a new challenge. */
+  onRematch?: (() => void) | undefined;
+  rematchBusy?: boolean;
+  alert?: string | null;
   tag?: string | undefined;
 }) {
   // micro-USDC → cents, for the figure that counts up.
@@ -550,12 +580,23 @@ export function PayoutScreen({
         phase === 'reverted' ? (
           <PrimaryButton label={t(COPY.ruling.retry)} onPress={onRetry} />
         ) : (
-          <PrimaryButton
-            testID="payout-home"
-            label={t(COPY.ruling.backHome)}
-            disabled={won && phase === 'processed'}
-            onPress={onHome}
-          />
+          <>
+            {onRematch ? <AlertLine message={alert ?? null} /> : null}
+            <PrimaryButton
+              testID="payout-home"
+              label={t(COPY.ruling.backHome)}
+              disabled={won && phase === 'processed'}
+              onPress={onHome}
+            />
+            {onRematch ? (
+              <QuietButton
+                testID="payout-rematch"
+                label={t(COPY.rematch.button)}
+                busy={rematchBusy}
+                onPress={onRematch}
+              />
+            ) : null}
+          </>
         )
       }
     >
@@ -849,6 +890,8 @@ const styles = StyleSheet.create({
   /** The hero keeps 24 pt under its title; 4 more puts the balance ~28 pt below it. */
   failedWords: { alignSelf: 'stretch', alignItems: 'center', gap: half.x05 },
   call: { alignSelf: 'stretch', alignItems: 'center', gap: half.x05, paddingHorizontal: space.x2 },
+  /** A dance off's breakdown, under the call. */
+  detail: { alignSelf: 'stretch', marginTop: space.x2 },
   stageMiddle: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   /** "Paying…" / Paid, centred under the figure. */
   // A row, so the Chip's own alignSelf: 'flex-start' cannot pull it to the left edge.

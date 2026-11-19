@@ -4,6 +4,9 @@
 //                                                     (+ judge.cue INVITE_ACCEPTED if the voice judge
 //                                                     was told to wait for it: ./invite.ts)
 //   POST /v1/bets/:bet_id/invite/decline   (S, B)  -> 200 {bet}   -> CANCELLED (declined); judge.cue DECLINED
+//   POST /v1/bets/:bet_id/rematch          (S, A|B) -> 201 {bet_id, suggested_stake_usd, bet, voice}
+//                                                     DANCE-OFF §7 double or nothing: a new DRAFTING
+//                                                     bet, caller = A, supersedes_bet_id = this bet
 //
 // POST /v1/bets effects, in ONE transaction: the bets row (bet_id = new UUIDv4 = the onchain
 // bet_id), the voice_sessions binding, bet.invited (seq 1) + bet.state DRAFTING (seq 2) in
@@ -16,15 +19,19 @@ import { auditLog, bets, outbox, users, voiceSessions } from '@youre-on/db';
 import {
   BetInviteAnsweredPayload,
   CreateBetRequest,
+  RematchRequest,
   rivalryOf,
+  suggestedRematchStakeUsd,
+  type ChallengeMethod,
   type ChallengeReceivedPush,
   type CreateBetResponse,
   type InviteAnswerResponse,
+  type RematchResponse,
 } from '@youre-on/shared/api';
 import { USDC_MINT_DEVNET } from '@youre-on/shared/chain/constants';
 import { MAX_STAKE } from '@youre-on/shared/constants';
 import { formatUsd } from '@youre-on/shared/money';
-import { Uuid } from '@youre-on/shared/primitives';
+import { Uuid, type UserRef } from '@youre-on/shared/primitives';
 import type { BetState } from '@youre-on/shared/bet-state';
 import type { AppDeps, RouteModule } from '../context';
 import { HttpError } from '../errors';
@@ -53,6 +60,16 @@ export const PRE_LOCK_STATES = [
 /** §1.7: POST /v1/bets 6/min per user, and ≤ 3 pre-lock bets per user. */
 export const BETS_BUCKET = { limit: 6, windowMs: 60_000 } as const;
 export const MAX_PRE_LOCK_BETS_PER_USER = 3;
+
+/** DANCE-OFF §7: a rematch (double or nothing) follows a bet that is over. */
+export const REMATCH_FROM = [
+  'PAID',
+  'VOIDED',
+  'FINALIZED',
+  'EXPIRED',
+] as const satisfies readonly BetState[];
+/** The rematch stake suggestion when the old bet never had stakes (dollars per side). */
+const REMATCH_DEFAULT_STAKE_USD = 5;
 
 /** §2.5: B may decline through the invite only here; later through §2.8 lock/decline. */
 const INVITE_DECLINABLE: readonly BetState[] = ['DRAFTING', 'TERMS_PROPOSED'];
@@ -94,188 +111,32 @@ export const betsRoutes: RouteModule = {
         });
       }
 
-      const room = await getRoomOr404(deps.db, body.room_id);
-      assertRoomLive(room, now);
-      if (!(await isActiveMember(deps.db, room.id, aId))) {
-        throw new HttpError('NOT_IN_ROOM', "You're not in this room.", { party: 'A' });
-      }
-      if (!(await isActiveMember(deps.db, room.id, bId))) {
-        throw new HttpError('NOT_IN_ROOM', "They're not in this room.", { party: 'B' });
-      }
-      // DEMO_MODE: the demo room (on the projector) is for the demo players, also for a member
-      // who joined before the stage opened (demo/players.ts).
-      if (await isDemoRoom(deps, room)) {
-        const outsider = (await nonDemoPlayers(deps, [aId, bId]))[0];
-        if (outsider)
-          throw demoRoomError('Only the demo players bet in this room.', {
-            party: outsider === aId ? 'A' : 'B',
-          });
-      }
-
-      const people = await deps.db
-        .select({
-          id: users.id,
-          age: users.age_attested_18plus,
-          deleted_at: users.deleted_at,
-        })
-        .from(users)
-        .where(inArray(users.id, [aId, bId]));
-      for (const [id, party] of [
-        [aId, 'A'],
-        [bId, 'B'],
-      ] as const) {
-        const u = people.find((p) => p.id === id);
-        if (!u || !u.age || u.deleted_at !== null) {
-          throw new HttpError('AGE_REQUIRED', undefined, { party });
-        }
-      }
-
-      if (body.challenge_method === 'face') {
-        const v = verifyMatchTicket(
-          body.match_ticket,
-          { scanner_user_id: aId, candidate_user_id: bId, room_id: room.id, now_ms: now },
-          deps.env,
-        );
-        if (!v.ok) {
-          throw new HttpError('VALIDATION_FAILED', 'That face match expired. Scan again.', {
-            issues: [{ path: 'match_ticket', message: `match_ticket ${v.reason}` }],
-            reason: 'match_ticket_invalid',
-          });
-        }
-      }
-
-      // The pair's record before this bet, A's view, for the stage's rivalry line (outside the
-      // transaction: a bet settling concurrently only shifts a display line).
-      const rivalry = rivalryOf(await headToHead(deps.db, aId, bId), body.challenge_method);
-      const refs = await loadUserRefs(deps.db, [aId, bId]);
-      const refA = refs.get(aId)!;
-      const refB = refs.get(bId)!;
-      const betId = randomUUID(); // v4; = the onchain bet_id (SCHEMAS §1.2)
-      const at = new Date(now);
-      const requestId = c.get('requestId');
-
-      const { row, invited, drafting } = await deps.db.transaction(async (tx) => {
-        // Serialize per user (sorted, so two crossing challenges cannot deadlock): the
-        // pair_busy and open-bet checks below are then race-free.
-        for (const id of [aId, bId].sort()) {
-          await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey(id)})`);
-        }
-        const [busy] = await tx
-          .select({ id: bets.id, state: bets.state })
-          .from(bets)
-          .where(
-            and(
-              or(
-                and(eq(bets.party_a_id, aId), eq(bets.party_b_id, bId)),
-                and(eq(bets.party_a_id, bId), eq(bets.party_b_id, aId)),
-              ),
-              inArray(bets.state, [...PRE_LOCK_STATES]),
-            ),
-          )
-          .limit(1);
-        if (busy) {
-          throw new HttpError('INVALID_STATE', 'You two already have a bet in progress.', {
-            reason: 'pair_busy',
-            bet_id: busy.id,
-            state: busy.state,
-          });
-        }
-        const [open] = await tx
-          .select({ n: sql<number>`count(*)::int` })
-          .from(bets)
-          .where(
-            and(
-              or(eq(bets.party_a_id, aId), eq(bets.party_b_id, aId)),
-              inArray(bets.state, [...PRE_LOCK_STATES]),
-            ),
+      const { row, refA, refB } = await createChallenge(deps, {
+        aId,
+        bId,
+        deviceId: me.device_id,
+        roomId: body.room_id,
+        challengeMethod: body.challenge_method,
+        voiceConversationId: body.voice_conversation_id ?? null,
+        requestId: c.get('requestId'),
+        now,
+        // after the room, membership and age checks, as before the helper existed
+        verify: () => {
+          if (body.challenge_method !== 'face') return;
+          const v = verifyMatchTicket(
+            body.match_ticket,
+            { scanner_user_id: aId, candidate_user_id: bId, room_id: body.room_id, now_ms: now },
+            deps.env,
           );
-        if ((open?.n ?? 0) >= MAX_PRE_LOCK_BETS_PER_USER) {
-          throw new HttpError(
-            'RATE_LIMITED',
-            'Finish one of your open bets first.',
-            {
-              bucket: 'bets/open',
-              reason: 'too_many_open_bets',
-              limit: MAX_PRE_LOCK_BETS_PER_USER,
-            },
-            { headers: { 'Retry-After': '60' } },
-          );
-        }
-
-        await tx.insert(bets).values({
-          id: betId,
-          room_id: room.id,
-          party_a_id: aId,
-          party_b_id: bId,
-          challenge_method: body.challenge_method,
-          lock_mode: deps.env.LOCK_MODE,
-          mint: deps.env.USDC_MINT ?? DEVNET_USDC_MINT,
-          created_at: at,
-        });
-
-        if (body.voice_conversation_id) {
-          await bindVoiceSession(tx, deps, {
-            conversation_id: body.voice_conversation_id,
-            bet_id: betId,
-            user_id: aId,
-            device_id: me.device_id,
-          });
-        }
-
-        const invited = await appendBetEvent(tx, {
-          bet_id: betId,
-          type: 'bet.invited',
-          payload: { challenger: refA, room_id: room.id, rivalry },
-          now,
-        });
-        const drafting = await appendBetEvent(tx, {
-          bet_id: betId,
-          type: 'bet.state',
-          payload: {
-            state: 'DRAFTING',
-            prev: null,
-            onchain_status: null,
-            chain_ack: 'none',
-            pending_tx: null,
-            reason: null,
-          },
-          now,
-        });
-
-        const push: ChallengeReceivedPush = {
-          bet_id: betId,
-          room_id: room.id,
-          challenger: { user_id: aId, display_name: refA.display_name },
-          title: `${refA.display_name} challenged you`,
-          body: 'Tap to hear the terms.',
-        };
-        await tx.insert(outbox).values({
-          recipient_user_id: bId,
-          bet_id: betId,
-          kind: 'challenge_received',
-          payload: push,
-          dedupe_key: `${betId}:challenge_received:${betId}:${bId}`,
-          next_attempt_at: at,
-        });
-
-        await tx.insert(auditLog).values({
-          actor_kind: 'user',
-          actor_user_id: aId,
-          action: 'bet.state_changed',
-          bet_id: betId,
-          subject_user_id: bId,
-          request_id: requestId,
-          details: { from: null, to: 'DRAFTING', challenge_method: body.challenge_method },
-        });
-
-        const [row] = await tx.select().from(bets).where(eq(bets.id, betId)).limit(1);
-        return { row: row!, invited, drafting };
+          if (!v.ok) {
+            throw new HttpError('VALIDATION_FAILED', 'That face match expired. Scan again.', {
+              issues: [{ path: 'match_ticket', message: `match_ticket ${v.reason}` }],
+              reason: 'match_ticket_invalid',
+            });
+          }
+        },
       });
-
-      // After commit (fire-and-forget fan-out; clients resync over REST on a gap).
-      deps.hub.publishToUser(bId, invited);
-      deps.hub.publishBetEvent(invited, room.id);
-      deps.hub.publishBetEvent(drafting, room.id);
+      const betId = row.id;
 
       const out: CreateBetResponse = {
         bet: betSnapshot(row, { a: refA, b: refB }, aId),
@@ -289,6 +150,91 @@ export const betsRoutes: RouteModule = {
         },
       };
       return c.json(out, 201);
+    });
+
+    // DANCE-OFF §7 double or nothing (every bet type): either party of a finished bet challenges
+    // the other again in the same room, as A. The new bet is a normal DRAFTING challenge (any
+    // bet type on the negotiate screen); bet.invited carries rematch_of and the stake chip's
+    // default, 2 x the old per-side stake capped at max_stake. A repeat by the same caller while
+    // that rematch is still pre-lock answers it again (201, same bet).
+    app.post('/v1/bets/:bet_id/rematch', requireSignedRequest, async (c) => {
+      const me = appAuth(c);
+      deps.rateLimit?.take('bets', me.user_id, BETS_BUCKET);
+      const oldId = betIdOr404(c.req.param('bet_id'));
+      await readBody(c, RematchRequest);
+      const [old] = await deps.db.select().from(bets).where(eq(bets.id, oldId)).limit(1);
+      if (!old) throw new HttpError('NOT_FOUND', 'No such bet.');
+      const party = partyOf(old, me.user_id);
+      if (!party) throw new HttpError('NOT_A_PARTY', "You're not in this bet.");
+      if (!(REMATCH_FROM as readonly BetState[]).includes(old.state))
+        throw new HttpError('INVALID_STATE', 'Finish this bet first.', {
+          state: old.state,
+          reason: 'not_finished',
+        });
+      // Seed rows (demo head-to-head history) are replaced wholesale by the seeder.
+      if (old.is_seed || !old.room_id)
+        throw new HttpError('INVALID_STATE', "This bet can't be rematched.", {
+          state: old.state,
+          reason: 'no_rematch',
+        });
+      const opponent = party === 'A' ? old.party_b_id : old.party_a_id;
+      const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
+      const suggested =
+        old.stake_a !== null && old.stake_b !== null
+          ? suggestedRematchStakeUsd(
+              { a: old.stake_a.toString(), b: old.stake_b.toString() },
+              maxStake,
+            )
+          : 0;
+      const suggestedUsd = suggested > 0 ? suggested : REMATCH_DEFAULT_STAKE_USD;
+
+      const respond = (row: BetRow, refA: UserRef, refB: UserRef) => {
+        const out: RematchResponse & CreateBetResponse = {
+          bet_id: row.id,
+          suggested_stake_usd: suggestedUsd,
+          bet: betSnapshot(row, { a: refA, b: refB }, me.user_id),
+          voice: {
+            dynamic_variables: {
+              bet_id: row.id,
+              party_a_name: refA.display_name,
+              party_b_name: refB.display_name,
+              max_stake_usd: maxStakeUsd(deps.env),
+            },
+          },
+        };
+        return c.json(out, 201);
+      };
+
+      // A repeat of the same rematch (a lost 201): the caller's pre-lock bet that follows this one.
+      const [again] = await deps.db
+        .select()
+        .from(bets)
+        .where(
+          and(
+            eq(bets.supersedes_bet_id, old.id),
+            eq(bets.party_a_id, me.user_id),
+            inArray(bets.state, [...PRE_LOCK_STATES]),
+          ),
+        )
+        .limit(1);
+      if (again) {
+        const refs = await loadUserRefs(deps.db, [again.party_a_id, again.party_b_id]);
+        return respond(again, refs.get(again.party_a_id)!, refs.get(again.party_b_id)!);
+      }
+
+      const { row, refA, refB } = await createChallenge(deps, {
+        aId: me.user_id,
+        bId: opponent,
+        deviceId: me.device_id,
+        roomId: old.room_id,
+        // the pair already know each other: a pick from the list, no face ticket
+        challengeMethod: 'list',
+        voiceConversationId: null,
+        requestId: c.get('requestId'),
+        now: deps.now(),
+        rematch: { of: old.id, suggested_stake_usd: suggestedUsd },
+      });
+      return respond(row, refA, refB);
     });
 
     app.post('/v1/bets/:bet_id/invite/accept', requireSignedRequest, async (c) => {
@@ -428,6 +374,227 @@ export const betsRoutes: RouteModule = {
 };
 
 type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
+
+export interface ChallengeInput {
+  /** The challenger (A) and the challenged (B). */
+  aId: string;
+  bId: string;
+  /** A's device (the voice session binding). */
+  deviceId: string;
+  roomId: string;
+  challengeMethod: ChallengeMethod;
+  voiceConversationId: string | null;
+  requestId: string;
+  now: number;
+  /** Extra checks after the room, membership and age checks (POST /v1/bets: the face ticket). */
+  verify?: () => void;
+  /** DANCE-OFF §7 double or nothing: the terminal bet this one follows (supersedes_bet_id). */
+  rematch?: { of: string; suggested_stake_usd: number };
+}
+
+/**
+ * The challenge itself (§2.5), shared by POST /v1/bets and POST /v1/bets/:id/rematch: the room
+ * and both players checked, then ONE transaction (serialized per user: pair_busy and the open-bet
+ * cap are race-free) writes the bets row, the voice binding, bet.invited (seq 1) + bet.state
+ * DRAFTING (seq 2), the outbox push to B and an audit row; after commit bet.invited goes to B's
+ * user channel and the bet channel / room stage, bet.state to the bet channel.
+ */
+export async function createChallenge(
+  deps: AppDeps,
+  i: ChallengeInput,
+): Promise<{ row: BetRow; refA: UserRef; refB: UserRef }> {
+  const { aId, bId, now } = i;
+  const room = await getRoomOr404(deps.db, i.roomId);
+  assertRoomLive(room, now);
+  if (!(await isActiveMember(deps.db, room.id, aId))) {
+    throw new HttpError('NOT_IN_ROOM', "You're not in this room.", { party: 'A' });
+  }
+  if (!(await isActiveMember(deps.db, room.id, bId))) {
+    throw new HttpError('NOT_IN_ROOM', "They're not in this room.", { party: 'B' });
+  }
+  // DEMO_MODE: the demo room (on the projector) is for the demo players, also for a member
+  // who joined before the stage opened (demo/players.ts).
+  if (await isDemoRoom(deps, room)) {
+    const outsider = (await nonDemoPlayers(deps, [aId, bId]))[0];
+    if (outsider)
+      throw demoRoomError('Only the demo players bet in this room.', {
+        party: outsider === aId ? 'A' : 'B',
+      });
+  }
+
+  const people = await deps.db
+    .select({
+      id: users.id,
+      age: users.age_attested_18plus,
+      deleted_at: users.deleted_at,
+    })
+    .from(users)
+    .where(inArray(users.id, [aId, bId]));
+  for (const [id, party] of [
+    [aId, 'A'],
+    [bId, 'B'],
+  ] as const) {
+    const u = people.find((p) => p.id === id);
+    if (!u || !u.age || u.deleted_at !== null) {
+      throw new HttpError('AGE_REQUIRED', undefined, { party });
+    }
+  }
+  i.verify?.();
+
+  // The pair's record before this bet, A's view, for the stage's rivalry line (outside the
+  // transaction: a bet settling concurrently only shifts a display line).
+  const rivalry = rivalryOf(await headToHead(deps.db, aId, bId), i.challengeMethod);
+  const refs = await loadUserRefs(deps.db, [aId, bId]);
+  const refA = refs.get(aId)!;
+  const refB = refs.get(bId)!;
+  const betId = randomUUID(); // v4; = the onchain bet_id (SCHEMAS §1.2)
+  const at = new Date(now);
+
+  const { row, invited, drafting } = await deps.db.transaction(async (tx) => {
+    // Serialize per user (sorted, so two crossing challenges cannot deadlock): the
+    // pair_busy and open-bet checks below are then race-free.
+    for (const id of [aId, bId].sort()) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey(id)})`);
+    }
+    const [busy] = await tx
+      .select({ id: bets.id, state: bets.state })
+      .from(bets)
+      .where(
+        and(
+          or(
+            and(eq(bets.party_a_id, aId), eq(bets.party_b_id, bId)),
+            and(eq(bets.party_a_id, bId), eq(bets.party_b_id, aId)),
+          ),
+          inArray(bets.state, [...PRE_LOCK_STATES]),
+        ),
+      )
+      .limit(1);
+    if (busy) {
+      throw new HttpError('INVALID_STATE', 'You two already have a bet in progress.', {
+        reason: 'pair_busy',
+        bet_id: busy.id,
+        state: busy.state,
+      });
+    }
+    const [open] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(bets)
+      .where(
+        and(
+          or(eq(bets.party_a_id, aId), eq(bets.party_b_id, aId)),
+          inArray(bets.state, [...PRE_LOCK_STATES]),
+        ),
+      );
+    if ((open?.n ?? 0) >= MAX_PRE_LOCK_BETS_PER_USER) {
+      throw new HttpError(
+        'RATE_LIMITED',
+        'Finish one of your open bets first.',
+        {
+          bucket: 'bets/open',
+          reason: 'too_many_open_bets',
+          limit: MAX_PRE_LOCK_BETS_PER_USER,
+        },
+        { headers: { 'Retry-After': '60' } },
+      );
+    }
+
+    await tx.insert(bets).values({
+      id: betId,
+      room_id: room.id,
+      party_a_id: aId,
+      party_b_id: bId,
+      challenge_method: i.challengeMethod,
+      lock_mode: deps.env.LOCK_MODE,
+      mint: deps.env.USDC_MINT ?? DEVNET_USDC_MINT,
+      supersedes_bet_id: i.rematch?.of ?? null,
+      created_at: at,
+    });
+
+    if (i.voiceConversationId) {
+      await bindVoiceSession(tx, deps, {
+        conversation_id: i.voiceConversationId,
+        bet_id: betId,
+        user_id: aId,
+        device_id: i.deviceId,
+      });
+    }
+
+    const invited = await appendBetEvent(tx, {
+      bet_id: betId,
+      type: 'bet.invited',
+      payload: {
+        challenger: refA,
+        room_id: room.id,
+        rivalry,
+        ...(i.rematch
+          ? { rematch_of: i.rematch.of, suggested_stake_usd: i.rematch.suggested_stake_usd }
+          : {}),
+      },
+      now,
+    });
+    const drafting = await appendBetEvent(tx, {
+      bet_id: betId,
+      type: 'bet.state',
+      payload: {
+        state: 'DRAFTING',
+        prev: null,
+        onchain_status: null,
+        chain_ack: 'none',
+        pending_tx: null,
+        reason: null,
+      },
+      now,
+    });
+
+    const push: ChallengeReceivedPush = i.rematch
+      ? {
+          bet_id: betId,
+          room_id: room.id,
+          challenger: { user_id: aId, display_name: refA.display_name },
+          title: `${refA.display_name} wants a rematch`,
+          body: 'Double or nothing?',
+        }
+      : {
+          bet_id: betId,
+          room_id: room.id,
+          challenger: { user_id: aId, display_name: refA.display_name },
+          title: `${refA.display_name} challenged you`,
+          body: 'Tap to hear the terms.',
+        };
+    await tx.insert(outbox).values({
+      recipient_user_id: bId,
+      bet_id: betId,
+      kind: 'challenge_received',
+      payload: push,
+      dedupe_key: `${betId}:challenge_received:${betId}:${bId}`,
+      next_attempt_at: at,
+    });
+
+    await tx.insert(auditLog).values({
+      actor_kind: 'user',
+      actor_user_id: aId,
+      action: 'bet.state_changed',
+      bet_id: betId,
+      subject_user_id: bId,
+      request_id: i.requestId,
+      details: {
+        from: null,
+        to: 'DRAFTING',
+        challenge_method: i.challengeMethod,
+        ...(i.rematch ? { rematch_of: i.rematch.of } : {}),
+      },
+    });
+
+    const [row] = await tx.select().from(bets).where(eq(bets.id, betId)).limit(1);
+    return { row: row!, invited, drafting };
+  });
+
+  // After commit (fire-and-forget fan-out; clients resync over REST on a gap).
+  deps.hub.publishToUser(bId, invited);
+  deps.hub.publishBetEvent(invited, room.id);
+  deps.hub.publishBetEvent(drafting, room.id);
+  return { row, refA, refB };
+}
 
 /** Moved to ./invite (the lock's confirm step uses it too); re-exported for existing callers. */
 export { priorAnswers } from './invite';
