@@ -26,6 +26,8 @@ import {
   type RoundEvent,
   type RoundState,
 } from '../model/round';
+import { getRoutine } from '@youre-on/shared/dance/routine';
+
 import { WAVE_POP } from './helpers';
 
 const cfg = roundConfig(WAVE_POP); // 120 bpm: 500 ms beats, 15 s
@@ -375,3 +377,54 @@ describe('snapshot schedule', () => {
     expect(snapshotSchedule(r)).toEqual([14_999]);
   });
 });
+
+describe('a long routine (bye-bye-shuffle, 32.6 s): everything runs off its duration_ms', () => {
+  const LONG = getRoutine('bye-bye-shuffle')!;
+  const longCfg = roundConfig(LONG);
+  const runLong = (events: RoundEvent[], from: RoundState = initialRound()) =>
+    events.reduce((s, e) => roundReducer(s, e, longCfg), from);
+
+  it('the round stops at t0 + 32.6 s + the tail, not at 15 s', () => {
+    expect(longCfg.durationMs).toBe(32_600);
+    const framed = runLong([...okFramesFor(0, FRAMING_STABLE_MS + 100)]);
+    expect(framed.phase).toBe('ready');
+    const counting = runLong(
+      [
+        { type: 'start', at: FRAMING_STABLE_MS + 200 },
+        { type: 'attempt', at: FRAMING_STABLE_MS + 300, attemptNo: 1 },
+      ],
+      framed,
+    );
+    expect(counting.phase).toBe('countIn');
+    const dancing = runLong([{ type: 'tick', at: counting.goAt! }], counting);
+    expect(dancing.phase).toBe('dancing');
+    const end = dancing.goAt! + 32_600 + ROUND_TAIL_MS;
+    expect(
+      runLong([{ type: 'tick', at: dancing.goAt! + 15_000 + ROUND_TAIL_MS }], dancing).phase,
+    ).toBe('dancing');
+    expect(runLong([{ type: 'tick', at: end - 1 }], dancing).phase).toBe('dancing');
+    expect(runLong([{ type: 'tick', at: end }], dancing).phase).toBe('scoring');
+    expect(danceProgress(dancing, dancing.goAt! + 16_300, LONG.duration_ms)).toBeCloseTo(0.5);
+  });
+
+  it('key-frame snapshots spread over the whole 32.6 s; beats run to the end', () => {
+    const times = snapshotSchedule(LONG);
+    expect(times).toHaveLength(SNAPSHOT_COUNT);
+    expect(times[0]!).toBeLessThan(10_000);
+    expect(times.at(-1)!).toBeGreaterThan(20_000);
+    for (const t of times) expect(t).toBeLessThan(LONG.duration_ms);
+    const beats = routineBeatTimes(LONG);
+    expect(beats[0]).toBe(235);
+    expect(beats.at(-1)!).toBeGreaterThan(32_000);
+    expect(beats.at(-1)!).toBeLessThanOrEqual(32_600);
+    expect(beatAt(LONG, 30_000)).not.toBeNull();
+    expect(beatAt(LONG, 32_700)).toBeNull();
+  });
+});
+
+function okFramesFor(from: number, to: number, step = 33): RoundEvent[] {
+  const out: RoundEvent[] = [];
+  for (let t = from; t <= to; t += step)
+    out.push({ type: 'framing', at: t, ok: true, reason: 'ok' });
+  return out;
+}

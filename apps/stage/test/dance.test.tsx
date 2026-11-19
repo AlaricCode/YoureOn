@@ -6,9 +6,11 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { getRoutine } from '@youre-on/shared/dance/routine';
+import { danceTermsText } from '@youre-on/shared/dance/terms';
 import { DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
 import {
   danceResult,
+  danceRoutineLabel,
   danceRoutineOf,
   danceScoreLine,
   danceScoreText,
@@ -275,6 +277,57 @@ describe('the phones (panes.ts)', () => {
       tone: 'bad',
     });
     for (const step of STEPS) expect(railSummary(at(step).bet).status).not.toMatch(/is up/);
+  });
+});
+
+describe('each routine has its own length', () => {
+  const LONG = getRoutine('bye-bye-shuffle')!;
+  /** The sample bet, re-pointed at the 32.6 s routine (terms text as the server composes it). */
+  const long = (step: Step): { bet: BetView; now: number } => {
+    const { bet, now } = at(step);
+    const env = bet.envelope!;
+    const t = danceTermsText(LONG, env.terms.stakes.a);
+    return {
+      now,
+      bet: {
+        ...bet,
+        envelope: {
+          ...env,
+          terms: { ...env.terms, claim: t.claim, success_criteria: [...t.success_criteria] },
+        },
+      },
+    };
+  };
+
+  it('the label and the panels say 33 seconds for bye-bye-shuffle, 15 for wave-pop', () => {
+    expect(danceRoutineLabel(at('framing').bet)).toBe(`${WAVE_POP.title} · 15 seconds`);
+    const { bet, now } = long('framing');
+    expect(danceRoutineOf(bet)).toMatchObject({ id: LONG.id, title: LONG.title, seconds: 33 });
+    expect(danceRoutineLabel(bet)).toBe('Bye Bye Shuffle · 33 seconds');
+    const framing = text(renderToString(<BetCard bet={bet} now={now} />));
+    expect(framing).toContain('>33 seconds<');
+    expect(framing).not.toContain('15 seconds');
+    const terms = long('terms');
+    expect(text(renderToString(<BetCard bet={terms.bet} now={terms.now} />))).toContain(
+      'Bye Bye Shuffle: 33 seconds, side by side, 11 key moves',
+    );
+  });
+
+  it("an unbundled routine reads the claim's own seconds", () => {
+    const { bet } = at('framing');
+    const env = bet.envelope!;
+    const odd: BetView = {
+      ...bet,
+      envelope: {
+        ...env,
+        terms: {
+          ...env.terms,
+          claim: 'Dance Off: Moonwalk, 27 seconds, higher match score wins, $5 each',
+          success_criteria: ['Routine moonwalk v1 sha256:0123456789abcdef'],
+        },
+      },
+    };
+    expect(danceRoutineLabel(odd)).toBe('Moonwalk · 27 seconds');
   });
 });
 

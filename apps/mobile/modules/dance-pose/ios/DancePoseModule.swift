@@ -31,6 +31,10 @@ public final class DancePoseModule: Module {
       AsyncFunction("stopRound") { (view: DancePoseView, promise: Promise) in
         view.stopRound(promise: promise)
       }
+
+      AsyncFunction("captureStill") { (view: DancePoseView, promise: Promise) in
+        view.captureStill(promise: promise)
+      }
     }
   }
 }

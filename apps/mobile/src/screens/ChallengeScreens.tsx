@@ -428,7 +428,7 @@ export interface MarketTermsPanel {
 export interface DanceTermsPanel {
   open: boolean;
   /** The bundled routines (app/danceTerms DANCE_ROUTINE_CHOICES). */
-  routines: readonly { id: string; title: string; song: string; bpm: number }[];
+  routines: readonly { id: string; title: string; song: string; bpm: number; seconds: number }[];
   routineId: string;
   stakeUsd: number;
   stakes: readonly number[];
@@ -978,7 +978,7 @@ function DancePanel({
                     pressed && !frozen && styles.pressed,
                   ]}
                 >
-                  {/* Title and tempo only: no subtitle under a label (ui/copyRule rule 2). */}
+                  {/* Title, tempo, length only: no subtitle under a label (ui/copyRule rule 2). */}
                   <Text
                     style={[type.labelMedium, styles.flex, !on && styles.offText]}
                     numberOfLines={1}
@@ -986,7 +986,7 @@ function DancePanel({
                     {r.title}
                   </Text>
                   <Text style={[type.labelMedium, on ? styles.onPct : styles.offText]}>
-                    {fill.bpm(r.bpm)}
+                    {fill.routineMeta(r.bpm, r.seconds)}
                   </Text>
                 </Pressable>
               );

@@ -2,6 +2,7 @@
 // §3, §4.6), the clock switch at t0, the fps cap, the self test and the sync sweep.
 import { PoseSeries } from '@youre-on/shared/dance/pose';
 import { scoreRound } from '@youre-on/shared/dance/score';
+import { hipCenter, seriesChecks } from '@youre-on/shared/dance/track';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -13,7 +14,8 @@ import {
   sweepSyncOffsets,
   type PipelineFrame,
 } from '../model/pipeline';
-import { frame, leftDancer, rightStill, WAVE_POP } from './helpers';
+import { frame, leftDancer, place, rightStill, WAVE_POP } from './helpers';
+import { referencePoseAt } from '../model/reference';
 
 /** Session clock: framing/count-in from ts 5000, startRound at 6500, t0 = ts 6520. */
 const T0_TS = 6_520;
@@ -127,6 +129,53 @@ describe('round pipeline', () => {
     expect(inputs[0]!.t).toBe(series.frames[0]!.t);
     expect(inputs[0]!.a![0]).toBeCloseTo(series.frames[0]!.a![0]! / 10_000, 6);
     expect(inputs[0]!.w).toBe(720);
+  });
+});
+
+describe('a long count-in (a bet round counts in from go_at)', () => {
+  // The pipeline starts 4.5 s before t0 (GO_DELAY_MS + 3 beats), and the series keeps t ≥ −3000.
+  // The two players swap places between ts 500 and 1100, before the series window opens, then
+  // stand still; t0 is ts 4500.
+  const T0 = 4_500;
+  const pose = referencePoseAt(WAVE_POP, 0);
+  const x = (from: number, ts: number) => {
+    const u = Math.min(1, Math.max(0, (ts - 500) / 600));
+    return from + (-from - from) * u;
+  };
+  /** P starts on the left, Q on the right. */
+  const people = (ts: number) => [place(pose, 0.5, x(-0.22, ts)), place(pose, 0.5, x(0.22, ts))];
+  const run = (start: { a: [number, number]; b: [number, number] } | null) => {
+    const p = createRoundPipeline({ routine: WAVE_POP, syncOffsetMs: 0, start });
+    const firstA: (number[] | null)[] = [];
+    for (let ts = 0; ts < T0; ts += 33) firstA.push(p.push(frame(ts, ts, people(ts))).a);
+    p.beginRound();
+    for (let t = 0; t <= 2_000; t += 33) p.push(frame(t, T0 + t, people(T0 + t)));
+    return { p, series: p.series(), firstA };
+  };
+
+  it('left / right: A is the one on the left when the series opens; phone and server agree', () => {
+    const { p, series, firstA } = run(null);
+    // The count-in preview called P (left at ts 0) A.
+    expect(hipCenter(firstA[0]!)![0]).toBeLessThan(0.5);
+    expect(series.frames[0]!.t).toBeGreaterThanOrEqual(-3_000);
+    // The series: A = whoever is on the left there (Q), no swap, on both sides.
+    const s = seriesChecks(PoseSeries.parse(series));
+    expect(s).toMatchObject({ side_swaps: 0, a_start: 'left' });
+    expect(p.tracking()?.side_swaps).toBe(0);
+    for (const f of series.frames) expect(f.a![0]!).toBeLessThan(f.b![0]!);
+  });
+
+  it('face-identified: the round tracker follows the identified players through the swap', () => {
+    // P was identified as A at the count-in, standing on the left.
+    const start = { a: [0.28, 0.5] as [number, number], b: [0.72, 0.5] as [number, number] };
+    const { p, series } = run(start);
+    // P ends up on the right: A starts the series on the right, and that is no swap (byFace).
+    expect(seriesChecks(PoseSeries.parse(series), { byFace: true })).toMatchObject({
+      side_swaps: 0,
+      a_start: 'right',
+    });
+    expect(p.tracking()?.side_swaps).toBe(0);
+    for (const f of series.frames) expect(f.a![0]!).toBeGreaterThan(f.b![0]!);
   });
 });
 

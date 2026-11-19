@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { checkCopy, type CopyRole } from '../../ui/copyRule';
 import {
+  clockText,
   DANCE_COPY,
   ERROR_COPY,
   firstName,
@@ -63,15 +64,26 @@ describe('Dance Off copy', () => {
   });
 
   it('the routine cards are the three bundled routines, with clean data', () => {
-    expect(DANCE_ROUTINE_CHOICES.map((r) => r.id)).toEqual([
-      'wave-pop',
-      'bounce-back',
-      'side-shuffle',
+    expect(DANCE_ROUTINE_CHOICES.map((r) => [r.id, r.seconds])).toEqual([
+      ['bye-bye-shuffle', 33],
+      ['wave-pop', 15],
+      ['bounce-back', 15],
     ]);
     for (const r of DANCE_ROUTINE_CHOICES) {
       expect(checkCopy(r.title, 'data')).toEqual([]);
       expect(checkCopy(r.song, 'data')).toEqual([]);
       expect(r.bpm).toBeGreaterThan(0);
     }
+  });
+
+  it('the round clock reads the routine length: 0:33, 0:15, 0:05', () => {
+    expect([clockText(33), clockText(15), clockText(5), clockText(0)]).toEqual([
+      '0:33',
+      '0:15',
+      '0:05',
+      '0:00',
+    ]);
+    expect(clockText(40.4)).toBe('0:40');
+    expect(checkCopy(clockText(33), 'data')).toEqual([]);
   });
 });

@@ -76,6 +76,15 @@ describe('betView (DANCE-OFF §1 dance off)', () => {
     expect(v.success[1]).toBe(terms.success_criteria[1]);
     expect(betView(bottleFlip('Logan').terms, 'ab'.repeat(32), 'A').routineTitle).toBeNull();
   });
+  it('the round line is the routine\'s own length (a 32.6 s routine reads "33 seconds")', () => {
+    const long = danceOff('Logan', 'Jake', 'bye-bye-shuffle');
+    const v = betView(long.terms, long.termsHash, 'A');
+    expect(long.terms.claim).toBe(
+      'Dance Off: Bye Bye Shuffle, 33 seconds, higher match score wins, $5 each',
+    );
+    expect(v.attempts).toBe('33 seconds');
+    expect(v.success[0]).toBe('Bye Bye Shuffle, 33 seconds');
+  });
   it('no appeal on a dance off: the score is deterministic', () => {
     const v = betView(terms, termsHash, 'B');
     expect(canAppeal(v, 'lost', 10_000, 0)).toBe(false);

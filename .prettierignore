@@ -14,3 +14,7 @@ docs/reference/
 .claude-artifacts/
 # recorded SAM 3.1 replies (test fixtures, kept byte-for-byte as captured)
 packages/shared/test/fixtures/sam3/
+# tools/dance-ref build output and its local work files (ignored by tools/dance-ref/.gitignore,
+# which prettier does not read)
+tools/dance-ref/.build/
+tools/dance-ref/work/

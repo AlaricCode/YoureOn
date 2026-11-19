@@ -6,6 +6,7 @@ import {
   bundleMentions,
   checkUpdatableProfile,
   exportedIos,
+  localDanceAssets,
   nativeGuard,
   parseUpdateArgs,
   updateCommand,
@@ -127,6 +128,43 @@ describe('bundle checks', () => {
       assetExts: ['tflite'],
     });
     expect(exportedIos({})).toEqual({ bundle: null, assetExts: [] });
+  });
+});
+
+describe('local Dance Off media guard', () => {
+  it('finds files from assets/dance/local/ in an assetmap, and nothing else', () => {
+    const root = '/Users/x/UBC-2026/apps/mobile';
+    const map = {
+      h1: {
+        name: 'bye-bye-shuffle',
+        type: 'mp4',
+        fileSystemLocation: `${root}/assets/dance/local`,
+        files: [`${root}/assets/dance/local/bye-bye-shuffle.mp4`],
+      },
+      h2: {
+        name: 'w600k_mbf',
+        type: 'tflite',
+        fileSystemLocation: `${root}/assets/face`,
+        files: [`${root}/assets/face/w600k_mbf.tflite`],
+      },
+      h3: {
+        name: 'bye-bye-shuffle',
+        type: 'mp4',
+        fileSystemLocation: `${root}/assets/dance`,
+        files: [`${root}/assets/dance/bye-bye-shuffle.mp4`],
+      },
+    };
+    expect(localDanceAssets(map)).toEqual([
+      `${root}/assets/dance/local/bye-bye-shuffle.mp4`,
+      `${root}/assets/dance/local`,
+    ]);
+    expect(localDanceAssets({ h2: map.h2, h3: map.h3 })).toEqual([]);
+    expect(localDanceAssets({ w: { files: ['C:\\m\\assets\\dance\\local\\a.mp4'] } })).toHaveLength(
+      1,
+    );
+    expect(localDanceAssets({ w: { files: [`${root}/assets/dance/localish/a.mp4`] } })).toEqual([]);
+    expect(localDanceAssets(null)).toEqual([]);
+    expect(localDanceAssets([])).toEqual([]);
   });
 });
 

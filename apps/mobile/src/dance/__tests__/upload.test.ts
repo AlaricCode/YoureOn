@@ -1,7 +1,7 @@
 // The upload bundle (DANCE-OFF §5): DanceUpload JSON + the key-frame JPEG parts.
 import { DanceUpload } from '@youre-on/shared/evidence';
 import { poseSha256 } from '@youre-on/shared/dance/pose';
-import { routineSha256 } from '@youre-on/shared/dance/routine';
+import { ROUTINE_SHA256_PINS, ROUTINES, routineSha256 } from '@youre-on/shared/dance/routine';
 import { scoreRound } from '@youre-on/shared/dance/score';
 import { sha256Hex } from '@youre-on/shared/primitives';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +27,10 @@ const snap = (t_ms: number, bytes: Uint8Array, sha256?: string): SnapshotBytes =
 });
 
 describe('dance upload bundle', () => {
+  it('every bundled routine hashes to its pin (the calibration self-test checks it on Hermes)', () => {
+    for (const r of ROUTINES) expect(routineSha256(r), r.id).toBe(ROUTINE_SHA256_PINS[r.id]);
+  });
+
   it('builds a valid DanceUpload with recomputed frame hashes, in time order', () => {
     const b1 = jpeg(1_000, 1);
     const b2 = jpeg(2_000, 2);

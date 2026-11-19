@@ -11,3 +11,18 @@ declare module '*.ttf' {
   const assetId: number;
   export default assetId;
 }
+
+// Dance Off music (Metro's default asset extensions include .m4a). expo-audio's
+// createAudioPlayer accepts the numeric asset id.
+declare module '*.m4a' {
+  const assetId: number;
+  export default assetId;
+}
+
+// Dance Off reference clips (Metro's default asset extensions include .mp4; metro.config.js
+// swaps in a same-named file from assets/dance/local/ when there is one). expo-video's
+// useVideoPlayer accepts the numeric asset id.
+declare module '*.mp4' {
+  const assetId: number;
+  export default assetId;
+}

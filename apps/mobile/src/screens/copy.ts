@@ -91,7 +91,7 @@ export const COPY = {
     evidence: ['Evidence', 'label'],
     deadline: ['Deadline', 'label'],
     tries: ['Tries', 'label'],
-    /** A Dance Off's round length on the card ("15 seconds"). */
+    /** A Dance Off's round length on the card ("15 seconds": the routine's own length). */
     round: ['Round', 'label'],
     odds: ['Odds', 'label'],
     code: ['Terms code', 'label'],
@@ -314,4 +314,6 @@ export const fill = {
   chanceFor: (pct: number, name: string) => `${pct}% for ${name.trim().split(/\s+/)[0] || 'them'}`,
   /** A routine card's tempo: "120 bpm" (data). */
   bpm: (bpm: number) => `${Math.round(bpm)} bpm`,
+  /** A routine card's tempo and length: "120 bpm · 15s" (data; each routine has its own). */
+  routineMeta: (bpm: number, seconds: number) => `${Math.round(bpm)} bpm · ${seconds}s`,
 } as const;

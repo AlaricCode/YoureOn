@@ -60,12 +60,12 @@ export function openAtRest(
  * Opens a SealedEmbedding from a request into a validated `model.dim`-d L2-normalized vector.
  * FACE_SEAL_INVALID: not decodable or the wrong byte length (or sealing required / sealed form
  * sent). VALIDATION_FAILED: decodes, but is not finite or not L2-normalized. `path` names the
- * field in the error (`embedding` or `probe`).
+ * field in the error (`embedding`, `probe`, or `faces.<i>.embedding` for dance identify).
  */
 export function openRequestEmbedding(
   sealed: SealedEmbedding,
   model: FaceModelRef,
-  opts: { sealRequired: boolean; path: 'embedding' | 'probe' },
+  opts: { sealRequired: boolean; path: 'embedding' | 'probe' | `faces.${number}.embedding` },
 ): Float32Array {
   if (sealed.alg !== 'plain-v0') {
     throw new HttpError(

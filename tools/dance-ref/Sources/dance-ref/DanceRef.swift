@@ -75,8 +75,8 @@ struct DanceRef {
     }
 
     var warnings: [String] = []
-    if o.durationMs != 15000 {
-      warnings.append("--duration-ms is \(o.durationMs); the contract requires 15000")
+    if o.durationMs < 5000 || o.durationMs > 40000 {
+      warnings.append("--duration-ms is \(o.durationMs); the contract allows 5000..40000")
     }
     let bpm: Double
     if let b = o.bpm {

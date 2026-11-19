@@ -13,12 +13,14 @@ export {
   KEYPOINT_COUNT,
   SNAPSHOT_MAX_BYTES,
   SNAPSHOT_MAX_LONG_SIDE,
+  STILL_MAX_LONG_SIDE,
   clampMaxFps,
   emptyStopResult,
   joint,
   toKeypoints,
   toPoseFrame,
   toStatusEvent,
+  toStillResult,
   toStopRoundResult,
 } from './src/frame';
 export type { JointName } from './src/frame';
@@ -31,5 +33,6 @@ export type {
   StartRoundOptions,
   StartRoundResult,
   StatusEvent,
+  StillResult,
   StopRoundResult,
 } from './src/types';

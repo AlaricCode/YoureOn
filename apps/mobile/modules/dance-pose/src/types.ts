@@ -61,10 +61,20 @@ export interface StartRoundResult {
   message?: string;
 }
 
+/**
+ * captureStill(): one full-size upright JPEG (720x1280) of the next frame that goes to the pose
+ * detector, for the face assignment (DANCE-OFF.md §3). `ts` is that frame's onPoses `ts`, so the
+ * faces in the still pair with that frame's people. The caller deletes the file when done.
+ */
+export type StillResult =
+  | { ok: true; uri: string; width: number; height: number; ts: number }
+  | { ok: false; message?: string };
+
 /** The ref handle of `<DancePoseView ref={...} />`. */
 export interface DancePoseHandle {
   startRound(opts: StartRoundOptions): Promise<StartRoundResult>;
   stopRound(): Promise<StopRoundResult>;
+  captureStill(): Promise<StillResult>;
 }
 
 export interface DancePoseViewProps {
