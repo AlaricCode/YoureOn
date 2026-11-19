@@ -618,7 +618,7 @@ The Stream filter must **drop failed transactions** (`meta.err != null`). A fail
 | outcome | ruling_outcome | N | | = record `outcome` (appeal row: `final_outcome`). `REDO` iff `claim_result = UNCLEAR` or confidence < 0.80, with re-attempts left. `VOID` only from server rules. |
 | claim_result | claim_result | Y | | Raw model answer (NULL for the appeal row) |
 | redo_reason | redo_reason | Y | | `CHECK (outcome='REDO') = (redo_reason IS NOT NULL)` |
-| void_reason | ruling_void_reason | Y | | `CHECK (outcome='VOID') = (void_reason IS NOT NULL)`. A hearing VOID is `undecidable`. |
+| void_reason | ruling_void_reason | Y | | `CHECK (outcome='VOID') = (void_reason IS NOT NULL)`. A hearing VOID is `undecidable`. A call-off (API-CONTRACT §2.9a, model `rule/called-off@1`) is `safety_stop`, with no frames, `evidence_canonical` = the `CallOffRecord` JCS, on the attempt it stopped (or a new attempt row with no recorder, from LOCKED / after a REDO); the request itself is only in `bet_events` (`bet.call_off`). |
 | confidence | numeric(3,2) | Y | | `CHECK 0..1`, 2 dp (= SCHEMAS `Confidence`); NULL for the appeal row |
 | reason | text | Y | | ≤ 280 chars; the judge speaks it |
 | cited_frames | smallint[] | N | '{}' | Indices into `frame_hashes` |

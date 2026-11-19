@@ -63,6 +63,11 @@ export const CONTRACT_COPY: readonly { readonly template: string; readonly sourc
   { template: 'Expired. Nothing moved.', source: 'SCHEMAS §9.4' },
   { template: "Couldn't lock it. Nothing moved.", source: 'SCHEMAS §9.4' },
   { template: 'Terms changed, review again', source: 'TASKS D2-M4' },
+  { template: '{name} wants to call it off. Refund both?', source: 'API-CONTRACT §2.9a' },
+  {
+    template: 'Simulator: play a sample round',
+    source: 'Simulator-only dance round (dance/model/simRound)',
+  },
 ];
 
 // Verdict's ranges (pictographs, misc symbols + dingbats, mahjong..enclosed, VS16), plus keycaps,

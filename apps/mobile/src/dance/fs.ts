@@ -57,6 +57,15 @@ export async function readFileBytes(uri: string): Promise<Uint8Array> {
   return new Uint8Array(await new File(uri).arrayBuffer());
 }
 
+/** The app's documents directory URI (../device/simulator reads where iOS put the sandbox). */
+export function appDocumentsUri(): string | null {
+  try {
+    return Paths.document.uri;
+  } catch {
+    return null;
+  }
+}
+
 /** The app-wide settings store (one per JS runtime). */
 export const danceSettings = createDanceSettingsStore(documentTextFile(DANCE_SETTINGS_FILE));
 

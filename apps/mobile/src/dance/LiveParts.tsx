@@ -11,7 +11,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 import { color, half, motion, palette, radius, space, TABULAR, type } from '../ui/tokens';
 import { useReduceMotion } from '../ui/parts';
-import { dt, firstName, GRADE_COPY } from './copy';
+import { danceLabels, dt, GRADE_COPY } from './copy';
 import { nowMs, useLive } from './hooks';
 import { POPUP_TTL_MS, type LiveStore, type Popup } from './model/liveStore';
 import {
@@ -100,15 +100,16 @@ export function NameTags({
   smoother.current ??= createTagSmoother();
   if (size.width <= 0 || size.height <= 0) return null;
   const rect = containRect(size, { width: view.w, height: view.h });
-  const input = (k: number[] | null, live: LivePlayerState | null, name: string): TagInput => ({
+  const labels = danceLabels(names);
+  const input = (k: number[] | null, live: LivePlayerState | null, label: string): TagInput => ({
     k: live !== null || view.byFace ? k : null,
-    label: firstName(name),
+    label,
     score: tagScore(live ? live.meter : null),
     icon: view.byFace,
   });
   const tags = smoother.current.step(view.version, nowMs(), rect, size, {
-    A: input(view.a, view.liveA, names.a),
-    B: input(view.b, view.liveB, names.b),
+    A: input(view.a, view.liveA, labels.a),
+    B: input(view.b, view.liveB, labels.b),
   });
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none" accessible={false}>
