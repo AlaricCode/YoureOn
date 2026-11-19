@@ -2,6 +2,8 @@
 // a call-off VOID: both phones showed the loser's payout, "GG -$1.00", while it settled).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AppealResult } from '@youre-on/shared/appeal';
+import { hashJcs } from '@youre-on/shared/jcs';
 import { Ruling } from '@youre-on/shared/ruling';
 
 import {
@@ -13,7 +15,7 @@ import {
 } from '../../bets/store';
 import { screenResult } from '../../bets/view';
 import { appReducer, initialApp, routeForBet, type AppState } from '../machine';
-import { DEVICE_A, ev, ME_A, ruling, snapshot, stateEv } from './fixtures';
+import { appealResult, BET, DEVICE_A, ev, ME_A, ruling, snapshot, stateEv } from './fixtures';
 
 const A: AppState = appReducer(initialApp, { type: 'signed_in', me: ME_A, deviceId: DEVICE_A });
 const fold = (m: BetModel, ...events: ReturnType<typeof ev>[]) => events.reduce(applyBetEvent, m);
@@ -77,6 +79,31 @@ describe('a VOID outcome is a refund on every screen', () => {
   it('CONCEDED / FINALIZED with a VOID outcome stay on the ruling', () => {
     for (const s of ['CONCEDED', 'FINALIZED'] as const)
       expect(routeForBet(A, fold(ruled('VOID'), stateEv(s, 40)))).toBe('ruling');
+  });
+
+  it('an appealed VOID the panel upholds (APPEAL_RESOLVED, then VOIDED) never routes to the payout', () => {
+    const upheld = appealResult(['ABSTAIN', 'ABSTAIN', 'ABSTAIN']);
+    const result = AppealResult.parse({
+      ...upheld,
+      appellant: 'A',
+      original_outcome: 'VOID',
+      final_outcome: 'VOID',
+      decided_by: 'upheld_no_majority',
+      flipped: false,
+    });
+    let m = fold(
+      ruled('VOID'),
+      stateEv('APPEALED', 30),
+      ev('appeal.result', { result, ruling_hash: hashJcs(result) }, 31),
+      stateEv('APPEAL_RESOLVED', 32),
+    );
+    expect(finalOutcome(m)).toBe('VOID');
+    expect(routeForBet(A, m)).toBe('appeal'); // the panel's result, until Continue
+    const acked = appReducer(A, { type: 'appeal_ack', bet_id: BET });
+    expect(routeForBet(acked, m)).toBe('ruling');
+    expect(screenResult(finalOutcome(m), m.state, 'A')).toBe('void');
+    m = fold(m, stateEv('VOIDED', 33));
+    expect(routeForBet(acked, m)).toBe('ruling');
   });
 
   it('a decisive outcome still goes to the payout (won / lost)', () => {
