@@ -1,6 +1,9 @@
-// DANCE-OFF §3: framing check + identity tracking (A = left in the image at round start).
-// Inputs are raw people (`k: number[57]`, floats in [0, 1], upright unmirrored image) as the native
-// module reports them; trackedSeriesChecks() recomputes the server-side checks from a PoseSeries.
+// DANCE-OFF §3: framing check + identity tracking. A and B are assigned at round start by the
+// left / right rule (A = left in the image), or, when the recording phone identified both players
+// by face, from where each of them stood (`TrackerStart`: A may stand on the right). Side swaps
+// are counted relative to the sides the players started on. Inputs are raw people
+// (`k: number[57]`, floats in [0, 1], upright unmirrored image) as the native module reports
+// them; seriesChecks() recomputes the server-side checks from a PoseSeries.
 import { JOINT, JOINT_COUNT } from './joints';
 import { dequantizePerson, type PoseSeries } from './pose';
 
@@ -20,7 +23,7 @@ export const DANCE_TRACKING = {
   /** Constant-velocity prediction: EMA weight of the newest velocity, and the longest horizon. */
   TRACK_VEL_ALPHA: 0.5,
   TRACK_PREDICT_MAX_MS: 300,
-  /** A's hip x > B's hip x for at least this long counts one side swap. */
+  /** A and B on the other's starting side for at least this long counts one side swap. */
   SWAP_MIN_MS: 1_000,
 } as const;
 const T = DANCE_TRACKING;
@@ -124,12 +127,33 @@ export interface TrackedFrame<P> {
 }
 
 export interface Tracker {
-  /** Assigns A / B (A = left) on the first frame with ≥ 2 hip centres, then follows them. */
+  /**
+   * Assigns A / B on the first frame with ≥ 2 hip centres (A = left, or the people nearest the
+   * `start` spots), then follows them.
+   */
   push<P extends readonly number[]>(t: number, people: readonly P[]): TrackedFrame<P>;
   stats(): TrackerStats;
   /** Whether A and B have been assigned. */
   started(): boolean;
+  /** Whether A started on the right of B (null before the assignment). */
+  aStartedRight(): boolean | null;
+  /** A's and B's last seen hip centres (normalized image coords), null before they are seen. */
+  last(): { a: [number, number] | null; b: [number, number] | null };
 }
+
+/**
+ * An explicit initial assignment: where A and B stood (hip centres, normalized image coords) when
+ * the phone identified them, e.g. by face. The first frame with ≥ 2 hip centres gives A and B the
+ * two people nearest these spots (least total distance), whichever side each is on.
+ */
+export interface TrackerStart {
+  a: readonly [number, number];
+  b: readonly [number, number];
+}
+
+/** A on the other's starting side: A right of B when A started left, A left of B when right. */
+const isSwapped = (ca: readonly number[], cb: readonly number[], aRight: boolean): boolean =>
+  aRight ? ca[0]! < cb[0]! : ca[0]! > cb[0]!;
 
 interface Slot {
   x: number;
@@ -143,15 +167,29 @@ interface Slot {
 /**
  * §3 identity tracker. Each frame, every person's hip centre is matched to A's and B's previous
  * one, choosing the assignment with the least total distance within the allowed jump (which grows
- * while a player is unseen); extra people are counted (n) and never become A or B.
+ * while a player is unseen); extra people are counted (n) and never become A or B. Without
+ * `start` the round-start assignment is the left / right rule (A = left), exactly as before.
  */
-export function createTracker(opts: { w: number; h: number }): Tracker {
+export function createTracker(opts: {
+  w: number;
+  h: number;
+  start?: TrackerStart | null | undefined;
+}): Tracker {
   const aspect = opts.w / opts.h;
+  const start = opts.start ?? null;
   let A: Slot | null = null;
   let B: Slot | null = null;
   const st: TrackerStats = { frames: 0, max_people: 0, frames_over_two: 0, side_swaps: 0 };
   let swapSince: number | null = null;
   let swapCounted = false;
+  /** Whether A started on the right of B (fixed by the round-start assignment). */
+  let aRight: boolean | null = null;
+  /** Aspect-correct distance between two hip centres. */
+  const gap = (p: readonly [number, number], c: readonly [number, number]) => {
+    const dx = (p[0] - c[0]) * aspect;
+    const dy = p[1] - c[1];
+    return Math.sqrt(dx * dx + dy * dy);
+  };
 
   /** Distance from the slot's predicted spot at time t (aspect-correct). */
   const dist = (s: Slot, c: [number, number], t: number) => {
@@ -178,6 +216,8 @@ export function createTracker(opts: { w: number; h: number }): Tracker {
   return {
     started: () => A !== null && B !== null,
     stats: () => ({ ...st }),
+    aStartedRight: () => aRight,
+    last: () => ({ a: A ? [A.x, A.y] : null, b: B ? [B.x, B.y] : null }),
     push<P extends readonly number[]>(t: number, people: readonly P[]): TrackedFrame<P> {
       st.frames += 1;
       if (people.length > st.max_people) st.max_people = people.length;
@@ -190,12 +230,27 @@ export function createTracker(opts: { w: number; h: number }): Tracker {
           .map((c, i) => (c ? i : -1))
           .filter((i) => i >= 0)
           .sort((i, j) => centers[i]![0] - centers[j]![0] || i - j);
-        if (idx.length >= 2) {
+        if (idx.length >= 2 && start) {
+          // Identified players: the pair nearest where A and B stood (A may be on the right).
+          let best = Number.POSITIVE_INFINITY;
+          for (const i of idx) {
+            for (const j of idx) {
+              if (i === j) continue;
+              const cost = gap(start.a, centers[i]!) + gap(start.b, centers[j]!);
+              if (cost < best) {
+                best = cost;
+                ia = i;
+                ib = j;
+              }
+            }
+          }
+        } else if (idx.length >= 2) {
           // Round start: the two most central people would be a guess; take the leftmost and the
           // rightmost (the framing check has already required exactly two).
           ia = idx[0]!;
           ib = idx[idx.length - 1]!;
         }
+        if (ia >= 0 && ib >= 0) aRight = centers[ia]![0] > centers[ib]![0];
       } else {
         const sa = A;
         const sb = B;
@@ -225,7 +280,7 @@ export function createTracker(opts: { w: number; h: number }): Tracker {
       if (ca) A = moveTo(A, ca, t);
       if (cb) B = moveTo(B, cb, t);
       if (ca && cb) {
-        if (ca[0] > cb[0]) {
+        if (isSwapped(ca, cb, aRight === true)) {
           if (swapSince === null) {
             swapSince = t;
             swapCounted = false;
@@ -246,24 +301,34 @@ export function createTracker(opts: { w: number; h: number }): Tracker {
   };
 }
 
-/** The deterministic checks DanceEvidence carries, recomputed from a series (server side). */
+/**
+ * The deterministic checks DanceEvidence carries, recomputed from a series (server side). The
+ * starting sides are read from the first frame where both players' hip centres are seen (A right
+ * of B there: A started on the right, as a face-identified A may); a side swap is A and B on the
+ * other's starting side for SWAP_MIN_MS. A series whose A starts on the left (every left / right
+ * round) counts exactly as before.
+ */
 export function seriesChecks(series: PoseSeries): {
   max_people: number;
   frames_over_two: number;
   side_swaps: number;
+  /** Where A started, null when the two were never seen together. */
+  a_start: 'left' | 'right' | null;
 } {
   let max_people = 0;
   let frames_over_two = 0;
   let side_swaps = 0;
   let since: number | null = null;
   let counted = false;
+  let aRight: boolean | null = null;
   for (const f of series.frames) {
     if (f.n > max_people) max_people = f.n;
     if (f.n > 2) frames_over_two += 1;
     const ca = f.a ? hipCenter(dequantizePerson(f.a)) : null;
     const cb = f.b ? hipCenter(dequantizePerson(f.b)) : null;
     if (!ca || !cb) continue;
-    if (ca[0] > cb[0]) {
+    aRight ??= ca[0] > cb[0];
+    if (isSwapped(ca, cb, aRight)) {
       if (since === null) {
         since = f.t;
         counted = false;
@@ -274,5 +339,10 @@ export function seriesChecks(series: PoseSeries): {
       }
     } else since = null;
   }
-  return { max_people, frames_over_two, side_swaps };
+  return {
+    max_people,
+    frames_over_two,
+    side_swaps,
+    a_start: aRight === null ? null : aRight ? 'right' : 'left',
+  };
 }

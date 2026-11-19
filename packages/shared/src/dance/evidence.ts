@@ -50,6 +50,7 @@ export function buildDanceEvidence(i: BuildDanceEvidenceInput): {
       coverage_b_pct: result.b.coverage_pct,
       max_people: checks.max_people,
       side_swaps: checks.side_swaps,
+      ...(checks.a_start === 'right' ? { a_start_side: 'right' as const } : {}),
     },
     frames: i.frames,
     clip_sha256: i.clip_sha256,

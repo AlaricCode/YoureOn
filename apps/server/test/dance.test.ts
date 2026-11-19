@@ -47,6 +47,7 @@ import {
   DANCE_CACHED_MODEL,
   DANCE_SYSTEM_PROMPT,
   DANCE_TIMEOUT_MS,
+  startingPlaces,
   type DanceCheck,
 } from '../src/judge/dance';
 import { isDanceOffBet } from '../src/judge/dance-bet';
@@ -314,9 +315,24 @@ describe('the round check (callDanceValidator)', () => {
     expect(text).toContain('Logan (A) 100.0');
     expect(text).toContain('Logan (A) wins');
     expect(text).toContain('Side swaps');
+    expect(text).toContain(
+      'Starting places: Logan (A) on the LEFT of the picture, Jake (B) on the RIGHT',
+    );
     expect(text).toContain('Frame 1/4 at t=1.00s:');
     expect(DANCE_SYSTEM_PROMPT).toMatch(/NEVER decide/);
     expect(DANCE_SYSTEM_PROMPT).toMatch(/family friendly/);
+  });
+
+  it('a face-identified round whose A started on the right says so (no left/right in the terms)', () => {
+    const e = evidenceOf();
+    const flipped = { ...e, checks: { ...e.checks, a_start_side: 'right' as const } };
+    expect(DanceEvidence.safeParse(flipped).success).toBe(true);
+    expect(startingPlaces(flipped, NAMES)).toBe(
+      '- Starting places: Logan (A) on the RIGHT of the picture, Jake (B) on the LEFT (both recognized by face)',
+    );
+    const parts = buildDanceParts({ ...input(), evidence: flipped });
+    expect((parts[0] as { text: string }).text).not.toMatch(/LEFT|RIGHT/);
+    expect(DANCE_SYSTEM_PROMPT).toMatch(/A may start on the RIGHT/);
   });
 });
 

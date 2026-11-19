@@ -22,11 +22,16 @@ export interface LiveView {
   h: number;
   /** Every person in the last frame (raw floats). */
   people: number[][];
-  /** The tracked (or, while framing, left / right) players in the last frame. */
+  /**
+   * The tracked players in the last frame. While framing: the face-identified players when
+   * `byFace`, else the framing check's left (A) / right (B).
+   */
   a: number[] | null;
   b: number[] | null;
+  /** A and B were identified by face (DANCE-OFF §3): their tags carry the face icon. */
+  byFace: boolean;
   framing: FramingResult | null;
-  /** 0..100 live match meters. */
+  /** 0..100 live match scores (the name tags show them). */
   meterA: number;
   meterB: number;
   popups: Popup[];
@@ -54,6 +59,7 @@ export const emptyLiveView = (): LiveView => ({
   people: [],
   a: null,
   b: null,
+  byFace: false,
   framing: null,
   meterA: 0,
   meterB: 0,
