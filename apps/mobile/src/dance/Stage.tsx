@@ -4,7 +4,8 @@
 // when there is one, else its animated skeleton) and the live camera with A (green) and B (white)
 // drawn on the dancers, PERFECT / GOOD / MISS popups over each player's half, and the 3-2-1-GO
 // count-in over both. It fits portrait and landscape: the panels take the largest equal size the
-// space allows.
+// space allows. With a display phone in the room (DanceDisplayScreen plays the reference and the
+// music), `reference={false}` drops the reference panel and the camera panel takes the space.
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
@@ -16,16 +17,17 @@ import { useFrameClock } from './hooks';
 import { CameraSkeletons, DebugReadout, LiveMeters, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
 import type { LiveStore } from './model/liveStore';
-import { stagePanels, type Size } from './model/overlay';
+import { CAMERA_ASPECT, fitPanels, stagePanels, type Size } from './model/overlay';
 import { referencePoseAt, upcomingKeyMove } from './model/reference';
 import { beatAt, countInLabel, type RoundState } from './model/round';
 import { SkeletonLayer } from './SkeletonLayer';
 import { REFERENCE_TINT } from './theme';
 
-/** expo-video, only when a routine has a reference clip (none do yet: see media.ts). */
+/** expo-video, only when a routine has a reference clip (see media.ts). */
 const ReferenceVideo = lazy(() => importSafely(() => import('./ReferenceVideo')));
 
 const PANEL_GAP = space.x1;
+const COUNT_NUMERAL_SIZE = 160;
 /** A beat flash fades over this long. */
 const FLASH_MS = 180;
 const BEATS_PER_BAR = 4;
@@ -135,9 +137,12 @@ export function BeatBar({ routine, startAt }: { routine: RoutineData; startAt: n
 export function CountInOverlay({
   round,
   beatMs,
+  numeralSize = COUNT_NUMERAL_SIZE,
 }: {
   round: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>;
   beatMs: number;
+  /** The numeral's font size (the display phone draws it bigger). */
+  numeralSize?: number;
 }) {
   const active = round.phase === 'countIn' || round.phase === 'dancing';
   const now = useFrameClock(active, 30);
@@ -155,7 +160,15 @@ export function CountInOverlay({
     <View style={[StyleSheet.absoluteFill, styles.countIn]} pointerEvents="none">
       <View style={[StyleSheet.absoluteFill, styles.scrim]} />
       <Text
-        style={[styles.countNumeral, go && { color: palette.accent }, { transform: [{ scale }] }]}
+        style={[
+          styles.countNumeral,
+          numeralSize !== COUNT_NUMERAL_SIZE && {
+            fontSize: numeralSize,
+            lineHeight: Math.round(numeralSize * 1.1),
+          },
+          go && { color: palette.accent },
+          { transform: [{ scale }] },
+        ]}
         accessibilityLiveRegion="assertive"
       >
         {go ? dt(DANCE_COPY.go) : label}
@@ -181,6 +194,7 @@ export function DanceStage({
   debug,
   syncOffsetMs,
   footer,
+  reference = true,
 }: {
   routine: RoutineData;
   names: { a: string; b: string };
@@ -197,6 +211,8 @@ export function DanceStage({
   debug: boolean;
   syncOffsetMs: number;
   footer?: ReactNode;
+  /** Show the reference panel (false: a display phone shows it; the camera panel only). */
+  reference?: boolean;
 }) {
   const [box, setBox] = useState<Size>({ width: 0, height: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
@@ -205,15 +221,17 @@ export function DanceStage({
   };
   // Both panels at the CAMERA's 9:16, whatever the routine's own shape: the reference skeleton
   // contain-fits inside its panel, the live view keeps its full size.
-  const panel = stagePanels(box, PANEL_GAP);
+  const panel = reference ? stagePanels(box, PANEL_GAP) : fitPanels(box, CAMERA_ASPECT, 0, 1);
   return (
     <View style={styles.stage}>
       <LiveMeters store={store} names={names} me={me} />
       <BeatBar routine={routine} startAt={startAt} />
       <View style={styles.panels} onLayout={onLayout}>
-        <View style={[styles.panel, panel]}>
-          <ReferencePanel routine={routine} startAt={startAt} size={panel} />
-        </View>
+        {reference ? (
+          <View style={[styles.panel, panel]}>
+            <ReferencePanel routine={routine} startAt={startAt} size={panel} />
+          </View>
+        ) : null}
         <View style={[styles.panel, panel]}>
           {camera}
           <CameraSkeletons store={store} size={panel} />
@@ -267,7 +285,7 @@ const styles = StyleSheet.create({
   scrim: { backgroundColor: palette.black, opacity: 0.45 },
   countNumeral: {
     ...type.moment,
-    fontSize: 160,
+    fontSize: COUNT_NUMERAL_SIZE,
     lineHeight: 176,
     letterSpacing: -4,
     color: palette.text,

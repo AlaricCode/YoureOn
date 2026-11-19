@@ -9,6 +9,12 @@
 // Frames go to framingCheck while framing, and to the round pipeline (tracker → live scorer →
 // series) from the count-in on; the display reads everything from the live store, so a frame
 // re-renders the meters and skeletons, not the screen.
+//
+// Two phones (./model/schedule): a bet round counts in from the attempt's go_at, so t0 is the
+// same server instant the display phone (DanceDisplayScreen) starts the reference and the music
+// on. While a display phone is there (`displayPhone`, decided once per round when the count-in
+// starts), this phone stays silent and shows no reference: the display plays both. Without one
+// (or a run that could not meet go_at), it plays the music itself (today's one-phone layout).
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { PoseSeries } from '@youre-on/shared/dance/pose';
@@ -28,6 +34,7 @@ import { nowMs, type DancePoseModule } from './hooks';
 import { routineMedia } from './media';
 import { createLiveStore, type LiveStore } from './model/liveStore';
 import { createRoundPipeline, type RoundPipeline } from './model/pipeline';
+import { recorderCountIn } from './model/schedule';
 import {
   beatAt,
   countInBeatIndex,
@@ -92,13 +99,22 @@ export interface DanceRoundEngine {
   camera: CameraState;
   /** t0 on the nowMs clock (reference + beat bar), null before GO. */
   startAt: number | null;
+  /**
+   * A display phone plays the reference and the music: this phone shows neither. Fixed for a
+   * round from its count-in on (the live `displayPhone` before that).
+   */
+  display: boolean;
   onPoses: (e: { nativeEvent: PoseFrameEvent }) => void;
   onStatus: (e: { nativeEvent: StatusEvent }) => void;
   dispatch: (e: RoundEvent) => { prev: RoundState; next: RoundState };
   /** Start pressed (framing stable; `force` skips that, for the calibration screen). */
   start: (force?: boolean) => void;
-  /** The attempt is open: count in (`force`: from framing, for an attempt started elsewhere). */
-  beginCountIn: (attemptNo: number, force?: boolean) => void;
+  /**
+   * The attempt is open: count in (`force`: from framing, for an attempt started elsewhere).
+   * `goAtLocal`: the attempt's go_at on the nowMs clock; the count-in starts there when t0 can
+   * still be met (in sync with the display phone), else now.
+   */
+  beginCountIn: (attemptNo: number, force?: boolean, goAtLocal?: number | null) => void;
   /** Back to framing for a new round. */
   reset: () => void;
 }
@@ -109,6 +125,8 @@ export function useDanceRound(opts: {
   syncOffsetMs: number;
   /** Ask the native view for key-frame JPEGs (the bet round; calibration needs none). */
   snapshots: boolean;
+  /** The other party's phone is the display (../app/danceFlow danceDisplayPresent). */
+  displayPhone?: boolean;
   onFinished: (out: DanceRoundOutput) => void;
 }): DanceRoundEngine {
   const { routine } = opts;
@@ -131,6 +149,10 @@ export function useDanceRound(opts: {
   const danceBeat = useRef(-1);
   const audio = useRef<AudioLike | null>(null);
   const goTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The count-in about to start ran from go_at (in sync with the display phone). */
+  const nextSynced = useRef(false);
+  /** This round's display decision (null: no round counting in or running). */
+  const [runDisplay, setRunDisplay] = useState<boolean | null>(null);
 
   const stopAudio = () => {
     const a = audio.current;
@@ -232,8 +254,12 @@ export function useDanceRound(opts: {
           Math.max(0, next.goAt - nowMs()),
         );
       }
+      // A display phone plays the music, if it is there and this run is on its timeline.
+      const display = optsRef.current.displayPhone === true && nextSynced.current;
+      nextSynced.current = false;
+      setRunDisplay(display);
       const media = routineMedia(routine);
-      if (media.audio !== null && media.video === null) {
+      if (!display && media.audio !== null && media.video === null) {
         const asset = media.audio;
         void importSafely(() => import('expo-audio'))
           .then((A) => {
@@ -253,6 +279,7 @@ export function useDanceRound(opts: {
       pipeline.current = null;
       startAtRef.current = null;
       setStartAt(null);
+      setRunDisplay(null);
       stopAudio();
       store.reset();
     }
@@ -347,8 +374,18 @@ export function useDanceRound(opts: {
   );
 
   const beginCountIn = useCallback(
-    (attemptNo: number, force?: boolean) => {
-      dispatch({ type: 'attempt', at: nowMs(), attemptNo, force: force === true });
+    (attemptNo: number, force?: boolean, goAtLocal?: number | null) => {
+      const at = nowMs();
+      const plan = recorderCountIn(goAtLocal ?? null, at, cfgRef.current.beatMs);
+      nextSynced.current = plan.synced;
+      dispatch({
+        type: 'attempt',
+        at,
+        attemptNo,
+        force: force === true,
+        countInAt: plan.countInAt,
+      });
+      nextSynced.current = false;
     },
     [dispatch],
   );
@@ -365,6 +402,7 @@ export function useDanceRound(opts: {
     handleRef,
     camera,
     startAt,
+    display: runDisplay ?? opts.displayPhone === true,
     onPoses,
     onStatus,
     dispatch,

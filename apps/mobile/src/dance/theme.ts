@@ -18,3 +18,10 @@ export const GRADE_TINT: Readonly<Record<KeyMoveGrade, string>> = {
   GOOD: palette.text,
   MISS: palette.textSecondary,
 };
+
+/**
+ * The reference's backdrop on the display phone: the dark violet the silhouette clips are
+ * rendered on (bye-bye-shuffle.mp4 is #0b0614 edge to edge), so the contain-fit letterbox blends
+ * into the clip. A media colour, not a UI one: it lives here, not in the Obsidian palette.
+ */
+export const REFERENCE_BACKDROP = '#0b0614';

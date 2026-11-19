@@ -19,7 +19,9 @@
 // a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
 // Dance Off (docs/planning/DANCE-OFF.md): "Dance off" on A's negotiate screen (app/danceTerms),
 // the same card and lock, then the round on the recording phone (../dance DanceOffScreen: the
-// judge cam, else A's phone) and "Dance off live" on the other (app/danceFlow); the usual ruling,
+// judge cam, else A's phone), B's phone the display meanwhile (../dance DanceDisplayScreen: the
+// mirrored reference and the music, from the same server go_at), and "Dance off live" on a phone
+// that is neither and while the round is judged (app/danceFlow); the usual ruling,
 // GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
 // "Jarvis" (../wake, ./wakeGate; EXPO_PUBLIC_WAKE): one recognizer, listening on Home (in a room)
 // and on A's negotiate screen until the judge starts. On Home "Jarvis, …" starts a challenge (the
@@ -117,6 +119,7 @@ import {
   type PreparedAttempt,
 } from './actions';
 import {
+  danceDisplayPresent,
   danceStartNote,
   danceWatchPhase,
   isDanceBet,
@@ -268,6 +271,7 @@ const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
 const loadDance = () => importSafely(() => import('../dance/index'));
 const DanceOffScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceOffScreen })));
 const DanceWatchScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceWatchScreen })));
+const DanceDisplayScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceDisplayScreen })));
 const DanceResultBreakdown = lazy(() =>
   loadDance().then((m) => ({ default: m.DanceResultBreakdown })),
 );
@@ -2235,17 +2239,19 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 terms={terms}
                 me={me}
                 names={names}
-                // go_at on this phone's clock (as the judge cam's arm), so the count-in lands
-                // on the server's instant.
-                attempt={
-                  a
-                    ? {
-                        attempt_no: a.attempt_no,
-                        go_at: new Date(Date.parse(a.go_at) - rt.clock.offsetMs).toISOString(),
-                        max_ms: a.max_ms,
-                      }
-                    : null
-                }
+                // go_at is the server's instant: the screen maps it onto its round clock
+                // through the clock offset, so its count-in lands on the same instant as the
+                // display phone's (../dance/model/schedule).
+                attempt={a ? { attempt_no: a.attempt_no, go_at: a.go_at, max_ms: a.max_ms } : null}
+                clockOffsetMs={rt.clock.offsetMs}
+                // B's phone is the display when B is online in the bet's room (./danceFlow).
+                displayPhone={danceDisplayPresent({
+                  members: app.members,
+                  roomId: app.room?.room_id ?? null,
+                  betRoomId: bet.room_id,
+                  displayUserId: bet.party_b?.user_id ?? null,
+                  myUserId: app.me?.user_id ?? null,
+                })}
                 ruling={
                   bet.ruling
                     ? {
@@ -2257,6 +2263,31 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 onStartAttempt={startDance}
                 onUpload={uploadDance}
                 onLeave={app.judgeCam ? () => setJudgeCam(false) : undefined}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        );
+      }
+      case 'danceDisplay': {
+        // B's phone during the round: the mirrored reference full screen with the music, from
+        // the attempt's go_at (the same server instant the recording phone starts on).
+        const terms = bet?.envelope?.terms;
+        if (!bet || !terms) return waiting;
+        const a = bet.attempt;
+        return (
+          <PanelErrorBoundary
+            key={bet.bet_id}
+            name={t(COPY.dance.panel)}
+            onError={(m) => console.warn('[yo] dance display', m)}
+          >
+            <Suspense fallback={waiting}>
+              <DanceDisplayScreen
+                terms={terms}
+                names={{ a: terms.party_a.display_name, b: terms.party_b.display_name }}
+                attempt={
+                  a && state === 'ATTEMPT' ? { attempt_no: a.attempt_no, go_at: a.go_at } : null
+                }
+                clockOffsetMs={rt.clock.offsetMs}
               />
             </Suspense>
           </PanelErrorBoundary>
