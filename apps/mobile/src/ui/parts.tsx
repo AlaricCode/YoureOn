@@ -1209,7 +1209,9 @@ export function Aurora({ tone }: { tone: AuroraTone }) {
 /**
  * A moment screen: black, safe-area padded, light status bar. Children are centred; `footer`
  * sits at the bottom (buttons); `top` above (e.g. a TopBar with the user tag). The only colour
- * field is the aurora: pass `aurora`, or let a MomentGroup inside ask for it (its `glow`).
+ * field is the aurora: pass `aurora`, or let a MomentGroup inside ask for it (its `glow`). The
+ * body always scrolls (centred while it fits), so content taller than the screen (a dance off's
+ * ruling and breakdown) never spills over the status bar, the top bar or the footer.
  */
 export function MomentScreen({
   children,

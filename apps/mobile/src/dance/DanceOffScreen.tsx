@@ -1,33 +1,52 @@
 // The Dance Off on the judge-cam phone (DANCE-OFF §6.2, §6.3). It IS the display (HDMI shows it
 // through iOS mirroring):
-//   1. Framing: live skeletons, "A ← | → B", the framing check's reason; Start unlocks after
-//      framing has held for 1 s.
+//   1. Framing: live skeletons and the framing check's reason; Start unlocks after framing has
+//      held for 1 s. When framing passes, the phone tries the face assignment once (§3,
+//      ./faceIdentify, time-boxed, never blocking Start): with both players identified, each one's
+//      name tag sits over their skeleton (A may stand on the right); without, the "A ← | → B"
+//      hint as before (the left / right rule).
 //   2. Start → POST /attempts (onStartAttempt) → the attempt arrives. An attempt another phone
 //      started (A pressed Start; the server named this judge cam) counts in on its own.
-//   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic), then GO.
-//   4. GO: startRound and the reference start in the same tick; duration_ms of dancing with live meters
-//      and PERFECT / GOOD / MISS popups.
+//   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic) from the attempt's go_at, then
+//      GO at go_at + 3 beats: the same server instant the display phone uses (./model/schedule).
+//   4. GO: startRound and the reference start in the same tick; duration_ms of dancing with a live
+//      name tag over each player ("Logan · 87") and PERFECT / GOOD / MISS popups. With a display
+//      phone (the other party's phone, online in the room when the count-in starts), this phone
+//      is silent and shows the camera panel only: the display plays the mirrored reference and
+//      the music. Without one, today's layout: the reference panel beside the camera, and the
+//      music from here.
 //   5. stopRound → the local final score → the result (no network so far).
 //   6. Upload (onUpload) → "Sending to judge" → the announcer line once the ruling lands (the bet
 //      flow then moves on to the ruling screen).
 // The pose module loads lazily (importSafely); without it the camera panel says "No camera".
+// In the iOS Simulator only (no camera; ../device/simulator), "Simulator: play a sample round"
+// runs this same flow on synthetic poses and key frames (./model/simRound): A follows the
+// routine, B lags and stops halfway, so two simulators can test the display, sync and ruling.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { Terms } from '@youre-on/shared/terms';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import { toPoseFrame, toStatusEvent } from '../../modules/dance-pose/src/frame';
+import { danceRoundGuard, type CallOffGuard } from '../app/callOff';
+import { simulatorSampleOffered } from '../device/simulator';
+import { useReportCallOffGuard } from '../screens/CallOff';
 
 import { AlertLine, PrimaryButton, QuietButton, TextButton } from '../ui/kit';
 import { DotsLabel, Screen, TopBar } from '../ui/parts';
 import { half, palette, space, type } from '../ui/tokens';
 import { safeLine } from './DanceResultBreakdown';
-import { DANCE_COPY, dt, ERROR_COPY, firstName, FRAMING_COPY } from './copy';
-import { readFileBytes } from './fs';
-import { useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
+import { DANCE_COPY, danceLabels, dt, ERROR_COPY, FRAMING_COPY } from './copy';
+import { appDocumentsUri, readFileBytes } from './fs';
+import { nowMs, useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
 import type { LiveStore } from './model/liveStore';
 import { attemptCountIn, framingProgress, type RoundState } from './model/round';
+import { serverIsoToLocalMs } from './model/schedule';
+import { createSimPoseSource, SIM_FRAME_MS, type SimPoseSource } from './model/simRound';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
+import type { DanceFaceId } from './faceIdentify';
 import { ResultCard, type ResultData } from './ResultCard';
 import { DanceStage } from './Stage';
 import { PLAYER_TINT } from './theme';
@@ -40,7 +59,14 @@ export type DanceOffScreenProps = {
   terms: Terms;
   me: 'A' | 'B';
   names: { a: string; b: string };
+  /** The open attempt; go_at is the SERVER's instant (mapped onto this phone via clockOffsetMs). */
   attempt: { attempt_no: number; go_at: string; max_ms: number } | null;
+  /** Server time − this phone's Date.now() (net Clock.offsetMs). */
+  clockOffsetMs: number;
+  /** The other party's phone is the display (../app/danceFlow danceDisplayPresent). */
+  displayPhone: boolean;
+  /** Face assignment (DANCE-OFF §3): the embedder and the identify call; null: left / right. */
+  faceId?: DanceFaceId | null;
   ruling: { outcome: string; reason: string } | null;
   onStartAttempt: () => Promise<{ ok: true } | { ok: false; message: string }>;
   onUpload: (
@@ -48,7 +74,19 @@ export type DanceOffScreenProps = {
     attemptNo: number,
   ) => Promise<{ ok: true } | { ok: false; message: string }>;
   onLeave?: () => void;
+  /**
+   * Where the round stands for "Call it off" (../app/callOff danceRoundGuard): held while it
+   * counts in / dances / scores, and off while this phone holds a local result.
+   */
+  onCallOffGuard?: (guard: CallOffGuard) => void;
 };
+
+/** The pose payload parsers without the native module (the Simulator's sample round). */
+const POSE_PARSERS = { toPoseFrame, toStatusEvent };
+
+/** A server go_at on the round clock, read now (the offset can re-sync at any time). */
+const goAtOnRoundClock = (goAt: string, offsetMs: number): number | null =>
+  serverIsoToLocalMs(goAt, { offsetMs, wallNow: Date.now(), monoNow: nowMs() });
 
 /** A local round result → the result card. */
 export function resultFromRound(routine: RoutineData, r: DanceRoundResult): ResultData {
@@ -84,7 +122,8 @@ export function DanceOffScreen(props: DanceOffScreenProps) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Framing guide: "A ← | → B" over the camera panel, the reason under it.
+// Framing guide: "A ← | → B" over the camera panel, the reason under it. Once both players are
+// identified by face their name tags (Stage NameTags) say who is who, so the hint goes.
 // ---------------------------------------------------------------------------------------
 
 function FramingGuide({
@@ -97,16 +136,17 @@ function FramingGuide({
   visible: boolean;
 }) {
   const ok = useLive(store, (v) => v.framing?.ok === true);
-  if (!visible) return null;
+  const byFace = useLive(store, (v) => v.byFace);
+  if (!visible || byFace) return null;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={[styles.centerLine, ok && styles.centerLineOk]} />
       <View style={styles.guideRow}>
         <Text style={[styles.guideName, { color: PLAYER_TINT.A }]} numberOfLines={1}>
-          {`${firstName(names.a)} ←`}
+          {`${danceLabels(names).a} ←`}
         </Text>
         <Text style={[styles.guideName, { color: PLAYER_TINT.B }]} numberOfLines={1}>
-          {`→ ${firstName(names.b)}`}
+          {`→ ${danceLabels(names).b}`}
         </Text>
       </View>
     </View>
@@ -119,11 +159,14 @@ function FramingFooter({
   store,
   camera,
   onStart,
+  onSample,
 }: {
   round: RoundState;
   store: LiveStore;
   camera: 'ok' | 'none' | 'error';
   onStart: () => void;
+  /** The Simulator only: run the sample round (undefined: not offered). */
+  onSample?: (() => void) | undefined;
 }) {
   const now = useFrameClock(round.phase === 'framing' && round.okSince !== null, 30);
   const reason = useLive(store, (v) => v.framing?.reason ?? null);
@@ -155,6 +198,13 @@ function FramingFooter({
         disabled={!ready}
         testID="dance-start"
       />
+      {onSample ? (
+        <QuietButton
+          testID="dance-sim-sample"
+          label={dt(DANCE_COPY.simSample)}
+          onPress={onSample}
+        />
+      ) : null}
     </View>
   );
 }
@@ -171,6 +221,12 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   const { routine, names, me } = props;
   const [settings] = useDanceSettings();
   const pose = useDancePose();
+  /** The Simulator's sample round: synthetic poses in place of the camera (./model/simRound). */
+  const [sim, setSim] = useState<SimPoseSource | null>(null);
+  const simRef = useRef<SimPoseSource | null>(null);
+  simRef.current = sim;
+  /** Where iOS put this app's sandbox, read once (../device/simulator). */
+  const [documentsUri] = useState(appDocumentsUri);
   const [result, setResult] = useState<DanceRoundResult | null>(null);
   const bundle = useRef<DanceUploadBundle | null>(null);
   /** Start was pressed and POST /attempts is out: the next unused attempt counts in. */
@@ -204,7 +260,10 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     (out: DanceRoundOutput) => {
       void (async () => {
         setResult(out.result);
-        const snaps = await readSnapshots(out.stop.snapshots, readFileBytes);
+        const snaps = await readSnapshots(
+          out.stop.snapshots,
+          simRef.current ? simRef.current.read : readFileBytes,
+        );
         const built = buildDanceUploadBundle({
           routine,
           series: out.series,
@@ -229,24 +288,48 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
 
   const engine = useDanceRound({
     routine,
-    pose: pose.mod,
+    pose: sim ? POSE_PARSERS : pose.mod,
     syncOffsetMs: settings.syncOffsetMs,
     snapshots: true,
+    displayPhone: props.displayPhone,
+    faceId: props.faceId ?? null,
     onFinished,
   });
   engineRef.current = engine;
   const { state } = engine;
+  useReportCallOffGuard(props.onCallOffGuard, danceRoundGuard(state.phase, result !== null));
 
-  // 2. Start → the attempt. An attempt already open (and not danced) is used as is; otherwise
-  // POST /attempts and wait for an attempt not used yet. Attempts are compared by number only:
-  // go_at is shifted by the live clock offset, so it changes on every clock re-sync.
+  // The sample round: frames at SIM_FPS through the same onPoses path, and the sample source
+  // standing in for the native view's handle (startRound / stopRound / the key frames).
+  useEffect(() => {
+    if (!sim) return;
+    const id = setInterval(() => {
+      const e = engineRef.current;
+      if (!e) return;
+      e.handleRef.current = sim.handle;
+      e.onPoses({ nativeEvent: sim.frame(nowMs()) });
+    }, SIM_FRAME_MS);
+    return () => clearInterval(id);
+  }, [sim]);
+  // Framing holds by itself on synthetic poses: Start as soon as it unlocks (one tap in all).
+  useEffect(() => {
+    if (sim && state.phase === 'ready') engineRef.current?.start();
+  }, [sim, state.phase]);
+
+  // 2. Start → the attempt. An attempt already open (and not danced) is used as is (its go_at is
+  // long past, so it counts in from now, out of step with the display); otherwise POST /attempts
+  // and wait for an attempt not used yet. Attempts are compared by number only.
   const attemptNo = props.attempt?.attempt_no ?? null;
   useEffect(() => {
     if (state.phase !== 'starting') return;
     const a = propsRef.current.attempt;
     if (a && !usedAttempts.current.has(a.attempt_no)) {
       usedAttempts.current.add(a.attempt_no);
-      engineRef.current?.beginCountIn(a.attempt_no);
+      engineRef.current?.beginCountIn(
+        a.attempt_no,
+        false,
+        goAtOnRoundClock(a.go_at, propsRef.current.clockOffsetMs),
+      );
       return;
     }
     waiting.current = true;
@@ -284,7 +367,11 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     if (go === null) return;
     waiting.current = false;
     usedAttempts.current.add(a.attempt_no);
-    engineRef.current?.beginCountIn(a.attempt_no, go === 'forced');
+    engineRef.current?.beginCountIn(
+      a.attempt_no,
+      go === 'forced',
+      goAtOnRoundClock(a.go_at, propsRef.current.clockOffsetMs),
+    );
   }, [state.phase, attemptNo]);
 
   const danceAgain = () => {
@@ -299,12 +386,21 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     engine.reset();
   };
 
-  const cameraKind: 'ok' | 'none' | 'error' =
+  const realCamera: 'ok' | 'none' | 'error' =
     pose.status === 'missing' || engine.camera === 'no_camera'
       ? 'none'
       : engine.camera === 'error'
         ? 'error'
         : 'ok';
+  const cameraKind = sim ? 'ok' : realCamera;
+  // Only in the iOS Simulator (its app container), only with no camera: never on a phone.
+  const simOffered =
+    sim === null &&
+    simulatorSampleOffered({
+      platform: Platform.OS,
+      documentsUri,
+      camera: realCamera,
+    });
   const showResult =
     result !== null &&
     (state.phase === 'result' ||
@@ -329,7 +425,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     );
   }
 
-  const Pose = pose.status === 'ready' ? pose.mod.DancePoseView : null;
+  const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
   const camera = Pose ? (
     <Pose
       ref={engine.handleRef}
@@ -341,7 +437,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     />
   ) : (
     <View style={[StyleSheet.absoluteFill, styles.noCamera]}>
-      {pose.status === 'loading' ? null : (
+      {pose.status === 'loading' || sim ? null : (
         <Text style={styles.noCameraText}>{dt(DANCE_COPY.noCamera)}</Text>
       )}
     </View>
@@ -354,6 +450,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       store={engine.store}
       camera={cameraKind}
       onStart={() => engine.start()}
+      onSample={simOffered ? () => setSim(createSimPoseSource(routine, nowMs)) : undefined}
     />
   ) : state.phase === 'starting' ? (
     <StatusFooter>
@@ -385,7 +482,6 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       <DanceStage
         routine={routine}
         names={names}
-        me={me}
         store={engine.store}
         round={state}
         beatMs={engine.cfg.beatMs}
@@ -395,6 +491,8 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
         debug={settings.debugOverlay}
         syncOffsetMs={settings.syncOffsetMs}
         footer={footer}
+        reference={!engine.display}
+        mutedUntil={engine.mutedUntil}
       />
     </Screen>
   );

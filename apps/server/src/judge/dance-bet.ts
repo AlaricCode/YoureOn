@@ -5,7 +5,7 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { betTermsVersions, rulings } from '@youre-on/db';
 import { DANCE_TERMS_TYPE } from '@youre-on/shared/dance/terms';
-import { DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
+import { CALLED_OFF_MODEL, DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
 import type { Tx } from '../lock/common';
 
 /** Works with deps.db or inside a transaction. */
@@ -27,6 +27,19 @@ export async function isDanceOffBet(db: Pick<Tx, 'select'>, betId: string): Prom
     .select({ id: rulings.id })
     .from(rulings)
     .where(and(eq(rulings.bet_id, betId), eq(rulings.model, DANCE_OFF_MODEL)))
+    .limit(1);
+  return ruled !== undefined;
+}
+
+/**
+ * Was this bet called off (a rule/called-off@1 VOID, ./call-off.ts)? Both players agreed (or the
+ * operator voided it), so there is nothing to appeal: the appeal routes refuse it like a dance off.
+ */
+export async function isCalledOffBet(db: Pick<Tx, 'select'>, betId: string): Promise<boolean> {
+  const [ruled] = await db
+    .select({ id: rulings.id })
+    .from(rulings)
+    .where(and(eq(rulings.bet_id, betId), eq(rulings.model, CALLED_OFF_MODEL)))
     .limit(1);
   return ruled !== undefined;
 }

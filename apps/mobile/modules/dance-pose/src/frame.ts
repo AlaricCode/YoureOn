@@ -1,5 +1,11 @@
 // Pure helpers for the DancePose payloads. No React Native imports, so node tests can load it.
-import type { DanceSnapshot, PoseFrameEvent, StatusEvent, StopRoundResult } from './types';
+import type {
+  DanceSnapshot,
+  PoseFrameEvent,
+  StatusEvent,
+  StillResult,
+  StopRoundResult,
+} from './types';
 
 /** The contract's joint order (DANCE-OFF.md §2), indices 0..18, as in ios/PoseExtraction.swift. */
 export const JOINT_ORDER = [
@@ -139,4 +145,21 @@ export function toStopRoundResult(raw: unknown): StopRoundResult {
     return { clipUri, clipSha256, snapshots };
   }
   return { clipUri: null, clipSha256: null, snapshots };
+}
+
+/** The face still's limits (ios SnapshotEncoder.still*): the whole upright frame. */
+export const STILL_MAX_LONG_SIDE = 1280;
+
+/** Validates a captureStill result; anything malformed is `{ok: false}`. */
+export function toStillResult(raw: unknown): StillResult {
+  if (!isObject(raw) || raw.ok !== true) {
+    const message = isObject(raw) && typeof raw.message === 'string' ? raw.message : undefined;
+    return message === undefined ? { ok: false } : { ok: false, message };
+  }
+  const { uri, width, height, ts } = raw;
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return { ok: false };
+  if (!isNum(width) || !isNum(height) || !isNum(ts) || width <= 0 || height <= 0)
+    return { ok: false };
+  if (Math.max(width, height) > STILL_MAX_LONG_SIDE) return { ok: false };
+  return { ok: true, uri, width, height, ts };
 }

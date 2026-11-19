@@ -772,7 +772,7 @@ export default function PreviewApp({
         return (
           <PayoutScreen
             view={view}
-            won={myResult(result, me) === 'won'}
+            result={myResult(result, me)}
             balanceCents={balance}
             phase={payoutPhase}
             onRetry={() => openPayout(true)}

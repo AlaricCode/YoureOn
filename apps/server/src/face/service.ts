@@ -12,6 +12,9 @@
 //    shared lobby (rooms/lobby.ts), only the members who are around: online now, or seen within
 //    LOBBY_RECENT_MS, most recently seen first, so a day of past visitors is never compared.
 //  - Scores stay here. The response is a user + ticket, or null.
+//  - Dance identify (identifyDanceParties, DANCE-OFF §3) compares only with the bet's two parties
+//    (the caller's own enrollment included), stores nothing at all (not even last_used_at), and
+//    answers face indices and parties, never a score.
 //  - Database errors are re-thrown without their message (Drizzle puts query parameters, i.e.
 //    ciphertext, in it) so the app's error log never sees face bytes.
 import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
@@ -22,9 +25,11 @@ import {
   RIVAL_MIN_SETTLED,
   type HeadToHead,
 } from '@youre-on/shared/api';
+import type { DanceIdentifyRequest, DanceIdentifyResponse } from '@youre-on/shared/api';
 import {
   bytesToEmbedding,
   cosineSimilarity,
+  decideDanceAssignments,
   decideMatch,
   embeddingProblem,
   embeddingToBytes,
@@ -517,10 +522,25 @@ export async function matchInRoom(
 /** Decrypts one candidate and scores it against the probe; null when it can't be read. */
 function scoreRow(
   keyring: ReadonlyMap<string, Uint8Array>,
-  r: CandidateRow,
+  r: Pick<CandidateRow, 'user_id' | 'embedding_ciphertext' | 'embedding_nonce' | 'key_id'>,
   model: FaceModelRef,
   probe: Float32Array,
 ): number | null {
+  const v = openRow(keyring, r, model);
+  if (!v) return null;
+  try {
+    return cosineSimilarity(probe, v);
+  } finally {
+    v.fill(0);
+  }
+}
+
+/** Decrypts one enrollment into a fresh vector (the caller zero-fills it); null if unusable. */
+function openRow(
+  keyring: ReadonlyMap<string, Uint8Array>,
+  r: Pick<CandidateRow, 'user_id' | 'embedding_ciphertext' | 'embedding_nonce' | 'key_id'>,
+  model: FaceModelRef,
+): Float32Array | null {
   const kek = kekFor(keyring, r.key_id);
   if (!kek) return null;
   const plain = openAtRest(kek, atRestAad(r.user_id, model), {
@@ -533,10 +553,94 @@ function scoreRow(
   }
   const v = bytesToEmbedding(plain);
   plain.fill(0);
-  try {
-    return embeddingProblem(v, model.dim) === null ? cosineSimilarity(probe, v) : null;
-  } finally {
+  if (embeddingProblem(v, model.dim) !== null) {
     v.fill(0);
+    return null;
+  }
+  return v;
+}
+
+// ---- dance identify (DANCE-OFF §3) -------------------------------------------------------
+
+/**
+ * POST /v1/bets/:bet_id/dance/identify, after the route's gate (the bet's recorder device, a
+ * dance off LOCKED or in ATTEMPT). Each probe face is compared with the two parties' active
+ * enrollments of the same model only, the caller's own included (both dance), and
+ * decideDanceAssignments keeps a face only when it is clearly one party and that party's clearly
+ * best face (the face-match threshold and margin). Nothing is stored or touched (no
+ * last_used_at bump), the probes and the decrypted enrollments are zero-filled, and the answer
+ * is face indices and parties only.
+ */
+export async function identifyDanceParties(
+  deps: FaceDeps,
+  parties: { A: string; B: string },
+  req: DanceIdentifyRequest,
+): Promise<DanceIdentifyResponse> {
+  const cfg = faceConfigOf(deps.env);
+  if (!isAcceptedFaceModel(req.model)) {
+    throw new HttpError('FACE_MODEL_UNSUPPORTED', 'Update the app to use face matching.', {
+      model: `${req.model.name}@${req.model.version}`,
+      dim: req.model.dim,
+    });
+  }
+  const probes: Float32Array[] = [];
+  try {
+    req.faces.forEach((f, i) =>
+      probes.push(
+        openRequestEmbedding(f.embedding, req.model, {
+          sealRequired: cfg.sealRequired,
+          path: `faces.${i}.embedding`,
+        }),
+      ),
+    );
+    const rows = await sanitized(deps, 'dance_candidates', () =>
+      deps.db
+        .select({
+          user_id: faceEnrollments.user_id,
+          embedding_ciphertext: faceEnrollments.embedding_ciphertext,
+          embedding_nonce: faceEnrollments.embedding_nonce,
+          key_id: faceEnrollments.key_id,
+        })
+        .from(faceEnrollments)
+        .innerJoin(users, and(eq(users.id, faceEnrollments.user_id), isNull(users.deleted_at)))
+        .where(
+          and(
+            inArray(faceEnrollments.user_id, [parties.A, parties.B]),
+            eq(faceEnrollments.status, 'active'),
+            eq(faceEnrollments.model_name, req.model.name),
+            eq(faceEnrollments.model_version, req.model.version),
+            eq(faceEnrollments.embedding_dim, req.model.dim),
+          ),
+        ),
+    );
+    const scores: Partial<Record<'A' | 'B', number[]>> = {};
+    let unreadable = 0;
+    for (const party of ['A', 'B'] as const) {
+      const r = rows.find((x) => x.user_id === parties[party]);
+      if (!r) continue;
+      const v = openRow(cfg.keyring, r, req.model);
+      if (!v) {
+        unreadable++;
+        continue;
+      }
+      try {
+        scores[party] = probes.map((p) => cosineSimilarity(p, v));
+      } finally {
+        v.fill(0);
+      }
+    }
+    if (unreadable > 0)
+      deps.log.warn('face.candidates_unreadable', {
+        scope: 'dance_identify',
+        unreadable,
+        candidates: rows.length,
+      });
+    const assignments = decideDanceAssignments(scores, probes.length);
+    scores.A?.fill(0);
+    scores.B?.fill(0);
+    return { assignments };
+  } finally {
+    for (const p of probes) p.fill(0);
   }
 }
 

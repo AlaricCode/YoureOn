@@ -6,6 +6,7 @@ import type { DanceUpload } from '@youre-on/shared/evidence';
 
 import { ApiClientError } from '../../net/signedFetch';
 import {
+  danceDisplayPresent,
   danceRecorderOrder,
   danceStartNote,
   danceWatchPhase,
@@ -14,6 +15,7 @@ import {
   prepareDance,
   recordsDance,
   sendDanceUpload,
+  showsDanceDisplay,
   startDanceAttemptVia,
   type DanceBundleIn,
   type PreparedDance,
@@ -22,6 +24,48 @@ import { DEVICE_A, DEVICE_CAM, dance, danceEnvelope, envelope } from './fixtures
 
 const noJudgeCam = () =>
   new ApiClientError('INVALID_STATE', 409, 'no judge cam', true, { reason: 'no_judge_cam' });
+
+describe('the display phone and the recorder’s presence check', () => {
+  it("B's phone is the display while the round runs (LOCKED, ATTEMPT), never a judge cam", () => {
+    const phone = { judgeCam: false };
+    expect(showsDanceDisplay(phone, { state: 'LOCKED', my_party: 'B' })).toBe(true);
+    expect(showsDanceDisplay(phone, { state: 'ATTEMPT', my_party: 'B' })).toBe(true);
+    // Judged: the watch screen and the ruling, as before.
+    expect(showsDanceDisplay(phone, { state: 'JUDGING', my_party: 'B' })).toBe(false);
+    // A records (or watches the judge cam record): never the display.
+    expect(showsDanceDisplay(phone, { state: 'ATTEMPT', my_party: 'A' })).toBe(false);
+    expect(showsDanceDisplay({ judgeCam: true }, { state: 'ATTEMPT', my_party: 'B' })).toBe(false);
+  });
+
+  const member = (user_id: string, online: boolean) => ({ user: { user_id }, online });
+  const base = {
+    members: [member('u-a', true), member('u-b', true)],
+    roomId: 'room-1',
+    betRoomId: 'room-1',
+    displayUserId: 'u-b',
+    myUserId: 'u-a',
+  };
+
+  it('a display phone is there when party B is online in the bet’s room', () => {
+    expect(danceDisplayPresent(base)).toBe(true);
+    // The bet's room unknown: taken as the current room.
+    expect(danceDisplayPresent({ ...base, betRoomId: null })).toBe(true);
+  });
+
+  it('none when B is offline, missing, in another room, or is this phone’s own user', () => {
+    expect(
+      danceDisplayPresent({ ...base, members: [member('u-a', true), member('u-b', false)] }),
+    ).toBe(false);
+    expect(danceDisplayPresent({ ...base, members: [member('u-a', true)] })).toBe(false);
+    expect(danceDisplayPresent({ ...base, members: [] })).toBe(false);
+    // The presence list is for another room than the bet's.
+    expect(danceDisplayPresent({ ...base, betRoomId: 'room-2' })).toBe(false);
+    expect(danceDisplayPresent({ ...base, roomId: null })).toBe(false);
+    expect(danceDisplayPresent({ ...base, displayUserId: null })).toBe(false);
+    // A judge cam signed in as B only ever sees itself online.
+    expect(danceDisplayPresent({ ...base, myUserId: 'u-b' })).toBe(false);
+  });
+});
 
 describe('which phone records the round', () => {
   const attempt = (recorder: string) => ({

@@ -52,7 +52,7 @@ You do two things.
 - danced_full_time: both players were dancing through the round (nobody stood still the whole time or quit early).
 - nobody_left: neither player walked out of the picture.
 - no_third_person: nobody else danced in the picture or stood in for a player.
-- no_side_swap: the players did not swap places. Player A starts on the LEFT of the picture, Player B on the RIGHT.
+- no_side_swap: the players did not swap places: each stayed on the side of the picture they started on. The server result says who started where (usually Player A on the LEFT and Player B on the RIGHT; when the phone recognized both players' faces, A may start on the RIGHT).
 verdict = "VALID" unless the frames or the checks clearly show one of these broke. A low score, a sloppy dancer, a missed move or a blurry frame is NOT a reason for "INVALID": the score already covers how well they danced. When in doubt, "VALID".
 
 2. Write announcer_line: what the announcer says out loud right after the round. One or two short sentences, at most 200 characters. Funny, warm and family friendly: tease the dancing, never a person's body, no swearing.
@@ -226,9 +226,22 @@ export function danceTermsBlock(input: Pick<DanceValidatorInput, 'terms' | 'name
     'TERMS',
     `Claim: ${input.terms.claim}`,
     ...input.terms.success_criteria.map((s) => `- ${s}`),
-    `Player A (starts on the LEFT): ${input.names.A}`,
-    `Player B (starts on the RIGHT): ${input.names.B}`,
+    `Player A: ${input.names.A}`,
+    `Player B: ${input.names.B}`,
   ].join('\n');
+}
+
+/**
+ * Where the players started (DANCE-OFF §3): A on the left, unless this server identified both by
+ * face for the bet (judge/dance-faces) and A started on the right (DanceEvidence.checks
+ * .a_start_side, written only then).
+ */
+export function startingPlaces(e: DanceEvidence, names: DanceNames): string {
+  const aRight = e.checks.a_start_side === 'right';
+  return (
+    `- Starting places: ${names.A} (A) on the ${aRight ? 'RIGHT' : 'LEFT'} of the picture, ` +
+    `${names.B} (B) on the ${aRight ? 'LEFT' : 'RIGHT'}${aRight ? ' (both recognized by face)' : ''}`
+  );
 }
 
 /** The server's result, the per-move breakdown and the deterministic checks. */
@@ -253,9 +266,10 @@ export function danceResultText(e: DanceEvidence, names: DanceNames): string {
       return `- ${moveName(k.id)}${t === undefined ? '' : ` at ${secs(t)}s`}: ${k.a} / ${k.b}`;
     }),
     'Deterministic checks:',
+    startingPlaces(e, names),
     `- Seen in the picture: A ${e.checks.coverage_a_pct}% of the round, B ${e.checks.coverage_b_pct}%`,
     `- Most people seen at once: ${e.checks.max_people}`,
-    `- Side swaps (A right of B for 1 s or more): ${e.checks.side_swaps}`,
+    `- Side swaps (each on the other's starting side for 1 s or more): ${e.checks.side_swaps}`,
     `- Pose frames: ${e.pose_frames}`,
   ];
   return lines.join('\n');

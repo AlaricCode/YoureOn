@@ -117,11 +117,12 @@ import {
 } from '../chain/tx';
 import { sha256Hex, verifyEd25519 } from '../crypto';
 import { HttpError } from '../errors';
-import { isDanceOffBet } from '../judge/dance-bet';
+import { isCalledOffBet, isDanceOffBet } from '../judge/dance-bet';
 import {
   fanout,
   hexBytes,
   iso,
+  casBetState,
   lockBet,
   readBet,
   readBetAccount,
@@ -323,6 +324,7 @@ export class AppealService {
     try {
       if (bet.evidence_source === 'gemini') return null; // SCHEMAS §7: no "I appeal!" on a market
       if (await isDanceOffBet(this.deps.db, bet.id)) return null; // DANCE-OFF §5: the score decides
+      if (await isCalledOffBet(this.deps.db, bet.id)) return null; // both agreed: nothing to appeal
       this.windowOrThrow(bet, this.deps.now());
       return await this.buildRequest(rt, bet, loser);
     } catch (err) {
@@ -340,6 +342,12 @@ export class AppealService {
       throw new HttpError('INVALID_STATE', 'The score decides a dance off. No appeals.', {
         state: bet.state,
         reason: 'dance_off',
+      });
+    // A call-off (judge/call-off.ts): both players agreed to the refund, so there is no appeal.
+    if (await isCalledOffBet(this.deps.db, bet.id))
+      throw new HttpError('INVALID_STATE', 'Called off. No appeals.', {
+        state: bet.state,
+        reason: 'called_off',
       });
   }
 
@@ -819,26 +827,27 @@ export class AppealService {
         .where(and(eq(appeals.id, appealId), eq(appeals.status, 'filing')));
       const envs: BetEventEnvelope[] = [];
       let state = b.state;
-      if (b.state === 'RULED' || b.state === 'FINALIZED') {
-        const [row] = await tx
-          .update(bets)
-          .set({
-            state: 'APPEALED',
-            ...(appealed
-              ? {
-                  appealed_at: new Date(Number(appealed.appealedAt) * 1000),
-                  appeal_resolve_deadline: new Date(Number(appealed.appealResolveDeadline) * 1000),
-                }
-              : {}),
-          })
-          .where(eq(bets.id, betId))
-          .returning();
+      const row =
+        b.state === 'RULED' || b.state === 'FINALIZED'
+          ? await casBetState(tx, betId, ['RULED', 'FINALIZED'], {
+              state: 'APPEALED',
+              ...(appealed
+                ? {
+                    appealed_at: new Date(Number(appealed.appealedAt) * 1000),
+                    appeal_resolve_deadline: new Date(
+                      Number(appealed.appealResolveDeadline) * 1000,
+                    ),
+                  }
+                : {}),
+            })
+          : null;
+      if (row) {
         state = 'APPEALED';
         envs.push(
           await appendBetEvent(tx, {
             bet_id: betId,
             type: 'bet.state',
-            payload: statePayload(row!, b.state, 'appealed', {
+            payload: statePayload(row, b.state, 'appealed', {
               kind: 'appeal',
               signature,
               submitted_at: iso(sentAt),
@@ -1339,16 +1348,13 @@ export class AppealService {
           sent_at: new Date(now),
         })
         .returning({ id: chainTxs.id });
-      const [row] = await tx
-        .update(bets)
-        .set({ state: 'APPEAL_RESOLVED' })
-        .where(eq(bets.id, betId))
-        .returning();
+      const row = await casBetState(tx, betId, ['APPEALED'], { state: 'APPEAL_RESOLVED' });
+      if (!row) throw new Error(`bet ${betId}: moved on from APPEALED under its row lock`);
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(row!, b.state, null, {
+          payload: statePayload(row, b.state, null, {
             kind: 'resolve_appeal',
             signature,
             submitted_at: iso(now),
@@ -1470,17 +1476,17 @@ export class AppealService {
       const voided = outcome === 'Refund';
       // bets.outcome stays the projector's (AppealResolved carries the final one): writing it
       // here would flap against a late BetAppealed delivery (fold.ts outcomeEvolves).
-      const [row] = await tx
-        .update(bets)
-        .set({ state: voided ? 'VOIDED' : 'PAID', payout_via: 'resolve_appeal' })
-        .where(eq(bets.id, betId))
-        .returning();
+      const row = await casBetState(tx, betId, ['APPEAL_RESOLVED', 'APPEALED'], {
+        state: voided ? 'VOIDED' : 'PAID',
+        payout_via: 'resolve_appeal',
+      });
+      if (!row) return { b, envs: [] as BetEventEnvelope[] };
       const names = await this.names(b, tx);
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(row!, b.state, 'resolve_appeal', {
+          payload: statePayload(row, b.state, 'resolve_appeal', {
             kind: 'resolve_appeal',
             signature,
             submitted_at: iso(sentAt),
@@ -1523,15 +1529,12 @@ export class AppealService {
         .where(eq(chainTxs.id, rowId));
       const b = await lockBet(tx, betId);
       if (b?.state !== 'APPEAL_RESOLVED') return null;
-      const [row] = await tx
-        .update(bets)
-        .set({ state: 'APPEALED' })
-        .where(eq(bets.id, betId))
-        .returning();
+      const row = await casBetState(tx, betId, ['APPEAL_RESOLVED'], { state: 'APPEALED' });
+      if (!row) return null;
       const e = await appendBetEvent(tx, {
         bet_id: betId,
         type: 'bet.state',
-        payload: statePayload(row!, 'APPEAL_RESOLVED', 'resolve_appeal_failed'),
+        payload: statePayload(row, 'APPEAL_RESOLVED', 'resolve_appeal_failed'),
         now: this.deps.now(),
       });
       return { b, e };

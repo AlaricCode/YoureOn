@@ -83,6 +83,12 @@ public final class DancePoseView: ExpoView {
     }
   }
 
+  func captureStill(promise: Promise) {
+    engine.captureStill { result in
+      promise.resolve(result)
+    }
+  }
+
   // MARK: - Private
 
   private func orientPreview() {

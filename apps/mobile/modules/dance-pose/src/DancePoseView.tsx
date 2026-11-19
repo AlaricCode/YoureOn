@@ -1,10 +1,11 @@
 // <DancePoseView>: the typed wrapper around the native judge-cam view (DANCE-OFF.md §6.1).
 // Without the native module (an old binary) it renders an empty black box, reports
-// `no_camera` once, and its ref handle answers startRound {ok: false} / an empty stopRound.
+// `no_camera` once, and its ref handle answers startRound {ok: false} / an empty stopRound /
+// captureStill {ok: false}.
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { View } from 'react-native';
 
-import { clampMaxFps, emptyStopResult, toStopRoundResult } from './frame';
+import { clampMaxFps, emptyStopResult, toStillResult, toStopRoundResult } from './frame';
 import { getNativeDancePoseView, type NativeDancePoseInstance } from './native';
 import type { DancePoseHandle, DancePoseViewProps, StartRoundResult, StatusEvent } from './types';
 
@@ -34,6 +35,12 @@ export const DancePoseView = forwardRef<DancePoseHandle, DancePoseViewProps>(
           const view = inner.current;
           if (!view) return emptyStopResult();
           return toStopRoundResult(await view.stopRound());
+        },
+        captureStill: async () => {
+          const view = inner.current;
+          if (!view || typeof view.captureStill !== 'function')
+            return { ok: false, message: 'captureStill is not in this build' };
+          return toStillResult(await view.captureStill());
         },
       }),
       [],

@@ -414,6 +414,18 @@ export const SealedEmbedding = z.object({
 });
 export type SealedEmbedding = z.infer<typeof SealedEmbedding>;
 
+/**
+ * A face embedding model (DATA-MODEL §5.3). Defined here so the dance identify request below can
+ * use it; `@youre-on/shared/face` re-exports it (face.ts imports this module, not the reverse).
+ */
+export const FaceModelRef = z.object({
+  name: z.string().min(1).max(64),
+  version: z.string().min(1).max(64),
+  /** DATA-MODEL §5.3 `embedding_dim` CHECK 64..1024. */
+  dim: z.number().int().min(64).max(1024),
+});
+export type FaceModelRef = z.infer<typeof FaceModelRef>;
+
 /** A pair with at least this many settled bets (pushes included) is a rivalry. */
 export const RIVAL_MIN_SETTLED = 3;
 
@@ -998,6 +1010,44 @@ export const DanceUploadResponse = z.object({
   frame_hashes: z.array(Hex32),
 });
 export type DanceUploadResponse = z.infer<typeof DanceUploadResponse>;
+
+/**
+ * DANCE-OFF §3 face assignment: POST /v1/bets/:bet_id/dance/identify (signed; only the bet's
+ * recorder device, while a dance off is LOCKED or in ATTEMPT). The recording phone sends the
+ * embeddings of the faces it found on the two players in one still (the same model, format and
+ * plain-v0 / sealed forms as face-match); the server compares them ONLY with the two parties'
+ * active enrollments (the caller's own included), with the face-match threshold and margin, and
+ * answers which face is which party. No scores, no vectors, nothing stored. Any face it is not
+ * sure of is left out, so an empty list is the left / right rule.
+ */
+export const danceIdentifyPath = (betId: string) =>
+  `/v1/bets/${encodeURIComponent(betId)}/dance/identify`;
+/** Faces per identify call. */
+export const DANCE_IDENTIFY_MAX_FACES = 4;
+export const DanceIdentifyRequest = z.object({
+  model: FaceModelRef,
+  faces: z
+    .array(z.object({ embedding: SealedEmbedding }))
+    .min(1)
+    .max(DANCE_IDENTIFY_MAX_FACES),
+});
+export type DanceIdentifyRequest = z.infer<typeof DanceIdentifyRequest>;
+/** At most one face per party; `face_index` is the face's index in the request. */
+export const DanceIdentifyResponse = z.object({
+  assignments: z
+    .array(
+      z.object({
+        face_index: z
+          .number()
+          .int()
+          .min(0)
+          .max(DANCE_IDENTIFY_MAX_FACES - 1),
+        party: Party,
+      }),
+    )
+    .max(2),
+});
+export type DanceIdentifyResponse = z.infer<typeof DanceIdentifyResponse>;
 
 /**
  * §7 double or nothing, any bet type: POST /v1/bets/:bet_id/rematch (signed; either party; the

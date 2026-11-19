@@ -43,6 +43,9 @@ apps/mobile/assets/models/*.tflite
 /apps/mobile/ios
 /apps/mobile/android
 apps/mobile/web-build/
+# Dance Off clips with the original (copyrighted) song: local demo builds only, never uploaded
+# (EAS bundles the committed drum-track versions in apps/mobile/assets/dance/).
+/apps/mobile/assets/dance/local
 apps/mobile/expo-env.d.ts
 apps/mobile/.kotlin/
 apps/mobile/.metro-health-check*
