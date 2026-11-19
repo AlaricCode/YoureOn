@@ -169,9 +169,11 @@ export function routeForBet(app: AppState, b: BetModel): Route {
   if (state === null) return b.challenger && b.my_party === 'B' ? 'incoming' : 'home';
   // Dance Off (DANCE-OFF §6.2): both players dance, one phone films for both. The ruling, GG and
   // payout below are the usual screens.
+  // A judge-cam device never signs: it goes straight to the round, and (the projector, §6.3)
+  // keeps the round's result and announcer line up through RULED instead of dropping to the
+  // standby camera screen; once the bet settles it shows the payout like any phone.
+  if (isDanceBet(b) && app.judgeCam && (inDanceRound(state) || state === 'RULED')) return 'dance';
   if (isDanceBet(b) && inDanceRound(state)) {
-    // A judge-cam device never signs: it goes straight to the round.
-    if (app.judgeCam) return 'dance';
     if (state === 'LOCKED' && !app.lockAcked.includes(b.bet_id)) return 'terms';
     return recordsDance(app, b) ? 'dance' : 'danceWatch';
   }

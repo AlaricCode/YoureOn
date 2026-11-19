@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies and WS frames are loosely typed in tests */
 // Dance Off on the server (docs/planning/DANCE-OFF.md §1, §5): POST …/terms/dance, the dance
-// attempt rules (either party records, a judge cam of either party), POST …/attempts/:n/dance
+// attempt rules (A's judge cam, else A's own phone; never B's), POST …/attempts/:n/dance
 // (routine / pose / frame hash checks, the server's own re-score), the round check (./dance.ts:
 // the mock LLM's default answer is VALID) and the deterministic ruling (winner -> decisive, too
 // close / failed / invalid -> VOID 'undecidable'), dance.scored in the ruling's commit, and the
@@ -35,6 +35,7 @@ import {
 } from '../src/providers/mock/llm';
 import type { ChatRequest } from '../src/providers/types';
 import { routeModules } from '../src/routes';
+import { lockedInstruction } from '../src/bets/cues';
 import { danceArmedCue, danceRulingCue } from '../src/judge/cues';
 import {
   buildDanceParts,
@@ -42,6 +43,7 @@ import {
   callDanceValidator,
   cannedDanceLine,
   clipText,
+  crownsName,
   DANCE_CACHED_MODEL,
   DANCE_SYSTEM_PROMPT,
   DANCE_TIMEOUT_MS,
@@ -177,6 +179,15 @@ describe('buildDanceRuling (DANCE-OFF §5)', () => {
     expect(good.ruling.reason).toBe('Logan hit every beat. Jake hit the snacks.');
     const wrong = buildDanceRuling(ctxOf(e), e, valid('Jake takes the crown tonight!'), NAMES);
     expect(wrong.ruling.reason).toBe(cannedDanceLine(e, NAMES));
+    // names the winner, but crowns the loser: the canned line, never a contradiction
+    for (const l of ['Logan tried, but Jake wins this one!', 'Logan who? JAKE is the champion'])
+      expect(buildDanceRuling(ctxOf(e), e, valid(l), NAMES).ruling.reason).toBe(
+        cannedDanceLine(e, NAMES),
+      );
+    const ok = buildDanceRuling(ctxOf(e), e, valid('Logan wins it! Jake, nice try.'), NAMES);
+    expect(ok.ruling.reason).toBe('Logan wins it! Jake, nice try.');
+    expect(crownsName('Logan hit every beat. Jake hit the snacks.', 'Jake')).toBe(false);
+    expect(crownsName('Jakes winning streak', 'Jake')).toBe(false);
     const long = buildDanceRuling(ctxOf(e), e, valid(`Logan ${'la '.repeat(200)}`), NAMES);
     expect(long.ruling.reason.length).toBeLessThanOrEqual(280);
   });
@@ -327,6 +338,15 @@ describe('dance cues', () => {
     expect(vc.text).not.toMatch(/three tries|check it again/i);
     expect(danceRulingCue(v, tie.scores, 'invalid', NAMES, 10).text).toMatch(/doesn't count/);
     expect(danceArmedCue(1, NAMES)).toMatchObject({ cue: 'ATTEMPT_ARMED', speak: false });
+  });
+
+  it("the LOCKED cue never tells the voice judge to start a dance off (the phone's Start does)", () => {
+    const dance = lockedInstruction('dance_off', NAMES);
+    expect(dance).toMatch(/Logan and Jake to get in frame for the dance off/);
+    expect(dance).toMatch(/Do not call request_attempt\.$/);
+    expect(dance).not.toMatch(/attempt_no/);
+    expect(lockedInstruction('skill', NAMES)).toMatch(/call request_attempt with attempt_no 1\.$/);
+    expect(lockedInstruction(undefined, NAMES)).toMatch(/call request_attempt with attempt_no 1/);
   });
 });
 
@@ -699,15 +719,23 @@ describeDb('dance judge pipeline (DB)', () => {
     },
   };
 
-  it('either party records itself: no performer refusal, max_ms 30 s, attempt.started names A', async () => {
+  it("A's phone records itself (B's never does): max_ms 30 s, attempt.started names A", async () => {
     await unbindCam();
     const betId = await lockedDance();
-    const r = await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+    // B dances too and would upload the whole PoseSeries: B's phone never records a dance off
+    const asB = await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+    expect(asB.status).toBe(403);
+    expect(asB.json!.error).toMatchObject({
+      code: 'NOT_A_PARTY',
+      details: { reason: 'recorder_is_a' },
+    });
+    expect((await betRow(betId)).state).toBe('LOCKED');
+    const r = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
     expect(r.status).toBe(201);
     expect(r.json).toMatchObject({
       attempt_no: 1,
       performer: 'A',
-      recorder_device_id: B.session.device_id,
+      recorder_device_id: A.session.device_id,
       max_ms: DANCE_MAX_MS,
     });
     const started = (await events(betId)).find((e) => e.type === 'attempt.started');
@@ -716,7 +744,7 @@ describeDb('dance judge pipeline (DB)', () => {
     expect(cue.payload).toMatchObject({ cue: 'ATTEMPT_ARMED', speak: false });
   });
 
-  it("a judge cam of either party films the dance (here A's own second device)", async () => {
+  it("A's judge cam (A's own second device) films the dance; no phone records over it", async () => {
     const bound = await signed(CAM, 'PATCH', '/v1/devices/current', {
       role: 'judge_cam',
       room_id: roomId,
@@ -724,6 +752,17 @@ describeDb('dance judge pipeline (DB)', () => {
     expect(bound.status).toBe(204);
     try {
       const betId = await lockedDance();
+      // with a judge cam in the room, A's phone can't film the round itself
+      const self = await post(A, `/v1/bets/${betId}/attempts`, {
+        attempt_no: 1,
+        recorder: 'self',
+      });
+      expect(self.status).toBe(409);
+      expect(self.json!.error).toMatchObject({
+        code: 'INVALID_STATE',
+        details: { reason: 'judge_cam_present' },
+      });
+      expect((await betRow(betId)).state).toBe('LOCKED');
       const r = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 });
       expect(r.status).toBe(201);
       expect(r.json!.recorder_device_id).toBe(CAM.session.device_id);
@@ -736,15 +775,45 @@ describeDb('dance judge pipeline (DB)', () => {
     }
   });
 
+  it('a judge cam B binds to the room never films a dance off (A films it)', async () => {
+    await unbindCam();
+    const [bCam] = await ctx.deps.db
+      .insert(devices)
+      .values({
+        user_id: uid(B),
+        device_pubkey: newKey().pubkey,
+        role: 'judge_cam',
+        judge_room_id: roomId,
+      })
+      .returning({ id: devices.id });
+    try {
+      const betId = await lockedDance();
+      const cam = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1 });
+      expect(cam.status).toBe(409);
+      expect(cam.json!.error).toMatchObject({
+        code: 'INVALID_STATE',
+        details: { reason: 'no_judge_cam' },
+      });
+      const r = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+      expect(r.status).toBe(201);
+      expect(r.json!.recorder_device_id).toBe(A.session.device_id);
+    } finally {
+      await ctx.deps.db
+        .update(devices)
+        .set({ role: 'phone', judge_room_id: null })
+        .where(eq(devices.id, bCam!.id));
+    }
+  });
+
   it('upload -> re-scored DanceEvidence -> JUDGING -> dance.scored + ruling.issued + judge.cue', async () => {
     await unbindCam();
     const betId = await lockedDance();
     expect(
-      (await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
+      (await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
     ).toBe(201);
     replies = [];
     const calls0 = llm.calls.length;
-    const up = await uploadDance(B, betId, 1);
+    const up = await uploadDance(A, betId, 1);
     expect(up.status).toBe(202);
     const hashes = up.frames.map((f) => sha256Hex(f));
     expect(up.json).toMatchObject({
@@ -813,10 +882,10 @@ describeDb('dance judge pipeline (DB)', () => {
     expect((await betRow(betId)).state).toBe('JUDGING'); // RULED comes with resolve (payout)
 
     // the same round replays the 202; another is refused; nothing is ruled twice
-    const replay = await uploadDance(B, betId, 1, { frames: up.frames });
+    const replay = await uploadDance(A, betId, 1, { frames: up.frames });
     expect(replay.status).toBe(202);
     expect(replay.json!.evidence_hash).toBe(up.json!.evidence_hash);
-    const other = await uploadDance(B, betId, 1, { series: series('still', 'still') });
+    const other = await uploadDance(A, betId, 1, { series: series('still', 'still') });
     expect(other.json!.error.code).toBe('ATTEMPT_NOT_OPEN');
     await judge.idle();
     expect(await rulingRows(betId)).toHaveLength(1);
@@ -835,17 +904,17 @@ describeDb('dance judge pipeline (DB)', () => {
     await unbindCam();
     const betId = await lockedDance();
     expect(
-      (await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
+      (await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
     ).toBe(201);
-    const pose = await uploadDance(B, betId, 1, { poseSha: H('not the series') });
+    const pose = await uploadDance(A, betId, 1, { poseSha: H('not the series') });
     expect(pose.status).toBe(422);
     expect(pose.json!.error).toMatchObject({
       code: 'EVIDENCE_HASH_MISMATCH',
       details: { what: 'pose' },
     });
-    const frame = await uploadDance(B, betId, 1, { tamper: 2 });
+    const frame = await uploadDance(A, betId, 1, { tamper: 2 });
     expect(frame.json!.error).toMatchObject({ code: 'FRAME_HASH_MISMATCH', details: { index: 2 } });
-    const wrong = await uploadDance(B, betId, 1, {
+    const wrong = await uploadDance(A, betId, 1, {
       routine: { id: OTHER.id, sha: routineSha256(OTHER) },
     });
     expect(wrong.status).toBe(422);
@@ -853,23 +922,23 @@ describeDb('dance judge pipeline (DB)', () => {
       code: 'VALIDATION_FAILED',
       details: { reason: 'wrong_routine' },
     });
-    const wrongSha = await uploadDance(B, betId, 1, {
+    const wrongSha = await uploadDance(A, betId, 1, {
       routine: { id: ROUTINE.id, sha: H('another take') },
     });
     expect(wrongSha.json!.error.details.reason).toBe('wrong_routine');
-    expect((await uploadDance(A, betId, 1)).status).toBe(403); // not the recorder
+    expect((await uploadDance(B, betId, 1)).status).toBe(403); // not the recorder
     expect((await betRow(betId)).state).toBe('ATTEMPT');
     expect(await rulingRows(betId)).toEqual([]);
     // and the good round still goes in
-    expect((await uploadDance(B, betId, 1)).status).toBe(202);
+    expect((await uploadDance(A, betId, 1)).status).toBe(202);
     await judge.idle();
   });
 
   it("too close to call -> VOID 'undecidable'; an INVALID round -> VOID; a failed check settles", async () => {
     await unbindCam();
     const tie = await lockedDance();
-    await post(B, `/v1/bets/${tie}/attempts`, { attempt_no: 1, recorder: 'self' });
-    expect((await uploadDance(B, tie, 1, { series: series('dance', 'dance') })).status).toBe(202);
+    await post(A, `/v1/bets/${tie}/attempts`, { attempt_no: 1, recorder: 'self' });
+    expect((await uploadDance(A, tie, 1, { series: series('dance', 'dance') })).status).toBe(202);
     await judge.idle();
     const [t] = await rulingRows(tie);
     expect(t).toMatchObject({
@@ -882,9 +951,9 @@ describeDb('dance judge pipeline (DB)', () => {
     expect(tieCue.payload.text).toMatch(/^\[EVENT\] VOIDED reason=undecidable why=too_close/);
 
     const bad = await lockedDance();
-    await post(B, `/v1/bets/${bad}/attempts`, { attempt_no: 1, recorder: 'self' });
+    await post(A, `/v1/bets/${bad}/attempts`, { attempt_no: 1, recorder: 'self' });
     replies = [invalid];
-    expect((await uploadDance(B, bad, 1)).status).toBe(202);
+    expect((await uploadDance(A, bad, 1)).status).toBe(202);
     await judge.idle();
     const [v] = await rulingRows(bad);
     expect(v).toMatchObject({ outcome: 'VOID', void_reason: 'undecidable' });
@@ -893,9 +962,9 @@ describeDb('dance judge pipeline (DB)', () => {
     expect(scored.payload.validation).toMatchObject({ verdict: 'invalid', skipped: false });
 
     const down = await lockedDance();
-    await post(B, `/v1/bets/${down}/attempts`, { attempt_no: 1, recorder: 'self' });
+    await post(A, `/v1/bets/${down}/attempts`, { attempt_no: 1, recorder: 'self' });
     replies = [{ fail: 'timeout' }];
-    expect((await uploadDance(B, down, 1)).status).toBe(202);
+    expect((await uploadDance(A, down, 1)).status).toBe(202);
     await judge.idle();
     const [d] = await rulingRows(down);
     expect(d).toMatchObject({ outcome: 'A_WINS', model: DANCE_OFF_MODEL });
@@ -906,7 +975,7 @@ describeDb('dance judge pipeline (DB)', () => {
   it('the keeper sweep settles a lost dance job on its score (no new model call)', async () => {
     await unbindCam();
     const betId = await lockedDance();
-    await post(B, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+    await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let entered!: () => void;
@@ -920,7 +989,7 @@ describeDb('dance judge pipeline (DB)', () => {
       loadTerms: async (_db, bet) => termsByBet.get(bet.id) ?? null,
     });
     try {
-      expect((await uploadDance(B, betId, 1)).status).toBe(202);
+      expect((await uploadDance(A, betId, 1)).status).toBe(202);
       await inHook;
       const calls0 = llm.calls.length;
       expect(await rebooted.resumeStuck(ctx.deps, Date.now() + 25_000)).toBe(1);

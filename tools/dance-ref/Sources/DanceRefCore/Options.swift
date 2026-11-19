@@ -41,9 +41,10 @@ public let USAGE = """
     -o, --out <path>          output RoutineData JSON (float keypoints; import it with
                               npx tsx scripts/dance-routine.ts import <out.json>)
     --fps <n>                 analysis rate, 1..30 (default 15)
-    --id <slug>               routine id, [a-z0-9_-] (default: from the video file name)
-    --title <text>            routine title (default: the id)
-    --song <text>             song / track credit (default: empty)
+    --id <slug>               routine id, kebab case [a-z0-9] words joined by single '-',
+                              max 32 (default: from the video file name)
+    --title <text>            routine title, max 40 characters (default: the id)
+    --song <text>             song / track credit, max 80 characters (default: Unnamed track)
     --bpm <n>                 tempo of the track (default 120, with a warning)
     --first-beat-ms <ms>      first beat, ms after the routine start (default 0)
     --routine-version <n>     RoutineData.version (default 1)
@@ -56,13 +57,19 @@ public let USAGE = """
     -h, --help                show this help
   """
 
-let ID_PATTERN = #"^[a-z0-9][a-z0-9_-]{0,47}$"#
+/// Same rule as shared `RoutineId` (`/^[a-z0-9]+(-[a-z0-9]+)*$/`, max 32) and the Terms routine
+/// line, so every id the tool writes passes `RoutineData.parse` on import.
+let ID_PATTERN = #"^[a-z0-9]+(?:-[a-z0-9]+)*\z"#
+public let ID_MAX = 32
+public let TITLE_MAX = 40
+public let SONG_MAX = 80
+public let DEFAULT_SONG = "Unnamed track"
 
 public func isValidId(_ id: String) -> Bool {
-  id.range(of: ID_PATTERN, options: .regularExpression) != nil
+  id.count <= ID_MAX && id.range(of: ID_PATTERN, options: .regularExpression) != nil
 }
 
-/// "Salsa Basic 01.mp4" → "salsa-basic-01"
+/// "Salsa Basic 01.mp4" → "salsa-basic-01"; "my_dance.mov" → "my-dance" (kebab case, max 32)
 public func slugFromPath(_ path: String) -> String {
   let base = (path as NSString).lastPathComponent
   let stem = (base as NSString).deletingPathExtension.lowercased()
@@ -72,17 +79,12 @@ public func slugFromPath(_ path: String) -> String {
     if ch.isASCII && (ch.isLetter || ch.isNumber) {
       out.append(ch)
       dash = false
-    } else if ch == "_" {
-      out.append(ch)
-      dash = false
     } else if !dash && !out.isEmpty {
       out.append("-")
       dash = true
     }
   }
-  while out.hasSuffix("-") { out.removeLast() }
-  while let f = out.first, f == "_" || f == "-" { out.removeFirst() }
-  if out.count > 48 { out = String(out.prefix(48)) }
+  if out.count > ID_MAX { out = String(out.prefix(ID_MAX)) }
   while out.hasSuffix("-") { out.removeLast() }
   return out.isEmpty ? "routine" : out
 }
@@ -170,9 +172,18 @@ public func parseOptions(_ args: [String]) throws -> Options {
 
   if o.id.isEmpty { o.id = slugFromPath(video) }
   guard isValidId(o.id) else {
-    throw UsageError("--id must match [a-z0-9][a-z0-9_-]* (max 48), got '\(o.id)'")
+    throw UsageError(
+      "--id must be kebab case like wave-pop ([a-z0-9] words joined by single '-',"
+        + " max \(ID_MAX)), got '\(o.id)'")
   }
-  if o.title.isEmpty { o.title = o.id }
+  if o.title.isEmpty { o.title = String(o.id.prefix(TITLE_MAX)) }
+  guard o.title.count <= TITLE_MAX else {
+    throw UsageError("--title must be at most \(TITLE_MAX) characters")
+  }
+  if o.song.isEmpty { o.song = DEFAULT_SONG }
+  guard o.song.count <= SONG_MAX else {
+    throw UsageError("--song must be at most \(SONG_MAX) characters")
+  }
 
   switch (keyList, every) {
   case (.some(_), .some(_)):

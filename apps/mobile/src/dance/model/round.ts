@@ -93,7 +93,11 @@ export type RoundEvent =
   | { type: 'tick'; at: number }
   /** `force`: start from framing too (the calibration screen: one dancer never frames as two). */
   | { type: 'start'; at: number; force?: boolean }
-  | { type: 'attempt'; at: number; attemptNo: number }
+  /**
+   * The attempt is open: count in. `force`: from framing / ready too, for an attempt another
+   * phone started (A pressed Start; the server named this judge cam as the recorder).
+   */
+  | { type: 'attempt'; at: number; attemptNo: number; force?: boolean }
   | { type: 'start_failed'; message: string }
   | { type: 'round_failed'; message: string }
   | { type: 'scored'; ok: true }
@@ -150,6 +154,26 @@ function framingTimers(s: RoundState, at: number): RoundState {
   return phase === next.phase ? next : { ...next, phase };
 }
 
+/**
+ * The screen's attempt prop changed (or the phase did): count in on it? After this phone's own
+ * Start (`waiting`), on any attempt not used yet. While framing, only on a NEW one (another
+ * phone started it and the server named this device the recorder), forced past the framing
+ * check. An attempt already open when the screen mounted waits for Start.
+ */
+export function attemptCountIn(p: {
+  phase: RoundPhase;
+  /** First time this screen sees this attempt number. */
+  fresh: boolean;
+  /** This screen already counted in on it. */
+  used: boolean;
+  /** Start was pressed and POST /attempts is out. */
+  waiting: boolean;
+}): 'count_in' | 'forced' | null {
+  if (p.used) return null;
+  if (p.phase === 'starting') return p.waiting ? 'count_in' : null;
+  return p.fresh && framingPhase(p.phase) ? 'forced' : null;
+}
+
 export function roundReducer(s: RoundState, e: RoundEvent, cfg: RoundConfig): RoundState {
   switch (e.type) {
     case 'framing': {
@@ -179,10 +203,11 @@ export function roundReducer(s: RoundState, e: RoundEvent, cfg: RoundConfig): Ro
       if (s.phase !== 'ready' && !(e.force === true && s.phase === 'framing')) return s;
       return { ...s, phase: 'starting', startedAt: e.at, error: null, message: null };
     case 'attempt':
-      if (s.phase !== 'starting') return s;
+      if (s.phase !== 'starting' && !(e.force === true && framingPhase(s.phase))) return s;
       return {
         ...s,
         phase: 'countIn',
+        startedAt: s.startedAt ?? e.at,
         attemptNo: e.attemptNo,
         countInAt: e.at,
         goAt: e.at + COUNT_IN_BEATS * cfg.beatMs,

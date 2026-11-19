@@ -33,7 +33,11 @@ import { judgeStatsOf } from './stats';
 
 /** Below the vision judge's 10 s: the round is already scored, the check must not hold it up. */
 export const DANCE_TIMEOUT_MS = 8_000;
-export const DANCE_MAX_OUTPUT_TOKENS = 512;
+/**
+ * As JUDGE_MAX_OUTPUT_TOKENS (1024): the default JUDGE_MODEL thinks adaptively and its thinking
+ * counts against max_tokens, so 512 cut the JSON short (invalid_output -> a skipped check).
+ */
+export const DANCE_MAX_OUTPUT_TOKENS = 1024;
 /** DanceCheck.model of the canned check served while cached_ruling is on (audit only). */
 export const DANCE_CACHED_MODEL = 'cache/demo-dance@1';
 /** DanceValidation.notes and the announcer line limits. */
@@ -175,6 +179,24 @@ export function cannedDanceLine(
   return `${names[w]} owns the dance floor, ${ws} to ${ls}. ${names[otherOf(w)]}, the moves were there in spirit.`;
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Not "beat(s)": a dance line says "every beat" about either player.
+const WIN_WORDS = String.raw`(?:wins?|won|winner|winning|takes it|takes the crown|champion|victory|victorious)`;
+
+/**
+ * True when `name` is followed, in the same sentence, by a win word ("Jake wins", "Jake takes
+ * the crown"): the line would crown that player. Whole-name match, any case.
+ */
+export function crownsName(line: string, name: string): boolean {
+  const n = name.trim();
+  if (!n) return false;
+  const re = new RegExp(
+    String.raw`(?<![\p{L}\p{N}])${escapeRe(n)}(?![\p{L}\p{N}])[^.!?]*?(?<![\p{L}\p{N}])${WIN_WORDS}(?![\p{L}\p{N}])`,
+    'iu',
+  );
+  return re.test(line);
+}
+
 /** The model's line, when it says what the result is (else null: the canned line is used). */
 function acceptedLine(
   line: string,
@@ -185,7 +207,13 @@ function acceptedLine(
   if (!s) return null;
   const low = s.toLowerCase();
   if (e.winner !== null && !e.too_close && e.failed === null) {
-    return low.includes(names[e.winner].toLowerCase()) ? s : null;
+    const winner = names[e.winner];
+    const loser = names[otherOf(e.winner)];
+    if (!low.includes(winner.toLowerCase())) return null;
+    // "Logan tried, but Jake wins": names the winner yet crowns the loser. (Two players with the
+    // same display name can't be told apart, so the canned line is used.)
+    if (winner.trim().toLowerCase() === loser.trim().toLowerCase()) return null;
+    return crownsName(s, loser) ? null : s;
   }
   return /^too close to call\b/.test(low) && !/\bwins?\b/.test(low) ? s : null;
 }

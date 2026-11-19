@@ -9,9 +9,11 @@
 //       [--bpm N] [--first-beat-ms M] [--version V] [--key-moves ms,ms,… | --every K]
 //       Takes the RoutineData-ish JSON the macOS tool (tools/dance-ref) writes (floats in [0, 1] or
 //       already-quantized ints), keeps the frames in [0, 15000] ms, quantizes, picks key moves
-//       (explicit times, or every K beats from first_beat_ms, snapped to frames, 8..16 of them),
-//       validates with the shared RoutineData schema and writes routines/<id>.ts. A NEW id must
-//       also be added to ROUTINES in packages/shared/src/dance/routine.ts (exactly 3 bundled).
+//       (--key-moves, --every K beats from first_beat_ms, the JSON's key_moves, or else every K
+//       beats with the smallest K that gives <= 16; 8..16 of them, kept on the beat, never snapped
+//       to a frame), validates with the shared RoutineData schema and writes routines/<id>.ts.
+//       The pure part is packages/shared/src/dance/routine-import.ts. A NEW id must also be
+//       added to ROUTINES in packages/shared/src/dance/routine.ts (exactly 3 bundled).
 //   npx tsx scripts/dance-routine.ts selftest
 //       Scores each bundled routine against itself (both players) and expects 100.0.
 //
@@ -23,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { JOINT, JOINT_COUNT, KEYPOINT_LEN } from '../packages/shared/src/dance/joints';
 import { quantizePerson } from '../packages/shared/src/dance/pose';
 import type { RoutineData } from '../packages/shared/src/dance/routine';
+import type { RoutineImportJson } from '../packages/shared/src/dance/routine-import';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ROUTINES_DIR = join(ROOT, 'packages/shared/src/dance/routines');
@@ -443,99 +446,24 @@ function flag(args: string[], name: string): string | undefined {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-interface ImportJson {
-  id?: string;
-  version?: number;
-  title?: string;
-  song?: string;
-  bpm?: number;
-  first_beat_ms?: number;
-  w: number;
-  h: number;
-  source?: string;
-  frames: { t: number; k: (number | null)[] }[];
-  key_moves?: { id?: string; t: number; name?: string }[];
-  media?: { video: string | null; audio: string | null };
-}
-
 async function importRoutine(file: string, args: string[]): Promise<void> {
-  const raw = JSON.parse(readFileSync(file, 'utf8')) as ImportJson;
-  const id = flag(args, 'id') ?? raw.id;
-  if (!id) throw new Error('--id is required (or an "id" in the JSON)');
-  const bpm = Number(flag(args, 'bpm') ?? raw.bpm ?? 120);
-  const firstBeat = Number(flag(args, 'first-beat-ms') ?? raw.first_beat_ms ?? 0);
-  if (!Number.isFinite(bpm) || bpm <= 0) throw new Error('bad --bpm');
-  if (!Number.isFinite(raw.w) || !Number.isFinite(raw.h)) throw new Error('w / h are required');
-  // Floats in [0, 1] (the tool's raw output) or ints already quantized (xy ≤ 10000, c ≤ 1000).
-  const quantized = raw.frames.some((f) => f.k.some((v) => v !== null && v > 1));
-  const frames: RoutineData['frames'] = [];
-  for (const f of raw.frames) {
-    const t = Math.round(f.t);
-    if (t < 0 || t > DURATION_MS) continue;
-    if (frames.length && t <= frames[frames.length - 1]!.t) continue;
-    if (f.k.length !== KEYPOINT_LEN) throw new Error(`frame t=${t}: ${f.k.length} values`);
-    const k = f.k.map((v, i) => {
-      if (v === null || !Number.isFinite(v)) return 0;
-      if (!quantized) return v;
-      return i % 3 === 2 ? v / 1000 : v / 10_000;
-    });
-    frames.push({ t, k: quantizePerson(k) });
-  }
-  if (frames.length < 2) throw new Error('fewer than 2 frames inside 0..15000 ms');
-  const snap = (t: number): number => {
-    let best = frames[0]!.t;
-    for (const f of frames) if (Math.abs(f.t - t) < Math.abs(best - t)) best = f.t;
-    return best;
-  };
-  let times: number[];
-  const explicit = flag(args, 'key-moves');
-  const every = flag(args, 'every');
-  if (explicit) times = explicit.split(',').map((s) => Math.round(Number(s.trim())));
-  else if (every) {
-    const k = Number(every);
-    if (!Number.isInteger(k) || k < 1) throw new Error('--every K: a whole number of beats');
-    const beat = 60_000 / bpm;
-    times = [];
-    for (let t = firstBeat + k * beat; t <= DURATION_MS - 500; t += k * beat)
-      times.push(Math.round(t));
-  } else if (raw.key_moves?.length) times = raw.key_moves.map((m) => Math.round(m.t));
-  else throw new Error('key moves: pass --key-moves ms,ms,… or --every K');
-  if (times.some((t) => !Number.isFinite(t))) throw new Error('bad key-move time');
-  // 8..16: thin evenly when there are too many.
-  if (times.length > 16) {
-    const step = times.length / 16;
-    times = Array.from({ length: 16 }, (_, i) => times[Math.floor(i * step)]!);
-  }
-  const uniq = [...new Set(times.map(snap))].sort((a, b) => a - b);
-  const names = raw.key_moves ?? [];
-  const key_moves = uniq.map((t, i) => ({
-    id: `k${String(i + 1).padStart(2, '0')}`,
-    t,
-    name: (names.find((m) => Math.round(m.t) === t)?.name ?? `Move ${i + 1}`).slice(0, 24),
-  }));
-  const routine: RoutineData = {
-    schema_version: 1,
-    id,
-    version: Number(flag(args, 'version') ?? raw.version ?? 1),
-    title: flag(args, 'title') ?? raw.title ?? id,
-    song: flag(args, 'song') ?? raw.song ?? 'Unnamed track',
-    bpm,
-    duration_ms: DURATION_MS,
-    first_beat_ms: Math.round(firstBeat),
-    count_in_beats: 3,
-    w: Math.round(raw.w),
-    h: Math.round(raw.h),
-    mirrored_source: false,
-    source: raw.source === 'synthetic' ? 'synthetic' : 'vision',
-    frames,
-    key_moves,
-    media: raw.media ?? { video: null, audio: null },
-  };
-  const { RoutineData: Schema } = await import('../packages/shared/src/dance/routine');
-  Schema.parse(routine);
+  const { routineFromImport } = await import('../packages/shared/src/dance/routine-import');
+  const raw = JSON.parse(readFileSync(file, 'utf8')) as RoutineImportJson;
+  const routine = routineFromImport(raw, {
+    id: flag(args, 'id'),
+    title: flag(args, 'title'),
+    song: flag(args, 'song'),
+    bpm: flag(args, 'bpm'),
+    firstBeatMs: flag(args, 'first-beat-ms'),
+    version: flag(args, 'version'),
+    keyMoves: flag(args, 'key-moves'),
+    every: flag(args, 'every'),
+  });
+  const named = routine.key_moves.filter((m) => !/^Move \d+$/.test(m.name)).length;
   console.log(
-    `wrote ${writeRoutine(routine, `import ${file.split('/').pop()}`)} (${frames.length} frames, ` +
-      `${key_moves.length} key moves at ${key_moves.map((m) => m.t).join(',')})`,
+    `wrote ${writeRoutine(routine, `import ${file.split('/').pop()}`)} (${routine.frames.length} ` +
+      `frames, ${routine.key_moves.length} key moves at ` +
+      `${routine.key_moves.map((m) => m.t).join(',')}; ${named} named)`,
   );
 }
 

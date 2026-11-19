@@ -97,8 +97,8 @@ export interface DanceRoundEngine {
   dispatch: (e: RoundEvent) => { prev: RoundState; next: RoundState };
   /** Start pressed (framing stable; `force` skips that, for the calibration screen). */
   start: (force?: boolean) => void;
-  /** The attempt is open: count in. */
-  beginCountIn: (attemptNo: number) => void;
+  /** The attempt is open: count in (`force`: from framing, for an attempt started elsewhere). */
+  beginCountIn: (attemptNo: number, force?: boolean) => void;
   /** Back to framing for a new round. */
   reset: () => void;
 }
@@ -347,8 +347,8 @@ export function useDanceRound(opts: {
   );
 
   const beginCountIn = useCallback(
-    (attemptNo: number) => {
-      dispatch({ type: 'attempt', at: nowMs(), attemptNo });
+    (attemptNo: number, force?: boolean) => {
+      dispatch({ type: 'attempt', at: nowMs(), attemptNo, force: force === true });
     },
     [dispatch],
   );

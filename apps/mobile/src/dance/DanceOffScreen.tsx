@@ -2,7 +2,8 @@
 // through iOS mirroring):
 //   1. Framing: live skeletons, "A ← | → B", the framing check's reason; Start unlocks after
 //      framing has held for 1 s.
-//   2. Start → POST /attempts (onStartAttempt) → the attempt arrives.
+//   2. Start → POST /attempts (onStartAttempt) → the attempt arrives. An attempt another phone
+//      started (A pressed Start; the server named this judge cam) counts in on its own.
 //   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic), then GO.
 //   4. GO: startRound and the reference start in the same tick; 15 s of dancing with live meters
 //      and PERFECT / GOOD / MISS popups.
@@ -25,7 +26,7 @@ import { DANCE_COPY, dt, ERROR_COPY, firstName, FRAMING_COPY } from './copy';
 import { readFileBytes } from './fs';
 import { useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
 import type { LiveStore } from './model/liveStore';
-import { framingProgress, type RoundState } from './model/round';
+import { attemptCountIn, framingProgress, type RoundState } from './model/round';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
 import { ResultCard, type ResultData } from './ResultCard';
 import { DanceStage } from './Stage';
@@ -172,9 +173,12 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   const pose = useDancePose();
   const [result, setResult] = useState<DanceRoundResult | null>(null);
   const bundle = useRef<DanceUploadBundle | null>(null);
-  /** While waiting for the attempt: the attempt key we already had (undefined = not waiting). */
-  const waitingFrom = useRef<string | null | undefined>(undefined);
+  /** Start was pressed and POST /attempts is out: the next unused attempt counts in. */
+  const waiting = useRef(false);
+  /** Attempts this screen has counted in on (and not given back with "Dance again"). */
   const usedAttempts = useRef(new Set<number>());
+  /** Attempts this screen has seen (the one open at mount included): only a new one auto-starts. */
+  const seenAttempts = useRef(new Set<number>(props.attempt ? [props.attempt.attempt_no] : []));
   const propsRef = useRef(props);
   propsRef.current = props;
 
@@ -234,10 +238,9 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   const { state } = engine;
 
   // 2. Start → the attempt. An attempt already open (and not danced) is used as is; otherwise
-  // POST /attempts and wait for a NEW attempt to arrive (not the one we already had).
-  const attemptKey = props.attempt ? `${props.attempt.attempt_no}|${props.attempt.go_at}` : null;
-  const attemptKeyRef = useRef(attemptKey);
-  attemptKeyRef.current = attemptKey;
+  // POST /attempts and wait for an attempt not used yet. Attempts are compared by number only:
+  // go_at is shifted by the live clock offset, so it changes on every clock re-sync.
+  const attemptNo = props.attempt?.attempt_no ?? null;
   useEffect(() => {
     if (state.phase !== 'starting') return;
     const a = propsRef.current.attempt;
@@ -246,11 +249,11 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       engineRef.current?.beginCountIn(a.attempt_no);
       return;
     }
-    waitingFrom.current = attemptKeyRef.current;
+    waiting.current = true;
     let live = true;
     const failed = (message: string) => {
       if (!live) return;
-      waitingFrom.current = undefined;
+      waiting.current = false;
       engineRef.current?.dispatch({ type: 'start_failed', message });
     };
     propsRef.current.onStartAttempt().then(
@@ -261,21 +264,37 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     );
     return () => {
       live = false;
+      waiting.current = false;
     };
   }, [state.phase, state.run]);
 
+  // The attempt arrives: after our own Start (waiting), or, new while this screen frames, one
+  // that another phone started with this device as the recorder. It counts in without a Start.
   useEffect(() => {
-    if (state.phase !== 'starting' || waitingFrom.current === undefined) return;
     const a = propsRef.current.attempt;
-    if (!a || attemptKey === null || attemptKey === waitingFrom.current) return;
-    waitingFrom.current = undefined;
+    if (!a) return;
+    const fresh = !seenAttempts.current.has(a.attempt_no);
+    seenAttempts.current.add(a.attempt_no);
+    const go = attemptCountIn({
+      phase: state.phase,
+      fresh,
+      used: usedAttempts.current.has(a.attempt_no),
+      waiting: waiting.current,
+    });
+    if (go === null) return;
+    waiting.current = false;
     usedAttempts.current.add(a.attempt_no);
-    engineRef.current?.beginCountIn(a.attempt_no);
-  }, [state.phase, attemptKey]);
+    engineRef.current?.beginCountIn(a.attempt_no, go === 'forced');
+  }, [state.phase, attemptNo]);
 
   const danceAgain = () => {
+    // Nothing reached the judge (a camera error, no key frames, no attempt): give the open
+    // attempt back, so the next Start counts in on it. A second POST /attempts would be refused
+    // while the bet is still in ATTEMPT.
+    if (state.phase !== 'submitted' && state.attemptNo !== null)
+      usedAttempts.current.delete(state.attemptNo);
     bundle.current = null;
-    waitingFrom.current = undefined;
+    waiting.current = false;
     setResult(null);
     engine.reset();
   };

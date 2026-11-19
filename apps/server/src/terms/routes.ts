@@ -179,7 +179,11 @@ export const termsRoutes: RouteModule = {
         });
 
       const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
-      const evaluation = evaluateProposeTerms(args, { maxStake, realWorldEnabled: false });
+      const evaluation = evaluateProposeTerms(args, {
+        maxStake,
+        realWorldEnabled: false,
+        allowDanceOff: true,
+      });
       const reply = proposeTermsReply(evaluation, { maxStake });
       if (evaluation.kind === 'invalid')
         throw new HttpError('VALIDATION_FAILED', undefined, {

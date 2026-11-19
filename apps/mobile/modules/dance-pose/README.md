@@ -83,7 +83,11 @@ npx expo run:ios --device                 # or the EAS dev-client profile
 ```
 
 The repo-wide `ios/` ignore rule would otherwise hide `modules/dance-pose/ios/`, so the root
-`.gitignore` and `.easignore` both re-include `apps/mobile/modules/*/ios/`.
+`.gitignore` and `.easignore` both re-include `apps/mobile/modules/*/ios/` (in `.gitignore`, the
+line `!apps/mobile/modules/*/ios/` sits directly after `ios/`). Check before committing:
+`git check-ignore -v apps/mobile/modules/dance-pose/ios/DancePose.podspec` must print nothing
+(exit 1). If it prints `.gitignore:10:ios/`, the podspec and Swift sources are not committed, and
+every other checkout builds without the module (the dance screen then always shows no camera).
 
 ## On-device test checklist
 

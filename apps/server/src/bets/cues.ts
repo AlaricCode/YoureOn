@@ -67,3 +67,18 @@ export function inviteAcceptedCue(name: string): JudgeCue {
   const n = asciiFold(name);
   return judgeCue('INVITE_ACCEPTED', { name }, `Say ${n} is in, then call confirm_terms again.`);
 }
+
+/**
+ * The LOCKED cue's instruction for a bet that is not a Gemini market. A Dance Off has no
+ * request_attempt (the phone refuses it: the dance screen owns Start), so the judge only tells
+ * both dancers to get in frame; every other camera bet starts attempt 1 by voice.
+ */
+export function lockedInstruction(
+  type: string | null | undefined,
+  names: { A: string; B: string },
+): string {
+  if (type === 'dance_off') {
+    return `Announce both stakes are locked in one transaction, then tell ${asciiFold(names.A)} and ${asciiFold(names.B)} to get in frame for the dance off. Do not call request_attempt.`;
+  }
+  return 'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.';
+}

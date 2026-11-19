@@ -30,7 +30,17 @@ export interface EvaluateOptions {
    * the Gemini market service (D1-J3). Until both are on, real_world gets NO_MARKET.
    */
   realWorldEnabled?: boolean;
+  /**
+   * DANCE-OFF §1: a dance off is proposed only through POST /terms/dance (danceTermsArgs), never
+   * by the voice agent. Default: allowed only for a projection with no `conversation_id`, which
+   * every ElevenLabs webhook body carries; pass `true` from the /terms/dance route to be explicit.
+   */
+  allowDanceOff?: boolean;
 }
+
+/** The voice webhook body always carries the conversation id; the /terms/dance projection never. */
+const fromConversation = (raw: unknown): boolean =>
+  typeof raw === 'object' && raw !== null && 'conversation_id' in raw;
 
 const ID_KEYS = new Set(['conversation_id', 'bet_id']);
 function strings(v: unknown, out: string[] = [], key = ''): string[] {
@@ -60,6 +70,11 @@ export function evaluateProposeTerms(raw: unknown, opts: EvaluateOptions = {}): 
     return { kind: 'invalid', issues: mapped.issues };
   }
   const p = mapped.proposal;
+  if (p.type === 'dance_off' && !(opts.allowDanceOff ?? !fromConversation(raw)))
+    return {
+      kind: 'invalid',
+      issues: [{ path: 'type', message: 'dance_off only via /terms/dance' }],
+    };
   const refusal = prefilterRefusal(p);
   if (refusal) return { kind: 'refused', refusal, proposal: p };
   const stake = stakeIssue(p, opts.maxStake ?? MAX_STAKE);
