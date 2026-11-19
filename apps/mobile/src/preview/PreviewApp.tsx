@@ -156,7 +156,14 @@ const JARVIS_REPLY = 'Ten pushups, Jake. Full reps, chest to the floor. How much
 const APPEAL_WINDOW_MS = 10_000;
 const startCents = Number(BigInt(BALANCE.usdc) / 10_000n);
 
-export default function PreviewApp({ onClose }: { onClose: () => void }) {
+export default function PreviewApp({
+  onClose,
+  start,
+}: {
+  onClose: () => void;
+  /** Open straight at this screen instead of the Screens menu (screenshot tooling, reviews). */
+  start?: PreviewScreenKey | undefined;
+}) {
   const faceApi = useMemo(() => createPreviewFaceApi({ delayMs: 600 }), []);
   // The face natives load on first use: a static import made the whole preview fail to load
   // in a build without the ML Kit detector (the simulator's); now only the capture step does.
@@ -1200,6 +1207,14 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // `start`: open straight at that screen, once, exactly as if its menu row had been tapped.
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current || !start) return;
+    started.current = true;
+    openFromMenu(start);
+  });
+
   // A thin "Preview" strip sits above every screen, under the status bar; the screens below it
   // get top inset 0 so they lay out as they would on their own.
   const insets = useSafeAreaInsets();
@@ -1221,6 +1236,9 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------------------------------
+
+/** Every screen the preview can open (the keys of its Screens menu, `menu-<key>`). */
+export type PreviewScreenKey = MenuKey;
 
 type MenuKey =
   | 'launch'
@@ -1384,6 +1402,11 @@ const MENU: readonly { section: string; items: readonly [MenuKey, string][] }[] 
     ],
   },
 ];
+
+/** The menu's keys, in menu order. */
+export const PREVIEW_SCREEN_KEYS: readonly PreviewScreenKey[] = MENU.flatMap((s) =>
+  s.items.map(([key]) => key),
+);
 
 function Menu({ onClose, open }: { onClose: () => void; open: (k: MenuKey) => void }) {
   // The list runs to the bottom edge (the inset is content padding instead): a row that has

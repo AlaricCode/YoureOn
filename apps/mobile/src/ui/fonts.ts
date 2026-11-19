@@ -1,6 +1,8 @@
-// Loads the app's one typeface, Geist (ui/tokens `fontFamily`), with expo-font, one family name
-// per weight: iOS does not select a weight inside a custom family from fontWeight. Only the four
-// faces the tokens use are imported (the package's index file would bundle all 18).
+// Loads the app's two typefaces (ui/tokens `fontFamily`) with expo-font, one family name per
+// face: iOS does not select a weight inside a custom family from fontWeight. Geist is the UI
+// voice; only the four weights the tokens use are imported (the package's index file would bundle
+// all 18). Instrument Serif (regular and italic, SIL OFL 1.1) is what is said: the judge, the
+// bet's claim, a moment's headline. Its two files are vendored in assets/fonts with the licence.
 //
 // The app root keeps the in-app splash (ui/brand SplashView, mark only) until this settles, so no
 // text draws in a font that is about to change. If loading fails, or takes longer than
@@ -14,6 +16,8 @@ import Geist_600SemiBold from '@expo-google-fonts/geist/600SemiBold/Geist_600Sem
 import { useFonts } from 'expo-font';
 import { useEffect, useState } from 'react';
 
+import InstrumentSerif_400Regular from '../../assets/fonts/InstrumentSerif_400Regular.ttf';
+import InstrumentSerif_400Regular_Italic from '../../assets/fonts/InstrumentSerif_400Regular_Italic.ttf';
 import type { FontFamilyName } from './tokens';
 
 /** Family name -> bundled file. Keys must be exactly the tokens' family names (checked by tsc). */
@@ -22,6 +26,8 @@ export const FONT_FILES = {
   Geist_400Regular,
   Geist_500Medium,
   Geist_600SemiBold,
+  InstrumentSerif_400Regular,
+  InstrumentSerif_400Regular_Italic,
 } as const satisfies Record<FontFamilyName, number>;
 
 /** Give up waiting (system font) after this long. Bundled files normally load in tens of ms. */

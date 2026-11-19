@@ -135,7 +135,7 @@ function Seg({
       ]}
     >
       <Text
-        style={[type.rowMedium, { color: on ? color.onAccent : palette.text }, styles.segInk]}
+        style={[type.rowMedium, { color: on ? color.onPrimary : palette.text }, styles.segInk]}
         numberOfLines={1}
       >
         {text}
@@ -148,7 +148,7 @@ const styles = StyleSheet.create({
   wrap: { gap: space.x1 },
   label: { color: palette.textSecondary, marginTop: space.x1 },
   row: { flexDirection: 'row', gap: space.x1 },
-  // Obsidian chips (ui/parts ChoiceChip): grey pills, the selected one green with black ink.
+  // Limelight chips (ui/parts ChoiceChip): glass pills, the selected one white with black ink.
   seg: {
     flex: 1,
     height: 44,

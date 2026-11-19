@@ -2,8 +2,9 @@
 //   a party's offer   "Jake offers 3 to 1: your $5 to win $20"  Accept / Counter (Withdraw for
 //                      the author), "Waiting on Jake" once my side is in.
 //   the judge's offer "Judge suggests 3:1", the performer's record ("Bottle flips 10–2 · vs Logan
-//                      4–7"), the judge's reason, "31% for Jake", and "Demo history" when seed
-//                      rows went into it. Both tap Accept: the judge never sets terms by itself.
+//                      4–7"), the judge's reason (in its serif voice), "31% for Jake", and "Demo
+//                      history" when seed rows went into it. Both tap Accept: the judge never sets
+//                      terms by itself.
 //   agreed            "Odds agreed" until the card is locked in.
 // With no offer out, the card's own row offers "Suggest odds" and "Offer odds".
 import { StyleSheet, View } from 'react-native';
@@ -12,7 +13,7 @@ import type { OfferCardView } from '../app/odds';
 import { COPY, fill, t } from '../screens/copy';
 import { Label, PrimaryButton, QuietButton } from '../ui/kit';
 import { Card, Chip, DataText, DotsLabel } from '../ui/parts';
-import { palette, radius, space } from '../ui/tokens';
+import { radius, space } from '../ui/tokens';
 import { OddsControlView, type OddsControlPanel } from './OddsControl';
 import { SuggestButton, type SuggestPanel } from './SuggestButton';
 
@@ -56,7 +57,7 @@ export function OfferCard({ panel }: { panel: OddsOfferPanel }) {
   if (!c) {
     if (panel.agreed && !sheet)
       return (
-        <Card style={styles.card}>
+        <Card raised style={styles.card}>
           <View style={styles.head}>
             <Label variant="small">{t(COPY.odds.title)}</Label>
             <Chip testID="odds-agreed" label={t(COPY.odds.oddsAgreed)} tone="accent" />
@@ -92,12 +93,10 @@ export function OfferCard({ panel }: { panel: OddsOfferPanel }) {
   }
 
   return (
-    <Card style={[styles.card, c.fromJudge && styles.judge]}>
+    <Card raised style={styles.card}>
       {c.header ? (
         <View style={styles.head}>
-          <Label variant="small" style={styles.judgeLabel}>
-            {c.header}
-          </Label>
+          <Label variant="labelMedium">{c.header}</Label>
           <View style={styles.chips}>
             {c.judge?.demo ? <Chip testID="odds-demo" label={t(COPY.odds.demoHistory)} /> : null}
             {c.judge?.byDefault ? <Chip label={t(COPY.odds.byDefault)} /> : null}
@@ -106,9 +105,10 @@ export function OfferCard({ panel }: { panel: OddsOfferPanel }) {
       ) : null}
       {c.judge ? (
         <>
-          <DataText variant="labelStrong">{c.judge.stats}</DataText>
-          <DataText muted>{`“${c.judge.reason}”`}</DataText>
-          <DataText>{c.judge.chance}</DataText>
+          <DataText muted>{c.judge.stats}</DataText>
+          {/* Why: the judge's own words, in its voice. */}
+          <DataText variant="spokenSmall">{`“${c.judge.reason}”`}</DataText>
+          <DataText variant="labelMedium">{c.judge.chance}</DataText>
         </>
       ) : (
         <DataText variant="labelStrong">{c.title}</DataText>
@@ -157,10 +157,9 @@ export function OfferCard({ panel }: { panel: OddsOfferPanel }) {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  card: { marginBottom: space.x1, gap: space.x1, borderRadius: radius.lg },
-  judge: { borderWidth: 1, borderColor: palette.accent },
+  // A glass card one size down from a slip: it sits between the captions and the draft.
+  card: { marginBottom: space.x1, gap: space.x1, borderRadius: radius.lg, padding: space.x2 },
   head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  judgeLabel: { color: palette.accent },
   chips: { flexDirection: 'row', gap: space.x1 },
   actions: { flexDirection: 'row', gap: space.x1 },
   sheet: { gap: space.x1 },

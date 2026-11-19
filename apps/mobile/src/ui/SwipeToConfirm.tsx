@@ -1,8 +1,10 @@
 // Swipe up to confirm: the deliberate intent before money moves (it replaces the 800 ms hold).
-// The standard 56 pt green pill; swiping up stretches it toward the thumb (a cap pill lifts, a
-// bridge fills the gap), ticks at 25/50/75 %, arms at full travel with a firm tap and a tick
-// glyph, and commits ON RELEASE (or on a fast flick from 60 % up). Sliding back down before
-// letting go backs out. A tap never commits: it nudges the pill and shows the hint.
+// The one green control (white asks, green answers: this is where money turns on): a 56 pt
+// green pill with a bloom of its own light under it. Swiping up stretches it toward the thumb
+// (a cap pill lifts, a bridge fills the gap), ticks at 25/50/75 %, arms at full travel with a
+// firm tap and a tick glyph, and commits ON RELEASE (or on a fast flick from 60 % up). Sliding
+// back down before letting go backs out. A tap never commits: it nudges the pill and shows the
+// hint.
 //
 // Everything visual runs on the UI thread (reanimated worklets, transforms only, no layout);
 // the JS thread hears only the start, the tick/arm crossings and the release.
@@ -56,7 +58,7 @@ import {
   swipeProgress,
   ticksCrossed,
 } from './swipe';
-import { color, motion, palette, radius, space, type HapticMoment, type } from './tokens';
+import { color, material, motion, palette, radius, space, type HapticMoment, type } from './tokens';
 
 const NEVER = ReduceMotion.Never;
 const easeOut = Easing.bezier(...motion.easing);
@@ -331,7 +333,7 @@ export function SwipeToConfirm({
   const hintStyle = useAnimatedStyle(() => ({ opacity: hintV.value }));
 
   const ink = disabled ? palette.textTertiary : color.onAccent;
-  const fill = disabled ? palette.fill : color.primaryAction;
+  const fill = disabled ? palette.fill : color.commit;
 
   const onAccessibilityAction = (e: AccessibilityActionEvent) => {
     if (e.nativeEvent.actionName !== 'activate' || !live) return;
@@ -348,7 +350,7 @@ export function SwipeToConfirm({
         accessibilityState={{ disabled, busy }}
         accessibilityActions={[{ name: 'activate', label }]}
         onAccessibilityAction={onAccessibilityAction}
-        style={[styles.root, { backgroundColor: fill }, rootStyle]}
+        style={[styles.root, { backgroundColor: fill }, disabled ? null : styles.lit, rootStyle]}
       >
         {live ? (
           <>
@@ -412,6 +414,7 @@ const styles = StyleSheet.create({
     // The stretch draws over the status and alert lines above it.
     zIndex: 1,
   },
+  lit: { boxShadow: material.bloomOn },
   bridge: {
     position: 'absolute',
     left: 0,

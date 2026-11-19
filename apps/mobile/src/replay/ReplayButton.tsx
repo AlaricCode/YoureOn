@@ -1,6 +1,6 @@
 // "Replay" on the payout screen (winner and loser). Renders nothing until the server has a replay
-// for the bet (useReplay moment != null), so there is never a dead button. Obsidian secondary
-// style: a grey fill pill with a white label and a small play glyph.
+// for the bet (useReplay moment != null), so there is never a dead button. The secondary style:
+// a glass pill (grey fill, a 1 pt rim) with a white label and a small play glyph.
 import type { ReplayMoment } from '@youre-on/shared/replay';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -38,6 +38,8 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 999,
     backgroundColor: obsidian.line,
+    borderWidth: 1,
+    borderColor: obsidian.edge,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
