@@ -21,7 +21,9 @@ import type { Terms } from '@youre-on/shared/terms';
 import { useEffect, useMemo, useState } from 'react';
 import { StatusBar, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
+import { danceDisplayGuard, type CallOffGuard } from '../app/callOff';
 import { importSafely } from '../app/importSafely';
+import { useReportCallOffGuard } from '../screens/CallOff';
 import { AlertLine } from '../ui/kit';
 import { DotsLabel } from '../ui/parts';
 import { half, palette, space, type } from '../ui/tokens';
@@ -48,6 +50,8 @@ export type DanceDisplayScreenProps = {
   attempt: { attempt_no: number; go_at: string } | null;
   /** Server time − this phone's Date.now() (net Clock.offsetMs). */
   clockOffsetMs: number;
+  /** "Call it off" holds its prompt back while the routine plays (../app/callOff). */
+  onCallOffGuard?: (guard: CallOffGuard) => void;
 };
 
 const KEEP_AWAKE_TAG = 'dance-display';
@@ -150,6 +154,7 @@ function Display({
   names,
   attempt,
   clockOffsetMs,
+  onCallOffGuard,
 }: DanceDisplayScreenProps & { routine: RoutineData }) {
   useKeepAwake();
   const cfg = useMemo(() => roundConfig(routine), [routine]);
@@ -169,6 +174,7 @@ function Display({
   const now = useFrameClock(timeline !== null && settled !== 'done', 30);
   const phase = displayPhase(timeline, now);
   useEffect(() => setSettled(phase), [phase]);
+  useReportCallOffGuard(onCallOffGuard, danceDisplayGuard(phase));
 
   const media = routineMedia(routine);
   const startAt = timeline?.goAt ?? null;

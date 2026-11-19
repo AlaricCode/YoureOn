@@ -9,9 +9,17 @@ import { checkCopy } from '../../ui/copyRule';
 import {
   CALL_OFF_ROUTES,
   callOffAllowed,
+  callOffConfirm,
   callOffName,
   callOffOnRoute,
   callOffView,
+  callOffWithdrawDue,
+  danceDisplayGuard,
+  danceRoundGuard,
+  judgeCamGuard,
+  type CallOffConfirmEvent,
+  type CallOffGuard,
+  type CallOffView,
 } from '../callOff';
 import { appReducer, initialApp, routeForBet, type Route } from '../machine';
 import { BET, DEVICE_A, envelope, ev, flip, ME_A, ruling, stateEv } from './fixtures';
@@ -37,8 +45,12 @@ const locked = (me: 'A' | 'B' = 'A'): BetModel =>
   fold(emptyBet(BET, me), ev('terms.proposed', { envelope: envelope() }), stateEv('LOCKED'));
 const asked = (by: 'A' | 'B', expiresInMs = CALL_OFF_TTL_MS) =>
   ev('bet.call_off', { status: 'requested', by, expires_at: later(expiresInMs) });
-const view = (b: BetModel, o: { nowMs?: number; judgeCam?: boolean } = {}) =>
-  callOffView(b, { nowMs: o.nowMs ?? NOW, judgeCam: o.judgeCam ?? false });
+const view = (b: BetModel, o: { nowMs?: number; judgeCam?: boolean; guard?: CallOffGuard } = {}) =>
+  callOffView(b, {
+    nowMs: o.nowMs ?? NOW,
+    judgeCam: o.judgeCam ?? false,
+    ...(o.guard ? { guard: o.guard } : {}),
+  });
 
 describe('callOffAllowed (the server rule)', () => {
   it('LOCKED, ATTEMPT, and JUDGING right after a REDO only', () => {
@@ -115,6 +127,89 @@ describe('callOffView', () => {
     const b = locked('B');
     expect(callOffName(b, 'A')).toBe(flip.terms.party_a.display_name);
     expect(callOffName({ ...emptyBet(BET), envelope: null }, 'B')).toBe('They');
+  });
+});
+
+describe('the round on this phone (CallOffGuard)', () => {
+  it('the recording phone: held while it counts in / dances / scores, off with a local result', () => {
+    for (const p of ['framing', 'ready', 'starting', 'failed'] as const)
+      expect(danceRoundGuard(p, false)).toBe('open'); // a camera or start failure: no score
+    for (const p of ['countIn', 'dancing', 'scoring'] as const)
+      expect(danceRoundGuard(p, false)).toBe('hold');
+    // the result card is up (the upload out, failed with "Try again", or no frames)
+    for (const p of ['scoring', 'result', 'uploading', 'submitted', 'failed'] as const)
+      expect(danceRoundGuard(p, true)).toBe('scored');
+  });
+
+  it('the display phone: held while the routine is on screen', () => {
+    expect(danceDisplayGuard('waiting')).toBe('open');
+    expect(danceDisplayGuard('countIn')).toBe('hold');
+    expect(danceDisplayGuard('playing')).toBe('hold');
+    expect(danceDisplayGuard('done')).toBe('open');
+  });
+
+  it('the filming phone: held while recording, off while it has a clip for the judge', () => {
+    const ok = { failed: false, hasClip: true };
+    expect(judgeCamGuard('standby', ok)).toBe('open');
+    expect(judgeCamGuard('countdown', ok)).toBe('hold');
+    expect(judgeCamGuard('recording', ok)).toBe('hold');
+    expect(judgeCamGuard('sending', ok)).toBe('scored');
+    expect(judgeCamGuard('sent', ok)).toBe('scored');
+    expect(judgeCamGuard('sent', { failed: true, hasClip: true })).toBe('scored'); // "Try again"
+    expect(judgeCamGuard('sent', { failed: true, hasClip: false })).toBe('open'); // no clip
+  });
+
+  it("'hold' keeps their prompt and the button off the round; 'scored' shows nothing", () => {
+    const theirs = fold(locked('A'), stateEv('ATTEMPT'), asked('B'));
+    expect(view(theirs, { guard: 'open' })).toMatchObject({ kind: 'prompt', by: 'B' });
+    expect(view(theirs, { guard: 'hold' })).toEqual({ kind: 'none' });
+    expect(view(theirs, { guard: 'scored' })).toEqual({ kind: 'none' });
+    const quiet = fold(locked('A'), stateEv('ATTEMPT'));
+    expect(view(quiet, { guard: 'hold' })).toEqual({ kind: 'none' });
+    expect(view(quiet, { guard: 'scored' })).toEqual({ kind: 'none' });
+    // the round over with no result (the camera failed): the button again, and a request
+    // still open shows its prompt
+    expect(view(quiet, { guard: 'open' })).toEqual({ kind: 'ask' });
+    // my own request still shows as waiting under 'hold' (until the withdraw lands)
+    const mine = fold(locked('A'), stateEv('ATTEMPT'), asked('A'));
+    expect(view(mine, { guard: 'hold' })).toMatchObject({ kind: 'waiting' });
+    expect(view(mine, { guard: 'scored' })).toEqual({ kind: 'none' });
+  });
+
+  it('a round starting withdraws this phone’s own open request, and only that', () => {
+    const o = (guard: CallOffGuard, judgeCam = false) => ({ nowMs: NOW, judgeCam, guard });
+    const mine = fold(locked('A'), asked('A'));
+    expect(callOffWithdrawDue(mine, o('open'))).toBe(false);
+    expect(callOffWithdrawDue(mine, o('hold'))).toBe(true);
+    expect(callOffWithdrawDue(mine, o('scored'))).toBe(true);
+    expect(callOffWithdrawDue(mine, o('hold', true))).toBe(false); // the judge-cam device
+    expect(callOffWithdrawDue(fold(locked('A'), asked('B')), o('hold'))).toBe(false); // theirs
+    expect(callOffWithdrawDue(locked('A'), o('hold'))).toBe(false); // nothing open
+    const gone = { nowMs: NOW + CALL_OFF_TTL_MS, judgeCam: false, guard: 'hold' as const };
+    expect(callOffWithdrawDue(mine, gone)).toBe(false); // lapsed
+  });
+});
+
+describe('the "Call it off?" confirm sheet (callOffConfirm)', () => {
+  const run = (events: CallOffConfirmEvent[]) => events.reduce(callOffConfirm, false);
+  const v = (kind: CallOffView['kind']): CallOffConfirmEvent => ({ type: 'view', kind });
+
+  it('opens on a tap, closes on confirm or cancel', () => {
+    expect(run([v('ask'), { type: 'open' }])).toBe(true);
+    expect(run([v('ask'), { type: 'open' }, { type: 'close' }])).toBe(false);
+  });
+
+  it('their request arriving, then lapsing, does not pop it back up', () => {
+    expect(run([v('ask'), { type: 'open' }, v('prompt'), v('ask')])).toBe(false);
+  });
+
+  it('the upload landing (none), then a REDO (ask), does not pop it back up', () => {
+    expect(run([v('ask'), { type: 'open' }, v('none'), v('ask')])).toBe(false);
+    expect(run([v('ask'), { type: 'open' }, v('waiting'), v('ask')])).toBe(false);
+  });
+
+  it('a re-render on the same view keeps it open', () => {
+    expect(run([v('ask'), { type: 'open' }, v('ask')])).toBe(true);
   });
 });
 

@@ -16,14 +16,29 @@ export const CALL_OFF_TTL_MS = 60_000;
 export const CallOffActor = z.enum(['A', 'B', 'operator']);
 export type CallOffActor = z.infer<typeof CallOffActor>;
 
-/** POST /v1/bets/:bet_id/call-off body. */
-export const CallOffRequest = z.strictObject({ agree: z.boolean() });
+/**
+ * An answer to the other party's request (`answer: true`) is still taken this long past its
+ * `expires_at`: the prompt closes on a 1 s client tick, so an Agree tapped in its last second can
+ * land just after it lapsed.
+ */
+export const CALL_OFF_ANSWER_GRACE_MS = 5_000;
+
+/**
+ * POST /v1/bets/:bet_id/call-off body. `answer: true` marks an Agree to the other party's request
+ * (the prompt): with no such request open it answers `none` and never opens one in this party's
+ * name. Without it, `agree: true` is "Call it off" (ask, or complete theirs).
+ */
+export const CallOffRequest = z.strictObject({
+  agree: z.boolean(),
+  answer: z.boolean().optional(),
+});
 export type CallOffRequest = z.infer<typeof CallOffRequest>;
 
 /**
  * POST /v1/bets/:bet_id/call-off 200: `requested` (open, waiting for the other party until
  * `expires_at`), `cleared` (this call declined or withdrew it), `agreed` (both agreed: the VOID
- * ruling is issued, `ruling_hash`), `none` (agree:false with nothing open).
+ * ruling is issued, `ruling_hash`), `none` (agree:false with nothing open, or an `answer` to a
+ * request that is no longer open).
  */
 export const CallOffResponse = z.object({
   status: z.enum(['requested', 'cleared', 'agreed', 'none']),

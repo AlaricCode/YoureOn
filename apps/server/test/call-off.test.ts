@@ -10,7 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asc, eq } from 'drizzle-orm';
 import { attempts, betEvents, bets, rulings } from '@youre-on/db';
 import { requestSigningString } from '@youre-on/shared/api';
-import { CALL_OFF_TTL_MS, CALLED_OFF_REASON, CallOffRecord } from '@youre-on/shared/call-off';
+import {
+  CALL_OFF_ANSWER_GRACE_MS,
+  CALL_OFF_TTL_MS,
+  CALLED_OFF_REASON,
+  CallOffRecord,
+} from '@youre-on/shared/call-off';
 import { ESCROW_ID, USDC_MINT_DEVNET } from '@youre-on/shared/chain/constants';
 import { poseSha256, type PoseSeries } from '@youre-on/shared/dance/pose';
 import { getRoutine, routineSha256 } from '@youre-on/shared/dance/routine';
@@ -94,6 +99,22 @@ describeDb('call it off (DB)', () => {
   };
   const callOff = (u: SignedUp, betId: string, agree: boolean) =>
     post(u, `/v1/bets/${betId}/call-off`, { agree });
+  /** The other phone's prompt: Agree to their request (never a request of its own). */
+  const answer = (u: SignedUp, betId: string) =>
+    post(u, `/v1/bets/${betId}/call-off`, { agree: true, answer: true });
+  /** A request by `by` that lapsed `agoMs` ago (written straight to the log). */
+  const lapsed = (betId: string, by: 'A' | 'B', agoMs: number) =>
+    ctx.deps.db.transaction((tx) =>
+      appendBetEvent(tx, {
+        bet_id: betId,
+        type: 'bet.call_off',
+        payload: {
+          status: 'requested',
+          by,
+          expires_at: new Date(Date.now() - agoMs).toISOString(),
+        },
+      }),
+    );
 
   beforeAll(async () => {
     ctx = await startTestServer({
@@ -369,15 +390,59 @@ describeDb('call it off (DB)', () => {
     expect(record).toMatchObject({ requested_by: 'B', agreed_by: 'A' });
   });
 
+  it("the prompt's Agree (answer) completes theirs, within a short grace, and never asks", async () => {
+    const betId = await lockedDance();
+    // nothing open, or only my own request: 'none', and nothing written
+    expect((await answer(B, betId)).json).toMatchObject({ status: 'none', ruling_hash: null });
+    expect((await callOff(B, betId, true)).json!.status).toBe('requested');
+    expect((await answer(B, betId)).json).toMatchObject({ status: 'none' });
+    expect((await callOff(B, betId, false)).json!.status).toBe('cleared');
+    // A's request lapsed well past the grace: B's Agree is 'none', not a request in B's name
+    await lapsed(betId, 'A', CALL_OFF_ANSWER_GRACE_MS + 2_000);
+    expect((await answer(B, betId)).json).toMatchObject({ status: 'none' });
+    const calls = (await events(betId)).filter((e) => e.type === 'bet.call_off');
+    expect(calls.map((e) => `${e.payload.status}:${e.payload.by}`)).toEqual([
+      'requested:B',
+      'cleared:B',
+      'requested:A',
+    ]);
+    expect((await betRow(betId)).state).toBe('LOCKED');
+    expect(await rulingRows(betId)).toHaveLength(0);
+    // tapped in the prompt's last second, landing just after it lapsed: still both agreed
+    await lapsed(betId, 'A', 1_000);
+    const agree = await answer(B, betId);
+    expect(agree.json).toMatchObject({ status: 'agreed' });
+    const { record } = await expectCalledOff(betId, 1);
+    expect(record).toMatchObject({ requested_by: 'A', agreed_by: 'B' });
+    expect((await answer(B, betId)).json).toMatchObject({
+      status: 'agreed',
+      ruling_hash: agree.json!.ruling_hash,
+    });
+  });
+
   it('ATTEMPT (still recording): the VOID rules the open attempt; the upload is then refused', async () => {
     const betId = await lockedDance();
     const start = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
     expect(start.status).toBe(201);
     expect((await betRow(betId)).state).toBe('ATTEMPT');
+    // a retried Start while it records replays the same 201
+    const retry = await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' });
+    expect(retry.status).toBe(201);
+    expect(retry.json).toMatchObject({ attempt_no: 1, go_at: start.json!.go_at });
     expect((await callOff(B, betId, true)).json!.status).toBe('requested');
     expect((await callOff(A, betId, true)).json!.status).toBe('agreed');
     await expectCalledOff(betId, 1);
     expect(await attemptRows(betId)).toHaveLength(1);
+    // the called-off attempt (it keeps its recorder device) is over: a retried Start is refused
+    expect((await attemptRows(betId))[0]!.recorded_by_device_id).not.toBeNull();
+    for (const n of [1, 2]) {
+      const again = await post(A, `/v1/bets/${betId}/attempts`, {
+        attempt_no: n,
+        recorder: 'self',
+      });
+      expect(again.status).toBe(409);
+      expect(again.json!.error).toMatchObject({ code: 'INVALID_STATE' });
+    }
     const late = await uploadDance(A, betId, 1);
     expect(late.status).toBeGreaterThanOrEqual(400);
     await judge.idle();

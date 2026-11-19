@@ -229,7 +229,7 @@ import {
 } from './wakeGate';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 import { CallOffLayer } from '../screens/CallOff';
-import { callOffOnRoute } from './callOff';
+import { callOffOnRoute, callOffWithdrawDue, type CallOffGuard } from './callOff';
 
 /** The last PRIVATE room's code (a lobby join and Leave delete it): a restart goes back there. */
 const LAST_ROOM_KEY = 'youreon.room.v1';
@@ -365,6 +365,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }>({ status: 'loading', items: [] });
   const challenging = useRef(false);
   const [alert, setAlert] = useState<string | null>(null);
+  /** Where the round on this phone stands, for "Call it off" (the round screens report it). */
+  const [callOffGuard, setCallOffGuard] = useState<CallOffGuard>('open');
   const [bootFailed, setBootFailed] = useState(false);
   const appRef = useRef(app);
   appRef.current = app;
@@ -1498,16 +1500,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
    * then (A's phone, none in the room) this phone. The count-in follows attempt.started.
    */
   /**
-   * "Call it off" (./callOff): ask, agree (true) or keep playing (false). Both agreeing VOIDs the
-   * bet on the server; the bet then follows the normal VOIDED path on both phones. A refusal
-   * (the round was uploaded meanwhile, a ruling is out) is a short alert; the events say the rest.
+   * "Call it off" (./callOff): ask, agree (true) or keep playing (false); `answer` marks the
+   * prompt's Agree. Both agreeing VOIDs the bet on the server; the bet then follows the normal
+   * VOIDED path on both phones. A refusal (the round was uploaded meanwhile, a ruling is out), or
+   * an Agree that came too late for their request, is a short alert; the events say the rest.
    */
   const callOff = useCallback(
-    async (agree: boolean) => {
+    async (agree: boolean, answer = false) => {
       const id = appRef.current.activeBetId;
       if (!id) return;
       try {
-        await rt.api.callOff(id, agree);
+        const res = await rt.api.callOff(id, agree, answer);
+        if (answer && res.status !== 'agreed') setAlert(t(COPY.callOff.failed));
       } catch (e) {
         console.warn('[yo] call off', e);
         if (agree) setAlert(t(COPY.callOff.failed));
@@ -1515,6 +1519,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     },
     [rt],
   );
+  // A round starting on this phone withdraws its own open request (./callOff): one made before
+  // the round is never agreed to after it, once this phone may hold the local result.
+  const myCallOff = bet?.callOff ?? null;
+  const myParty = bet?.my_party ?? null;
+  useEffect(() => {
+    const due = callOffWithdrawDue(
+      { callOff: myCallOff, my_party: myParty },
+      { nowMs: Date.now() + rt.clock.offsetMs, judgeCam: app.judgeCam, guard: callOffGuard },
+    );
+    if (due) void callOff(false);
+  }, [callOffGuard, myCallOff, myParty, app.judgeCam, callOff, rt]);
 
   const startDance = useCallback(async (): Promise<DanceAnswer> => {
     const a = appRef.current;
@@ -2320,6 +2335,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 onStartAttempt={startDance}
                 onUpload={uploadDance}
                 onLeave={app.judgeCam ? () => setJudgeCam(false) : undefined}
+                onCallOffGuard={setCallOffGuard}
               />
             </Suspense>
           </PanelErrorBoundary>
@@ -2345,6 +2361,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                   a && state === 'ATTEMPT' ? { attempt_no: a.attempt_no, go_at: a.go_at } : null
                 }
                 clockOffsetMs={danceClockOffsetMs}
+                onCallOffGuard={setCallOffGuard}
               />
             </Suspense>
           </PanelErrorBoundary>
@@ -2380,6 +2397,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             arm={arm}
             onSend={sendClip}
             onBack={app.judgeCam ? () => setJudgeCam(false) : undefined}
+            onCallOffGuard={setCallOffGuard}
           />
         );
       case 'redo':
@@ -2563,6 +2581,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           me={me}
           judgeCam={app.judgeCam}
           offsetMs={rt.clock.offsetMs}
+          guard={callOffGuard}
           onCall={callOff}
         />
       ) : null}

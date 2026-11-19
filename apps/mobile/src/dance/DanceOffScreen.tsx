@@ -30,7 +30,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { toPoseFrame, toStatusEvent } from '../../modules/dance-pose/src/frame';
+import { danceRoundGuard, type CallOffGuard } from '../app/callOff';
 import { simulatorSampleOffered } from '../device/simulator';
+import { useReportCallOffGuard } from '../screens/CallOff';
 
 import { AlertLine, PrimaryButton, QuietButton, TextButton } from '../ui/kit';
 import { DotsLabel, Screen, TopBar } from '../ui/parts';
@@ -72,6 +74,11 @@ export type DanceOffScreenProps = {
     attemptNo: number,
   ) => Promise<{ ok: true } | { ok: false; message: string }>;
   onLeave?: () => void;
+  /**
+   * Where the round stands for "Call it off" (../app/callOff danceRoundGuard): held while it
+   * counts in / dances / scores, and off while this phone holds a local result.
+   */
+  onCallOffGuard?: (guard: CallOffGuard) => void;
 };
 
 /** The pose payload parsers without the native module (the Simulator's sample round). */
@@ -290,6 +297,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   });
   engineRef.current = engine;
   const { state } = engine;
+  useReportCallOffGuard(props.onCallOffGuard, danceRoundGuard(state.phase, result !== null));
 
   // The sample round: frames at SIM_FPS through the same onPoses path, and the sample source
   // standing in for the native view's handle (startRound / stopRound / the key frames).

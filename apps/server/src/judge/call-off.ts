@@ -2,10 +2,13 @@
 // bet whose round can't happen, so neither phone sits on the attempt screens until
 // resolve_deadline (lock + 3600 s, then the keeper's timeout_refund).
 //
-//   POST /v1/bets/:bet_id/call-off {agree}   (S, party) -> 200 CallOffResponse
+//   POST /v1/bets/:bet_id/call-off {agree, answer?}   (S, party) -> 200 CallOffResponse
 //     agree:true, nothing open        opens a request (bet.call_off requested, expires in 60 s)
 //     agree:true, mine open           idempotent: the same open request
 //     agree:true, theirs open         both agreed: the VOID ruling (below)
+//     agree:true, answer:true         the prompt's Agree: theirs open (or lapsed less than
+//                                     CALL_OFF_ANSWER_GRACE_MS ago) -> the VOID ruling; else
+//                                     'none', and never a new request in this party's name
 //     agree:false, open (either side) clears it (bet.call_off cleared); nothing open: 'none'
 //   POST /v1/demo/bets/:bet_id/void          (demo key, DEMO_MODE) -> 200 CallOffResponse
 //     the operator's fallback: the same VOID ruling at once, no player asked.
@@ -31,6 +34,7 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { attempts, auditLog, betEvents, bets, rulings } from '@youre-on/db';
 import {
+  CALL_OFF_ANSWER_GRACE_MS,
   CALL_OFF_TTL_MS,
   CALLED_OFF_REASON,
   CallOffPayload,
@@ -329,9 +333,11 @@ export async function callOff(
   deps: AppDeps,
   betId: string,
   me: { user_id: string },
-  agree: boolean,
+  body: { agree: boolean; answer?: boolean | undefined },
   requestId?: string,
 ): Promise<CallOffResponse> {
+  const { agree } = body;
+  const answer = agree && body.answer === true;
   const [bet0] = await deps.db.select().from(bets).where(eq(bets.id, betId)).limit(1);
   if (!bet0) throw new HttpError('NOT_FOUND', 'No such bet.');
   const party: Party | null = partyOf(bet0, me.user_id);
@@ -377,16 +383,26 @@ export async function callOff(
         };
       }
       const at = await callableAttempt(tx, bet);
-      if (open && open.payload.by === party)
+      // The prompt's Agree (`answer`) only ever completes the other party's request. Tapped in
+      // the prompt's last second it can land just past expires_at, so it is taken for a short
+      // grace; later (or withdrawn, or never asked) it is 'none', not a request of its own.
+      const theirs = answer ? await openRequest(tx, bet.id, now - CALL_OFF_ANSWER_GRACE_MS) : open;
+      if (answer && (!theirs || theirs.payload.by === party))
         return {
-          res: { status: 'requested', expires_at: open.payload.expires_at, ruling_hash: null },
+          res: { status: 'none', expires_at: null, ruling_hash: null },
           events: [],
           room_id: null,
         };
-      if (open) {
+      if (theirs && theirs.payload.by === party)
+        return {
+          res: { status: 'requested', expires_at: theirs.payload.expires_at, ruling_hash: null },
+          events: [],
+          room_id: null,
+        };
+      if (theirs) {
         const voided = await commitVoid(deps, tx, bet, at, {
-          requested_by: open.payload.by,
-          requested_at: open.at,
+          requested_by: theirs.payload.by,
+          requested_at: theirs.at,
           agreed_by: party,
           user_id: me.user_id,
           request_id: requestId,
@@ -467,7 +483,7 @@ export const callOffRoutes: RouteModule = {
       const me = appAuth(c);
       const betId = betIdParam(c.req.param('bet_id') ?? '');
       const body = await readBody(c, CallOffRequest);
-      return c.json(await callOff(deps, betId, me, body.agree, c.get('requestId')), 200);
+      return c.json(await callOff(deps, betId, me, body, c.get('requestId')), 200);
     });
 
     app.post('/v1/demo/bets/:bet_id/void', requireDemo, async (c) => {
