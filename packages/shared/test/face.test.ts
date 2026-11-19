@@ -1,11 +1,21 @@
 // Face addressing contract (src/face.ts): the top-2 match rule, the float32-LE embedding bytes,
 // embedding validation and the wire schemas.
 import { describe, expect, it } from 'vitest';
-import { HeadToHead, RIVAL_MIN_SETTLED, rivalryOf } from '../src/api';
+import {
+  DANCE_IDENTIFY_MAX_FACES,
+  DanceIdentifyRequest,
+  DanceIdentifyResponse,
+  danceIdentifyPath,
+  FaceModelRef as ApiFaceModelRef,
+  HeadToHead,
+  RIVAL_MIN_SETTLED,
+  rivalryOf,
+} from '../src/api';
 import {
   ACCEPTED_FACE_MODELS,
   bytesToEmbedding,
   cosineSimilarity,
+  decideDanceAssignments,
   decideMatch,
   embeddingProblem,
   embeddingToBytes,
@@ -20,6 +30,7 @@ import {
   FaceMatchRequest,
   FaceMatchResponse,
   faceMatchPath,
+  FaceModelRef,
   isAcceptedFaceModel,
   sha256HexOfText,
 } from '../src/face';
@@ -89,6 +100,75 @@ describe('decideMatch (API-CONTRACT §2.4: top1 >= 0.30 and top1 - top2 >= 0.05)
       kind: 'abstain',
       reason: 'below_threshold',
     });
+  });
+});
+
+describe('decideDanceAssignments (DANCE-OFF §3: dance identify)', () => {
+  it('assigns each party its clearly best face, both ways', () => {
+    // face 0 is B, face 1 is A
+    expect(decideDanceAssignments({ A: [0.1, 0.62], B: [0.55, 0.05] }, 2)).toEqual([
+      { face_index: 1, party: 'A' },
+      { face_index: 0, party: 'B' },
+    ]);
+  });
+
+  it('applies the face-match threshold', () => {
+    const below = FACE_MATCH_MIN_COSINE - 0.01;
+    expect(decideDanceAssignments({ A: [below, 0.0], B: [0.0, 0.6] }, 2)).toEqual([
+      { face_index: 1, party: 'B' },
+    ]);
+  });
+
+  it('a face that looks like both parties goes to nobody (the margin, across parties)', () => {
+    expect(decideDanceAssignments({ A: [0.6, 0.0], B: [0.58, 0.0] }, 2)).toEqual([]);
+    expect(
+      decideDanceAssignments({ A: [0.6, 0.0], B: [0.6 - FACE_MATCH_MIN_MARGIN - 0.01, 0] }, 2),
+    ).toEqual([{ face_index: 0, party: 'A' }]);
+  });
+
+  it('two faces that both look like one party: that party gets neither (the margin, across faces)', () => {
+    expect(decideDanceAssignments({ A: [0.6, 0.57], B: [0.0, 0.0] }, 2)).toEqual([]);
+  });
+
+  it('never gives one face to both parties or one party two faces', () => {
+    const out = decideDanceAssignments({ A: [0.9, 0.2, 0.1], B: [0.88, 0.2, 0.1] }, 3);
+    expect(out).toEqual([]);
+    const two = decideDanceAssignments({ A: [0.9, 0.1, 0.0], B: [0.1, 0.0, 0.7] }, 3);
+    expect(two).toEqual([
+      { face_index: 0, party: 'A' },
+      { face_index: 2, party: 'B' },
+    ]);
+  });
+
+  it('only one party enrolled: only the threshold across parties; NaN never matches', () => {
+    expect(decideDanceAssignments({ B: [0.4] }, 1)).toEqual([{ face_index: 0, party: 'B' }]);
+    expect(decideDanceAssignments({ A: [Number.NaN] }, 1)).toEqual([]);
+    expect(decideDanceAssignments({}, 2)).toEqual([]);
+  });
+});
+
+describe('dance identify wire schemas', () => {
+  const face = { embedding: { alg: 'plain-v0', epk_b64: null, nonce_b64: null, ct_b64: 'AA==' } };
+  it('1..4 faces, the face-match model ref (one schema, re-exported by face)', () => {
+    expect(FaceModelRef).toBe(ApiFaceModelRef);
+    expect(DanceIdentifyRequest.safeParse({ model: FACE_MODEL_W600K, faces: [face] }).success).toBe(
+      true,
+    );
+    expect(DanceIdentifyRequest.safeParse({ model: FACE_MODEL_W600K, faces: [] }).success).toBe(
+      false,
+    );
+    const five = Array.from({ length: DANCE_IDENTIFY_MAX_FACES + 1 }, () => face);
+    expect(DanceIdentifyRequest.safeParse({ model: FACE_MODEL_W600K, faces: five }).success).toBe(
+      false,
+    );
+    expect(danceIdentifyPath('b 1')).toBe('/v1/bets/b%201/dance/identify');
+  });
+  it('the response: at most two assignments, no scores', () => {
+    const ok = { assignments: [{ face_index: 0, party: 'A' }] };
+    expect(DanceIdentifyResponse.parse({ ...ok, score: 0.9 })).toEqual(ok);
+    expect(
+      DanceIdentifyResponse.safeParse({ assignments: [{ face_index: 4, party: 'A' }] }).success,
+    ).toBe(false);
   });
 });
 

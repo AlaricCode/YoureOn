@@ -13,6 +13,7 @@ import {
 import { AppealResult, AppealVote } from './appeal';
 import { AuthorizationMethod, AuthorizeRequest, TxKind } from './authorization';
 import { BetState, ChainAck, OnchainStatus, PendingTx } from './bet-state';
+import { CallOffPayload } from './call-off';
 import { ChainEvents } from './chain-events';
 import { ChecksCompiledPayload, ChecksReportPayload } from './checks/events';
 import { CameraEvidence, DanceEvidence, GeminiSettlementRecord } from './evidence';
@@ -183,6 +184,8 @@ export const RealtimeEvent = z.discriminatedUnion('type', [
   env('review.requested', 'server', ReviewRequestedPayload),
   /** NEW (./gg): the loser kept the ruling, or confirm_by passed unconfirmed. */
   env('review.closed', 'server', ReviewClosedPayload),
+  /** NEW (./call-off): a "call it off" request opened, cleared, or agreed (a VOID ruling follows). */
+  env('bet.call_off', 'server', CallOffPayload),
   /** NEW (./checks/events): the bet's terms compiled into camera checks (non-binding). */
   env('checks.compiled', 'server', ChecksCompiledPayload),
   /** NEW (./checks/events): one attempt's camera-check report, just before its ruling.issued. */

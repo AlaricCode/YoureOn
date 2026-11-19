@@ -143,17 +143,20 @@ frames inside it, and picks key moves inside it. `--audio <file>` / `--video <fi
 routine's `media` (the bundled file under `apps/mobile/assets/dance/`). `selftest` scores every
 routine against itself and expects 100.
 
-The real routine `bye-bye-shuffle` (32.6 s, poses only, music from an original synthesized drum
-track) was imported with:
+The real routine `bye-bye-shuffle` (32.6 s, a silhouette reference clip with an original
+synthesized drum track muxed in) was imported with:
 
 ```sh
 npx tsx scripts/dance-routine.ts import tools/dance-ref/work/left.json --id bye-bye-shuffle \
   --title "Bye Bye Shuffle" --song "Original drum track (You're On), 172.6 BPM" \
-  --bpm 172.6 --first-beat-ms 235 --every 8 --audio bye-bye-shuffle.m4a
+  --bpm 172.6 --first-beat-ms 235 --every 8 --video bye-bye-shuffle.mp4
 ```
 
-Its source footage stays in `tools/dance-ref/work/` (gitignored) and never ships: the phone draws
-the reference as a skeleton and plays `apps/mobile/assets/dance/bye-bye-shuffle.m4a`. There are exactly 3 bundled routines (`ROUTINES`), so either reuse
+Its source footage stays in `tools/dance-ref/work/` (gitignored) and never ships. The phone plays
+`apps/mobile/assets/dance/bye-bye-shuffle.mp4` (`work/silhouette-drums.mp4`: the SAM 3.1 silhouette
+on #0b0614 with the drum track). For a local demo build with the original song, copy
+`work/silhouette-song.mp4` to `apps/mobile/assets/dance/local/bye-bye-shuffle.mp4` (gitignored and
+in `.easignore`; Metro bundles it in place of the committed one). Never commit that file. There are exactly 3 bundled routines (`ROUTINES`), so either reuse
 the id of the synthetic placeholder you are replacing, or swap the new routine into the registry
 in its place. Raise `--routine-version` whenever you re-import a routine that is already in use.
 Its sha256 is part of the bet terms (§1).

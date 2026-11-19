@@ -8,7 +8,22 @@
 //
 // Frames go to framingCheck while framing, and to the round pipeline (tracker → live scorer →
 // series) from the count-in on; the display reads everything from the live store, so a frame
-// re-renders the meters and skeletons, not the screen.
+// re-renders the name tags (their live scores) and skeletons, not the screen.
+//
+// Face assignment (DANCE-OFF §3, ./faceIdentify): with `faceId` (a bet round), when the framing
+// check passes the engine takes one still and asks who is who; the answer (if both players are
+// identified) is followed through framing (./model/identity) and seeds the round's tracker at the
+// count-in, so A keeps A's skeleton and tag wherever A stands. It is time-boxed and never holds
+// up Start: a round that counts in first, or any miss, uses the left / right rule.
+//
+// Two phones (./model/schedule): a bet round counts in from the attempt's go_at, so t0 is the
+// same server instant the display phone (DanceDisplayScreen) starts the reference and the music
+// on. While a display phone is there (`displayPhone`, decided once per round when the count-in
+// starts), this phone stays silent and shows no reference: the display plays both. Without one
+// (or a run that could not meet go_at), it plays the music itself (today's one-phone layout);
+// a run that could not meet go_at while the display is still playing that timeline stays silent
+// until the display's routine is over (`mutedUntil`, ./model/schedule fallbackMutedUntil), so
+// the room never hears two copies of the song out of step.
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { PoseSeries } from '@youre-on/shared/dance/pose';
@@ -24,10 +39,14 @@ import type {
 } from '../../modules/dance-pose';
 import { importSafely } from '../app/importSafely';
 import { feel } from '../device/feedback';
+import { identifyPlayers, isFaceIdResult, mayTryFaces, type DanceFaceId } from './faceIdentify';
+import { deleteCacheFile } from './fs';
 import { nowMs, type DancePoseModule } from './hooks';
 import { routineMedia } from './media';
+import { createPlayerIdentity, type PlayerIdentity } from './model/identity';
 import { createLiveStore, type LiveStore } from './model/liveStore';
 import { createRoundPipeline, type RoundPipeline } from './model/pipeline';
+import { fallbackMutedUntil, recorderCountIn } from './model/schedule';
 import {
   beatAt,
   countInBeatIndex,
@@ -92,23 +111,42 @@ export interface DanceRoundEngine {
   camera: CameraState;
   /** t0 on the nowMs clock (reference + beat bar), null before GO. */
   startAt: number | null;
+  /**
+   * A display phone plays the reference and the music: this phone shows neither. Fixed for a
+   * round from its count-in on (the live `displayPhone` before that).
+   */
+  display: boolean;
+  /**
+   * This run's reference music is silent until this instant (nowMs clock): a run out of step
+   * with a display phone that is still playing. null: not muted.
+   */
+  mutedUntil: number | null;
   onPoses: (e: { nativeEvent: PoseFrameEvent }) => void;
   onStatus: (e: { nativeEvent: StatusEvent }) => void;
   dispatch: (e: RoundEvent) => { prev: RoundState; next: RoundState };
   /** Start pressed (framing stable; `force` skips that, for the calibration screen). */
   start: (force?: boolean) => void;
-  /** The attempt is open: count in (`force`: from framing, for an attempt started elsewhere). */
-  beginCountIn: (attemptNo: number, force?: boolean) => void;
+  /**
+   * The attempt is open: count in (`force`: from framing, for an attempt started elsewhere).
+   * `goAtLocal`: the attempt's go_at on the nowMs clock; the count-in starts there when t0 can
+   * still be met (in sync with the display phone), else now.
+   */
+  beginCountIn: (attemptNo: number, force?: boolean, goAtLocal?: number | null) => void;
   /** Back to framing for a new round. */
   reset: () => void;
 }
 
 export function useDanceRound(opts: {
   routine: RoutineData;
-  pose: DancePoseModule | null;
+  /** The pose module's payload parsers (the native module, or the pure ones for a sample round). */
+  pose: Pick<DancePoseModule, 'toPoseFrame' | 'toStatusEvent'> | null;
   syncOffsetMs: number;
   /** Ask the native view for key-frame JPEGs (the bet round; calibration needs none). */
   snapshots: boolean;
+  /** The other party's phone is the display (../app/danceFlow danceDisplayPresent). */
+  displayPhone?: boolean;
+  /** Face assignment (the bet round): the embedder and the identify call; null: left / right. */
+  faceId?: DanceFaceId | null;
   onFinished: (out: DanceRoundOutput) => void;
 }): DanceRoundEngine {
   const { routine } = opts;
@@ -131,6 +169,18 @@ export function useDanceRound(opts: {
   const danceBeat = useRef(-1);
   const audio = useRef<AudioLike | null>(null);
   const goTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The count-in about to start ran from go_at (in sync with the display phone). */
+  const nextSynced = useRef(false);
+  /** The go_at (round clock) the count-in about to start was planned from. */
+  const nextGoAtLocal = useRef<number | null>(null);
+  /** This run's music mute (fallbackMutedUntil), null: none. */
+  const [mutedUntil, setMutedUntil] = useState<number | null>(null);
+  /** This round's display decision (null: no round counting in or running). */
+  const [runDisplay, setRunDisplay] = useState<boolean | null>(null);
+  /** Who is who while framing (face assignment), created on the first frame (its size). */
+  const identity = useRef<PlayerIdentity | null>(null);
+  /** Face attempts this run: one in flight, a few tries, spaced. */
+  const faceTry = useRef({ inFlight: false, tries: 0, lastTryAt: null as number | null });
 
   const stopAudio = () => {
     const a = audio.current;
@@ -218,11 +268,15 @@ export function useDanceRound(opts: {
 
   transitionRef.current = (prev, next, at) => {
     if (next.phase === 'countIn' && prev.phase !== 'countIn') {
+      // Face-identified players seed the tracker where they stand now; else left / right.
+      const start = identity.current?.start() ?? null;
       pipeline.current = createRoundPipeline({
         routine,
         syncOffsetMs: optsRef.current.syncOffsetMs,
+        start,
       });
       store.reset();
+      if (start) store.update({ byFace: true });
       countBeat.current = -1;
       // Exactly on GO, not up to a tick late.
       if (goTimer.current) clearTimeout(goTimer.current);
@@ -232,8 +286,27 @@ export function useDanceRound(opts: {
           Math.max(0, next.goAt - nowMs()),
         );
       }
+      // A display phone plays the music, if it is there and this run is on its timeline.
+      const synced = nextSynced.current;
+      const displayPhone = optsRef.current.displayPhone === true;
+      const display = displayPhone && synced;
+      const muted =
+        next.goAt === null
+          ? null
+          : fallbackMutedUntil({
+              synced,
+              displayPhone,
+              goAtLocal: nextGoAtLocal.current,
+              cfg: cfgRef.current,
+              runT0: next.goAt,
+            });
+      nextSynced.current = false;
+      nextGoAtLocal.current = null;
+      setRunDisplay(display);
+      setMutedUntil(muted);
       const media = routineMedia(routine);
-      if (media.audio !== null && media.video === null) {
+      // A separate track cannot start mid-song in step: a muted run plays none.
+      if (!display && muted === null && media.audio !== null && media.video === null) {
         const asset = media.audio;
         void importSafely(() => import('expo-audio'))
           .then((A) => {
@@ -250,9 +323,13 @@ export function useDanceRound(opts: {
       void handleRef.current?.stopRound().catch(() => undefined);
     }
     if (next.run !== prev.run) {
+      identity.current?.clear();
+      faceTry.current = { inFlight: false, tries: 0, lastTryAt: null };
       pipeline.current = null;
       startAtRef.current = null;
       setStartAt(null);
+      setRunDisplay(null);
+      setMutedUntil(null);
       stopAudio();
       store.reset();
     }
@@ -289,6 +366,38 @@ export function useDanceRound(opts: {
     [],
   );
 
+  /** One face attempt (time-boxed, never throws); a hit is followed until the count-in. */
+  const tryFaces = useCallback(
+    (size: { w: number; h: number }) => {
+      const faceId = optsRef.current.faceId;
+      const id = identity.current;
+      if (!faceId || !id) return;
+      const run = stateRef.current.run;
+      const ft = faceTry.current;
+      ft.inFlight = true;
+      ft.tries += 1;
+      ft.lastTryAt = nowMs();
+      void identifyPlayers({
+        open: (uri) => faceId.open(uri),
+        identify: (req) => faceId.identify(req),
+        captureStill: async () =>
+          (await handleRef.current?.captureStill()) ?? { ok: false as const },
+        frameAt: (ts) => id.frameAt(ts),
+        deleteFile: deleteCacheFile,
+        size,
+      }).then((r) => {
+        if (stateRef.current.run !== run) return;
+        faceTry.current.inFlight = false;
+        const phase = stateRef.current.phase;
+        // Too late: the round already counted in on the left / right rule.
+        if (phase !== 'framing' && phase !== 'ready' && phase !== 'starting') return;
+        if (isFaceIdResult(r) && id.identify(r.ts, r.aPerson, r.bPerson))
+          store.update({ byFace: true });
+      });
+    },
+    [store],
+  );
+
   const onPoses = useCallback(
     (e: { nativeEvent: PoseFrameEvent }) => {
       const mod = optsRef.current.pose;
@@ -301,12 +410,39 @@ export function useDanceRound(opts: {
         const fr = framingCheck(people, f.w, f.h);
         if (s.phase !== 'starting')
           dispatch({ type: 'framing', at: nowMs(), ok: fr.ok, reason: fr.reason });
+        identity.current ??= createPlayerIdentity({ w: f.w, h: f.h });
+        const id = identity.current;
+        const who = id.observe({ ts: f.ts ?? f.t, people });
+        const byFace = id.identified();
+        const ft = faceTry.current;
+        if (
+          s.phase !== 'starting' &&
+          mayTryFaces({
+            enabled: optsRef.current.faceId != null,
+            framingOk: fr.ok,
+            identified: byFace,
+            inFlight: ft.inFlight,
+            tries: ft.tries,
+            lastTryAt: ft.lastTryAt,
+            now: nowMs(),
+          })
+        )
+          tryFaces({ w: f.w, h: f.h });
         store.update({
           w: f.w,
           h: f.h,
           people,
-          a: fr.a !== undefined ? (people[fr.a] ?? null) : null,
-          b: fr.b !== undefined ? (people[fr.b] ?? null) : null,
+          a: byFace
+            ? ((who?.a as number[] | null) ?? null)
+            : fr.a !== undefined
+              ? (people[fr.a] ?? null)
+              : null,
+          b: byFace
+            ? ((who?.b as number[] | null) ?? null)
+            : fr.b !== undefined
+              ? (people[fr.b] ?? null)
+              : null,
+          byFace,
           framing: fr,
           fps: f.fps,
         });
@@ -330,7 +466,7 @@ export function useDanceRound(opts: {
       if (s.phase === 'scoring') return;
       store.update({ w: f.w, h: f.h, people, a: null, b: null, fps: f.fps });
     },
-    [dispatch, store],
+    [dispatch, store, tryFaces],
   );
 
   const onStatus = useCallback((e: { nativeEvent: StatusEvent }) => {
@@ -347,8 +483,20 @@ export function useDanceRound(opts: {
   );
 
   const beginCountIn = useCallback(
-    (attemptNo: number, force?: boolean) => {
-      dispatch({ type: 'attempt', at: nowMs(), attemptNo, force: force === true });
+    (attemptNo: number, force?: boolean, goAtLocal?: number | null) => {
+      const at = nowMs();
+      const plan = recorderCountIn(goAtLocal ?? null, at, cfgRef.current.beatMs);
+      nextSynced.current = plan.synced;
+      nextGoAtLocal.current = goAtLocal ?? null;
+      dispatch({
+        type: 'attempt',
+        at,
+        attemptNo,
+        force: force === true,
+        countInAt: plan.countInAt,
+      });
+      nextSynced.current = false;
+      nextGoAtLocal.current = null;
     },
     [dispatch],
   );
@@ -365,6 +513,8 @@ export function useDanceRound(opts: {
     handleRef,
     camera,
     startAt,
+    display: runDisplay ?? opts.displayPhone === true,
+    mutedUntil,
     onPoses,
     onStatus,
     dispatch,

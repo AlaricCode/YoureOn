@@ -249,7 +249,7 @@ describe('DanceEvidence, DanceUpload and dance.scored (§5)', () => {
   const series = seriesOf(R, a, b);
   const hex = (c: string) => c.repeat(64);
   const frames = [0, 1, 2, 3].map((index) => ({ index, t_ms: 3000 * index, sha256: hex('a') }));
-  const built = buildDanceEvidence({
+  const builtInput = {
     bet_id: '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f',
     attempt_no: 1,
     terms_hash: hex('b'),
@@ -257,7 +257,8 @@ describe('DanceEvidence, DanceUpload and dance.scored (§5)', () => {
     series,
     frames,
     clip_sha256: null,
-  });
+  };
+  const built = buildDanceEvidence(builtInput);
 
   it('buildDanceEvidence re-scores and produces a strict, hashable record', () => {
     const e = built.evidence;
@@ -272,6 +273,53 @@ describe('DanceEvidence, DanceUpload and dance.scored (§5)', () => {
     expect(DanceEvidence.safeParse({ ...e, extra: 1 }).success).toBe(false);
     expect(DanceEvidence.safeParse({ ...e, frames: [] }).success).toBe(false);
     expect(DanceEvidence.safeParse({ ...e, scores: { a: 1001, b: 0 } }).success).toBe(false);
+    // A on the left (the left / right rule): no a_start_side key, so the record is unchanged.
+    expect('a_start_side' in e.checks).toBe(false);
+  });
+
+  it('a face-identified round whose A started on the right says so; swaps count from there', () => {
+    // The same players, swapped in the picture: A dances on the right, B stands on the left.
+    const flip = (k: number[] | null) => {
+      if (!k) return null;
+      const out = [...k];
+      for (let j = 0; j < 19; j++) out[j * 3] = 10_000 - k[j * 3]!;
+      return out;
+    };
+    const mirrored = {
+      ...series,
+      frames: series.frames.map((f) => ({ ...f, a: flip(f.a), b: flip(f.b) })),
+    };
+    const e = buildDanceEvidence({
+      bet_id: '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f',
+      attempt_no: 1,
+      terms_hash: hex('b'),
+      routine: R,
+      series: mirrored,
+      frames,
+      clip_sha256: null,
+      faces_identified: true,
+    }).evidence;
+    expect(e.checks).toMatchObject({ side_swaps: 0, a_start_side: 'right' });
+    // Without the server's face identification the same series is A on the wrong side: the
+    // left / right rule counts it as a swap, and nothing claims a start on the right.
+    const plain = buildDanceEvidence({
+      bet_id: '7f3c2a9e-4b1d-4e8a-9c2f-1a2b3c4d5e6f',
+      attempt_no: 1,
+      terms_hash: hex('b'),
+      routine: R,
+      series: mirrored,
+      frames,
+      clip_sha256: null,
+    }).evidence;
+    expect(plain.checks.side_swaps).toBe(1);
+    expect('a_start_side' in plain.checks).toBe(false);
+    // A face-identified round whose A started on the LEFT records exactly what the plain one does.
+    const leftByFace = buildDanceEvidence({ ...builtInput, faces_identified: true }).evidence;
+    expect(leftByFace).toEqual(built.evidence);
+    expect(DanceEvidence.safeParse(e).success).toBe(true);
+    expect(
+      DanceEvidence.safeParse({ ...e, checks: { ...e.checks, a_start_side: 'left' } }).success,
+    ).toBe(false);
   });
 
   it('DanceUpload carries the series and up to 6 frames', () => {

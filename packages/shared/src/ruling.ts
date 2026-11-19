@@ -36,6 +36,15 @@ export const CACHED_RULING_MODEL = 'cache/demo-bottle@1';
  */
 export const DANCE_OFF_MODEL = 'rule/dance-off@1';
 
+/**
+ * The model id of a call-off ruling (API-CONTRACT §2.9a): both players agreed to stop a locked
+ * bet before any ruling was in flight (or the operator voided a stuck one, POST /v1/demo/bets/:id
+ * /void). Always VOID 'safety_stop' (the bet halted after lock: nobody wins, both refunded) and
+ * commits no frames: its evidence_hash is hashJcs(CallOffRecord) (./call-off). It can never be
+ * decisive (the Ruling refinement below).
+ */
+export const CALLED_OFF_MODEL = 'rule/called-off@1';
+
 /** True for a ruling served from a stored demo verdict (`model` starts with `cache/`). */
 export const isCachedRuling = (r: { model: string }): boolean => isCachedRulingModel(r.model);
 /** A ruling model served from a stored verdict (`cache/…`): the stage labels it "replay ruling". */
@@ -95,10 +104,15 @@ export const RulingCore = {
 export const isDecisive = (o: RulingOutcome): o is 'A_WINS' | 'B_WINS' =>
   o === 'A_WINS' || o === 'B_WINS';
 
-/** Shared by Ruling and HearingRuling: frames are committed, and citations point into them. */
+/**
+ * Shared by Ruling and HearingRuling: frames are committed, and citations point into them.
+ * `frameless` are the models that commit no frames (and must not): the Gemini settlement, and for
+ * a Ruling also the call-off (CALLED_OFF_MODEL).
+ */
 export const checkFrames = (
   r: { cited_frames: number[]; frame_hashes: string[]; model: string },
   ctx: z.RefinementCtx,
+  frameless: readonly string[] = [GEMINI_SETTLEMENT_MODEL],
 ): void => {
   if (r.cited_frames.some((i) => i >= r.frame_hashes.length))
     ctx.addIssue({
@@ -106,13 +120,16 @@ export const checkFrames = (
       path: ['cited_frames'],
       message: 'cites a frame not in frame_hashes',
     });
-  if ((r.model === GEMINI_SETTLEMENT_MODEL) !== (r.frame_hashes.length === 0))
+  if (frameless.includes(r.model) !== (r.frame_hashes.length === 0))
     ctx.addIssue({
       code: 'custom',
       path: ['frame_hashes'],
-      message: 'camera rulings commit ≥ 1 frame; gemini settlement commits none',
+      message: 'camera rulings commit ≥ 1 frame; gemini settlement / call-off commit none',
     });
 };
+
+/** The models a Ruling may carry with no frames (checkFrames). */
+const RULING_FRAMELESS: readonly string[] = [GEMINI_SETTLEMENT_MODEL, CALLED_OFF_MODEL];
 
 export const Ruling = z
   .strictObject({
@@ -137,7 +154,15 @@ export const Ruling = z
       });
     if (isDecisive(r.outcome) && r.confidence < REDO_BELOW)
       ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'confidence < 0.8 must be REDO' });
-    checkFrames(r, ctx);
+    // Widened in place like the dance-off rule (SCHEMAS §11): a call-off commits no frames, and
+    // is only ever a VOID 'safety_stop' (never a winner, never a re-attempt).
+    if (r.model === CALLED_OFF_MODEL && (r.outcome !== 'VOID' || r.void_reason !== 'safety_stop'))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['outcome'],
+        message: "a call-off ruling is VOID 'safety_stop'",
+      });
+    checkFrames(r, ctx, RULING_FRAMELESS);
   });
 export type Ruling = z.infer<typeof Ruling>;
 

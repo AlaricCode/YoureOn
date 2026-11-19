@@ -19,8 +19,10 @@
 // a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
 // Dance Off (docs/planning/DANCE-OFF.md): "Dance off" on A's negotiate screen (app/danceTerms),
 // the same card and lock, then the round on the recording phone (../dance DanceOffScreen: the
-// judge cam, else A's phone) and "Dance off live" on the other (app/danceFlow); the usual ruling,
-// GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
+// judge cam, else A's phone; it tells A from B by face when it can, DANCE-OFF §3), B's phone the
+// display meanwhile (../dance DanceDisplayScreen: the mirrored reference and the music, from the
+// same server go_at), and "Dance off live" on a phone that is neither and while the round is
+// judged (app/danceFlow); the usual ruling, GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
 // "Jarvis" (../wake, ./wakeGate; EXPO_PUBLIC_WAKE): one recognizer, listening on Home (in a room)
 // and on A's negotiate screen until the judge starts. On Home "Jarvis, …" starts a challenge (the
 // person named, the face scan, or the one person online); on the negotiate screen A's judge waits
@@ -59,7 +61,14 @@ import { extractFrames, readClip } from '../attempt/capture';
 import { startAttemptVia, startsAttempt, type Recorder } from '../attempt/recorder';
 import { initialLock, lockReducer, type AuthFailure } from '../bets/lock';
 import { emptyBet, endReasonOf, finalOutcome, lockSignals, type BetModel } from '../bets/store';
-import { appealSeats, appealVerdict, betView, myResult, type BetView } from '../bets/view';
+import {
+  appealSeats,
+  appealVerdict,
+  betView,
+  myResult,
+  screenResult,
+  type BetView,
+} from '../bets/view';
 import { feel } from '../device/feedback';
 import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
 import { createServerFaceApi, type FaceStatus } from '../enroll/api';
@@ -117,6 +126,7 @@ import {
   type PreparedAttempt,
 } from './actions';
 import {
+  danceDisplayPresent,
   danceStartNote,
   danceWatchPhase,
   isDanceBet,
@@ -124,6 +134,7 @@ import {
   startDanceAttemptVia,
   type PreparedDance,
 } from './danceFlow';
+import { useDanceClockOffset } from './danceClock';
 import {
   canConfirmDance,
   canSubmitDance,
@@ -224,6 +235,8 @@ import {
   type LoopState,
 } from './wakeGate';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
+import { CallOffLayer } from '../screens/CallOff';
+import { callOffOnRoute, callOffWithdrawDue, type CallOffGuard } from './callOff';
 
 /** The last PRIVATE room's code (a lobby join and Leave delete it): a restart goes back there. */
 const LAST_ROOM_KEY = 'youreon.room.v1';
@@ -254,6 +267,13 @@ const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
  */
 const loadFaceEmbedder = () =>
   importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
+/**
+ * The Dance Off's face assignment (DANCE-OFF §3) uses the same face natives, loaded the same way
+ * (on first use, through importSafely): a simulator build without ML Kit just falls back to the
+ * left / right rule.
+ */
+const loadDanceFaceEmbedder = () =>
+  importSafely(() => import('../face/native')).then((m) => m.getDanceEmbedder());
 /** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
 const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
 /**
@@ -268,6 +288,7 @@ const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
 const loadDance = () => importSafely(() => import('../dance/index'));
 const DanceOffScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceOffScreen })));
 const DanceWatchScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceWatchScreen })));
+const DanceDisplayScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceDisplayScreen })));
 const DanceResultBreakdown = lazy(() =>
   loadDance().then((m) => ({ default: m.DanceResultBreakdown })),
 );
@@ -351,6 +372,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }>({ status: 'loading', items: [] });
   const challenging = useRef(false);
   const [alert, setAlert] = useState<string | null>(null);
+  /** Where the round on this phone stands, for "Call it off" (the round screens report it). */
+  const [callOffGuard, setCallOffGuard] = useState<CallOffGuard>('open');
   const [bootFailed, setBootFailed] = useState(false);
   const appRef = useRef(app);
   appRef.current = app;
@@ -372,6 +395,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** The on-device embedder (its natives and the model load on first use; the scan screen
    *  warms it up). */
   const embedder = useMemo(() => (FACE_ENABLED ? createLazyEmbedder(loadFaceEmbedder) : null), []);
+  /** The dance face assignment's embedder (small faces), null with EXPO_PUBLIC_FACE=off. */
+  const danceEmbedder = useMemo(
+    () => (FACE_ENABLED ? createLazyEmbedder(loadDanceFaceEmbedder) : null),
+    [],
+  );
   /** A face screen crashed (e.g. a native module missing from the build): face is off until
    *  the app restarts, and challenges go through the room list. */
   const [faceBroken, setFaceBroken] = useState(false);
@@ -511,7 +539,6 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           linked: null,
           lobby: lobbyWanted(lobbyIntent()),
           stored,
-          judgeCam: appRef.current.judgeCam,
         }),
         {
           joinLobby: () => joinLobbyId(true),
@@ -655,13 +682,19 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     let last = 0;
     const sub = RNAppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
-      const a = appRef.current;
-      if (!shouldRejoinLobby(lobbyIntent(), a)) return;
-      if (a.room && Date.now() - last < LOBBY_REFRESH_MS) return;
-      last = Date.now();
-      void joinLobbyId(true).then((id) => {
-        if (id === null && !appRef.current.room) roomRetryRef.current?.markPending();
-      });
+      // The launch rejoin first (it may be going back to a private room): a lobby join racing it
+      // would land the phone in both, and the private join takes it out of the lobby.
+      void Promise.resolve(launchJoin.current)
+        .catch(() => undefined)
+        .then(() => {
+          const a = appRef.current;
+          if (!shouldRejoinLobby(lobbyIntent(), a)) return;
+          if (a.room && Date.now() - last < LOBBY_REFRESH_MS) return;
+          last = Date.now();
+          void joinLobbyId(true).then((id) => {
+            if (id === null && !appRef.current.room) roomRetryRef.current?.markPending();
+          });
+        });
     });
     return () => sub.remove();
   }, [rt]);
@@ -747,6 +780,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const bet: BetModel | null = app.activeBetId ? (rt.hub.get(app.activeBetId) ?? null) : null;
   const route = selectRoute(app, bet);
+  // The two-phone Dance Off maps go_at with a round-trip-compensated offset (./danceClock).
+  const danceClockOffsetMs = useDanceClockOffset({
+    active: route === 'dance' || route === 'danceDisplay',
+    betId: bet?.bet_id ?? null,
+    baseUrl: rt.baseUrl,
+    fallbackMs: rt.clock.offsetMs,
+  });
   // An alert belongs to the screen it was raised on: a new screen starts without one (it used
   // to follow into the next screens as a toast that never cleared).
   useEffect(() => setAlert(null), [route]);
@@ -1466,6 +1506,38 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
    * DanceOffScreen's Start (after its framing check): POST /attempts asking for the judge cam,
    * then (A's phone, none in the room) this phone. The count-in follows attempt.started.
    */
+  /**
+   * "Call it off" (./callOff): ask, agree (true) or keep playing (false); `answer` marks the
+   * prompt's Agree. Both agreeing VOIDs the bet on the server; the bet then follows the normal
+   * VOIDED path on both phones. A refusal (the round was uploaded meanwhile, a ruling is out), or
+   * an Agree that came too late for their request, is a short alert; the events say the rest.
+   */
+  const callOff = useCallback(
+    async (agree: boolean, answer = false) => {
+      const id = appRef.current.activeBetId;
+      if (!id) return;
+      try {
+        const res = await rt.api.callOff(id, agree, answer);
+        if (answer && res.status !== 'agreed') setAlert(t(COPY.callOff.failed));
+      } catch (e) {
+        console.warn('[yo] call off', e);
+        if (agree) setAlert(t(COPY.callOff.failed));
+      }
+    },
+    [rt],
+  );
+  // A round starting on this phone withdraws its own open request (./callOff): one made before
+  // the round is never agreed to after it, once this phone may hold the local result.
+  const myCallOff = bet?.callOff ?? null;
+  const myParty = bet?.my_party ?? null;
+  useEffect(() => {
+    const due = callOffWithdrawDue(
+      { callOff: myCallOff, my_party: myParty },
+      { nowMs: Date.now() + rt.clock.offsetMs, judgeCam: app.judgeCam, guard: callOffGuard },
+    );
+    if (due) void callOff(false);
+  }, [callOffGuard, myCallOff, myParty, app.judgeCam, callOff, rt]);
+
   const startDance = useCallback(async (): Promise<DanceAnswer> => {
     const a = appRef.current;
     const b = a.activeBetId ? rt.hub.get(a.activeBetId) : undefined;
@@ -1679,6 +1751,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         inRoom: a.room !== null,
         canScan: faceOn && a.room !== null,
         opponents,
+        meName: a.me?.display_name,
       });
       // Kept for the challenge's negotiate screen (openNewBet), '' included: the judge starts
       // there without waiting for another "Jarvis".
@@ -1751,8 +1824,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   // After an appeal the panel's outcome pays (and may differ from the ruling's).
   const outcome = bet ? finalOutcome(bet) : null;
-  const result =
-    outcome && me ? (bet?.state === 'VOIDED' ? 'void' : myResult(outcome, me)) : 'void';
+  const result = screenResult(outcome, bet?.state ?? null, me);
   const balanceCents = balance ? Number(BigInt(balance.usdc) / 10_000n) : 0;
   // Home's sparkline and delta come from the settled history the app already holds (loaded when
   // History opens); no extra request. Hidden until there is history. No caption: the list is
@@ -2235,14 +2307,26 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 terms={terms}
                 me={me}
                 names={names}
-                // go_at on this phone's clock (as the judge cam's arm), so the count-in lands
-                // on the server's instant.
-                attempt={
-                  a
+                // go_at is the server's instant: the screen maps it onto its round clock
+                // through the clock offset, so its count-in lands on the same instant as the
+                // display phone's (../dance/model/schedule).
+                attempt={a ? { attempt_no: a.attempt_no, go_at: a.go_at, max_ms: a.max_ms } : null}
+                clockOffsetMs={danceClockOffsetMs}
+                // B's phone is the display when B is online in the bet's room (./danceFlow).
+                displayPhone={danceDisplayPresent({
+                  members: app.members,
+                  roomId: app.room?.room_id ?? null,
+                  betRoomId: bet.room_id,
+                  displayUserId: bet.party_b?.user_id ?? null,
+                  myUserId: app.me?.user_id ?? null,
+                })}
+                // Face assignment (DANCE-OFF §3): who is who from one still when framing passes
+                // (time-boxed; any miss, a simulator without ML Kit, is the left / right rule).
+                faceId={
+                  danceEmbedder
                     ? {
-                        attempt_no: a.attempt_no,
-                        go_at: new Date(Date.parse(a.go_at) - rt.clock.offsetMs).toISOString(),
-                        max_ms: a.max_ms,
+                        open: (uri) => danceEmbedder.open(uri),
+                        identify: (req) => rt.api.danceIdentify(bet.bet_id, req),
                       }
                     : null
                 }
@@ -2257,6 +2341,33 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 onStartAttempt={startDance}
                 onUpload={uploadDance}
                 onLeave={app.judgeCam ? () => setJudgeCam(false) : undefined}
+                onCallOffGuard={setCallOffGuard}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        );
+      }
+      case 'danceDisplay': {
+        // B's phone during the round: the mirrored reference full screen with the music, from
+        // the attempt's go_at (the same server instant the recording phone starts on).
+        const terms = bet?.envelope?.terms;
+        if (!bet || !terms) return waiting;
+        const a = bet.attempt;
+        return (
+          <PanelErrorBoundary
+            key={bet.bet_id}
+            name={t(COPY.dance.panel)}
+            onError={(m) => console.warn('[yo] dance display', m)}
+          >
+            <Suspense fallback={waiting}>
+              <DanceDisplayScreen
+                terms={terms}
+                names={{ a: terms.party_a.display_name, b: terms.party_b.display_name }}
+                attempt={
+                  a && state === 'ATTEMPT' ? { attempt_no: a.attempt_no, go_at: a.go_at } : null
+                }
+                clockOffsetMs={danceClockOffsetMs}
+                onCallOffGuard={setCallOffGuard}
               />
             </Suspense>
           </PanelErrorBoundary>
@@ -2292,6 +2403,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             arm={arm}
             onSend={sendClip}
             onBack={app.judgeCam ? () => setJudgeCam(false) : undefined}
+            onCallOffGuard={setCallOffGuard}
           />
         );
       case 'redo':
@@ -2330,7 +2442,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         const breakdown = scored ? (
           <PanelErrorBoundary name={t(COPY.dance.panel)} onError={() => undefined}>
             <Suspense fallback={null}>
-              <DanceResultBreakdown scored={scored} names={partyNames(view)} />
+              <DanceResultBreakdown scored={scored} names={partyNames(view)} omitLine={reason} />
             </Suspense>
           </PanelErrorBoundary>
         ) : null;
@@ -2366,6 +2478,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 // No appeal on a dance off: its score is deterministic (DANCE-OFF §5).
                 onAppeal={result === 'lost' && !isDance ? () => void appealNow() : undefined}
                 onRematch={onRematch}
+                // Over (VOIDED: called off, too close to call, three REDOs): nothing moves this
+                // screen on any more, so it gets Back home like the payout screen.
+                onHome={isOver(bet.state) ? dismiss : undefined}
                 rematchBusy={rematchBusy}
                 tag={tag}
               />
@@ -2408,7 +2523,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return (
           <PayoutScreen
             view={view}
-            won={result === 'won'}
+            result={result}
             balanceCents={balanceCents}
             phase={phase}
             onRetry={refreshBalance}
@@ -2467,6 +2582,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             />
           </Suspense>
         </PanelErrorBoundary>
+      ) : null}
+      {/* "Call it off" (./callOff): every post-lock, pre-ruling screen, and the other phone's prompt. */}
+      {bet && me && callOffOnRoute(route) ? (
+        <CallOffLayer
+          bet={bet}
+          me={me}
+          judgeCam={app.judgeCam}
+          offsetMs={rt.clock.offsetMs}
+          guard={callOffGuard}
+          onCall={callOff}
+        />
       ) : null}
       {alert && route !== 'ruling' && route !== 'terms' && route !== 'payout' ? (
         <View style={styles.toast} pointerEvents="none">

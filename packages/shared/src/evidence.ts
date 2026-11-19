@@ -119,7 +119,14 @@ export const DanceEvidence = z.strictObject({
     coverage_a_pct: Pct,
     coverage_b_pct: Pct,
     max_people: z.number().int().min(0),
+    /** Sustained swaps of the starting sides (DANCE-OFF §3). */
     side_swaps: z.number().int().min(0),
+    /**
+     * Present only when A started on the RIGHT of the picture (players identified by face,
+     * DANCE-OFF §3). Absent: A started on the left, as in every left / right round, whose record
+     * (and evidence_hash) this field leaves unchanged.
+     */
+    a_start_side: z.literal('right').optional(),
   }),
   /** The key frames uploaded (cited by the ruling's frame_hashes, in this order). */
   frames: z.array(EvidenceFrame).min(1).max(DANCE_MAX_KEY_FRAMES),

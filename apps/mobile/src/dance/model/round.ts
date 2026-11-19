@@ -7,7 +7,9 @@
 //   for FRAMING_STABLE_MS before Start is enabled. A dropout shorter than FRAMING_GRACE_MS (one
 //   Vision frame losing an ankle) does not restart the timer.
 // - starting: Start was pressed; the screen POSTs /attempts and waits for the attempt.
-// - countIn: 3 beats of the routine's tempo; GO (t0) is the instant after the third beat.
+// - countIn: 3 beats of the routine's tempo; GO (t0) is the instant after the third beat. A bet
+//   round counts in from the attempt's go_at (./schedule: t0 = go_at + 3 beats, the same instant
+//   the display phone uses), so the phase starts a little before its first beat.
 // - dancing: the routine's duration plus ROUND_TAIL_MS (so the last key-move windows close).
 // - scoring: stopRound + the local final score. result: shown with no network so far.
 // A camera error mid-round does not abort: the round runs out, and the scorer marks it failed
@@ -96,8 +98,10 @@ export type RoundEvent =
   /**
    * The attempt is open: count in. `force`: from framing / ready too, for an attempt another
    * phone started (A pressed Start; the server named this judge cam as the recorder).
+   * `countInAt`: the count-in's first beat (the attempt's go_at on this clock, ./schedule
+   * recorderCountIn); `at` when absent.
    */
-  | { type: 'attempt'; at: number; attemptNo: number; force?: boolean }
+  | { type: 'attempt'; at: number; attemptNo: number; force?: boolean; countInAt?: number }
   | { type: 'start_failed'; message: string }
   | { type: 'round_failed'; message: string }
   | { type: 'scored'; ok: true }
@@ -202,16 +206,18 @@ export function roundReducer(s: RoundState, e: RoundEvent, cfg: RoundConfig): Ro
     case 'start':
       if (s.phase !== 'ready' && !(e.force === true && s.phase === 'framing')) return s;
       return { ...s, phase: 'starting', startedAt: e.at, error: null, message: null };
-    case 'attempt':
+    case 'attempt': {
       if (s.phase !== 'starting' && !(e.force === true && framingPhase(s.phase))) return s;
+      const countInAt = e.countInAt ?? e.at;
       return {
         ...s,
         phase: 'countIn',
         startedAt: s.startedAt ?? e.at,
         attemptNo: e.attemptNo,
-        countInAt: e.at,
-        goAt: e.at + COUNT_IN_BEATS * cfg.beatMs,
+        countInAt,
+        goAt: countInAt + COUNT_IN_BEATS * cfg.beatMs,
       };
+    }
     case 'start_failed':
       if (s.phase !== 'starting') return s;
       return fail(s, 'start_failed', e.message);
@@ -254,7 +260,10 @@ export function countInSchedule(
   return { beats, goAt: countInAt + COUNT_IN_BEATS * beatMs };
 }
 
-/** What the big numeral shows at `now`: 3 / 2 / 1 during the count-in, GO just after t0. */
+/**
+ * What the big numeral shows at `now`: nothing before the count-in's first beat (the wait for
+ * go_at), 3 / 2 / 1 during the count-in, GO just after t0.
+ */
 export function countInLabel(
   s: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>,
   now: number,
@@ -262,7 +271,7 @@ export function countInLabel(
 ): '3' | '2' | '1' | 'GO' | null {
   if (s.phase === 'countIn' && s.countInAt !== null) {
     const i = Math.floor((now - s.countInAt) / beatMs);
-    if (i < 0) return '3';
+    if (i < 0) return null;
     if (i >= COUNT_IN_BEATS) return 'GO';
     return (['3', '2', '1'] as const)[i] ?? null;
   }

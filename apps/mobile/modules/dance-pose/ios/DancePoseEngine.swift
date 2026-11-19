@@ -111,8 +111,16 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   // visionQueue only.
   private let poseRequest = PoseExtraction.makeRequest()
 
+  // captureQueue only: captureStill() callers waiting for the next pose frame.
+  private var stillRequests: [(Payload) -> Void] = []
+
   // snapshotQueue only.
   private let encoder = SnapshotEncoder()
+  private let stillEncoder = SnapshotEncoder(
+    maxLongSide: SnapshotEncoder.stillMaxLongSide,
+    maxBytes: SnapshotEncoder.stillMaxBytes,
+    startQuality: SnapshotEncoder.stillQuality
+  )
   private var snapshotsByRound: [String: [SnapshotFile]] = [:]
 
   override init() {
@@ -161,6 +169,26 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
       }
       self.round = RoundState(id: UUID().uuidString.lowercased(), snapshotTargets: targets)
       completion(true, nil)
+    }
+  }
+
+  /// One full-size JPEG of the next frame that goes to Vision (DANCE-OFF.md §3 face assignment),
+  /// so the caller can pair the faces in it with that frame's poses: the result carries the
+  /// frame's `ts` (the same value as its onPoses `ts`). `completion` runs on the snapshot queue
+  /// with `{ok, uri, width, height, ts}` or `{ok: false, message}`. The caller deletes the file
+  /// (it is also pruned with the other caches after a day).
+  func captureStill(completion: @escaping (Payload) -> Void) {
+    captureQueue.async { [weak self] in
+      guard let self else {
+        completion(["ok": false, "message": "camera view is gone"])
+        return
+      }
+      let fresh = ProcessInfo.processInfo.systemUptime - self.lastFrameUptime
+      guard self.lastFrameUptime > 0, fresh < DancePoseEngine.frameStaleAfter else {
+        completion(["ok": false, "message": "camera is not running"])
+        return
+      }
+      self.stillRequests.append(completion)
     }
   }
 
@@ -522,6 +550,11 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     let frameT = (t * 10).rounded() / 10
     let frameTs = (sessionT * 10).rounded() / 10
     let fps = (fpsEMA * 10).rounded() / 10
+    if !stillRequests.isEmpty {
+      let waiting = stillRequests
+      stillRequests = []
+      enqueueStill(pixelBuffer, ts: frameTs, completions: waiting)
+    }
     visionQueue.async { [weak self] in
       self?.detectPoses(pixelBuffer, t: frameT, ts: frameTs, width: width, height: height, fps: fps)
     }
@@ -594,6 +627,38 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         self.snapshotsByRound[roundId, default: []].append(file)
       } catch {
         // A failed snapshot is simply missing from the list; the caller checks the count.
+      }
+    }
+  }
+
+  /// The face still of a pose frame, full size (snapshotQueue); every waiting caller gets it.
+  private func enqueueStill(
+    _ pixelBuffer: CVPixelBuffer,
+    ts: Double,
+    completions: [(Payload) -> Void]
+  ) {
+    snapshotQueue.async { [weak self] in
+      var result: Payload
+      if let self {
+        do {
+          let url = try DancePoseFiles.directory()
+            .appendingPathComponent("still-\(UUID().uuidString.lowercased()).jpg")
+          let file = try self.stillEncoder.encode(pixelBuffer: pixelBuffer, tMs: ts, to: url)
+          result = [
+            "ok": true,
+            "uri": file.uri,
+            "width": file.width,
+            "height": file.height,
+            "ts": ts,
+          ]
+        } catch {
+          result = ["ok": false, "message": error.localizedDescription]
+        }
+      } else {
+        result = ["ok": false, "message": "camera view is gone"]
+      }
+      for completion in completions {
+        completion(result)
       }
     }
   }

@@ -77,6 +77,14 @@ export const canWithdraw = (f: OddsFold, me: Party | null, state: BetState | nul
   !!me && onTable(state) && f.open?.from === me;
 
 /** Skill terms only: market (Gemini) stakes are set by the market and never need an odds offer. */
+/**
+ * Where "Suggest odds" lives on A's typed form: under the picker only while nothing is proposed
+ * (the judge's numbers fill the picker). Once the card is on the table the offer card's own row
+ * has "Suggest odds | Offer odds" for both phones, so the form's button goes (it showed twice).
+ */
+export const typedSuggestShown = (b: { state: BetState | null; envelope: unknown }): boolean =>
+  b.state === 'DRAFTING' || b.state === null || b.envelope === null;
+
 export const oddsApply = (terms: Pick<Terms, 'type' | 'market'>): boolean =>
   terms.type === 'skill' && terms.market === null;
 

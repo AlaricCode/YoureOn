@@ -29,6 +29,12 @@ does not use VisionCamera or expo-camera, and it is iOS only.
 - **Snapshots.** When a frame's `t` first reaches a requested `snapshotAtMs`, that frame becomes
   a JPEG: long side ≤ 512 px, quality 0.7, lowered until the file is ≤ 200 KB. It is written to
   `Caches/dance-pose/` with its SHA-256.
+- **`captureStill()`.** The next frame that goes to Vision is also written as one full-size JPEG
+  (the whole upright 720x1280 frame, quality 0.9, ≤ 1.5 MB) to `Caches/dance-pose/still-*.jpg`.
+  It resolves `{ok: true, uri, width, height, ts}`, where `ts` is that frame's `onPoses.ts`, so
+  the faces found in the still pair with that frame's people (the Dance Off face assignment,
+  DANCE-OFF.md §3). Without fresh frames it resolves `{ok: false, message}`. The caller deletes
+  the file once the faces are embedded (the cache prune is the backstop).
 - **`stopRound()`.** Finishes the clip, hashes it by streaming the file (SHA-256, 1 MB chunks)
   and returns `{clipUri, clipSha256, snapshots}`. If recording failed, `clipUri` and
   `clipSha256` are `null`, and the snapshots still come back. Files older than a day in
@@ -63,7 +69,8 @@ const { clipUri, clipSha256, snapshots } = await ref.current!.stopRound();
 
 Importing the module never throws. Without the native module, `isDancePoseAvailable()` is false,
 the view renders a black box and reports `no_camera` once, and the ref answers
-`startRound → {ok: false}` and an empty `stopRound`. `toPoseFrame`, `toStatusEvent` and
+`startRound → {ok: false}`, an empty `stopRound` and `captureStill → {ok: false}` (also in a
+binary built before `captureStill` existed). `toPoseFrame`, `toStatusEvent`, `toStillResult` and
 `toStopRoundResult` validate payloads, for example frames replayed from a saved session.
 `JOINT_ORDER` and `joint(k, name)` read keypoints. The pure helpers live in `src/frame.ts` and are
 tested in node by `__tests__/dancePose.test.ts`.

@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Dance Off reference clips with the ORIGINAL (copyrighted) song, for local demo builds only.
+# metro.config.js serves a file here in place of the same-named one in assets/dance/ (which
+# carries our original drum track). Never commit these.
+/assets/dance/local/

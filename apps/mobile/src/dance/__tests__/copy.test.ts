@@ -6,6 +6,7 @@ import {
   clockText,
   DANCE_COPY,
   ERROR_COPY,
+  danceLabels,
   firstName,
   FRAMING_COPY,
   GRADE_COPY,
@@ -50,6 +51,25 @@ describe('Dance Off copy', () => {
   it('keeps the first name only', () => {
     expect(winsLabel('Eva Santos')).toBe('Eva wins');
     expect(firstName(' ')).toBe('They');
+  });
+
+  it('two dancers with one first name get told apart (framing hint, tags, X vs Y, result)', () => {
+    expect(danceLabels({ a: 'Logan Staples', b: 'Jake Ruiz' })).toEqual({ a: 'Logan', b: 'Jake' });
+    expect(danceLabels({ a: 'Alex Kim', b: 'alex ruiz' })).toEqual({ a: 'Alex K', b: 'alex R' });
+    expect(danceLabels({ a: 'Alex Mae Kim', b: 'Alex Ruiz' })).toEqual({
+      a: 'Alex K',
+      b: 'Alex R',
+    });
+    // the same initial, or no last name: the full display names
+    expect(danceLabels({ a: 'Alex Kim', b: 'Alex King' })).toEqual({
+      a: 'Alex Kim',
+      b: 'Alex King',
+    });
+    expect(danceLabels({ a: 'Alex', b: 'Alex Kim' })).toEqual({ a: 'Alex', b: 'Alex K' });
+    expect(danceLabels({ a: 'Sam', b: 'Sam' })).toEqual({ a: 'Sam', b: 'Sam' });
+    const l = danceLabels({ a: 'Alex Kim', b: 'Alex Ruiz' });
+    expect(winsLabel('Alex Kim', l.a)).toBe('Alex K wins');
+    expect(checkCopy(winsLabel('Alex Kim', l.a), 'label')).toEqual([]);
   });
 
   it('scores are tenths shown with one decimal; meters are whole numbers (data)', () => {

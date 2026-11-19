@@ -139,7 +139,7 @@ export const ROUTINE_IDS: readonly string[] = ROUTINES.map((r) => r.id);
  * Re-importing a routine changes its sha: update the pin with it (the test names the new one).
  */
 export const ROUTINE_SHA256_PINS: Readonly<Record<string, string>> = {
-  'bye-bye-shuffle': 'c60e0f2b6a99e2229334d128777abf3cecb7b9e5f50afab496fc5489bef1ef35',
+  'bye-bye-shuffle': '6353beffad6ea6b1cb4071edaeb0d78b4ac14dbe524040de80abcad43549b4ba',
   'wave-pop': '812f15c411edd6269364f0af6b5d25cacba42a2ca953b33fc69c24275d26e454',
   'bounce-back': '7cfedcae2fd032a0e490209d4244f212a047ea3fe179929602bab672e0b86fd1',
 };

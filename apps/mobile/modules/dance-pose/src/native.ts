@@ -14,6 +14,8 @@ export const DANCE_POSE_MODULE = 'DancePose';
 export interface NativeDancePoseInstance {
   startRound(opts: StartRoundOptions): Promise<StartRoundResult>;
   stopRound(): Promise<unknown>;
+  /** Absent in a binary built before captureStill existed. */
+  captureStill?(): Promise<unknown>;
 }
 
 export interface NativeDancePoseProps {

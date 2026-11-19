@@ -22,6 +22,16 @@ export const CENTS_STRIP = '0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n0';
 export const TEXT_STRIP = `${CENTS_STRIP}\n1\n2\n3\n4\n5\n6\n7\n8\n9`;
 
 /**
+ * The height a strip's Text must be given explicitly. Its column is one line tall with
+ * overflow: hidden, and Yoga measures a non-scrolling column's child with the column's height as
+ * an AT_MOST bound, so a Text left to size itself lays out (and draws) only its first line: every
+ * digit but 0 rolled into blank space. One spare line, so pixel rounding never drops the last row.
+ */
+export function stripHeight(strip: string, lineHeight: number): number {
+  return (strip.split('\n').length + 1) * lineHeight;
+}
+
+/**
  * The strip row of digit column `k` (0 = cents ones, 1 = cents tens, 2 = dollars ones, …) for
  * the value `v` in cents (fractional while rolling). Row r shows digit r mod 10; rows are
  * continuous, so 9.5 is halfway from 9 to the 0 under it.
