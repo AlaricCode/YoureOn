@@ -89,10 +89,22 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
         const agentId = d.env.ELEVENLABS_AGENT_ID;
         // DEMO_MODE (the finals server): the judge agent is for the demo players only, so open
         // signups can't fill the plan's concurrent conversations before the real one starts.
-        if (d.env.DEMO_MODE && (await nonDemoPlayers(d, [me.user_id])).length)
+        // VOICE_DEMO_ONLY=false opens it to every player. A refusal is logged: the client falls
+        // back to the typed form, so without this line it is invisible.
+        if (
+          d.env.DEMO_MODE &&
+          d.env.VOICE_DEMO_ONLY &&
+          (await nonDemoPlayers(d, [me.user_id])).length
+        ) {
+          d.log.warn('voice.token_refused', {
+            reason: 'demo_only',
+            user_id: me.user_id,
+            bet_id: body.bet_id ?? null,
+          });
           throw new HttpError('NOT_A_PARTY', 'The voice judge is for the demo players today.', {
             reason: 'demo_only',
           });
+        }
 
         if (body.bet_id) {
           const [bet] = await d.db

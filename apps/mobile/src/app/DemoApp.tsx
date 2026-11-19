@@ -920,7 +920,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       // the bet is already over (a failure in the closing tail has nothing left to type).
       setVoiceFailedBet(id);
       setJudgeSpeaking(false);
-      if (!isOver(rt.hub.get(id)?.state ?? null)) typedDispatch({ type: 'open' });
+      if (!isOver(rt.hub.get(id)?.state ?? null)) {
+        typedDispatch({ type: 'open' });
+        // What A said after "Jarvis" is the claim, not the bottle-flip template.
+        const said = wakeUtterances.current.get(id)?.trim();
+        if (said) typedDispatch({ type: 'claim', text: said });
+      }
     },
     [rt],
   );
