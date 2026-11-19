@@ -89,7 +89,7 @@ export function SignupScreen({
           >
             <AppMark width={MARK_WIDTH} lit />
           </View>
-          {/* The name of the app, said once, in the italic serif. */}
+          {/* The name of the app, said once, big and bold. */}
           <OperatorHold onHold={onTitleLongPress}>
             <Label variant="hero">{SIGNUP_COPY.title}</Label>
           </OperatorHold>

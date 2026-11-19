@@ -10,6 +10,7 @@ import {
   color,
   displayScale,
   fontFamily,
+  headlineScale,
   GRID,
   haptics,
   hold,
@@ -26,12 +27,12 @@ import {
   skeleton,
   space,
   spectrum,
+  stroke,
   swatch,
   swipe,
   ticker,
   type,
   typeScale,
-  voiceScale,
 } from '../tokens';
 
 const HEX = /^#[0-9A-F]{6}$/;
@@ -66,12 +67,12 @@ describe('color: Limelight (black, white, greys, one green, one red)', () => {
   it('pins the swatches', () => {
     expect(swatch).toEqual({
       black: '#000000',
-      raised: '#0F0F11',
-      line: '#1C1C1F',
-      edge: '#2A2A2E',
+      raised: '#161618',
+      line: '#232327',
+      edge: '#2E2E33',
       white: '#FFFFFF',
-      grey: '#8D8D93',
-      dim: '#4A4A4F',
+      grey: '#98989F',
+      dim: '#5C5C63',
       green: '#00D47A',
       red: '#FF4F45',
     });
@@ -131,7 +132,15 @@ describe('color: Limelight (black, white, greys, one green, one red)', () => {
     expect(color.error).toBe(palette.text);
   });
 
-  it('the glass rim is a neutral one step brighter than the fill it outlines', () => {
+  it('panels step up from black: surface, then fill, then rim, all neutral', () => {
+    for (const c of [palette.surface, palette.fill, palette.rim]) expect(chromatic(c)).toBe(false);
+    expect(lum(palette.surface)).toBeGreaterThan(lum(palette.background));
+    expect(lum(palette.fill)).toBeGreaterThan(lum(palette.surface));
+    // a soft panel must read as off the black, not as the black
+    expect(ratio(palette.surface, palette.background)).toBeGreaterThan(1.12);
+  });
+
+  it('the rim is a neutral one step brighter than the fill it sits on', () => {
     expect(chromatic(palette.rim)).toBe(false);
     expect(lum(palette.rim)).toBeGreaterThan(lum(palette.fill));
     expect(lum(palette.rim)).toBeLessThan(lum(palette.textTertiary));
@@ -168,83 +177,54 @@ describe('color: Limelight (black, white, greys, one green, one red)', () => {
   });
 });
 
-describe('type: two voices, Geist to operate and Instrument Serif for what is said', () => {
+describe('type: one voice, Geist, and it is bold', () => {
   const styles = Object.values(type);
   const families = new Set<string>(Object.values(fontFamily));
-  const serif: readonly string[] = [fontFamily.voice, fontFamily.voiceItalic];
-  const isSerif = (s: { fontFamily: string }) => serif.includes(s.fontFamily);
+  const weightOf: Record<string, string> = {
+    Geist_400Regular: '400',
+    Geist_500Medium: '500',
+    Geist_600SemiBold: '600',
+    Geist_700Bold: '700',
+  };
 
-  it('every style uses a loaded face, one family name per face', () => {
+  it('every style uses a loaded Geist face, one family name per weight; nothing lighter than 400', () => {
     for (const s of styles) expect(families.has(s.fontFamily)).toBe(true);
-    // The fallback weight matches the face, so the system font keeps the hierarchy.
-    const weightOf: Record<string, string> = {
-      Geist_300Light: '300',
-      Geist_400Regular: '400',
-      Geist_500Medium: '500',
-      Geist_600SemiBold: '600',
-      InstrumentSerif_400Regular: '400',
-      InstrumentSerif_400Regular_Italic: '400',
-    };
+    for (const f of families) expect(f).toMatch(/^Geist_[4-9]00[A-Za-z]+$/);
     expect(Object.keys(weightOf).sort()).toEqual([...families].sort());
+    // The fallback weight matches the face, so the system font keeps the hierarchy.
     for (const s of styles) expect(s.fontWeight).toBe(weightOf[s.fontFamily]);
   });
 
   it('ui/fonts loads exactly the families the tokens name, from the matching files', () => {
     const src = readFileSync(fileURLToPath(new URL('../fonts.ts', import.meta.url)), 'utf8');
     for (const name of Object.values(fontFamily)) {
-      // Geist from its package (one folder per weight); the serif from the vendored files.
-      const from = name.startsWith('Geist_')
-        ? `@expo-google-fonts/geist/[^']+/${name}\\.ttf`
-        : `\\.\\./\\.\\./assets/fonts/${name}\\.ttf`;
-      expect(src).toMatch(new RegExp(`import ${name} from '${from}'`));
+      expect(src).toMatch(
+        new RegExp(`import ${name} from '@expo-google-fonts/geist/[^']+/${name}\\.ttf'`),
+      );
       expect(src).toMatch(new RegExp(`^\\s+${name},$`, 'm'));
     }
     expect(src.match(/\.ttf'/g)).toHaveLength(families.size);
-    expect(src).not.toMatch(/big-shoulders|instrument-sans/);
+    expect(src).not.toMatch(/big-shoulders|instrument|300Light/i);
   });
 
-  it('the vendored serif ships with its licence', () => {
-    const asset = (name: string) =>
-      readFileSync(fileURLToPath(new URL(`../../../assets/fonts/${name}`, import.meta.url)));
-    for (const face of serif) expect(asset(`${face}.ttf`).length).toBeGreaterThan(10_000);
-    expect(asset('OFL-InstrumentSerif.txt').toString('utf8')).toMatch(/SIL Open Font License/);
+  it('nothing on screen is thin: every style is Medium or heavier', () => {
+    for (const [name, s] of Object.entries(type))
+      expect(Number(s.fontWeight), name).toBeGreaterThanOrEqual(500);
   });
 
-  it('Geist sizes come from 13/15/17/22/28 (UI) and 34/44/56 (thin tabular figures)', () => {
-    for (const s of styles.filter((x) => !isSerif(x))) {
-      expect([...typeScale, ...displayScale]).toContain(s.fontSize);
-      if ((displayScale as readonly number[]).includes(s.fontSize)) {
-        expect([fontFamily.light, fontFamily.regular]).toContain(s.fontFamily);
-        expect(s.fontVariant).toEqual(['tabular-nums']);
-      }
+  it('sizes come from 13/15/17/22/28 (UI), 34/44/56 (figures) and 20/24/32/44/56 (headlines)', () => {
+    for (const s of styles) {
+      expect([...typeScale, ...displayScale, ...headlineScale]).toContain(s.fontSize);
+      expect(ALLOWED_COLORS.has(s.color)).toBe(true);
     }
-    for (const s of styles) expect(ALLOWED_COLORS.has(s.color)).toBe(true);
     const used = new Set(styles.map((s) => s.fontSize));
-    for (const size of [...typeScale, ...displayScale, ...voiceScale]) expect(used).toContain(size);
+    for (const size of [...typeScale, ...displayScale, ...headlineScale])
+      expect(used).toContain(size);
   });
 
-  it('the serif is a display face: never under 22, never a figure, tight only when large', () => {
-    for (const s of styles.filter(isSerif)) {
-      expect(voiceScale).toContain(s.fontSize);
-      expect(s.fontSize).toBeGreaterThanOrEqual(22);
-      expect('fontVariant' in s).toBe(false);
-      if (s.fontSize < 40) expect(s.letterSpacing).toBe(0);
-      else expect(s.letterSpacing).toBeLessThan(0);
-    }
-  });
-
-  it('what is said is in the serif: moments, the claim, the judge, the wordmark', () => {
-    for (const k of ['moment', 'momentSmall', 'endTitle', 'statement', 'statementSmall'] as const)
-      expect(type[k].fontFamily).toBe(fontFamily.voice);
-    for (const k of ['spoken', 'spokenSmall', 'wordmark', 'hero'] as const)
-      expect(type[k].fontFamily).toBe(fontFamily.voiceItalic);
-    expect(type.moment.fontSize).toBeGreaterThan(type.momentSmall.fontSize);
-    expect(type.momentSmall.fontSize).toBeGreaterThan(type.endTitle.fontSize);
-  });
-
-  it('money and big numbers are big, thin, tabular and tightly tracked', () => {
+  it('money and big numbers are big, bold, tabular and tightly tracked', () => {
     for (const k of ['balance', 'money', 'display', 'figure'] as const) {
-      expect(type[k].fontFamily).toBe(fontFamily.light);
+      expect(type[k].fontFamily).toBe(fontFamily.bold);
       expect(type[k].fontVariant).toEqual(['tabular-nums']);
       expect(type[k].letterSpacing).toBeLessThan(0);
     }
@@ -253,12 +233,27 @@ describe('type: two voices, Geist to operate and Instrument Serif for what is sa
     expect(type.money.fontSize).toBe(56);
   });
 
-  it('headings 600, body 400, labels 500; small UI type is untracked with room to breathe', () => {
-    expect(type.title).toMatchObject({ fontFamily: fontFamily.semibold, fontSize: 28 });
-    expect(type.heading.fontFamily).toBe(fontFamily.semibold);
-    expect(type.button).toMatchObject({ fontFamily: fontFamily.semibold, fontSize: 17 });
-    expect(type.body.fontFamily).toBe(fontFamily.regular);
-    expect(type.labelMedium.fontFamily).toBe(fontFamily.medium);
+  it('headlines are heavy and tight, and step down in size', () => {
+    for (const k of ['moment', 'momentSmall', 'endTitle', 'hero', 'wordmark'] as const) {
+      expect(type[k].fontFamily).toBe(fontFamily.bold);
+      expect(type[k].letterSpacing).toBeLessThan(0);
+    }
+    for (const k of ['statement', 'statementSmall'] as const)
+      expect(type[k].fontFamily).toBe(fontFamily.semibold);
+    expect(type.moment.fontSize).toBeGreaterThan(type.momentSmall.fontSize);
+    expect(type.momentSmall.fontSize).toBeGreaterThan(type.endTitle.fontSize);
+    expect(type.statement.fontSize).toBeGreaterThan(type.statementSmall.fontSize);
+    // what the judge says is white and a step up from what people say (the grey body size)
+    expect(type.spoken.color).toBe(palette.text);
+    expect(type.spoken.fontSize).toBeGreaterThan(type.row.fontSize);
+  });
+
+  it('titles and buttons 700, names and labels that matter 600, reading text 500', () => {
+    expect(type.title).toMatchObject({ fontFamily: fontFamily.bold, fontSize: 28 });
+    expect(type.heading.fontFamily).toBe(fontFamily.bold);
+    expect(type.button).toMatchObject({ fontFamily: fontFamily.bold, fontSize: 17 });
+    expect(type.body.fontFamily).toBe(fontFamily.medium);
+    expect(type.labelMedium.fontFamily).toBe(fontFamily.semibold);
     for (const s of styles) {
       if (s.fontSize <= 17) expect(s.letterSpacing).toBe(0);
       else expect(s.letterSpacing).toBeLessThanOrEqual(0);
@@ -274,13 +269,19 @@ describe('space and shape', () => {
     expect(space.page).toBe(20);
   });
 
-  it('controls are 56 pt pills; inputs radius 14; the stage 20; glass objects 28; focus 1 pt', () => {
+  it('big and round: 56 pt pills, inputs radius 18, tiles 24, panels 32; focus is a 2 pt outline', () => {
     expect(space.control).toBe(56);
     expect(radius.pill).toBe(999);
-    expect(radius.md).toBe(14);
-    expect(radius.lg).toBe(20);
-    expect(radius.xl).toBe(28);
-    expect(border.focused).toBe(1);
+    expect(radius.md).toBe(18);
+    expect(radius.lg).toBe(24);
+    expect(radius.xl).toBe(32);
+    expect(border.focused).toBe(2);
+  });
+
+  it('bars and drawn marks are thick enough to read at a glance', () => {
+    expect(stroke.bar).toBeGreaterThanOrEqual(4);
+    expect(stroke.glyph).toBeGreaterThanOrEqual(2);
+    expect(stroke.bar % 2).toBe(0);
   });
 });
 
@@ -292,7 +293,7 @@ describe('materials and light', () => {
       a: Number(m[4]),
     }));
 
-  it('glass is neutral, lit from the top, and never brighter than its rim', () => {
+  it('panel fills are neutral, a touch lighter at the top, and never brighter than the rim', () => {
     for (const fill of [material.glass, material.glassRaised, material.disc]) {
       const stops = hexes(fill);
       expect(stops.length).toBeGreaterThanOrEqual(2);
@@ -302,6 +303,9 @@ describe('materials and light', () => {
     }
     const top = lum((hexes(material.glass)[0] as string).toUpperCase());
     expect(top).toBeLessThan(lum(palette.rim));
+    // soft, not glossy: a panel's gradient is barely there
+    const bottom = lum((hexes(material.glass).at(-1) as string).toUpperCase());
+    expect(top - bottom).toBeLessThan(0.006);
   });
 
   it('light is only white or the palette green, always at an alpha', () => {
@@ -356,6 +360,13 @@ describe('materials and light', () => {
 });
 
 describe('motion and timing', () => {
+  it('a screen eases in: a short fade and a small rise, inside the transition budget', () => {
+    expect(motion.screenMs).toBeGreaterThanOrEqual(120);
+    expect(motion.screenMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
+    expect(motion.screenRise).toBeGreaterThan(0);
+    expect(motion.screenRise).toBeLessThanOrEqual(16);
+  });
+
   it('transitions are <= 200 ms, ease-out; the one moment reveal is <= 300 ms', () => {
     expect(motion.fastMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
     expect(hold.releaseMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);

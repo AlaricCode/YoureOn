@@ -1,6 +1,6 @@
 // The app's mark, its wordmark and the in-app splash. The mark is the icon's switch flipped "on"
 // (green track, white knob), drawn with Views; the wordmark is the mark with the name beside it
-// in the italic serif (the top of Home). SplashView repeats the native splash (app.json
+// in bold (the top of Home). SplashView repeats the native splash (app.json
 // expo-splash-screen: assets/splash-icon.png at 180 pt, centred on black #000000) so the hand-off
 // from the native launch screen to JS has no jump: the mark is pinned to the centre of the
 // window (not of the view, which may sit under other chrome), and the boot state is absolutely
@@ -115,7 +115,7 @@ export function SwitchOn({ width = 98, delayMs = 0 }: { width?: number; delayMs?
 }
 
 /**
- * The wordmark: the switch and the app's name in the italic serif, on one line. One element to
+ * The wordmark: the switch and the app's name in bold, on one line. One element to
  * VoiceOver, read as the name.
  */
 export function Wordmark({ name }: { name: string }) {

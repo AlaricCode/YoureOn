@@ -1,9 +1,10 @@
 // More pieces in the "Limelight" style (./tokens, ./kit), for the bet screens: the page frame and
-// top bar, glass monogram avatars, hairline rows, the balance header (big thin numerals, a delta
-// line and a sparkline) that counts up on a payout, a countdown hook, the hold-to-confirm control
-// (TASKS D1-M5), status heroes, the reconnect banner, and the moment screen: black, one serif
-// headline, an aurora of the moment's colour behind it, and for money a giant green (or red)
-// figure. Every color, size and duration comes from ./tokens; copy follows ./copyRule.
+// top bar (every screen eases in), soft avatar discs, hairline rows, the balance header (big bold
+// numerals, a delta line and a sparkline) that counts up on a payout, a countdown hook, the
+// hold-to-confirm control (TASKS D1-M5), status heroes, the reconnect banner, and the moment
+// screen: black, one bold headline, an aurora of the moment's colour behind it, and for money a
+// giant green (or red) figure. Every color, size and duration comes from ./tokens; copy follows
+// ./copyRule.
 import { StatusBar } from 'expo-status-bar';
 import {
   createContext,
@@ -36,7 +37,7 @@ import { useReconnecting } from './connection';
 import { BackButton, BackdropProvider, ChevronLeft, Label, Tick, useBackdropColor } from './kit';
 import { centsToUsd, signedCentsToUsd } from './money';
 import { SPARK_MIN_POINTS, sparkDirection, sparkGeometry } from './spark';
-import { balance, isVoice, typographic } from './typography';
+import { balance, isDisplay, typographic } from './typography';
 import {
   aurora,
   color,
@@ -51,6 +52,7 @@ import {
   radius,
   space,
   sparkline,
+  stroke as glyph,
   TABULAR,
   type,
   type TypeToken,
@@ -61,8 +63,41 @@ import {
 // ---------------------------------------------------------------------------------------
 
 /**
- * A full screen on black, padded by the safe-area insets. The reconnect banner sits at its top
- * whenever the realtime connection is coming back (./connection), or when `offline`.
+ * A screen arriving (tokens `motion.screenMs`): its content fades in and settles up a few points,
+ * once, when the screen mounts. Each route renders its own screen component, so moving through
+ * the app is a glide instead of a hard cut. The black behind it never moves. Reduce Motion: the
+ * content is simply there.
+ */
+function ScreenEnter({ children }: { children: ReactNode }) {
+  const reduced = useReduceMotion();
+  const k = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (reduced === null) return;
+    if (reduced) {
+      k.setValue(1);
+      return;
+    }
+    const a = Animated.timing(k, {
+      toValue: 1,
+      duration: motion.screenMs,
+      easing: easeOut,
+      useNativeDriver: true,
+    });
+    a.start();
+    return () => a.stop();
+  }, [k, reduced]);
+  const translateY = k.interpolate({ inputRange: [0, 1], outputRange: [motion.screenRise, 0] });
+  return (
+    <Animated.View style={[styles.flex, { opacity: k, transform: [{ translateY }] }]}>
+      {children}
+    </Animated.View>
+  );
+}
+
+/**
+ * A full screen on black, padded by the safe-area insets; its content eases in (ScreenEnter).
+ * The reconnect banner sits at its top whenever the realtime connection is coming back
+ * (./connection), or when `offline`.
  */
 export function Screen({ children, offline = false }: { children: ReactNode; offline?: boolean }) {
   const i = useSafeAreaInsets();
@@ -75,7 +110,7 @@ export function Screen({ children, offline = false }: { children: ReactNode; off
       ]}
     >
       <ReconnectBanner visible={offline || reconnecting} />
-      {children}
+      <ScreenEnter>{children}</ScreenEnter>
     </View>
   );
 }
@@ -159,22 +194,23 @@ const initials = (name: string) =>
     .join('');
 
 /**
- * The monogram on a disc: Instrument Serif at half the disc (a touch smaller for two letters),
- * one line, so it reads as a monogram at 32 pt and at 112 pt alike.
+ * The initials on a disc: Geist Semibold at about two fifths of the disc (a touch smaller for
+ * two letters), one line, so they read the same at 32 pt and at 112 pt.
  */
 function initialsStyle(size: number, letters: number): TextStyle {
-  const fontSize = Math.round(size * (letters > 1 ? 0.42 : 0.5));
+  const fontSize = Math.round(size * (letters > 1 ? 0.36 : 0.42));
   return {
-    fontFamily: fontFamily.voice,
-    fontWeight: '400',
+    fontFamily: fontFamily.semibold,
+    fontWeight: '600',
     fontSize,
-    lineHeight: Math.round(fontSize * 1.12),
+    lineHeight: Math.round(fontSize * 1.2),
+    letterSpacing: fontSize >= 22 ? -Math.round(fontSize * 0.02 * 10) / 10 : 0,
     color: palette.text,
   };
 }
 
 /**
- * A serif monogram on a glass disc, lit from the upper left (no per-person colours). `online`
+ * Bold initials on a soft grey disc (no per-person colours). `online`
  * adds a presence dot (green online, dim offline) cut out of the backdrop. `accent` rings the
  * disc in white (you, or whose turn it is); `lit` rings it in green light (who just won).
  */
@@ -202,7 +238,7 @@ export function Avatar({
           styles.avatar,
           { width: size, height: size, borderRadius: size / 2 },
           accent && { borderWidth: ring, borderColor: palette.text },
-          lit && { borderColor: palette.accent, boxShadow: material.ringOn },
+          lit && { boxShadow: material.ringOn },
         ]}
       >
         <Text style={initialsStyle(size, [...letters].length)} allowFontScaling={false}>
@@ -247,7 +283,7 @@ export function PresenceDot({ online, size = 8 }: { online: boolean; size?: numb
 
 /**
  * A group of content. Flat by default: no fill, no box, content on black at the page margin (8 pt
- * above and below). `raised` makes it a glass object (top-lit, a 1 pt rim, radius 28, 20 pt
+ * above and below). `raised` makes it a soft panel (filled, borderless, radius 32, 20 pt
  * padding): use that only for things you could hold (a slip, a roster, a sheet-like panel);
  * children then see a 'raised' backdrop (./kit).
  */
@@ -269,8 +305,8 @@ export function Card({
 }
 
 /**
- * Plain data text (names, claims, amounts): exempt from the label word limit. In a serif
- * variant (a claim, the judge's words) it is set with real apostrophes; VoiceOver and the e2e
+ * Plain data text (names, claims, amounts): exempt from the label word limit. At headline
+ * sizes (a claim, the judge's words) it is set with real apostrophes; VoiceOver and the e2e
  * flows still get the text as written.
  */
 export function DataText({
@@ -287,7 +323,7 @@ export function DataText({
   style?: StyleProp<TextStyle>;
   lines?: number;
 }) {
-  const shown = isVoice(variant) ? typographic(children) : children;
+  const shown = isDisplay(variant) ? typographic(children) : children;
   return (
     <Text
       numberOfLines={lines}
@@ -408,7 +444,7 @@ export function ListRow({
 export type ChipTone = 'muted' | 'accent' | 'win' | 'danger';
 
 /**
- * A small glass pill ("Mic on", "Replay", "Paid"). muted: grey text; accent / win: green text
+ * A small soft pill ("Mic on", "Replay", "Paid"). muted: grey text; accent / win: green text
  * (a state that is on); danger: red text.
  */
 export function Chip({
@@ -435,7 +471,7 @@ export function Chip({
 }
 
 /**
- * A selectable pill (the $1 / $5 / $10 / $20 stake picker): glass, white text; selected, a
+ * A selectable pill (the $1 / $5 / $10 / $20 stake picker): soft grey, white text; selected, a
  * white fill with black text. A radio by default; put the set in a View with
  * accessibilityRole="radiogroup".
  */
@@ -944,7 +980,7 @@ function Cross({ size, tint, bar = 3 }: { size: number; tint: string; bar?: numb
 }
 
 /**
- * Round badge on a glass disc. check: a green tick in a ring of green light; cross: a red cross
+ * Round badge on a soft disc. check: a green tick in a ring of green light; cross: a red cross
  * (a loss, a failure); `neutral` greys the cross for endings where nothing moved; ring: an empty
  * dim outline (waiting, empty).
  */
@@ -957,7 +993,7 @@ export function StatusBadge({
   size?: number;
   neutral?: boolean;
 }) {
-  const stroke = Math.max(2, Math.round(size * 0.035));
+  const stroke = Math.max(glyph.glyph, Math.round(size * 0.05));
   return (
     <View
       style={[
@@ -968,11 +1004,11 @@ export function StatusBadge({
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: mark === 'ring' ? 'transparent' : palette.fill,
-          borderWidth: mark === 'ring' ? 1.5 : 1,
-          borderColor: mark === 'ring' ? palette.textTertiary : palette.rim,
+          borderWidth: mark === 'ring' ? 2 : 0,
+          borderColor: palette.textTertiary,
         },
         mark === 'ring' ? null : { backgroundImage: material.disc },
-        mark === 'check' ? { borderColor: palette.accent, boxShadow: material.ringOn } : null,
+        mark === 'check' ? { boxShadow: material.ringOn } : null,
       ]}
     >
       {mark === 'check' ? <Tick size={size * 0.4} tint={palette.accent} /> : null}
@@ -990,7 +1026,7 @@ export function StatusBadge({
 /**
  * A centred status: badge, title, and an optional grey line of data under it. The badge scales
  * in and the words follow one beat later; `pulse` adds the LOCKED double beat. Titles are Geist
- * 22/600 (quiet); `loud` sets them in the serif at 52 instead. For the big moments, use
+ * 22/700 (quiet); `loud` sets them at 44 instead. For the big moments, use
  * MomentScreen + MomentHeadline.
  */
 export function StatusHero({
@@ -1010,7 +1046,7 @@ export function StatusHero({
   titleRole?: 'label' | 'contract';
   pulse?: boolean;
   loud?: boolean;
-  /** An end state ("Declined. Nothing moved.", "Payout failed"): serif 40, the moment voice. */
+  /** An end state ("Declined. Nothing moved.", "Payout failed"): 32 Bold, the moment voice. */
   end?: boolean;
   /** A grey cross instead of red (nothing moved). */
   neutral?: boolean;
@@ -1104,7 +1140,7 @@ export function ReconnectBanner({ visible }: { visible: boolean }) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Moments: the challenge arriving, "You're on", the ruling, the payout. Black, centred, one serif
+// Moments: the challenge arriving, "You're on", the ruling, the payout. Black, centred, one bold
 // headline, an aurora of the moment's colour hung from the top of the screen, and for money a
 // giant green (or red) figure.
 // ---------------------------------------------------------------------------------------
@@ -1207,9 +1243,10 @@ export function Aurora({ tone }: { tone: AuroraTone }) {
 }
 
 /**
- * A moment screen: black, safe-area padded, light status bar. Children are centred; `footer`
- * sits at the bottom (buttons); `top` above (e.g. a TopBar with the user tag). The only colour
- * field is the aurora: pass `aurora`, or let a MomentGroup inside ask for it (its `glow`).
+ * A moment screen: black, safe-area padded, light status bar; its content eases in. Children
+ * are centred; `footer` sits at the bottom (buttons); `top` above (e.g. a TopBar with the user
+ * tag). The only colour field is the aurora: pass `aurora`, or let a MomentGroup inside ask for
+ * it (its `glow`).
  */
 export function MomentScreen({
   children,
@@ -1243,32 +1280,34 @@ export function MomentScreen({
       {tone ? <Aurora tone={tone} /> : null}
       <ReconnectBanner visible={offline || reconnecting} />
       <AuroraContext.Provider value={setAsked}>
-        {top}
-        {/* Centred while it fits; a moment with more to show than the screen holds (a dance
+        <ScreenEnter>
+          {top}
+          {/* Centred while it fits; a moment with more to show than the screen holds (a dance
             off's move-by-move table) scrolls from its top instead of spilling under the status
             bar and the buttons. */}
-        <ScrollView
-          style={styles.flex}
-          contentContainerStyle={styles.momentBody}
-          bounces={false}
-          showsVerticalScrollIndicator={false}
-        >
-          {children}
-        </ScrollView>
-        {footer ? <View style={styles.momentFooter}>{footer}</View> : null}
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={styles.momentBody}
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+          >
+            {children}
+          </ScrollView>
+          {footer ? <View style={styles.momentFooter}>{footer}</View> : null}
+        </ScreenEnter>
       </AuroraContext.Provider>
     </View>
   );
 }
 
-/** Instrument Serif's average advance per character (~0.4 em: it is a narrow face), with margin. */
-const HEADLINE_EM_PER_CHAR = 0.46;
+/** Geist Bold's average advance per character (~0.56 em), with margin. */
+const HEADLINE_EM_PER_CHAR = 0.62;
 /** The same without the margin: how many characters of a headline fit on one line. */
-const HEADLINE_EM_AVERAGE = 0.41;
+const HEADLINE_EM_AVERAGE = 0.55;
 
 /**
- * The moment headline: Instrument Serif, white, centred, shrinking to fit (`lines`, default 2).
- * size 'xl' is 64, 'lg' 52 (longer lines). It plays the one reveal (Reveal: fade and a 12 pt rise
+ * The moment headline: Geist Bold, white, centred, shrinking to fit (`lines`, default 2).
+ * size 'xl' is 56, 'lg' 44 (longer lines). It plays the one reveal (Reveal: fade and a 12 pt rise
  * over 280 ms, ease-out, after `delayMs`; Reduce Motion: it simply appears).
  */
 export function MomentHeadline({
@@ -1423,8 +1462,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: color.avatar,
     backgroundImage: material.disc,
-    borderWidth: 1,
-    borderColor: palette.rim,
   },
   presence: { position: 'absolute', right: -1, bottom: -1, borderWidth: 2.5 },
   cardFlat: { paddingVertical: space.x1 },
@@ -1432,8 +1469,6 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface,
     backgroundImage: material.glass,
     borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: palette.rim,
     boxShadow: material.highlight,
     padding: space.page,
   },
@@ -1467,23 +1502,19 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: palette.fill,
     borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.rim,
     paddingHorizontal: half.x15,
-    paddingVertical: half.x05,
+    paddingVertical: half.x05 + 1,
   },
   choice: {
     minWidth: space.x8,
     height: 44,
     borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: palette.rim,
     backgroundColor: palette.fill,
     paddingHorizontal: space.x2 + half.x05,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  choiceOn: { backgroundColor: color.selected, borderColor: color.selected },
+  choiceOn: { backgroundColor: color.selected },
   dotsRow: { flexDirection: 'row', alignItems: 'center' },
   dotsOverflow: { position: 'absolute', left: '100%' },
   hold: {
@@ -1510,13 +1541,13 @@ const styles = StyleSheet.create({
   heroTitle: { marginTop: space.x1 },
   endTitle: { alignSelf: 'center', maxWidth: 280 },
   barTrack: {
-    height: 2,
-    borderRadius: 1,
+    height: glyph.bar,
+    borderRadius: glyph.bar / 2,
     backgroundColor: palette.rim,
     overflow: 'hidden',
     marginTop: half.x05,
   },
-  barFill: { height: 2, borderRadius: 1, backgroundColor: palette.text },
+  barFill: { height: glyph.bar, borderRadius: glyph.bar / 2, backgroundColor: palette.text },
   dotsTrack: { flexDirection: 'row', justifyContent: 'center', gap: space.x1 },
   attemptDot: {
     width: 8,

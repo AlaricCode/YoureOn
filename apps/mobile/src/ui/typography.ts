@@ -1,16 +1,18 @@
-// Small typesetting helpers for the serif voice (ui/tokens `fontFamily.voice`): a display face
-// shows every shortcut the keyboard took. Pure TS, tested in node.
-import { fontFamily, type, type TypeToken } from './tokens';
+// Small typesetting helpers for headline type (ui/tokens): at 20 pt and up, bold, a line shows
+// every shortcut the keyboard took. Pure TS, tested in node.
+import { type, type TypeToken } from './tokens';
 
-/** True for the type styles set in Instrument Serif (what is said, not what you operate). */
-export function isVoice(variant: TypeToken): boolean {
-  const face: string = type[variant].fontFamily;
-  return face === fontFamily.voice || face === fontFamily.voiceItalic;
+/** Headline sizes start here; under it type is read, not looked at. */
+export const DISPLAY_FROM = 20;
+
+/** True for the type styles big enough to be set with care (20 pt and up). */
+export function isDisplay(variant: TypeToken): boolean {
+  return type[variant].fontSize >= DISPLAY_FROM;
 }
 
 /**
  * Typewriter apostrophes become real ones ("You're On" -> "You’re On", "Jake's" -> "Jake’s"):
- * in a serif at 40 pt and up a straight tick reads as a mistake. Only an apostrophe that follows
+ * in a bold headline a straight tick reads as a mistake. Only an apostrophe that follows
  * a letter or digit is touched, so quoted text and prime marks are left alone.
  */
 export function typographic(text: string): string {

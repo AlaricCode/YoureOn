@@ -1,5 +1,5 @@
 /* The GG moment and the review banner (gg-moment.tsx), in the stage's Limelight look
-   (stage.css): the words that are said ("Logan: GG", "Good game.") in the serif, the record and
+   (stage.css): the words that are said ("Logan: GG", "Good game.") in bold, the record and
    the money in Geist, glass for the chips, and green only for what landed (GG, the win that
    ticked over, the payout once paid). Uses the :root tokens of stage.css. */
 
@@ -28,11 +28,10 @@
 }
 .gg-stamp {
   position: relative;
-  font-family: var(--serif);
-  font-size: 9.5em;
-  font-weight: 400;
-  line-height: 0.95;
-  letter-spacing: -0.02em;
+  font-size: 7.41em;
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
   white-space: nowrap;
   animation: gg-stamp 0.18s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
@@ -46,10 +45,9 @@
 .gg-line {
   position: relative;
   margin: 0;
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 2.4em;
-  font-weight: 400;
+  font-size: 1.87em;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   color: var(--muted);
 }
 
@@ -74,7 +72,7 @@
   align-items: baseline;
   gap: 0.4em;
   font-size: 3em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.035em;
   line-height: 1.05;
 }
@@ -146,7 +144,7 @@
   color: var(--muted);
 }
 .gg-payout .amt {
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }

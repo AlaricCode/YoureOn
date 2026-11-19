@@ -67,16 +67,16 @@ export function DrainBar({
 
 const styles = StyleSheet.create({
   track: {
-    height: 2,
-    borderRadius: 1,
-    backgroundColor: palette.hairline,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: palette.rim,
     overflow: 'hidden',
     marginTop: half.x05,
   },
   fill: {
-    height: 2,
+    height: 4,
     width: '100%',
-    borderRadius: 1,
+    borderRadius: 2,
     backgroundColor: palette.text,
     transformOrigin: 'left',
   },

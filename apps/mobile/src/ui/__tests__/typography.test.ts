@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { fontFamily, type, type TypeToken } from '../tokens';
-import { balance, isVoice, typographic } from '../typography';
+import { type, type TypeToken } from '../tokens';
+import { balance, DISPLAY_FROM, isDisplay, typographic } from '../typography';
 
-describe('isVoice', () => {
-  it('is true exactly for the styles set in the serif', () => {
-    for (const k of Object.keys(type) as TypeToken[]) {
-      const face: string = type[k].fontFamily;
-      expect(isVoice(k), k).toBe(face === fontFamily.voice || face === fontFamily.voiceItalic);
-    }
-    expect(isVoice('moment')).toBe(true);
-    expect(isVoice('spoken')).toBe(true);
-    expect(isVoice('label')).toBe(false);
-    expect(isVoice('balance')).toBe(false);
+describe('isDisplay', () => {
+  it('is true exactly for the styles at headline size (20 pt and up)', () => {
+    for (const k of Object.keys(type) as TypeToken[])
+      expect(isDisplay(k), k).toBe(type[k].fontSize >= DISPLAY_FROM);
+    expect(isDisplay('moment')).toBe(true);
+    expect(isDisplay('statement')).toBe(true);
+    expect(isDisplay('hero')).toBe(true);
+    expect(isDisplay('label')).toBe(false);
+    expect(isDisplay('button')).toBe(false);
   });
 });
 

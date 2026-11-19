@@ -2,18 +2,17 @@
    1. The page is true black; chrome is monochrome. White asks (the current step, whose move it
       is, a button); green answers (live, locked, the winner, money up, paid, on-chain); red is
       money down, the loser and errors. The market keeps green / red as its direction colours.
-   2. Two voices. Geist (--sans) for everything functional: labels, numbers, tables, the chain
-      feed, the health strip (Geist Mono for hashes only). Instrument Serif (--serif) for what is
-      SAID and for the moment itself: the wordmark, the claim, Locked / the verdict / Paid, "vs",
-      the judge's caption (italic, like a film subtitle). Numbers and money stay in Geist.
-   3. Objects are smoked glass (.glass rules below: the terms slip, the terms code, the caption,
+   2. One voice, and it is bold. Geist (--sans) only, a step heavier than a default UI: 700 for
+      the names, the moment's word (Locked, the verdict, Paid) and the big numbers, 600 for the
+      claim and money, 500 for what is read. Nothing thin: no Light, no serif (Geist Mono for
+      hashes only).
+   3. Objects are soft panels (.glass rules below: the terms slip, the terms code, the caption,
       the QR, the market and the chain feed); rows inside a panel stay hairline rows. The moment
       is not boxed: it is lit, by a soft aurora in the colour of what happened.
    4. The versus band and the moment are the heroes; the right rail is secondary; the health
       strip is operator telemetry and the quietest thing on screen.
    Everything is sized from the viewport (1em ~ 28px on 1920x1080, 19px on 1280x720), so any
-   projector shows the same layout, and the page never scrolls. Thin strokes (Geist Light, the
-   serif) only at 1.3em and up: a projector loses them below that. */
+   projector shows the same layout, and the page never scrolls. */
 :root {
   /* the swatches (same hex as the app) */
   --black: #000000;
@@ -58,8 +57,6 @@
   --radius: 1.1em;
   --radius-in: 0.6em;
   --sans: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  /* what is said, and the moment (src/fonts.css) */
-  --serif: 'Instrument Serif', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   /* hashes only: the terms code, transaction ids, the evidence hash */
   --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: dark;
@@ -113,10 +110,9 @@ code,
 }
 /* the empty stage's one line, in the moment's voice */
 .huge {
-  font-family: var(--serif);
-  font-size: 3.4em;
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  font-size: 2.65em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1.02;
   margin: 0;
 }
@@ -151,7 +147,7 @@ code,
   align-items: center;
   gap: 1.4em;
 }
-/* the wordmark: the name as it is said, in the serif italic */
+/* the wordmark: the name, bold */
 .topbar h1,
 .connect h1,
 .status-rail h1 {
@@ -160,11 +156,9 @@ code,
   /* the word space: the two words are separate flex items */
   gap: 0.2em;
   margin: 0;
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 1.75em;
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-size: 1.36em;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   line-height: 1;
   white-space: nowrap;
 }
@@ -365,10 +359,9 @@ code,
   min-width: 3.4em;
 }
 .vs {
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 1.7em;
-  font-weight: 400;
+  font-size: 1.33em;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   line-height: 1;
   color: var(--muted);
 }
@@ -378,7 +371,7 @@ code,
   align-items: baseline;
   gap: 0.3em;
   font-size: 1.5em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.03em;
   line-height: 1.05;
   white-space: nowrap;
@@ -418,18 +411,15 @@ code,
   flex-direction: column;
   min-width: 0;
 }
-/* The two names are the cast of the moment: the serif, like the verdict that will name one. */
+/* The two names are the cast of the moment: bold, like the verdict that will name one. */
 .party .name {
-  font-family: var(--serif);
-  font-size: 3.3em;
-  font-weight: 400;
-  letter-spacing: -0.015em;
-  /* a tight line box, so the band stays short; the padding is room inside the ellipsis clip for
-     the serif's overhangs (a J's hook, a g's tail). The margin takes most of it back, but leaves
-     the tail of a g clear of the status line under the name. */
-  line-height: 0.84;
-  padding: 0.08em 0.09em 0.22em;
-  margin: -0.08em -0.09em -0.12em;
+  font-size: 2.57em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  /* the padding is room inside the ellipsis clip for a g's tail; the margin takes it back */
+  line-height: 1.05;
+  padding: 0 0.04em 0.1em;
+  margin: 0 -0.04em -0.1em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -454,7 +444,7 @@ code,
   color: var(--muted);
   animation: pulse 1.6s ease-in-out infinite;
 }
-/* a glass disc, lit from the top left, with a serif monogram (no per-person tint); the winner's
+/* a soft disc with bold initials (no per-person tint); the winner's
    is lit green */
 .avatar {
   flex: none;
@@ -487,14 +477,14 @@ code,
   object-fit: cover;
 }
 .avatar .initials {
-  font-family: var(--serif);
-  font-size: 1.9em;
-  font-weight: 400;
+  font-size: 1.48em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1;
   color: var(--white);
 }
 .avatar.sm .initials {
-  font-size: 0.95em;
+  font-size: 0.74em;
 }
 .party.winner .avatar {
   box-shadow:
@@ -505,7 +495,7 @@ code,
 }
 
 /* ---- terms -------------------------------------------------------------------------------- */
-/* the terms slip: a glass ticket. The claim is the judge's wording, so it is set in the serif;
+/* the terms slip: a soft ticket. The claim is the judge's wording, set large and semibold;
    the terms code is the ticket's stub, torn along a perforation with a notch at each end. */
 .terms {
   position: relative;
@@ -527,16 +517,15 @@ code,
   padding: 0.55em 1.15em 0.65em;
 }
 .claim {
-  font-family: var(--serif);
-  font-size: 1.8em;
-  font-weight: 400;
-  letter-spacing: -0.012em;
+  font-size: 1.4em;
+  font-weight: 600;
+  letter-spacing: -0.025em;
   margin: 0.12em 0 0.3em;
   line-height: 1.08;
   text-wrap: balance;
 }
 .terms.pending .claim {
-  font-style: italic;
+  color: var(--muted);
   margin-bottom: 0;
 }
 .stakes {
@@ -661,7 +650,7 @@ code,
 /* the price, the line and the clock: big thin numerals */
 .market .odds-grid .num {
   font-size: 1.6em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.03em;
   white-space: nowrap;
 }
@@ -748,7 +737,7 @@ code,
   flex-direction: column;
   gap: 0.5em;
   overflow: hidden;
-  /* the serif's capitals and the italic overhang their box: room inside the clip for them */
+  /* room inside the clip for a descender and a bold letter's overhang */
   padding: 0 0.3em 0.1em;
   margin: 0 -0.3em;
 }
@@ -762,12 +751,11 @@ code,
   gap: 0.4em;
   height: 100%;
 }
-/* the moment's line when nothing has a stamp yet ("Logan challenged Jake"): the serif, large */
+/* the moment's line when nothing has a stamp yet ("Logan challenged Jake"): bold, large */
 .intro .big {
-  font-family: var(--serif);
-  font-size: 3em;
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  font-size: 2.34em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1.02;
   text-wrap: balance;
 }
@@ -777,7 +765,7 @@ code,
 /* the lock phase's line is a count ("1 of 2 authorized"): a report, so it is set in Geist */
 .moment.phase-lock .intro .big {
   font-family: var(--sans);
-  font-size: 2em;
+  font-size: 1.56em;
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1.1;
@@ -787,14 +775,13 @@ code,
   align-items: baseline;
   gap: 0.7em;
 }
-/* LOCKED, PAID, REFUNDED read Locked, Paid, Refunded: the moment's word, in the serif. It is
+/* LOCKED, PAID, REFUNDED read Locked, Paid, Refunded: the moment's word, in bold. It is
    on, so it carries its own light. */
 .stamp {
-  font-family: var(--serif);
-  font-size: 4em;
-  font-weight: 400;
-  letter-spacing: -0.02em;
-  line-height: 0.95;
+  font-size: 3.12em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
   text-transform: lowercase;
 }
 .stamp::first-letter {
@@ -876,11 +863,9 @@ code,
 }
 /* "Ready when you are, Jake.": said, not reported */
 .play .big.muted {
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 1.9em;
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-size: 1.48em;
+  font-weight: 600;
+  letter-spacing: -0.035em;
   line-height: 1.1;
 }
 .rec {
@@ -920,7 +905,7 @@ code,
 }
 
 /* if a short screen runs out of room the ruling is cut at its foot, never drawn over the appeal
-   panel under it (the padding keeps the serif's overhang inside the clip) */
+   panel under it (the padding keeps a descender inside the clip) */
 .ruling {
   display: flex;
   flex-direction: column;
@@ -963,16 +948,15 @@ code,
   flex-direction: column;
   gap: 0.4em;
 }
-/* the verdict: the judge's word, the biggest serif on the card. White: the green is the light
+/* the verdict: the judge's word, the biggest type on the card. White: the green is the light
    behind it and the ring on the winner. */
 .verdict {
-  font-family: var(--serif);
-  font-size: 3.8em;
-  font-weight: 400;
+  font-size: 2.96em;
+  font-weight: 700;
   /* a tight line box; the padding is room under the baseline for a J or a g */
-  line-height: 0.92;
+  line-height: 1.02;
   padding-bottom: 0.1em;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.035em;
   color: var(--text);
   animation: land 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -981,7 +965,7 @@ code,
 }
 /* the appeal panel shares the moment with the ruling: the verdict gives it the room */
 .moment-body:has(.appeal-panel) .verdict {
-  font-size: 2.8em;
+  font-size: 2.18em;
 }
 .reason {
   margin: 0;
@@ -1208,7 +1192,7 @@ code,
   color: var(--text);
 }
 .payout-row .amt {
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.03em;
 }
 .payout-row.got .amt {
@@ -1285,7 +1269,7 @@ code,
   white-space: nowrap;
 }
 /* what is being said, live: a glass strip along the foot of the card, set like a film subtitle
-   (the serif italic). The speaker's name stays in Geist. */
+   (medium weight, white). The speaker's name is the quiet label beside it. */
 .caption {
   position: relative;
   z-index: 1;
@@ -1295,10 +1279,9 @@ code,
   border-radius: var(--radius);
   background: var(--glass);
   box-shadow: var(--glass-edge);
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 1.36em;
-  letter-spacing: -0.005em;
+  font-size: 1.06em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
   line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
@@ -1312,7 +1295,7 @@ code,
   letter-spacing: 0;
   color: var(--text);
   margin-right: 0.9em;
-  /* sit on the italic's baseline, not below it */
+  /* sit on the caption's baseline, not below it */
   vertical-align: 0.14em;
 }
 .caption .label.player {
@@ -1329,10 +1312,9 @@ code,
   height: 100%;
 }
 .rules .big {
-  font-family: var(--serif);
-  font-size: 2.2em;
-  font-weight: 400;
-  letter-spacing: -0.012em;
+  font-size: 1.72em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1.05;
 }
 .rules ul {
@@ -1372,12 +1354,11 @@ code,
   align-items: baseline;
   gap: 0.6em;
 }
-/* the routine's name, in the serif: it is a title */
+/* the routine's name, bold: it is a title */
 .dance-routine .title {
-  font-family: var(--serif);
-  font-size: 2.1em;
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  font-size: 1.64em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1;
 }
 .dance-routine .len {
@@ -1499,7 +1480,7 @@ code,
   grid-row: 1 / 3;
   grid-column: 2;
   font-size: 2.6em;
-  font-weight: 300;
+  font-weight: 600;
   line-height: 1;
   letter-spacing: -0.04em;
   animation: land 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -1569,7 +1550,7 @@ code,
   gap: 0.15em;
 }
 .ruling.dance .verdict {
-  font-size: 2.8em;
+  font-size: 2.18em;
 }
 /* too close to call is the headline of a void dance off, not a grey footnote */
 .ruling.dance.void .verdict {
@@ -1622,7 +1603,7 @@ code,
 }
 .odds .odds-grid > div:nth-child(2) .num {
   font-size: 2.9em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.04em;
   line-height: 1;
   margin-bottom: 0.08em;
@@ -1849,10 +1830,9 @@ code,
 }
 .help h2 {
   margin: 0 0 0.3em;
-  font-family: var(--serif);
-  font-size: 2.6em;
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  font-size: 2.03em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
 }
 .help dl {
   display: grid;
@@ -1920,11 +1900,10 @@ code,
   animation: fadeout 7s ease-in forwards;
 }
 .paid-word {
-  font-family: var(--serif);
-  font-size: 12em;
-  font-weight: 400;
-  line-height: 0.9;
-  letter-spacing: -0.02em;
+  font-size: 9.36em;
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
   color: var(--good);
   text-shadow: 0 0 0.35em rgb(0 212 122 / 0.35);
   text-transform: lowercase;
@@ -1935,7 +1914,7 @@ code,
 }
 .paid-line {
   font-size: 2.8em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.035em;
 }
 .burst {
@@ -2238,7 +2217,7 @@ code,
 }
 /* the ruling fills the middle column: a bigger verdict, the moment centred in its space */
 .phones-center .verdict {
-  font-size: 3.4em;
+  font-size: 2.65em;
 }
 .phones-center .moment-body,
 .phones-center .qr-card {
@@ -2304,9 +2283,9 @@ code,
   background: var(--black);
 }
 .phone-letter {
-  font-family: var(--serif);
   font-size: calc(var(--phone-h) * 0.2);
-  font-weight: 400;
+  font-weight: 500;
+  letter-spacing: -0.015em;
   line-height: 1;
   color: var(--line-strong);
 }
@@ -2399,7 +2378,7 @@ code,
 }
 /* the matchup, the pot and the result carry the rail: the brand steps back */
 .phones-shell.big .status-rail h1 {
-  font-size: 1em;
+  font-size: 0.78em;
 }
 .rail-phase {
   font-size: 0.74em;
@@ -2418,10 +2397,11 @@ code,
   font-weight: 600;
   letter-spacing: -0.015em;
 }
-/* the claim is the judge's wording: the serif, as on the terms slip */
+/* the claim is the judge's wording, as on the terms slip */
 .rail-claim {
-  font-family: var(--serif);
-  font-size: 1.2em;
+  font-size: 0.94em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
   line-height: 1.12;
   color: var(--muted);
   display: -webkit-box;
@@ -2431,16 +2411,15 @@ code,
 }
 .rail-amount {
   font-size: 2em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.035em;
   line-height: 1;
 }
 /* the moment's word between the phones ("Locked", "Jake wins") */
 .rail-status {
-  font-family: var(--serif);
-  font-size: 2.2em;
-  font-weight: 400;
-  letter-spacing: -0.015em;
+  font-size: 1.72em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1.02;
 }
 .rail-status.good {
@@ -2455,11 +2434,11 @@ code,
 .rail-status.idle {
   color: var(--muted);
 }
-/* what is being said, as on the card's caption strip: the serif italic */
+/* what is being said, as on the card's caption strip */
 .rail-caption {
-  font-family: var(--serif);
-  font-style: italic;
-  font-size: 1.15em;
+  font-size: 0.9em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
   line-height: 1.15;
   color: var(--muted);
   display: -webkit-box;

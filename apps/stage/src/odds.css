@@ -1,7 +1,7 @@
 /* Odds on the projector (odds.tsx): the judge's odds card (the AI reasoning from the performer's
    record), the offer / counter timeline, and the terms card's odds chip, in the stage's
    Limelight look (stage.css). Odds on the table are a question, so they are white (--accent);
-   green arrives only when they are agreed. The judge's reason is said: the serif italic. */
+   green arrives only when they are agreed. The judge's reason is its own words, in white. */
 
 /* ---- the moment while odds are on the table --------------------------------------------- */
 .odds-moment {
@@ -13,10 +13,9 @@
   min-height: 0;
 }
 .odds-moment > .big {
-  font-family: var(--serif);
-  font-size: 2.2em;
-  font-weight: 400;
-  letter-spacing: -0.012em;
+  font-size: 1.72em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1.05;
 }
 .odds-moment > .big.compact {
@@ -76,7 +75,7 @@
 /* the ratio: big thin numerals, like the money */
 .judge-odds-ratio .ratio {
   font-size: 3.2em;
-  font-weight: 300;
+  font-weight: 600;
   letter-spacing: -0.04em;
   line-height: 0.95;
   white-space: nowrap;
@@ -150,9 +149,9 @@
 }
 .judge-odds-reason {
   margin: 0.1em 0 0;
-  font-family: var(--serif);
-  font-size: 1.25em;
-  font-style: italic;
+  font-size: 0.98em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
   line-height: 1.15;
   overflow: hidden;
   display: -webkit-box;

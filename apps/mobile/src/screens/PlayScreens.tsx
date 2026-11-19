@@ -458,7 +458,7 @@ export function RulingScreen({
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
   const left = appealDeadlineMs - now;
-  // A moment, on both phones: the call in the serif on black, under an aurora of the result
+  // A moment, on both phones: the call in bold on black, under an aurora of the result
   // (green won, red lost, white for no contest). The money waits for the payout.
   return (
     <MomentScreen
@@ -513,7 +513,7 @@ export function RulingScreen({
         </DataText>
         {note ? <BodyText style={styles.centerText}>{note}</BodyText> : null}
       </View>
-      {/* Why: the judge's own words, in its voice. */}
+      {/* Why: the judge's own words. */}
       <View style={styles.call}>
         <Label variant="small">{judgeLabel ?? t(COPY.ruling.judge)}</Label>
         <DataText variant="spokenSmall" style={styles.centerText}>
