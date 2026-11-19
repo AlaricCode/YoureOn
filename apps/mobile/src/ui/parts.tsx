@@ -1116,28 +1116,52 @@ const AuroraContext = createContext<((tone: AuroraTone | null) => void) | null>(
 
 /**
  * The aurora (tokens `aurora`): a wide ellipse of light hung from the top of the screen, green
- * for money in / locked, red for money out, white for a neutral moment. It fades in once (Reduce
- * Motion: it is simply there). Put it first inside a full-screen View; it takes no touches.
+ * for money in / locked, red for money out, white for a neutral moment. It fades in once, then
+ * swells and dims very slowly for as long as the moment is up (Reduce Motion: it is simply
+ * there, still). Put it first inside a full-screen View; it takes no touches.
  */
 export function Aurora({ tone }: { tone: AuroraTone }) {
   const { width, height } = useWindowDimensions();
   const reduced = useReduceMotion();
   const k = useRef(new Animated.Value(0)).current;
+  const swell = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (reduced === null) return;
     if (reduced) {
       k.setValue(1);
       return;
     }
-    const a = Animated.timing(k, {
+    const slow = Easing.inOut(Easing.quad);
+    const up = Animated.timing(k, {
       toValue: 1,
       duration: aurora.fadeMs,
       easing: easeOut,
       useNativeDriver: true,
     });
-    a.start();
-    return () => a.stop();
-  }, [k, reduced, tone]);
+    const breathe = Animated.loop(
+      Animated.sequence([
+        Animated.timing(swell, {
+          toValue: 1,
+          duration: aurora.swellMs,
+          easing: slow,
+          useNativeDriver: true,
+        }),
+        Animated.timing(swell, {
+          toValue: 0,
+          duration: aurora.swellMs,
+          easing: slow,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    up.start(({ finished }) => {
+      if (finished) breathe.start();
+    });
+    return () => {
+      up.stop();
+      breathe.stop();
+    };
+  }, [k, swell, reduced, tone]);
   const id = `aurora${useId().replace(/[^A-Za-z0-9]/g, '')}`;
   const tint = tone === 'in' ? color.positive : tone === 'out' ? color.negative : palette.text;
   const peak =
@@ -1151,7 +1175,21 @@ export function Aurora({ tone }: { tone: AuroraTone }) {
       importantForAccessibility="no-hide-descendants"
       style={[
         styles.aurora,
-        { width: w, height: h, left: (width - w) / 2, top: height * aurora.top, opacity: k },
+        {
+          width: w,
+          height: h,
+          left: (width - w) / 2,
+          top: height * aurora.top,
+          opacity: Animated.multiply(
+            k,
+            swell.interpolate({ inputRange: [0, 1], outputRange: [1, aurora.swellDim] }),
+          ),
+          transform: [
+            {
+              scale: swell.interpolate({ inputRange: [0, 1], outputRange: [1, aurora.swellTo] }),
+            },
+          ],
+        },
       ]}
     >
       <Svg width={w} height={h}>

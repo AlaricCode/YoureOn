@@ -328,6 +328,14 @@ describe('materials and light', () => {
     expect(aurora.fadeMs).toBeLessThanOrEqual(MAX_MOMENT_MS);
   });
 
+  it('the aurora swells slowly and slightly: light, not an animation', () => {
+    expect(aurora.swellMs).toBeGreaterThanOrEqual(3_000);
+    expect(aurora.swellTo).toBeGreaterThan(1);
+    expect(aurora.swellTo).toBeLessThanOrEqual(1.1);
+    expect(aurora.swellDim).toBeGreaterThanOrEqual(0.7);
+    expect(aurora.swellDim).toBeLessThan(1);
+  });
+
   it('the judge orb is shaded from a white highlight to a near-black rim and breathes gently', () => {
     const offsets = orb.stops.map(([o]) => o);
     expect(offsets[0]).toBe(0);

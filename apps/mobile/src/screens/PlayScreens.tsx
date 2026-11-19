@@ -683,7 +683,9 @@ export function HearingScreen({
     <Screen>
       <TopBar title={t(COPY.hearing.title)} tag={tag} />
       <Page>
-        <DataText variant="statement">{view.claim}</DataText>
+        <Slip>
+          <DataText variant="statement">{view.claim}</DataText>
+        </Slip>
         <View style={styles.turns}>
           {turns.map((tn) => (
             <View key={tn.name} style={styles.turn}>
@@ -906,7 +908,7 @@ const styles = StyleSheet.create({
   waiting: { height: space.control, alignItems: 'center', justifyContent: 'center' },
   // Redo
   // Hearing
-  turns: { marginTop: space.x3 },
+  turns: { marginTop: space.x1 },
   turn: {
     minHeight: space.row + space.x1,
     flexDirection: 'row',

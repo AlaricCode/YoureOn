@@ -424,10 +424,11 @@ code,
   font-size: 3.5em;
   font-weight: 400;
   letter-spacing: -0.015em;
-  line-height: 1;
-  /* room for the serif's overhangs (the hook of a J, a g's tail) inside the ellipsis clip */
-  padding: 0.04em 0.09em 0.12em;
-  margin: -0.04em -0.09em -0.12em;
+  /* a tight line box, so the band is no taller than it was; the padding (taken back by the
+     margin) is room inside the ellipsis clip for the serif's overhangs: a J's hook, a g's tail */
+  line-height: 0.84;
+  padding: 0.08em 0.09em 0.22em;
+  margin: -0.08em -0.09em -0.22em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

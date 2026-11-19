@@ -142,6 +142,14 @@ export const aurora = {
   /** Centre opacity: a neutral (white) moment, e.g. an incoming challenge. */
   neutralOpacity: 0.1,
   fadeMs: 280,
+  /**
+   * Once it is up the light is alive: it swells to `swellTo` and dims to `swellDim` of itself and
+   * back, `swellMs` each way. Slow enough to feel like light, not like an animation. Off under
+   * Reduce Motion.
+   */
+  swellMs: 4200,
+  swellTo: 1.06,
+  swellDim: 0.82,
 } as const;
 
 /**
