@@ -19,8 +19,10 @@
 // a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
 // Dance Off (docs/planning/DANCE-OFF.md): "Dance off" on A's negotiate screen (app/danceTerms),
 // the same card and lock, then the round on the recording phone (../dance DanceOffScreen: the
-// judge cam, else A's phone) and "Dance off live" on the other (app/danceFlow); the usual ruling,
-// GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
+// judge cam, else A's phone; it tells A from B by face when it can, DANCE-OFF §3), B's phone the
+// display meanwhile (../dance DanceDisplayScreen: the mirrored reference and the music, from the
+// same server go_at), and "Dance off live" on a phone that is neither and while the round is
+// judged (app/danceFlow); the usual ruling, GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
 // "Jarvis" (../wake, ./wakeGate; EXPO_PUBLIC_WAKE): one recognizer, listening on Home (in a room)
 // and on A's negotiate screen until the judge starts. On Home "Jarvis, …" starts a challenge (the
 // person named, the face scan, or the one person online); on the negotiate screen A's judge waits
@@ -117,6 +119,7 @@ import {
   type PreparedAttempt,
 } from './actions';
 import {
+  danceDisplayPresent,
   danceStartNote,
   danceWatchPhase,
   isDanceBet,
@@ -124,6 +127,7 @@ import {
   startDanceAttemptVia,
   type PreparedDance,
 } from './danceFlow';
+import { useDanceClockOffset } from './danceClock';
 import {
   canConfirmDance,
   canSubmitDance,
@@ -254,6 +258,13 @@ const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
  */
 const loadFaceEmbedder = () =>
   importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
+/**
+ * The Dance Off's face assignment (DANCE-OFF §3) uses the same face natives, loaded the same way
+ * (on first use, through importSafely): a simulator build without ML Kit just falls back to the
+ * left / right rule.
+ */
+const loadDanceFaceEmbedder = () =>
+  importSafely(() => import('../face/native')).then((m) => m.getDanceEmbedder());
 /** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
 const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
 /**
@@ -268,6 +279,7 @@ const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
 const loadDance = () => importSafely(() => import('../dance/index'));
 const DanceOffScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceOffScreen })));
 const DanceWatchScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceWatchScreen })));
+const DanceDisplayScreen = lazy(() => loadDance().then((m) => ({ default: m.DanceDisplayScreen })));
 const DanceResultBreakdown = lazy(() =>
   loadDance().then((m) => ({ default: m.DanceResultBreakdown })),
 );
@@ -372,6 +384,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** The on-device embedder (its natives and the model load on first use; the scan screen
    *  warms it up). */
   const embedder = useMemo(() => (FACE_ENABLED ? createLazyEmbedder(loadFaceEmbedder) : null), []);
+  /** The dance face assignment's embedder (small faces), null with EXPO_PUBLIC_FACE=off. */
+  const danceEmbedder = useMemo(
+    () => (FACE_ENABLED ? createLazyEmbedder(loadDanceFaceEmbedder) : null),
+    [],
+  );
   /** A face screen crashed (e.g. a native module missing from the build): face is off until
    *  the app restarts, and challenges go through the room list. */
   const [faceBroken, setFaceBroken] = useState(false);
@@ -747,6 +764,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const bet: BetModel | null = app.activeBetId ? (rt.hub.get(app.activeBetId) ?? null) : null;
   const route = selectRoute(app, bet);
+  // The two-phone Dance Off maps go_at with a round-trip-compensated offset (./danceClock).
+  const danceClockOffsetMs = useDanceClockOffset({
+    active: route === 'dance' || route === 'danceDisplay',
+    betId: bet?.bet_id ?? null,
+    baseUrl: rt.baseUrl,
+    fallbackMs: rt.clock.offsetMs,
+  });
   // An alert belongs to the screen it was raised on: a new screen starts without one (it used
   // to follow into the next screens as a toast that never cleared).
   useEffect(() => setAlert(null), [route]);
@@ -2235,14 +2259,26 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 terms={terms}
                 me={me}
                 names={names}
-                // go_at on this phone's clock (as the judge cam's arm), so the count-in lands
-                // on the server's instant.
-                attempt={
-                  a
+                // go_at is the server's instant: the screen maps it onto its round clock
+                // through the clock offset, so its count-in lands on the same instant as the
+                // display phone's (../dance/model/schedule).
+                attempt={a ? { attempt_no: a.attempt_no, go_at: a.go_at, max_ms: a.max_ms } : null}
+                clockOffsetMs={danceClockOffsetMs}
+                // B's phone is the display when B is online in the bet's room (./danceFlow).
+                displayPhone={danceDisplayPresent({
+                  members: app.members,
+                  roomId: app.room?.room_id ?? null,
+                  betRoomId: bet.room_id,
+                  displayUserId: bet.party_b?.user_id ?? null,
+                  myUserId: app.me?.user_id ?? null,
+                })}
+                // Face assignment (DANCE-OFF §3): who is who from one still when framing passes
+                // (time-boxed; any miss, a simulator without ML Kit, is the left / right rule).
+                faceId={
+                  danceEmbedder
                     ? {
-                        attempt_no: a.attempt_no,
-                        go_at: new Date(Date.parse(a.go_at) - rt.clock.offsetMs).toISOString(),
-                        max_ms: a.max_ms,
+                        open: (uri) => danceEmbedder.open(uri),
+                        identify: (req) => rt.api.danceIdentify(bet.bet_id, req),
                       }
                     : null
                 }
@@ -2257,6 +2293,31 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 onStartAttempt={startDance}
                 onUpload={uploadDance}
                 onLeave={app.judgeCam ? () => setJudgeCam(false) : undefined}
+              />
+            </Suspense>
+          </PanelErrorBoundary>
+        );
+      }
+      case 'danceDisplay': {
+        // B's phone during the round: the mirrored reference full screen with the music, from
+        // the attempt's go_at (the same server instant the recording phone starts on).
+        const terms = bet?.envelope?.terms;
+        if (!bet || !terms) return waiting;
+        const a = bet.attempt;
+        return (
+          <PanelErrorBoundary
+            key={bet.bet_id}
+            name={t(COPY.dance.panel)}
+            onError={(m) => console.warn('[yo] dance display', m)}
+          >
+            <Suspense fallback={waiting}>
+              <DanceDisplayScreen
+                terms={terms}
+                names={{ a: terms.party_a.display_name, b: terms.party_b.display_name }}
+                attempt={
+                  a && state === 'ATTEMPT' ? { attempt_no: a.attempt_no, go_at: a.go_at } : null
+                }
+                clockOffsetMs={danceClockOffsetMs}
               />
             </Suspense>
           </PanelErrorBoundary>

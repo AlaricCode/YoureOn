@@ -53,7 +53,7 @@ public let USAGE = """
     --key-move-names <a,b,..> optional names for the key moves, in time order
     --mirrored                the source is mirrored (selfie style): flip x and swap left/right
     --start-ms <ms>           routine start inside the video (default 0)
-    --duration-ms <ms>        routine length (default 15000; the contract requires 15000)
+    --duration-ms <ms>        routine length (default 15000; the contract allows 5000..40000)
     -h, --help                show this help
   """
 

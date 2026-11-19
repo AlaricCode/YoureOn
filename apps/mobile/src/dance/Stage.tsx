@@ -1,36 +1,37 @@
 // The Dance Off display (DANCE-OFF §6.3). This is what the HDMI display shows (iOS mirroring),
-// so it is laid out like a broadcast: the two players' names and live match meters on top, the
-// beat bar, then two equal 9:16 panels side by side: the MIRRORED reference (the routine's video
-// when there is one, else its animated skeleton) and the live camera with A (green) and B (white)
-// drawn on the dancers, PERFECT / GOOD / MISS popups over each player's half, and the 3-2-1-GO
-// count-in over both. It fits portrait and landscape: the panels take the largest equal size the
-// space allows.
+// so it is laid out like a broadcast: the beat bar on top, then two equal 9:16 panels side by
+// side: the MIRRORED reference (the routine's video when there is one, else its animated
+// skeleton) and the live camera with A (green) and B (white) drawn on the dancers, each with a
+// name tag pinned above their head carrying the live match score ("Logan · 87"; no separate
+// meters), PERFECT / GOOD / MISS popups over each player's half, and the 3-2-1-GO count-in over
+// both. It fits portrait and landscape: the panels take the largest equal size the
+// space allows. With a display phone in the room (DanceDisplayScreen plays the reference and the
+// music), `reference={false}` drops the reference panel and the camera panel takes the space.
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { importSafely } from '../app/importSafely';
 import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
-import { DANCE_COPY, dt } from './copy';
+import { clockText, DANCE_COPY, dt } from './copy';
 import { useFrameClock } from './hooks';
-import { CameraSkeletons, DebugReadout, LiveMeters, PopupLayer } from './LiveParts';
+import { CameraSkeletons, DebugReadout, NameTags, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
 import type { LiveStore } from './model/liveStore';
-import { fitPanels, type Size } from './model/overlay';
+import { CAMERA_ASPECT, fitPanels, stagePanels, type Size } from './model/overlay';
 import { referencePoseAt, upcomingKeyMove } from './model/reference';
 import { beatAt, countInLabel, type RoundState } from './model/round';
 import { SkeletonLayer } from './SkeletonLayer';
 import { REFERENCE_TINT } from './theme';
 
-/** expo-video, only when a routine has a reference clip (none do yet: see media.ts). */
+/** expo-video, only when a routine has a reference clip (see media.ts). */
 const ReferenceVideo = lazy(() => importSafely(() => import('./ReferenceVideo')));
 
 const PANEL_GAP = space.x1;
+const COUNT_NUMERAL_SIZE = 160;
 /** A beat flash fades over this long. */
 const FLASH_MS = 180;
 const BEATS_PER_BAR = 4;
-
-const nineSixteen = (r: Pick<RoutineData, 'w' | 'h'>) => r.w / r.h;
 
 // ---------------------------------------------------------------------------------------
 // Reference
@@ -44,11 +45,14 @@ export function ReferencePanel({
   routine,
   startAt,
   size,
+  mutedUntil = null,
 }: {
   routine: RoutineData;
   /** The round's t0 on the nowMs clock, or null (not started). */
   startAt: number | null;
   size: Size;
+  /** The clip is silent until this instant (nowMs clock; null: never). */
+  mutedUntil?: number | null;
 }) {
   const media = routineMedia(routine);
   const playing = startAt !== null;
@@ -58,7 +62,12 @@ export function ReferencePanel({
   if (media.video !== null) {
     return (
       <Suspense fallback={null}>
-        <ReferenceVideo source={media.video} startAt={startAt} />
+        <ReferenceVideo
+          source={media.video}
+          startAt={startAt}
+          durationMs={routine.duration_ms}
+          mutedUntil={mutedUntil}
+        />
       </Suspense>
     );
   }
@@ -119,7 +128,9 @@ export function BeatBar({ routine, startAt }: { routine: RoutineData; startAt: n
             </>
           ) : null}
         </View>
-        <Text style={styles.clock}>{running ? `0:${String(left).padStart(2, '0')}` : '0:15'}</Text>
+        <Text style={styles.clock}>
+          {clockText(running ? left : Math.ceil(routine.duration_ms / 1000))}
+        </Text>
       </View>
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
@@ -135,9 +146,12 @@ export function BeatBar({ routine, startAt }: { routine: RoutineData; startAt: n
 export function CountInOverlay({
   round,
   beatMs,
+  numeralSize = COUNT_NUMERAL_SIZE,
 }: {
   round: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>;
   beatMs: number;
+  /** The numeral's font size (the display phone draws it bigger). */
+  numeralSize?: number;
 }) {
   const active = round.phase === 'countIn' || round.phase === 'dancing';
   const now = useFrameClock(active, 30);
@@ -155,7 +169,15 @@ export function CountInOverlay({
     <View style={[StyleSheet.absoluteFill, styles.countIn]} pointerEvents="none">
       <View style={[StyleSheet.absoluteFill, styles.scrim]} />
       <Text
-        style={[styles.countNumeral, go && { color: palette.accent }, { transform: [{ scale }] }]}
+        style={[
+          styles.countNumeral,
+          numeralSize !== COUNT_NUMERAL_SIZE && {
+            fontSize: numeralSize,
+            lineHeight: Math.round(numeralSize * 1.1),
+          },
+          go && { color: palette.accent },
+          { transform: [{ scale }] },
+        ]}
         accessibilityLiveRegion="assertive"
       >
         {go ? dt(DANCE_COPY.go) : label}
@@ -171,7 +193,6 @@ export function CountInOverlay({
 export function DanceStage({
   routine,
   names,
-  me,
   store,
   round,
   beatMs,
@@ -181,10 +202,11 @@ export function DanceStage({
   debug,
   syncOffsetMs,
   footer,
+  reference = true,
+  mutedUntil = null,
 }: {
   routine: RoutineData;
   names: { a: string; b: string };
-  me?: 'A' | 'B' | undefined;
   store: LiveStore;
   round: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>;
   beatMs: number;
@@ -197,24 +219,37 @@ export function DanceStage({
   debug: boolean;
   syncOffsetMs: number;
   footer?: ReactNode;
+  /** Show the reference panel (false: a display phone shows it; the camera panel only). */
+  reference?: boolean;
+  /** The reference's music is silent until this instant (nowMs clock; null: never). */
+  mutedUntil?: number | null;
 }) {
   const [box, setBox] = useState<Size>({ width: 0, height: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     if (width !== box.width || height !== box.height) setBox({ width, height });
   };
-  const panel = fitPanels(box, nineSixteen(routine), PANEL_GAP);
+  // Both panels at the CAMERA's 9:16, whatever the routine's own shape: the reference skeleton
+  // contain-fits inside its panel, the live view keeps its full size.
+  const panel = reference ? stagePanels(box, PANEL_GAP) : fitPanels(box, CAMERA_ASPECT, 0, 1);
   return (
     <View style={styles.stage}>
-      <LiveMeters store={store} names={names} me={me} />
       <BeatBar routine={routine} startAt={startAt} />
       <View style={styles.panels} onLayout={onLayout}>
-        <View style={[styles.panel, panel]}>
-          <ReferencePanel routine={routine} startAt={startAt} size={panel} />
-        </View>
+        {reference ? (
+          <View style={[styles.panel, panel]}>
+            <ReferencePanel
+              routine={routine}
+              startAt={startAt}
+              size={panel}
+              mutedUntil={mutedUntil}
+            />
+          </View>
+        ) : null}
         <View style={[styles.panel, panel]}>
           {camera}
           <CameraSkeletons store={store} size={panel} />
+          <NameTags store={store} size={panel} names={names} />
           <PopupLayer store={store} size={panel} />
           {cameraOverlay}
         </View>
@@ -265,7 +300,7 @@ const styles = StyleSheet.create({
   scrim: { backgroundColor: palette.black, opacity: 0.45 },
   countNumeral: {
     ...type.moment,
-    fontSize: 160,
+    fontSize: COUNT_NUMERAL_SIZE,
     lineHeight: 176,
     letterSpacing: -4,
     color: palette.text,

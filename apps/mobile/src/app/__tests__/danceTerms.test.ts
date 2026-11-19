@@ -39,8 +39,8 @@ describe('dance panel reducer', () => {
   });
 
   it('picks a bundled routine and a stake; an unknown routine or a bad stake is ignored', () => {
-    const s = run(open(), { type: 'routine', id: 'side-shuffle' }, { type: 'stake', usd: 10 });
-    expect([s.routineId, s.stakeUsd]).toEqual(['side-shuffle', 10]);
+    const s = run(open(), { type: 'routine', id: 'bounce-back' }, { type: 'stake', usd: 10 });
+    expect([s.routineId, s.stakeUsd]).toEqual(['bounce-back', 10]);
     expect(run(s, { type: 'routine', id: 'moonwalk' })).toBe(s);
     expect(run(s, { type: 'stake', usd: 0 })).toBe(s);
     expect(run(s, { type: 'stake', usd: 2.555 })).toBe(s);
@@ -111,10 +111,10 @@ describe('dance panel reducer', () => {
 
 describe('the card, chips and preview', () => {
   it('reads a dance card back (routine id, even stake); never a skill card', () => {
-    const d = danceOff('Logan', 'Jake', 'side-shuffle', '10000000');
+    const d = danceOff('Logan', 'Jake', 'bounce-back', '10000000');
     expect(danceCardOf({ terms: d.terms, terms_hash: d.termsHash })).toEqual({
       terms_hash: d.termsHash,
-      routineId: 'side-shuffle',
+      routineId: 'bounce-back',
       stakeUsd: 10,
     });
     const b = bottleFlip('Logan');

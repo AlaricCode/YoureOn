@@ -51,7 +51,7 @@ export async function computeReplay(
   const appeal = snap.appeal?.original_ruling_hash === ruling_hash ? snap.appeal : null;
   const finalOutcome = appeal?.final_outcome ?? ruling.outcome;
   if (finalOutcome !== 'A_WINS' && finalOutcome !== 'B_WINS') return none('no_winner');
-  // A Dance Off's key frames are stills of a 15 s round, not a landing: no slow-mo replay (its
+  // A Dance Off's key frames are stills of a whole round, not a landing: no slow-mo replay (its
   // evidence_canonical is a DanceEvidence, which the landing-window builder can't read).
   if (
     ruling.model === GEMINI_SETTLEMENT_MODEL ||

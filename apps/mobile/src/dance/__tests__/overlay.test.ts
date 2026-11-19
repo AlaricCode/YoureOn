@@ -1,9 +1,11 @@
 // Overlay geometry (contain-fit like the native preview layer, mirroring, panel fitting) and the
 // reference skeleton's interpolation.
 import { dequantizePerson } from '@youre-on/shared/dance/pose';
+import { ROUTINES } from '@youre-on/shared/dance/routine';
 import { describe, expect, it } from 'vitest';
 
 import {
+  CAMERA_ASPECT,
   containRect,
   fitPanels,
   headCircle,
@@ -11,6 +13,7 @@ import {
   mapPoint,
   popupAnchor,
   skeletonSegments,
+  stagePanels,
 } from '../model/overlay';
 import { frameIndexAt, referencePoseAt, upcomingKeyMove } from '../model/reference';
 import { WAVE_POP } from './helpers';
@@ -93,6 +96,24 @@ describe('fitPanels', () => {
     expect(wide.height).toBeCloseTo(400);
     expect(wide.width).toBeCloseTo(225);
     expect(fitPanels({ width: 0, height: 100 }, 9 / 16, 8)).toEqual({ width: 0, height: 0 });
+  });
+
+  it('stage panels take the camera’s 9:16 whatever the routine’s shape', () => {
+    // A 393 pt iPhone minus the gutters: the camera image fills its panel for every routine,
+    // and the 960x1080 bye-bye-shuffle skeleton contain-fits inside the reference panel.
+    const box = { width: 369, height: 520 };
+    const panel = stagePanels(box, 8);
+    expect(panel).toEqual(fitPanels(box, CAMERA_ASPECT, 8));
+    expect(panel.width / panel.height).toBeCloseTo(720 / 1280);
+    const camera = containRect(panel, { width: 720, height: 1280 });
+    expect(camera.width).toBeCloseTo(panel.width);
+    expect(camera.height).toBeCloseTo(panel.height);
+    for (const r of ROUTINES) {
+      const ref = containRect(panel, { width: r.w, height: r.h });
+      expect(ref.width).toBeLessThanOrEqual(panel.width + 1e-9);
+      expect(ref.height).toBeLessThanOrEqual(panel.height + 1e-9);
+      expect(Math.max(ref.width / panel.width, ref.height / panel.height)).toBeCloseTo(1);
+    }
   });
 
   it('popups sit over each player’s half', () => {

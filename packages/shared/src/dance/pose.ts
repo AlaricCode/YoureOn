@@ -10,11 +10,13 @@ export const POSE_SCHEMA_VERSION = 1 as const;
 export const POSE_XY_SCALE = 10_000;
 /** c is quantized to 0..POSE_C_SCALE. */
 export const POSE_C_SCALE = 1_000;
-export const POSE_MAX_FRAMES = 700;
+/** A 40 s round (ROUTINE_MAX_DURATION_MS) + the 3 s count-in + tail at the 30 fps cap is ~1300. */
+export const POSE_MAX_FRAMES = 1_500;
 export const POSE_MAX_FPS = 30;
 /** Frame times are ms since round t0 (count-in frames are negative). */
 export const POSE_T_MIN_MS = -3_000;
-export const POSE_T_MAX_MS = 20_000;
+/** The longest routine (40 s) plus slack for the recording tail. */
+export const POSE_T_MAX_MS = 45_000;
 export const SYNC_OFFSET_MAX_MS = 500;
 
 const Int = z.number().int();
@@ -30,7 +32,7 @@ export const PoseKeypoints = z
 export type PoseKeypoints = z.infer<typeof PoseKeypoints>;
 
 export const PoseFrame = z.strictObject({
-  /** ms since round t0 (the shared start instant), −3000..20000. */
+  /** ms since round t0 (the shared start instant), −3000..45000. */
   t: Int.min(POSE_T_MIN_MS).max(POSE_T_MAX_MS),
   /** People Vision saw in this frame (extra people are counted, never scored). */
   n: Int.min(0).max(32),

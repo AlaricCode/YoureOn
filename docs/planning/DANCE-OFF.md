@@ -6,8 +6,9 @@ one of them in the same change.
 
 ## 0. What it is
 
-A new bet type. Two players dance side by side, at the same time, to a 15 s reference routine in front of one
-judge-cam phone. Each is scored on-device (Apple Vision body pose → deterministic pure-TS scorer) on how closely
+A new bet type. Two players dance side by side, at the same time, to a reference routine in front of one
+judge-cam phone. Each routine has its own length, 5 to 40 s (`RoutineData.duration_ms`): the bundled ones are
+15 s and 32.6 s. Each is scored on-device (Apple Vision body pose → deterministic pure-TS scorer) on how closely
 they match the reference. Higher score wins the escrow. Claude never picks the winner: it only validates the
 round (danced the whole time, nobody left, no third person, no side swap) and writes a 1–2 sentence announcer
 line. Settlement, GG, the 10 s window and payout are the existing paths, unchanged.
@@ -36,7 +37,9 @@ a three-way branch. For `dance_off`:
 - `edge_cases = []` is allowed
 
 The routine is hashed through the text fields. No new keys:
-- `claim`: `Dance Off: <routine title>, 15 seconds, higher match score wins, $X each` (A = challenger)
+- `claim`: `Dance Off: <routine title>, <N> seconds, higher match score wins, $X each` (A = challenger), where
+  N = `Math.round(routine.duration_ms / 1000)` (`routineSeconds`). A 15 s routine reads "15 seconds" exactly as
+  before, so its Terms text and terms hash are unchanged; the 32.6 s `bye-bye-shuffle` reads "33 seconds".
 - `success_criteria[0]`: `Routine <routine_id> v<version> sha256:<first 16 hex of routine sha256>`
 - `success_criteria[1]`: `Higher match score wins; scores within <TIE_MARGIN> points are too close to call (refund)`
 - `failure_criteria`: `[]`
@@ -58,7 +61,9 @@ UNMIRRORED image, with a top-left origin and y pointing down. c is in [0,1]. A m
 
 **Quantized** (hashed and uploaded): every value is an int. x and y are in 0..10000, c is in 0..1000.
 `quantizePerson`/`dequantizePerson` live in shared. All scoring runs on DEQUANTIZED values, so the phone and
-the server score bit-identical inputs. No floats are ever hashed.
+the server score bit-identical inputs. No floats are ever hashed, except a routine's `bpm` (whole or one
+decimal, e.g. bye-bye-shuffle's 172.6; JCS prints it with ECMAScript's shortest round trip, and
+`ROUTINE_SHA256_PINS` checks the routine shas on V8 in tests and on Hermes in the calibration self-test).
 
 ```ts
 PoseSeries = strict {
@@ -66,34 +71,92 @@ PoseSeries = strict {
   w: int, h: int,                 // upright image size, for aspect-correct vectors
   fps_cap: int,                   // ≤ 30
   sync_offset_ms: int,            // −500..500, already-applied A/V offset (see §4.4)
-  frames: { t: int /*ms since round t0, −3000..20000*/, n: int /*people seen*/, a: int[57] | null, b: int[57] | null }[]  // ≤ 700
+  frames: { t: int /*ms since round t0, −3000..45000*/, n: int /*people seen*/, a: int[57] | null, b: int[57] | null }[]  // ≤ 1500
+  // POSE_MAX_FRAMES 1500 / POSE_T_MAX_MS 45000: a 40 s round + the count-in + the tail at the 30 fps cap
 }
 pose_sha256 = hashJcs(PoseSeries)
 ```
 
 **Routine** (`packages/shared/src/dance/routines/<id>.ts`, generated):
 ```ts
-RoutineData = { schema_version: 1, id, version: int, title, song, bpm, duration_ms: 15000, first_beat_ms,
+RoutineData = { schema_version: 1, id, version: int, title, song, bpm,
+  duration_ms: int,                      // 5000..40000 (ROUTINE_MIN/MAX_DURATION_MS), per routine
+  first_beat_ms,                         // ≤ duration_ms
   count_in_beats: 3, w, h, mirrored_source: false, source: 'synthetic' | 'vision',
-  frames: { t: int, k: int[57] }[],      // quantized, ~15–30 fps
-  key_moves: { id: string, t: int, name: string }[],   // 8–16, beat-aligned
+  frames: { t: int, k: int[57] }[],      // quantized, ~15–30 fps, ≤ 1500, every t ≤ duration_ms
+  key_moves: { id: string, t: int, name: string }[],   // 8–16, beat-aligned, every t ≤ duration_ms
   media: { video: string | null, audio: string | null } }
 routineSha256(r) = hashJcs(r)   // cached
-ROUTINES: readonly RoutineData[]  // exactly 3; getRoutine(id)
+ROUTINES: readonly RoutineData[]  // exactly 3, the first is the default card; getRoutine(id)
 ```
-Three bundled routines are SYNTHETIC placeholders, generated procedurally by `scripts/dance-routine.ts synth`
-until we record the real reference videos and run the macOS tool (§8). The phone renders the reference
-as a mirrored animated skeleton when `media.video` is null.
+The bundled routines, in card order:
+- `bye-bye-shuffle` (32.6 s, 172.6 bpm, `source: 'vision'`): a real take extracted with the macOS tool (§8).
+  Its reference is a silhouette clip (`media.video = 'bye-bye-shuffle.mp4'`, `media.audio = null`: the music
+  is muxed in): a neon SAM 3.1 mask of the dancer on a dark `#0b0614` background, 720x808, 23.976 fps,
+  32.6 s, with an ORIGINAL synthesized drum track (first beat at 235 ms). The source footage is never
+  bundled. A local demo build may carry the original song instead: with `DANCE_LOCAL_MEDIA=1` (opt-in,
+  ignored in CI and on an EAS builder), Metro (`apps/mobile/metro.config.js`) bundles
+  `apps/mobile/assets/dance/local/<name>` in place of `apps/mobile/assets/dance/<name>` when it exists.
+  That folder is gitignored and in `.easignore`, and `scripts/eas-update.ts` strips the flag and refuses
+  an export whose assetmap lists a file from it, so only the drum version is ever committed, built on
+  EAS or published over the air. The routine (and its sha256) is the same either way.
+- `wave-pop`, `bounce-back` (15 s each): SYNTHETIC placeholders, generated procedurally by
+  `scripts/dance-routine.ts synth`. Their bytes, sha256s and scores are unchanged by the per-routine length.
+
+The phone renders the reference as a mirrored animated skeleton when `media.video` is null, and plays the
+mirrored clip (with its sound) otherwise.
+Everything timed on the round comes from the routine's `duration_ms`: the scorer's window and coverage bins
+(§4), the phone's round length, stop time, key-frame snapshot schedule, progress bar, beat counter and clock
+(§6), the stage's "N seconds" line, and the attempt's `max_ms` (`DANCE_MAX_MS` 50 s fits the longest).
 
 ## 3. Identity tracking + framing (shared, `dance/track.ts`)
 
 - `framingCheck(people, w, h)` → `{ok, reason: 'ok'|'need_two'|'too_many'|'feet'|'head'|'same_side'|'too_close', a?: idx, b?: idx}`.
   It passes only when there are exactly 2 people, each full body (nose or neck, both ankles, both hips with
   c ≥ FRAMING_CONF), one hip-center left of image center and the other right of it, with a gap between them.
-- `createTracker()`. Players are assigned at round start by hip-center x: **A = left in the image** (the
-  challenger stands on the left of the display). From then on, each person is matched to the nearest previous
-  hip-center (greedy NN with a max jump). Extra people are counted (`n`) and never become A or B.
-  The tracker also counts side swaps (A's hip x > B's hip x for ≥ SWAP_MIN_MS) and frames with n > 2.
+- `createTracker({w, h, start?})`. Players are assigned at round start either from an explicit initial
+  assignment (`start = {a, b}`: where A and B stood, as hip centres, when the phone identified them by face;
+  the two people nearest those spots, so **A may stand on the right**), or, without one, by hip-center x:
+  **A = left in the image** (the challenger stands on the left of the display), exactly as before. From then
+  on, each person is matched to the nearest previous hip-center (greedy NN with a max jump). Extra people are
+  counted (`n`) and never become A or B. The tracker also counts side swaps RELATIVE to the starting sides
+  (A and B each on the other's starting side for ≥ SWAP_MIN_MS) and frames with n > 2. The phone's round
+  tracker makes that round-start assignment on the series' FIRST frame (t ≥ −3000; a bet round's count-in
+  starts earlier, at go_at, so a preview tracker colours the count-in and the round tracker replays the
+  buffered frames from the window's start, `apps/mobile/src/dance/model/pipeline.ts`), so the phone and the
+  server see the same starting sides. `seriesChecks` (server) counts the same way, with the starting sides:
+  - A on the LEFT (the left / right rule, any sustained A-right-of-B is a swap), unless
+  - the server itself identified both players by face for this bet (`apps/server/src/judge/dance-faces.ts`:
+    the identify route notes the bet in memory when its answer assigned both parties, 30 min; no faces or
+    scores kept; a restart forgets it, which is the left / right rule): then the series' first frame with
+    both players, and a round whose A started on the right records `checks.a_start_side = 'right'` in
+    DanceEvidence. Absent otherwise, so every left / right record and its evidence_hash are unchanged, and
+    a recorder that labels B as A from the start is still a side swap.
+
+**Face assignment** (who is A, who is B). The recording phone tries it once the framing check passes, and it
+never blocks or fails the round:
+1. `captureStill()` on the pose view (§6.1): one full-size JPEG of the next frame sent to Vision, with that
+   frame's `ts`.
+2. The existing face stack (`apps/mobile/src/face`, a small-face ML Kit detector, `minFaceSize` 0.04, and the
+   same w600k_mbf embedder as the scan) finds the faces; each face box goes to the nearest person's head
+   keypoints (nose / eyes / ears, else neck) in the same frame (`dance/model/faceId.ts`). Only the faces on the
+   two framed players are embedded, and the still is deleted.
+3. `POST /v1/bets/:bet_id/dance/identify` (signed; `DanceIdentifyRequest {model, faces: [{embedding}] (1..4)}`
+   → `{assignments: [{face_index, party}]}`). Only the dance off's filming device may call it: while LOCKED, A's
+   judge cam bound to the room if there is one, else A's own phone(s); in ATTEMPT, the attempt's recorder
+   device. The server compares the probes ONLY with the two parties' active enrollments (the caller's own
+   included) with the face-match threshold (0.30) and margin (0.05), both ways: a face is party p only when p
+   is clearly that face's best party and that face is clearly p's best face, so each party gets at most one
+   face (`decideDanceAssignments`). No scores or vectors in the answer, nothing about the faces stored (not
+   even last_used_at; only the in-memory per-bet note that both were identified, §3 above), bodies never logged, the same plain-v0 / sealed embedding forms; one call in flight per user
+   and 30/min in its own bucket `face-match/dance`.
+4. Both players identified, as two different people: the phone follows them through the rest of framing
+   (`dance/model/identity.ts`, the shared tracker seeded at the still's frame) and seeds the round's tracker
+   with where they stand at the count-in. Anything else (not enrolled, no or one face, masks, a timeout after
+   2.5 s, a simulator build without the ML Kit detector, a network error) is the left / right rule, silently.
+   At most 3 tries per framing session, 4 s apart.
+5. Framing copy: with faces, each player's name tag sits over their skeleton; without, the `A ← | → B` hint as
+   before.
 
 ## 4. Scorer (shared, `dance/score.ts`, scorer_version `dance-score@1`)
 
@@ -131,8 +194,8 @@ poses. The overlap multiplies the continuous score, and it gates key moves: a ke
 player's motion energy in the preceding `KEY_MOTION_WINDOW_MS` is at least `KEY_MOTION_MIN` × the reference's.
 
 4.6 **Two layers.**
-- Live meter (display only): an EMA (`LIVE_EMA_ALPHA`) of the per-frame best-lag similarity × a short-window
-  movement overlap.
+- Live meter (display only, the number on each player's name tag, §6.3): an EMA (`LIVE_EMA_ALPHA`) of the
+  per-frame best-lag similarity × a short-window movement overlap.
 - Key moves: for each key move at time t, take the best sim of the player frames in [t − 200, t + 500] against
   the reference pose at t. ≥ `PERFECT_AT` is PERFECT (100 pts), ≥ `GOOD_AT` is GOOD (60 pts), anything lower,
   or a failed motion gate, is a MISS (0).
@@ -158,17 +221,20 @@ DanceEvidence = strict {           // packages/shared/src/evidence.ts; evidence_
   scores: { a: int, b: int },       // tenths, SERVER-recomputed from PoseSeries
   winner: 'A' | 'B' | null, too_close: boolean, failed: string | null,
   key_moves: { id, a: 'PERFECT'|'GOOD'|'MISS', b: 'PERFECT'|'GOOD'|'MISS' }[],
-  checks: { coverage_a_pct, coverage_b_pct, max_people, side_swaps },
+  checks: { coverage_a_pct, coverage_b_pct, max_people, side_swaps, a_start_side?: 'right' },
   frames: EvidenceFrame[] (1..6, the key frames uploaded), clip_sha256: Hex32 | null }
 ```
 
 - Upload: `POST /v1/bets/:bet_id/attempts/:n/dance` (multipart, signed). The parts are `upload` (JSON
   `DanceUpload = {routine_id, routine_sha256, series: PoseSeries, pose_sha256, client_scores:{a,b}, clip_sha256,
-  frames: [{index, t_ms, sha256, width, height, bytes}]}`) and `frame` × 4 JPEGs (≤ 200 KB each). The server
-  verifies the frame hashes and pose_sha256, recomputes the scores with the shared scorer, builds
+  frames: [{index, t_ms, sha256, width, height, bytes}]}`) and `frame` × 4 JPEGs (≤ 200 KB each). The body cap
+  (`DANCE_BODY_LIMIT`) is 4 MiB: a 40 s round at 30 fps is ~1300 frames, ≤ ~1.1 MB of JSON. The server
+  verifies the frame hashes and pose_sha256, recomputes the scores with the shared scorer (against the bundled
+  routine, so the round window is that routine's `duration_ms`), builds
   DanceEvidence, and stores `attempts.evidence_canonical = jcs(DanceEvidence)`. The bet moves to JUDGING.
 - Validation job (Claude, `apps/server/src/judge/dance.ts`) gets the terms, both scores, the per-move breakdown,
-  the deterministic checks and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
+  the deterministic checks (including who started on which side: A left unless `checks.a_start_side` says
+  right, which only a server-side face identification allows, §3) and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
   nobody_left, no_third_person, no_side_swap, notes, announcer_line}`. `valid` comes first, so the mock LLM's
   default is the happy path. If the LLM fails or times out, the round settles on the score with a canned line,
   and the validation is recorded as skipped.
@@ -203,6 +269,9 @@ worklets package is not installed.
     and recording starts.
   - `stopRound()` → `{clipUri, clipSha256, snapshots: {t_ms, uri, width, height, bytes, sha256}[]}`. The
     snapshots are JPEGs, ≤ 512 px and ≤ 200 KB.
+  - `captureStill()` → `{ok: true, uri, width, height, ts} | {ok: false, message}`: one full-size upright JPEG
+    (720x1280) of the next frame sent to Vision, `ts` being that frame's `onPoses.ts` (the face assignment,
+    §3). The caller deletes it; a binary without it answers `{ok: false}`.
 - JS: `apps/mobile/modules/dance-pose/index.ts` exports the typed view plus `isDancePoseAvailable()`. The app
   loads it only through `importSafely`. The simulator has no camera, so it reports `no_camera`, and the app
   offers the debug replay.
@@ -211,19 +280,49 @@ worklets package is not installed.
 - The negotiate screen gets a "Dance off" panel: 3 routine cards and a stake → `POST /terms/dance` → the
   existing confirm → "You're on" + Face ID lock.
 - On LOCKED, the recording phone (the room's judge cam, or else A's phone) routes to `dance`:
-  1. Framing check (live skeletons, "A ← | → B"). Start is disabled until framing passes for 1 s.
+  1. Framing check (live skeletons, "A ← | → B", or the players' name tags once the face assignment (§3)
+     identified both). Start is disabled until framing passes for 1 s; the face assignment never holds it.
   2. `POST /attempts`.
-  3. Count-in "3, 2, 1" on the routine's beat (visual + haptic).
-  4. At one shared instant t0: `startRound`, the reference video (or skeleton) and the music start, and
-     the live scoring starts.
-  5. 15 s of dancing.
+  3. Count-in "3, 2, 1" on the routine's beat (visual + haptic), starting at the attempt's `go_at`
+     (the server's instant, GO_DELAY_MS after POST /attempts).
+  4. At one shared instant t0 = `go_at` + 3 beats: `startRound`, the reference video (or skeleton) and the
+     music start, and the live scoring starts. Both phones map `go_at` onto their own monotonic clock
+     (`apps/mobile/src/dance/model/schedule.ts`) through a round-trip-compensated server-clock offset:
+     each phone probes `GET /health` (5 samples, the minimum-RTT one, offset = server_time − the
+     request's midpoint) when it enters a dance screen (`apps/mobile/src/app/danceClock.ts`,
+     `apps/mobile/src/net/clockProbe.ts`), falling back to the app Clock's offset until it answers. The
+     phones then agree to within each probe's RTT / 2. A recorder handed an attempt too late to meet its
+     t0 ("Dance again" on an attempt already used, one open at mount) counts in from now and shows its
+     own reference; while a display phone is still playing that attempt's go_at timeline it stays silent
+     until the display's routine is over (`fallbackMutedUntil`: one song in the room, never two out of
+     step), then plays its own music.
+  5. The routine's `duration_ms` of dancing (the music, if any, plays from t0).
   6. `stopRound` → local final scoring → result screen, with no network so far.
   7. Upload → ruling → the existing RulingScreen, GG and payout.
-- The other phone shows a "Dance off live" status screen.
+- B's phone is the DISPLAY while the bet is LOCKED or in ATTEMPT (the recorder is always one of A's devices,
+  so B's phone never records): full screen, the reference MIRRORED and contain-fit on the routine's dark
+  backdrop, with its music, the screen kept awake, a big beat-synced "3, 2, 1" from `go_at`, then the
+  reference from t0. A routine without a clip shows its mirrored skeleton full screen. It follows the
+  phone's orientation like the rest of the app (no orientation lock: that needs a native module the
+  binary does not have), so it is meant to stand upright; on its side the contain-fit still shows the
+  whole reference, smaller. A clip paused by an interruption (the app backgrounded, a call, Siri) seeks
+  to where the round is and plays again when the app is active (`clipResumeSec`). From JUDGING on it
+  shows the "Dance off live" screen with the score, then the usual ruling screens.
+- Presence: the recorder plays the music and shows its own reference only when there is no display
+  phone: party B online in the bet's room (room presence: a live socket now or within 30 s), read when
+  the count-in starts. With a display phone it is silent and shows the camera panel only. There is no
+  display-to-recorder ack on the wire (it would need a new event type and route).
+- A's phone, when a judge cam records, shows the "Dance off live" status screen.
 
 6.3 **Display layout** (it is what HDMI mirroring shows): the mirrored reference, the live camera view with
-skeleton overlays for A and B, two live match meters, PERFECT/GOOD/MISS popups at each key move, and the beat
-counter.
+skeleton overlays for A and B, a live name tag pinned above each player's head (a small pill in the player's
+colour: first name + live match score, `Logan · 87`, and a tiny face mark when that player was identified by
+face; placed from the live head keypoints with a short EMA, kept inside the panel and off the other tag,
+fading out when the player is lost and back in where they are found, never sliding onto the other player;
+`dance/model/nameTags.ts`), PERFECT/GOOD/MISS popups over each player's side at each key move, and the beat
+counter. The tags are the live score readout: there are no separate match meters. With a display phone in
+the room the recording phone drops the reference panel (the display phone shows it) and the camera panel takes
+the space.
 
 6.4 **Debug / calibration** (hidden; Diagnostics → "Dance calibration"):
 - Live readout of the raw scores, per-limb similarity, current lag and FPS.

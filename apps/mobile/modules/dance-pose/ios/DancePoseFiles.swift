@@ -82,7 +82,7 @@ enum DancePoseFiles {
     return hex(SHA256.hash(data: data))
   }
 
-  /// Streams the file through SHA-256 in 1 MB chunks (a 15 s 720p clip is ~10 MB).
+  /// Streams the file through SHA-256 in 1 MB chunks (a 15 s 720p clip is ~10 MB, a 40 s one ~27 MB).
   static func sha256Hex(ofFileAt url: URL) throws -> String {
     let handle = try FileHandle(forReadingFrom: url)
     defer {
@@ -102,14 +102,34 @@ enum DancePoseFiles {
   }
 }
 
-/// Pixel buffer -> small JPEG (long side <= 512 px, <= 200 KB). Used only on the snapshot queue.
+/// Pixel buffer -> JPEG. The key-frame snapshots are small (long side <= 512 px, <= 200 KB); the
+/// face still (captureStill) keeps the full 720x1280 frame so the face detector sees small faces.
+/// Used only on the snapshot queue.
 final class SnapshotEncoder {
   static let maxLongSide: CGFloat = 512
   static let maxBytes = 200_000
   static let startQuality: CGFloat = 0.7
   static let minQuality: CGFloat = 0.2
 
+  /// The face still: the whole upright frame, at a quality the face embedder reads well.
+  static let stillMaxLongSide: CGFloat = 1280
+  static let stillMaxBytes = 1_500_000
+  static let stillQuality: CGFloat = 0.9
+
+  private let maxLongSide: CGFloat
+  private let maxBytes: Int
+  private let startQuality: CGFloat
   private let context = CIContext(options: [.cacheIntermediates: false])
+
+  init(
+    maxLongSide: CGFloat = SnapshotEncoder.maxLongSide,
+    maxBytes: Int = SnapshotEncoder.maxBytes,
+    startQuality: CGFloat = SnapshotEncoder.startQuality
+  ) {
+    self.maxLongSide = maxLongSide
+    self.maxBytes = maxBytes
+    self.startQuality = startQuality
+  }
 
   func encode(pixelBuffer: CVPixelBuffer, tMs: Double, to url: URL) throws -> SnapshotFile {
     let image = CIImage(cvPixelBuffer: pixelBuffer)
@@ -118,7 +138,7 @@ final class SnapshotEncoder {
     guard longSide > 0 else {
       throw DancePoseError("empty frame")
     }
-    let scale = min(1, Self.maxLongSide / longSide)
+    let scale = min(1, maxLongSide / longSide)
     let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
     let rect = CGRect(
       x: scaled.extent.origin.x,
@@ -132,14 +152,14 @@ final class SnapshotEncoder {
       throw DancePoseError("could not render the frame")
     }
 
-    var quality = Self.startQuality
+    var quality = startQuality
     var data = try jpeg(cgImage, quality: quality)
-    while data.count > Self.maxBytes && quality > Self.minQuality {
+    while data.count > maxBytes && quality > Self.minQuality {
       quality -= 0.1
       data = try jpeg(cgImage, quality: quality)
     }
-    guard data.count <= Self.maxBytes else {
-      throw DancePoseError("snapshot is over \(Self.maxBytes) bytes")
+    guard data.count <= maxBytes else {
+      throw DancePoseError("snapshot is over \(maxBytes) bytes")
     }
     try data.write(to: url, options: .atomic)
     return SnapshotFile(

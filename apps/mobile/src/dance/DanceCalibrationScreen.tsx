@@ -7,8 +7,15 @@
 //   real time (the reference plays alongside), or score it at once, plus a sync sweep that
 //   re-scores the same poses at offsets −300..300 ms and names the best one.
 // - The A/V sync offset stepper (persisted) and the debug-overlay switch for the live screen.
-// - Self test: a routine scored against itself must be 100.0 for both players.
-import { getRoutine, ROUTINES, type RoutineData } from '@youre-on/shared/dance/routine';
+// - Self test: a routine scored against itself must be 100.0 for both players, and its sha256
+//   on Hermes must equal the pin V8 computed (the server refuses a mismatch as wrong_routine).
+import {
+  getRoutine,
+  ROUTINE_SHA256_PINS,
+  ROUTINES,
+  routineSha256,
+  type RoutineData,
+} from '@youre-on/shared/dance/routine';
 import {
   createLiveScorer,
   scoreRound,
@@ -360,11 +367,13 @@ export default function DanceCalibrationScreen({ onClose }: { onClose: () => voi
     const r = scoreRound(routine, selfTestSeries(routine));
     const ms = Math.round(nowMs() - t);
     const perfect = r.a.key_moves.filter((m) => m.grade === 'PERFECT').length;
-    const pass = r.a.score_x10 === 1000 && r.b.score_x10 === 1000;
+    const sha = routineSha256(routine);
+    const shaOk = sha === ROUTINE_SHA256_PINS[routine.id];
+    const pass = r.a.score_x10 === 1000 && r.b.score_x10 === 1000 && shaOk;
     setSelfTest(
       `${pass ? 'PASS' : 'FAIL'} ${routine.id}: A ${scoreText(r.a.score_x10)} B ` +
         `${scoreText(r.b.score_x10)} · ${perfect}/${r.a.key_moves.length} perfect · ` +
-        `${r.a.convention} · ${ms} ms`,
+        `${r.a.convention} · sha ${sha.slice(0, 16)} ${shaOk ? 'ok' : 'MISMATCH'} · ${ms} ms`,
     );
   };
 

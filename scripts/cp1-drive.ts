@@ -742,7 +742,7 @@ run(async () => {
     console.log(`  ruling_hash ${ruling.ruling_hash}, evidence_hash ${r.evidence_hash}`);
   }
 
-  // ---- Dance Off: A's phone records one 15 s round, scores it, uploads poses + key frames ----
+  // ---- Dance Off: A's phone records one round (the routine's length), scores it, uploads ----
   if (danceRoutine) {
     const att = must(
       await api.signed(A, 'POST', `/v1/bets/${betId}/attempts`, {
@@ -1231,7 +1231,7 @@ function routinePoseAt(r: RoutineData, t: number): number[] {
 }
 
 /**
- * A synthetic dancer at 20 fps over the 15 s round: `good` follows the routine 80 ms late with a
+ * A synthetic dancer at 20 fps over the routine: `good` follows the routine 80 ms late with a
  * little jitter; otherwise 650 ms late and frozen from 7 s on. Shifted left (A) or right (B).
  */
 function dancer(r: RoutineData, good: boolean, side: -1 | 1, seed: number): number[][] {

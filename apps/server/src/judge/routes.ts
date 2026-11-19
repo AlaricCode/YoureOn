@@ -89,6 +89,7 @@ import {
   type DanceVoidWhy,
 } from './cues';
 import { buildDanceRuling, callDanceValidator, type DanceCheck } from './dance';
+import { danceFacesIdentified } from './dance-faces';
 import {
   applyCameraVeto,
   runAttemptChecks,
@@ -131,12 +132,17 @@ export const STUCK_JUDGING_MS = 20_000;
 /** gg_secs in the RULING cue when APPEAL_WINDOW_S is unset. */
 const DEFAULT_GG_SECS = 10;
 /**
- * DANCE-OFF §6.2: a dance attempt's recording window (the count-in, the 15 s routine and slack;
- * = the attempts_duration CHECK's 30 s), instead of MS_PER_TRY × count.
+ * DANCE-OFF §6.2: a dance attempt's recording window, instead of MS_PER_TRY × count. Each routine
+ * has its own length (5..40 s); this fits the longest (40 s) + the count-in (3 beats, ≤ 4.5 s at
+ * 40 bpm) + the recording tail, with slack. Informational: the phone stops on the routine's end.
  */
-export const DANCE_MAX_MS = 30_000;
-/** The dance multipart: ≤ 6 key frames × 200 KB + the PoseSeries JSON (≤ 700 frames, ~0.5 MB). */
-export const DANCE_BODY_LIMIT = Math.floor(2.5 * 1024 * 1024);
+export const DANCE_MAX_MS = 50_000;
+/**
+ * The dance multipart: ≤ 6 key frames × 200 KB (1.2 MB) + the PoseSeries JSON. A 40 s round +
+ * count-in at the 30 fps cap is ~1300 frames (POSE_MAX_FRAMES 1500), ≤ ~720 bytes each with both
+ * players (2 × 57 ints of ≤ 5 digits), so ≤ ~1.1 MB of poses. 4 MiB leaves ~1.7 MB of margin.
+ */
+export const DANCE_BODY_LIMIT = 4 * 1024 * 1024;
 
 /** States POST …/attempts may be called in (ATTEMPT/JUDGING only for a replay or after a REDO). */
 const ATTEMPT_FROM: readonly BetRow['state'][] = ['LOCKED', 'ATTEMPT', 'JUDGING'];
@@ -290,7 +296,7 @@ const nonPerformerId = (bet: BetRow, performer: Party) =>
  * (the mobile judge-cam poll follows A's bets), so only A's judge-cam devices count: a judge cam
  * B binds to the room never becomes a dance recorder (the recorder uploads the whole PoseSeries).
  */
-async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
+export async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
   // findJudgeCam takes the PERFORMER and returns the other party's cam: 'B' -> A's devices.
   return findJudgeCam(db, bet, 'B');
 }
@@ -336,7 +342,7 @@ function danceAccepted(e: DanceEvidence, client: { a: number; b: number }): Danc
  * Evidence provenance (ARCHITECTURE §6): only the attempt's recorder device may upload, and for a
  * judge_cam attempt only while it is still this room's judge cam.
  */
-async function assertRecorder(
+export async function assertRecorder(
   deps: AppDeps,
   att: AttemptRow,
   bet: BetRow,
@@ -1406,6 +1412,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           series: upload.series,
           frames: upload.frames.map((f) => ({ index: f.index, t_ms: f.t_ms, sha256: f.sha256 })),
           clip_sha256: upload.clip_sha256,
+          // A may start on the right only when this server identified both by face.
+          faces_identified: danceFacesIdentified(deps, betId),
         });
         const canonical = jcs(evidence);
         const evidenceHash = sha256Hex(canonical);

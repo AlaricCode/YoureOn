@@ -34,8 +34,10 @@ about half the frame width, so the routine has to stay on the spot:
   the beat (§4.6), and arms carry the most weight in the scorer.
 - Face the camera. Full turns and back-to-camera moves confuse left and right in Vision.
 - No floor work, no jumps that leave the frame, and nothing that hides the hands behind the body.
-- Plan 8–16 key moves in 15 s. At 120 bpm, a key move every 2 beats gives about 14, and every 4
-  beats from a first beat at 500 ms gives 8.
+- A routine is 5 to 40 s long (`--duration-ms`, 15000 by default; each routine has its own length
+  and the Terms text says it). Plan 8–16 key moves over it. For 15 s at 120 bpm, a key move every 2
+  beats gives about 14, and every 4 beats from a first beat at 500 ms gives 8; for the 32.6 s
+  `bye-bye-shuffle` at 172.6 bpm, every 8 beats from 235 ms gives 11.
 
 ### 2. Make the music
 
@@ -84,7 +86,8 @@ ffmpeg -hide_banner -i tools/dance-ref/work/raw.mov \
 ```
 
 The first `silence_end: S` is the music start, `S` seconds into the raw file. Cut the clip at S,
-replace the camera audio with the clean track, keep exactly 15 s, and encode for the phone:
+replace the camera audio with the clean track, keep exactly the routine length (`-t`, here 15 s; it
+must match `--duration-ms`), and encode for the phone:
 
 ```sh
 mkdir -p apps/mobile/assets/dance
@@ -134,8 +137,26 @@ npx tsx scripts/dance-routine.ts import tools/dance-ref/work/<id>.json --id <id>
 npx tsx scripts/dance-routine.ts selftest
 ```
 
-`import` writes `packages/shared/src/dance/routines/<id>.ts`. `selftest` scores every routine
-against itself and expects 100. There are exactly 3 bundled routines (`ROUTINES`), so either reuse
+`import` writes `packages/shared/src/dance/routines/<id>.ts`. It keeps the JSON's `duration_ms`
+(5000..40000; `--duration-ms` overrides it, and a JSON without one gets 15000), keeps only the
+frames inside it, and picks key moves inside it. `--audio <file>` / `--video <file>` set the
+routine's `media` (the bundled file under `apps/mobile/assets/dance/`). `selftest` scores every
+routine against itself and expects 100.
+
+The real routine `bye-bye-shuffle` (32.6 s, a silhouette reference clip with an original
+synthesized drum track muxed in) was imported with:
+
+```sh
+npx tsx scripts/dance-routine.ts import tools/dance-ref/work/left.json --id bye-bye-shuffle \
+  --title "Bye Bye Shuffle" --song "Original drum track (You're On), 172.6 BPM" \
+  --bpm 172.6 --first-beat-ms 235 --every 8 --video bye-bye-shuffle.mp4
+```
+
+Its source footage stays in `tools/dance-ref/work/` (gitignored) and never ships. The phone plays
+`apps/mobile/assets/dance/bye-bye-shuffle.mp4` (`work/silhouette-drums.mp4`: the SAM 3.1 silhouette
+on #0b0614 with the drum track). For a local demo build with the original song, copy
+`work/silhouette-song.mp4` to `apps/mobile/assets/dance/local/bye-bye-shuffle.mp4` (gitignored and
+in `.easignore`; Metro bundles it in place of the committed one). Never commit that file. There are exactly 3 bundled routines (`ROUTINES`), so either reuse
 the id of the synthetic placeholder you are replacing, or swap the new routine into the registry
 in its place. Raise `--routine-version` whenever you re-import a routine that is already in use.
 Its sha256 is part of the bet terms (§1).

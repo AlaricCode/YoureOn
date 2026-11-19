@@ -8,7 +8,7 @@ import type { BetState } from '@youre-on/shared/bet-state';
 import type { UserRef } from '@youre-on/shared/primitives';
 
 import { isAppealed, type BetModel } from '../bets/store';
-import { inDanceRound, isDanceBet, recordsDance } from './danceFlow';
+import { inDanceRound, isDanceBet, recordsDance, showsDanceDisplay } from './danceFlow';
 
 export type Route =
   | 'boot'
@@ -35,9 +35,14 @@ export type Route =
   | 'payout'
   /**
    * A Dance Off round on the phone that records it (the room's judge cam, else A's phone):
-   * framing, count-in, the 15 s dance with live scoring, the upload, then waiting for the ruling.
+   * framing, count-in, the routine (its own length) with live scoring, the upload, then the ruling.
    */
   | 'dance'
+  /**
+   * A Dance Off round on B's phone, the display: the mirrored reference full screen with the
+   * music, in step with the recording phone (LOCKED and ATTEMPT).
+   */
+  | 'danceDisplay'
   /** A Dance Off round on the other phone: "Dance off live", then the score. */
   | 'danceWatch';
 
@@ -177,7 +182,8 @@ export function routeForBet(app: AppState, b: BetModel): Route {
   if (isDanceBet(b) && app.judgeCam && (inDanceRound(state) || state === 'RULED')) return 'dance';
   if (isDanceBet(b) && inDanceRound(state)) {
     if (state === 'LOCKED' && !app.lockAcked.includes(b.bet_id)) return 'terms';
-    return recordsDance(app, b) ? 'dance' : 'danceWatch';
+    if (recordsDance(app, b)) return 'dance';
+    return showsDanceDisplay(app, b) ? 'danceDisplay' : 'danceWatch';
   }
   // The recording device films whatever attempt names it, whoever's phone it is.
   const recording =

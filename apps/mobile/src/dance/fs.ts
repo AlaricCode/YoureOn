@@ -62,3 +62,16 @@ export const danceSettings = createDanceSettingsStore(documentTextFile(DANCE_SET
 
 /** The app-wide session store. */
 export const danceSessions = createDanceSessionStore(documentSessionDir());
+
+/**
+ * Deletes a file the pose view wrote to Caches (the face still, once its faces are embedded).
+ * Best effort: the native module prunes Caches/dance-pose after a day anyway.
+ */
+export function deleteCacheFile(uri: string): void {
+  try {
+    const f = new File(uri);
+    if (f.exists) f.delete();
+  } catch {
+    // already gone, or not ours to delete
+  }
+}

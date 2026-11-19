@@ -274,10 +274,11 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
       10,
     );
 
-  it('the locked card first; then A records and B watches', () => {
+  it('the locked card first; then A records and B is the display', () => {
     expect(routeForBet(A, locked())).toBe('terms');
     expect(routeForBet(ack(A), locked())).toBe('dance');
-    expect(routeForBet(ack(B), locked('B'))).toBe('danceWatch');
+    expect(routeForBet(ack(B), locked('B'))).toBe('danceDisplay');
+    expect(routeForBet(B, locked('B'))).toBe('terms');
   });
 
   it('two phones: A filming itself stays on the dance screen through the judging', () => {
@@ -285,7 +286,9 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
     expect(routeForBet(ack(A), m)).toBe('dance');
     m = fold(m, stateEv('JUDGING', 11));
     expect(routeForBet(ack(A), m)).toBe('dance');
-    const b = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_A), stateEv('JUDGING', 11));
+    const live = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_A));
+    expect(routeForBet(ack(B), live)).toBe('danceDisplay');
+    const b = fold(live, stateEv('JUDGING', 11));
     expect(routeForBet(ack(B), b)).toBe('danceWatch');
   });
 
@@ -294,6 +297,9 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
     const m = fold(locked(), stateEv('ATTEMPT', 9), started(DEVICE_CAM));
     expect(routeForBet(cam, m)).toBe('dance');
     expect(routeForBet(ack(A), m)).toBe('danceWatch');
+    // B's phone is the display whoever records.
+    const bm = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_CAM));
+    expect(routeForBet(ack(B), bm)).toBe('danceDisplay');
     // Before the lock the judge cam stands by, as for any bet.
     const drafting = fromSnapshot(snapshot({ state: 'DRAFTING', envelope: danceEnvelope() }));
     expect(routeForBet(cam, drafting)).toBe('judgeCam');

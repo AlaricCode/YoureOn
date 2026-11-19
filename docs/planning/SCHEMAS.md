@@ -512,7 +512,7 @@ These fields differ from §2.5. A says "Bitcoin's up by the end of this pitch", 
 
 | Field | Text |
 |---|---|
-| `claim` | `Dance Off: <routine title>, 15 seconds, higher match score wins, $X each` (A = challenger) |
+| `claim` | `Dance Off: <routine title>, <N> seconds, higher match score wins, $X each` (A = challenger; N = `Math.round(duration_ms / 1000)` of the routine, so a 15 s routine reads "15 seconds") |
 | `success_criteria[0]` | `Routine <routine_id> v<version> sha256:<first 16 hex of routineSha256>` |
 | `success_criteria[1]` | `Higher match score wins; scores within 2 points are too close to call (refund)` (`TIE_MARGIN_X10` 20) |
 | `failure_criteria` | `[]` |
@@ -832,7 +832,7 @@ Pose data and the scorer live in `packages/shared/src/dance/` (`joints`, `pose`,
 // packages/shared/src/dance/pose.ts — every value an int; pose_sha256 = hashJcs(PoseSeries)
 export const PoseKeypoints = z.array(z.number().int().min(0).max(10_000)).length(57)   // x, y 0..10000; c ≤ 1000 (refined)
 export const PoseFrame = z.strictObject({
-  t: z.number().int().min(-3_000).max(20_000),   // ms since round t0 (count-in frames are negative)
+  t: z.number().int().min(-3_000).max(45_000),   // ms since round t0 (count-in negative; fits a 40 s routine)
   n: z.number().int().min(0).max(32),             // people seen; extra people are never scored
   a: PoseKeypoints.nullable(),                    // A = left in the image at round start
   b: PoseKeypoints.nullable(),
@@ -842,7 +842,7 @@ export const PoseSeries = z.strictObject({
   w: z.number().int().min(1).max(8192), h: z.number().int().min(1).max(8192),   // upright image size (aspect-correct vectors)
   fps_cap: z.number().int().min(1).max(30),
   sync_offset_ms: z.number().int().min(-500).max(500),   // the scorer subtracts it from every t
-  frames: z.array(PoseFrame).max(700),                    // t never decreases (refined)
+  frames: z.array(PoseFrame).max(1_500),                  // t never decreases (refined); 40 s + count-in at 30 fps
 });
 
 // packages/shared/src/evidence.ts — strict, hashed: evidence_hash = hashJcs(DanceEvidence)
@@ -855,14 +855,15 @@ export const DanceEvidence = z.strictObject({
   routine: z.strictObject({ id: z.string().min(1).max(32), version: z.number().int().min(1), sha256: Hex32 }),
   scorer_version: z.literal('dance-score@1'),
   pose_sha256: Hex32,
-  pose_frames: z.number().int().min(0).max(700),
+  pose_frames: z.number().int().min(0).max(1_500),
   sync_offset_ms: z.number().int().min(-500).max(500),
   scores: z.strictObject({ a: ScoreX10, b: ScoreX10 }),     // int tenths 0..1000, SERVER-recomputed from the series
   winner: Party.nullable(),
   too_close: z.boolean(),                                    // |a − b| < TIE_MARGIN_X10 (20)
   failed: z.enum(['coverage_a', 'coverage_b', 'no_frames']).nullable(),
   key_moves: z.array(z.strictObject({ id: z.string().min(1).max(24), a: Grade, b: Grade })).max(16),   // Grade = PERFECT | GOOD | MISS
-  checks: z.strictObject({ coverage_a_pct: Pct, coverage_b_pct: Pct, max_people: z.number().int().min(0), side_swaps: z.number().int().min(0) }),
+  checks: z.strictObject({ coverage_a_pct: Pct, coverage_b_pct: Pct, max_people: z.number().int().min(0), side_swaps: z.number().int().min(0),
+    a_start_side: z.literal('right').optional() }),   // only when the server identified both by face AND A started on the right (DANCE-OFF §3)
   frames: z.array(EvidenceFrame).min(1).max(6),              // the uploaded key frames (= the ruling's frame_hashes)
   clip_sha256: Hex32.nullable(),
 });
@@ -877,9 +878,9 @@ export const DanceUpload = z.object({
 });
 ```
 
-- A routine (`RoutineData`, generated into `dance/routines/<id>.ts` by `scripts/dance-routine.ts`) is `{schema_version: 1, id, version, title, song, bpm, duration_ms: 15000, first_beat_ms, count_in_beats: 3, w, h, mirrored_source: false, source: 'synthetic' | 'vision', frames: {t, k}[], key_moves: {id, t, name}[] (8–16), media: {video, audio}}`; `routineSha256(r) = hashJcs(r)`. A routine never changes once a bet locks on it: a new take is a new `version`. `scripts/dance-routine.ts import` (pure half: `dance/routine-import.ts`, not in the barrel) keeps key-move times as given (clamped to 0..15000, de-duplicated, thinned to 16, never snapped to a frame, since the scorer finds the nearest reference frame), and without `--key-moves`, `--every K` or JSON `key_moves` it picks every K beats from `first_beat_ms` (smallest K giving ≤ 16, 500 ms clear of both ends).
-- The scorer (`scoreRound(routine, series)`, `dance-score@1`, every constant in `DANCE_SCORING`) runs on DEQUANTIZED values with only + − × ÷ and `Math.sqrt` (plus `Math.pow` in the display curve), so the phone (Hermes) and the server (V8) agree bit for bit. `buildDanceEvidence()` (`dance/evidence.ts`) re-scores the series and builds the record; `seriesChecks()` recomputes `max_people` and `side_swaps`.
-- No float is ever hashed: `PoseSeries`, `RoutineData` and `DanceEvidence` hold ints, strings and booleans only.
+- A routine (`RoutineData`, generated into `dance/routines/<id>.ts` by `scripts/dance-routine.ts`) is `{schema_version: 1, id, version, title, song, bpm, duration_ms (int 5000..40000, per routine; frames, key moves and first_beat_ms are all ≤ it), first_beat_ms, count_in_beats: 3, w, h, mirrored_source: false, source: 'synthetic' | 'vision', frames: {t, k}[], key_moves: {id, t, name}[] (8–16), media: {video, audio}}`; `routineSha256(r) = hashJcs(r)`. A routine never changes once a bet locks on it: a new take is a new `version`. `scripts/dance-routine.ts import` (pure half: `dance/routine-import.ts`, not in the barrel) keeps key-move times as given (clamped to 0..duration_ms: the JSON's `duration_ms` or `--duration-ms`, 5000..40000, 15000 when neither is given; de-duplicated, thinned to 16, never snapped to a frame, since the scorer finds the nearest reference frame), and without `--key-moves`, `--every K` or JSON `key_moves` it picks every K beats from `first_beat_ms` (smallest K giving ≤ 16, 500 ms clear of both ends).
+- The scorer (`scoreRound(routine, series)`, `dance-score@1`, every constant in `DANCE_SCORING`) runs on DEQUANTIZED values with only + − × ÷ and `Math.sqrt` (plus `Math.pow` in the display curve), so the phone (Hermes) and the server (V8) agree bit for bit. `buildDanceEvidence()` (`dance/evidence.ts`) re-scores the series and builds the record; `seriesChecks()` recomputes `max_people` and `side_swaps`: relative to A on the LEFT (the left / right rule), or, when the server holds this bet's face identification of both players (`buildDanceEvidence({faces_identified})`), relative to the starting sides read from the series' first frame with both players; `a_start_side: 'right'` is written only in that second case when A started on the right, so a left / right round's record is unchanged.
+- No float is ever hashed, with ONE exception: `RoutineData.bpm`, whole or with one decimal (bye-bye-shuffle is 172.6; the schema refuses finer). JCS writes it with ECMAScript Number::toString, the spec's shortest round trip, so Hermes and V8 print the same `172.6`; `ROUTINE_SHA256_PINS` pins every bundled routine's sha, checked on V8 by `test/dance-duration.test.ts` and on Hermes by the phone's calibration self-test. Otherwise `PoseSeries`, `RoutineData` and `DanceEvidence` hold ints, strings and booleans only.
 
 ---
 

@@ -640,8 +640,6 @@ export function finishPlayer(
   };
 }
 
-const COVERAGE_BINS = Math.ceil(15_000 / S.COVERAGE_BIN_MS);
-
 /** Coverage bins for a routine's duration. */
 const binCount = (durationMs: number): number =>
   Math.max(1, Math.ceil(durationMs / S.COVERAGE_BIN_MS));
@@ -911,5 +909,6 @@ export function createLiveScorer(routine: RoutineData, opts: LiveScorerOptions =
   };
 }
 
-/** Bins used for coverage over the standard 15 s routine (exported for the debug readout). */
-export const DANCE_COVERAGE_BINS = COVERAGE_BINS;
+/** Bins used for coverage over a routine (exported for the debug readout). */
+export const danceCoverageBins = (r: Pick<RoutineData, 'duration_ms'>): number =>
+  binCount(r.duration_ms);

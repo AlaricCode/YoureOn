@@ -8,7 +8,7 @@ import {
   type AppealVote,
   type PanelProvider,
 } from '@youre-on/shared/appeal';
-import { DANCE_ROUND_SECONDS, parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
+import { danceRoundSeconds, parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import { formatUsd, type MicroUsdc } from '@youre-on/shared/money';
 import { ratioLabel, toWinLine } from '@youre-on/shared/odds-math';
 import { formatPrice } from '@youre-on/shared/settlement';
@@ -54,7 +54,7 @@ export interface BetView {
   lineUsd: string | null;
   deadline: string;
   termsCode: string;
-  /** Attempts line: "1 try", "Best of 3"; a dance off's round: "15 seconds". */
+  /** Attempts line: "1 try", "Best of 3"; a dance off's round: the routine's "15 seconds". */
   attempts: string;
   /** Dance offs: the bound routine's title ("Wave Pop"), verified against the bundled one. */
   routineTitle: string | null;
@@ -92,8 +92,11 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
   // only when it is the bundled routine the scorer uses (id, version and hash all match).
   const routine = kind === 'dance' ? parseDanceTermsRoutine(terms) : null;
   const routineTitle = routine?.ok ? routine.routine.title : null;
+  // The round length is the routine's own (15 s, 32.6 s → "33 seconds", ...).
+  const seconds = kind === 'dance' ? danceRoundSeconds(terms) : null;
+  const roundLine = seconds === null ? 'One round' : `${seconds} seconds`;
   const success = routineTitle
-    ? [`${routineTitle}, ${DANCE_ROUND_SECONDS} seconds`, ...terms.success_criteria.slice(1)]
+    ? [`${routineTitle}, ${roundLine}`, ...terms.success_criteria.slice(1)]
     : terms.success_criteria;
   return {
     me,
@@ -118,10 +121,7 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
     lineUsd: terms.market?.strike.value ? formatPrice(terms.market.strike.value) : null,
     deadline: terms.deadline,
     termsCode: termsCode(termsHash),
-    attempts:
-      kind === 'dance'
-        ? `${DANCE_ROUND_SECONDS} seconds`
-        : ATTEMPTS[terms.attempts.rule](terms.attempts.count),
+    attempts: kind === 'dance' ? roundLine : ATTEMPTS[terms.attempts.rule](terms.attempts.count),
     routineTitle,
   };
 }

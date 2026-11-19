@@ -1,6 +1,8 @@
 // Dance Off on the phone (docs/planning/DANCE-OFF.md §6). What the bet flow uses:
-// - DanceOffScreen: the judge-cam phone's round (framing → count-in → 15 s → result → upload).
+// - DanceOffScreen: the judge-cam phone's round (framing → count-in → dance → result → upload).
 //   It loads the native pose module lazily (importSafely), so importing this file is safe.
+// - DanceDisplayScreen: B's phone during the round, the display (the mirrored reference full
+//   screen with the music, in step with the recorder from the attempt's go_at).
 // - DanceWatchScreen / DanceResultBreakdown: the other phone, and the server's verdict.
 // - DANCE_ROUTINE_CHOICES: the negotiate panel's routine cards (also from ./routines alone).
 // The hidden calibration screen is NOT exported here: diagnostics loads
@@ -8,6 +10,8 @@
 export { DanceOffScreen, resultFromRound } from './DanceOffScreen';
 export type { DanceOffScreenProps } from './DanceOffScreen';
 export type { DanceUploadBundle } from './model/upload';
+export { DanceDisplayScreen } from './DanceDisplayScreen';
+export type { DanceDisplayScreenProps } from './DanceDisplayScreen';
 export { DanceWatchScreen } from './DanceWatchScreen';
 export type { DanceWatchScreenProps } from './DanceWatchScreen';
 export { DanceResultBreakdown, resultFromScored } from './DanceResultBreakdown';

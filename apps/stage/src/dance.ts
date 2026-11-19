@@ -1,6 +1,6 @@
-// Dance Off on the projector (DANCE-OFF §1, §5): both players dance side by side to a 15 s
-// routine in front of one judge-cam phone; the shared scorer decides, Claude only validates the
-// round. Pure helpers over the BetView the ticker folds:
+// Dance Off on the projector (DANCE-OFF §1, §5): both players dance side by side to a reference
+// routine (5..40 s, each routine its own length) in front of one judge-cam phone; the shared
+// scorer decides, Claude only validates the round. Pure helpers over the BetView the ticker folds:
 //
 //   - which bets are dance offs (Terms.type 'dance_off', performer null: BOTH perform);
 //   - the routine the terms commit to (success_criteria[0] "Routine <id> v<n> sha256:<16 hex>",
@@ -9,12 +9,8 @@
 //     deterministic checks, Claude's validation) as the card keeps it;
 //   - what the stage says in each step: framing -> dancing -> scoring -> the verdict, where a VOID
 //     dance ruling reads "Too close to call" (or "No contest" for an invalid round), never "NN%".
-import { getRoutine } from '@youre-on/shared/dance/routine';
-import {
-  DANCE_ROUND_SECONDS,
-  DANCE_TERMS_TYPE,
-  parseDanceRoutineLine,
-} from '@youre-on/shared/dance/terms';
+import { getRoutine, routineSeconds } from '@youre-on/shared/dance/routine';
+import { DANCE_TERMS_TYPE, parseDanceRoutineLine } from '@youre-on/shared/dance/terms';
 import type { DanceScoredPayload } from '@youre-on/shared/realtime';
 import { DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
 import type { BetView, PartyKey } from './ticker';
@@ -76,11 +72,13 @@ export const isDanceBet = (b: BetView | null | undefined): boolean =>
     b.ruling?.model === DANCE_OFF_MODEL);
 
 /** "Wave Pop" in "Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each". */
-const CLAIM_TITLE_RE = /^Dance Off: (.+?), \d+ seconds\b/;
+const CLAIM_TITLE_RE = /^Dance Off: (.+?), (\d+) seconds\b/;
 
 export interface DanceRoutineInfo {
   id: string | null;
   title: string;
+  /** The round length in whole seconds (the routine's own, else the claim's), or null. */
+  seconds: number | null;
   /** Key-move id -> its name ("k02" -> "Arms up"), when the routine is bundled here. */
   moves: Record<string, string>;
 }
@@ -99,12 +97,14 @@ export function danceRoutineOf(b: BetView): DanceRoutineInfo | null {
   const version = ref?.version ?? b.dance?.routine_version ?? null;
   const r = id ? getRoutine(id) : null;
   const known = r && (version === null || r.version === version) ? r : null;
-  const fromClaim = t ? CLAIM_TITLE_RE.exec(t.claim)?.[1]?.trim() : undefined;
+  const claim = t ? CLAIM_TITLE_RE.exec(t.claim) : null;
+  const fromClaim = claim?.[1]?.trim();
   const title = known?.title ?? fromClaim ?? (id ? titleCase(id) : null);
   if (!title) return null;
+  const seconds = known ? routineSeconds(known) : claim?.[2] ? Number(claim[2]) : null;
   const moves: Record<string, string> = {};
   for (const k of known?.key_moves ?? []) moves[k.id] = k.name;
-  return { id, title, moves };
+  return { id, title, seconds, moves };
 }
 
 const titleCase = (id: string) =>
@@ -114,17 +114,22 @@ const titleCase = (id: string) =>
     .map((w) => w[0]!.toUpperCase() + w.slice(1))
     .join(' ');
 
-/** "Wave Pop · 15 seconds" (the round's length is the same for every routine). */
+/** "Wave Pop · 15 seconds", "Bye Bye Shuffle · 33 seconds" (each routine has its own length). */
 export function danceRoutineLabel(b: BetView): string {
   const r = danceRoutineOf(b);
-  return `${r ? `${r.title} · ` : ''}${DANCE_ROUND_SECONDS} seconds`;
+  const len = danceSecondsText(r);
+  return r ? `${r.title} · ${len}` : len;
 }
+
+/** "15 seconds", or "One round" when the length is unknown. */
+export const danceSecondsText = (r: Pick<DanceRoutineInfo, 'seconds'> | null): string =>
+  r?.seconds != null ? `${r.seconds} seconds` : 'One round';
 
 /** A display score in tenths, as the scoreboard prints it: 874 -> "87.4". */
 export const danceScoreText = (x10: number): string =>
   Number.isFinite(x10) ? (Math.max(0, Math.min(1000, Math.round(x10))) / 10).toFixed(1) : '—';
 
-/** Where a dance off's play phase is: lining up, the 15 s round, or the server scoring it. */
+/** Where a dance off's play phase is: lining up, the round, or the server scoring it. */
 export type DancePlayStep = 'framing' | 'dancing' | 'scoring';
 
 export function dancePlayStep(b: BetView): DancePlayStep {
