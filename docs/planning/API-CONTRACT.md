@@ -500,7 +500,7 @@ Server timers:
 
 **Dance Off attempts (DANCE-OFF §5, §6.2; built 2026-11-18).** A `dance_off` bet uses the same `POST …/attempts`, with these differences: both parties dance, so neither is neutral and the round is filmed from A's side only (DANCE-OFF §6.2: the room's judge cam, else A's phone; the recorder uploads the whole PoseSeries): `'judge_cam'` picks the room's judge cam of **A** (a second device of A; a judge cam B binds is ignored, so `409 no_judge_cam`), `'self'` is A's phone only (`403 NOT_A_PARTY {reason:'recorder_is_a'}` for B) and only when the room has no judge cam of A (`409 INVALID_STATE {reason:'judge_cam_present'}`), `max_ms` is `DANCE_MAX_MS` = 30000 (count-in + the 15 s routine), the response's and `attempt.started`'s `performer` is the yes party `A` (the field is a Party), and the `ATTEMPT_ARMED` cue names both dancers. A dance round never uploads to `/frames` (`409 INVALID_STATE {reason:'dance_upload'}`), and a non-dance bet never to `/dance` (`409 {reason:'not_dance'}`).
 
-**`POST /v1/bets/:bet_id/attempts/:n/dance`** (S, recorder device): `multipart/form-data`, body cap 2.5 MiB
+**`POST /v1/bets/:bet_id/attempts/:n/dance`** (S, recorder device): `multipart/form-data`, body cap 4 MiB (≤ 6 × 200 KB key frames + a PoseSeries of up to a 40 s round at 30 fps, ≤ ~1.1 MB)
 
 - Parts:
   1. `upload`, `application/json`: `DanceUpload {routine_id, routine_sha256, series: PoseSeries, pose_sha256, client_scores: {a, b}, clip_sha256: Hex32|null, frames: [{index, t_ms, sha256, width, height, bytes}] (1..6)}` (`packages/shared/src/evidence.ts`).

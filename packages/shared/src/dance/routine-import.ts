@@ -1,5 +1,6 @@
 // DANCE-OFF §8: the pure half of `scripts/dance-routine.ts import`. It turns the JSON the macOS
-// reference tool (tools/dance-ref) writes into a RoutineData: keeps the frames in 0..15000 ms,
+// reference tool (tools/dance-ref) writes into a RoutineData: keeps the frames in 0..duration_ms
+// (the JSON's duration_ms or --duration-ms, 5000..40000; 15000 when neither is given),
 // quantizes them, picks the key moves and validates the result. No I/O, so it is unit tested.
 // Script-only: NOT re-exported from ./index (the phone and the stage never need it).
 import { KEYPOINT_LEN } from './joints';
@@ -7,7 +8,9 @@ import { quantizePerson } from './pose';
 import {
   ROUTINE_COUNT_IN_BEATS,
   ROUTINE_DURATION_MS,
+  ROUTINE_MAX_DURATION_MS,
   ROUTINE_MAX_KEY_MOVES,
+  ROUTINE_MIN_DURATION_MS,
   ROUTINE_MIN_KEY_MOVES,
   RoutineData,
 } from './routine';
@@ -20,6 +23,8 @@ export interface RoutineImportJson {
   song?: string;
   bpm?: number;
   first_beat_ms?: number;
+  /** The round length; ROUTINE_DURATION_MS (15000) when absent. */
+  duration_ms?: number;
   w: number;
   h: number;
   source?: string;
@@ -38,10 +43,15 @@ export interface RoutineImportFlags {
   bpm?: string;
   firstBeatMs?: string;
   version?: string;
+  /** Overrides the JSON's duration_ms. */
+  durationMs?: string;
   /** "ms,ms,…" */
   keyMoves?: string;
   /** Every K beats from first_beat_ms. */
   every?: string;
+  /** media.video / media.audio: bundled file names (apps/mobile/assets/dance/…); beat the JSON. */
+  video?: string;
+  audio?: string;
 }
 
 /** A picked beat stays this far from either end, so its judging window fits the round. */
@@ -62,29 +72,41 @@ export function routineIdSlug(s: string): string {
 }
 
 /** Beats first_beat_ms + n·K·beat (n ≥ 0) that sit KEY_MOVE_EDGE_MS inside the round. */
-export function beatTimes(bpm: number, firstBeatMs: number, k: number): number[] {
+export function beatTimes(
+  bpm: number,
+  firstBeatMs: number,
+  k: number,
+  durationMs: number = ROUTINE_DURATION_MS,
+): number[] {
   const step = (k * 60_000) / bpm;
   const out: number[] = [];
   if (!Number.isFinite(step) || step <= 0 || !Number.isFinite(firstBeatMs)) return out;
   for (let n = 0; ; n++) {
     const t = Math.round(firstBeatMs + n * step);
-    if (t > ROUTINE_DURATION_MS - KEY_MOVE_EDGE_MS) break;
+    if (t > durationMs - KEY_MOVE_EDGE_MS) break;
     if (t >= KEY_MOVE_EDGE_MS) out.push(t);
   }
   return out;
 }
 
 /** The smallest K whose beats fit in ROUTINE_MAX_KEY_MOVES (2 at 120 bpm: 14 moves). */
-export function defaultEvery(bpm: number, firstBeatMs: number): number {
+export function defaultEvery(
+  bpm: number,
+  firstBeatMs: number,
+  durationMs: number = ROUTINE_DURATION_MS,
+): number {
   let k = 1;
-  while (beatTimes(bpm, firstBeatMs, k).length > ROUTINE_MAX_KEY_MOVES) k++;
+  while (beatTimes(bpm, firstBeatMs, k, durationMs).length > ROUTINE_MAX_KEY_MOVES) k++;
   return k;
 }
 
 /** Clamp into the round, round to ms, de-duplicate, sort, then thin evenly to at most 16. */
-export function normalizeKeyMoveTimes(times: readonly number[]): number[] {
+export function normalizeKeyMoveTimes(
+  times: readonly number[],
+  durationMs: number = ROUTINE_DURATION_MS,
+): number[] {
   if (times.some((t) => !Number.isFinite(t))) throw new Error('bad key-move time');
-  const clamped = times.map((t) => Math.min(ROUTINE_DURATION_MS, Math.max(0, Math.round(t))));
+  const clamped = times.map((t) => Math.min(durationMs, Math.max(0, Math.round(t))));
   let uniq = [...new Set(clamped)].sort((a, b) => a - b);
   if (uniq.length > ROUTINE_MAX_KEY_MOVES) {
     const step = uniq.length / ROUTINE_MAX_KEY_MOVES;
@@ -111,17 +133,30 @@ export function pickKeyMoveTimes(
   flags: Pick<RoutineImportFlags, 'keyMoves' | 'every'>,
   bpm: number,
   firstBeatMs: number,
+  durationMs: number = ROUTINE_DURATION_MS,
 ): number[] {
+  const d = durationMs;
   const explicit = given(flags.keyMoves);
   const every = given(flags.every);
-  if (explicit) return normalizeKeyMoveTimes(explicit.split(',').map((s) => Number(s.trim())));
+  if (explicit)
+    return normalizeKeyMoveTimes(
+      explicit.split(',').map((s) => Number(s.trim())),
+      d,
+    );
   if (every) {
     const k = Number(every);
     if (!Number.isInteger(k) || k < 1) throw new Error('--every K: a whole number of beats');
-    return normalizeKeyMoveTimes(beatTimes(bpm, firstBeatMs, k));
+    return normalizeKeyMoveTimes(beatTimes(bpm, firstBeatMs, k, d), d);
   }
-  if (raw.key_moves?.length) return normalizeKeyMoveTimes(raw.key_moves.map((m) => m.t));
-  return normalizeKeyMoveTimes(beatTimes(bpm, firstBeatMs, defaultEvery(bpm, firstBeatMs)));
+  if (raw.key_moves?.length)
+    return normalizeKeyMoveTimes(
+      raw.key_moves.map((m) => m.t),
+      d,
+    );
+  return normalizeKeyMoveTimes(
+    beatTimes(bpm, firstBeatMs, defaultEvery(bpm, firstBeatMs, d), d),
+    d,
+  );
 }
 
 /** Builds and validates (RoutineData.parse) the routine. Throws with a readable message. */
@@ -132,6 +167,17 @@ export function routineFromImport(raw: RoutineImportJson, flags: RoutineImportFl
   if (!id) throw new Error(`bad id "${idIn}"`);
   const bpm = Number(given(flags.bpm) ?? raw.bpm ?? 120);
   const firstBeat = Math.round(Number(given(flags.firstBeatMs) ?? raw.first_beat_ms ?? 0));
+  const duration = Math.round(
+    Number(given(flags.durationMs) ?? raw.duration_ms ?? ROUTINE_DURATION_MS),
+  );
+  if (
+    !Number.isFinite(duration) ||
+    duration < ROUTINE_MIN_DURATION_MS ||
+    duration > ROUTINE_MAX_DURATION_MS
+  )
+    throw new Error(
+      `bad duration_ms ${duration}: ${ROUTINE_MIN_DURATION_MS}..${ROUTINE_MAX_DURATION_MS}`,
+    );
   if (!Number.isFinite(bpm) || bpm <= 0) throw new Error('bad --bpm');
   if (!Number.isFinite(firstBeat) || firstBeat < 0) throw new Error('bad --first-beat-ms');
   if (!Number.isFinite(raw.w) || !Number.isFinite(raw.h)) throw new Error('w / h are required');
@@ -142,7 +188,7 @@ export function routineFromImport(raw: RoutineImportJson, flags: RoutineImportFl
   const frames: RoutineData['frames'] = [];
   for (const f of raw.frames) {
     const t = Math.round(f.t);
-    if (!Number.isFinite(t) || t < 0 || t > ROUTINE_DURATION_MS) continue;
+    if (!Number.isFinite(t) || t < 0 || t > duration) continue;
     if (frames.length && t <= frames[frames.length - 1]!.t) continue;
     if (f.k.length !== KEYPOINT_LEN) throw new Error(`frame t=${t}: ${f.k.length} values`);
     const k = f.k.map((v, i) => {
@@ -152,14 +198,14 @@ export function routineFromImport(raw: RoutineImportJson, flags: RoutineImportFl
     });
     frames.push({ t, k: quantizePerson(k) });
   }
-  if (frames.length < 2) throw new Error('fewer than 2 frames inside 0..15000 ms');
+  if (frames.length < 2) throw new Error(`fewer than 2 frames inside 0..${duration} ms`);
 
-  const times = pickKeyMoveTimes(raw, flags, bpm, firstBeat);
+  const times = pickKeyMoveTimes(raw, flags, bpm, firstBeat, duration);
   // Names from the JSON (the tool's --key-move-names), matched on the ORIGINAL (clamped) time.
   const named = new Map<number, string>();
   for (const m of raw.key_moves ?? []) {
     const name = typeof m.name === 'string' ? m.name.trim().slice(0, NAME_MAX).trim() : '';
-    const t = Math.min(ROUTINE_DURATION_MS, Math.max(0, Math.round(m.t)));
+    const t = Math.min(duration, Math.max(0, Math.round(m.t)));
     if (name && !named.has(t)) named.set(t, name);
   }
   const key_moves = times.map((t, i) => ({
@@ -178,7 +224,7 @@ export function routineFromImport(raw: RoutineImportJson, flags: RoutineImportFl
     title,
     song,
     bpm,
-    duration_ms: ROUTINE_DURATION_MS,
+    duration_ms: duration,
     first_beat_ms: firstBeat,
     count_in_beats: ROUTINE_COUNT_IN_BEATS,
     w: Math.round(raw.w),
@@ -187,6 +233,9 @@ export function routineFromImport(raw: RoutineImportJson, flags: RoutineImportFl
     source: raw.source === 'synthetic' ? 'synthetic' : 'vision',
     frames,
     key_moves,
-    media: raw.media ?? { video: null, audio: null },
+    media: {
+      video: given(flags.video) ?? raw.media?.video ?? null,
+      audio: given(flags.audio) ?? raw.media?.audio ?? null,
+    },
   });
 }

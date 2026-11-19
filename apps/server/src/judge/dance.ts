@@ -44,7 +44,7 @@ export const DANCE_CACHED_MODEL = 'cache/demo-dance@1';
 const NOTES_MAX = 400;
 const REASON_MAX = 280;
 
-export const DANCE_SYSTEM_PROMPT = `You are the round checker for a Dance Off in "You're On", a money bet between two friends. Two players danced side by side, at the same time, to the same 15-second reference routine in front of one camera. A deterministic scorer on the server already compared each player's body pose with the reference and set both scores and the result. You NEVER decide, change or question the winner, and you never re-score the dancing.
+export const DANCE_SYSTEM_PROMPT = `You are the round checker for a Dance Off in "You're On", a money bet between two friends. Two players danced side by side, at the same time, to the same short reference routine (its length is in the claim) in front of one camera. A deterministic scorer on the server already compared each player's body pose with the reference and set both scores and the result. You NEVER decide, change or question the winner, and you never re-score the dancing.
 
 You do two things.
 
@@ -246,6 +246,7 @@ export function danceResultText(e: DanceEvidence, names: DanceNames): string {
     'SERVER RESULT (final; you do not change it)',
     `Scores, 0 to 100: ${names.A} (A) ${danceScore(e.scores.a)}, ${names.B} (B) ${danceScore(e.scores.b)}`,
     `Result: ${result}`,
+    ...(routine ? [`Round length: ${secs(routine.duration_ms)}s`] : []),
     'Key moves (A / B):',
     ...e.key_moves.map((k) => {
       const t = moveT(k.id);

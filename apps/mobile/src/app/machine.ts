@@ -35,7 +35,7 @@ export type Route =
   | 'payout'
   /**
    * A Dance Off round on the phone that records it (the room's judge cam, else A's phone):
-   * framing, count-in, the 15 s dance with live scoring, the upload, then waiting for the ruling.
+   * framing, count-in, the routine (its own length) with live scoring, the upload, then the ruling.
    */
   | 'dance'
   /** A Dance Off round on the other phone: "Dance off live", then the score. */

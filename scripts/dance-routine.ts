@@ -2,13 +2,15 @@
 // Dance Off reference routines (docs/planning/DANCE-OFF.md §2, §8).
 //
 //   npx tsx scripts/dance-routine.ts synth
-//       Writes the 3 bundled SYNTHETIC placeholder routines to
+//       Writes the 2 bundled SYNTHETIC placeholder routines (wave-pop, bounce-back; 15 s each) to
 //       packages/shared/src/dance/routines/<id>.ts, procedurally and deterministically (same bytes
 //       on every run), then validates and self-scores them.
 //   npx tsx scripts/dance-routine.ts import <routine.json> [--id ID] [--title T] [--song S]
-//       [--bpm N] [--first-beat-ms M] [--version V] [--key-moves ms,ms,… | --every K]
+//       [--bpm N] [--first-beat-ms M] [--version V] [--duration-ms D]
+//       [--key-moves ms,ms,… | --every K] [--video FILE] [--audio FILE]
 //       Takes the RoutineData-ish JSON the macOS tool (tools/dance-ref) writes (floats in [0, 1] or
-//       already-quantized ints), keeps the frames in [0, 15000] ms, quantizes, picks key moves
+//       already-quantized ints), keeps its duration_ms (5000..40000; --duration-ms overrides it,
+//       15000 when neither is given) and the frames in [0, duration_ms], quantizes, picks key moves
 //       (--key-moves, --every K beats from first_beat_ms, the JSON's key_moves, or else every K
 //       beats with the smallest K that gives <= 16; 8..16 of them, kept on the beat, never snapped
 //       to a frame), validates with the shared RoutineData schema and writes routines/<id>.ts.
@@ -333,46 +335,6 @@ const SPECS: SynthSpec[] = [
       ['hips', 'stand', 'up'],
     ],
   },
-  {
-    id: 'side-shuffle',
-    title: 'Side Shuffle',
-    song: 'Placeholder click track, 128 BPM (royalty-free)',
-    bpm: 128,
-    first_beat_ms: 469,
-    beats: [
-      ['low', 'stand', 'up'],
-      ['swingL', 'stepL', 'up', 'Step left'],
-      ['low', 'stand', 'up'],
-      ['swingR', 'stepR', 'up', 'Step right'],
-      ['low', 'wide', 'up'],
-      ['t', 'wide', 'leanL', 'Lean left'],
-      ['low', 'wide', 'up'],
-      ['t', 'wide', 'leanR', 'Lean right'],
-      ['down', 'stand', 'up'],
-      ['pointR', 'stepR', 'tiltL'],
-      ['pointL', 'stepL', 'tiltR', 'Point left'],
-      ['down', 'stand', 'up'],
-      ['clap', 'bounce', 'up', 'Clap'],
-      ['low', 'stand', 'up'],
-      ['leftUp', 'lungeL', 'leanR', 'Lunge reach'],
-      ['low', 'stand', 'up'],
-      ['rightUp', 'lungeR', 'leanL', 'Lunge back'],
-      ['down', 'wide', 'up'],
-      ['swingL', 'stepL', 'tiltR'],
-      ['swingR', 'stepR', 'tiltL', 'Swing'],
-      ['cross', 'stand', 'up'],
-      ['t', 'wide', 'up', 'Open'],
-      ['low', 'bounce', 'up'],
-      ['up', 'stand', 'up', 'Finish'],
-      ['up', 'stand', 'up'],
-      ['v', 'wide', 'up'],
-      ['low', 'stand', 'up'],
-      ['down', 'stand', 'up'],
-      ['down', 'stand', 'up'],
-      ['down', 'stand', 'up'],
-      ['down', 'stand', 'up'],
-    ],
-  },
 ];
 
 // ---- output -------------------------------------------------------------------------------
@@ -458,8 +420,11 @@ async function importRoutine(file: string, args: string[]): Promise<void> {
     bpm: flag(args, 'bpm'),
     firstBeatMs: flag(args, 'first-beat-ms'),
     version: flag(args, 'version'),
+    durationMs: flag(args, 'duration-ms'),
     keyMoves: flag(args, 'key-moves'),
     every: flag(args, 'every'),
+    video: flag(args, 'video'),
+    audio: flag(args, 'audio'),
   });
   const named = routine.key_moves.filter((m) => !/^Move \d+$/.test(m.name)).length;
   console.log(

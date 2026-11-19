@@ -5,7 +5,7 @@
 //   2. Start → POST /attempts (onStartAttempt) → the attempt arrives. An attempt another phone
 //      started (A pressed Start; the server named this judge cam) counts in on its own.
 //   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic), then GO.
-//   4. GO: startRound and the reference start in the same tick; 15 s of dancing with live meters
+//   4. GO: startRound and the reference start in the same tick; duration_ms of dancing with live meters
 //      and PERFECT / GOOD / MISS popups.
 //   5. stopRound → the local final score → the result (no network so far).
 //   6. Upload (onUpload) → "Sending to judge" → the announcer line once the ruling lands (the bet

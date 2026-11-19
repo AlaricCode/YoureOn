@@ -10,8 +10,11 @@ import {
   limbSimilarity,
   limbVectors,
   mirrorLimbs,
+  POSE_MAX_FRAMES,
+  POSE_T_MAX_MS,
   PoseSeries,
   poseSha256,
+  ROUTINE_MAX_DURATION_MS,
   quantizePerson,
   RoutineData,
   ROUTINES,
@@ -58,7 +61,10 @@ describe('scoreRound (§4)', () => {
       expect(res.b.score_x10).toBe(1000);
       expect(res.a.convention).toBe('identity');
       expect(res.a.key_moves.every((m) => m.grade === 'PERFECT')).toBe(true);
-      expect(res.a.coverage_pct).toBe(100);
+      // A Vision take has a few frames where nobody was seen (and its last frame is a little
+      // before duration_ms); a synthetic routine covers every bin.
+      if (r.source === 'synthetic') expect(res.a.coverage_pct).toBe(100);
+      else expect(res.a.coverage_pct).toBeGreaterThanOrEqual(95);
       expect(res.a.mean_lag_ms).toBe(0);
       expect(res.too_close).toBe(true);
       expect(res.winner).toBeNull();
@@ -238,8 +244,17 @@ describe('pose quantization (§2)', () => {
     expect(PoseSeries.safeParse({ ...s, extra: 1 }).success).toBe(false);
     expect(PoseSeries.safeParse({ ...s, fps_cap: 31 }).success).toBe(false);
     expect(PoseSeries.safeParse({ ...s, sync_offset_ms: 501 }).success).toBe(false);
-    const big = { ...s, frames: Array.from({ length: 701 }, (_, t) => ({ ...s.frames[0]!, t })) };
-    expect(PoseSeries.safeParse(big).success).toBe(false);
+    const many = (n: number) => ({
+      ...s,
+      frames: Array.from({ length: n }, (_, t) => ({ ...s.frames[0]!, t })),
+    });
+    // A 40 s round + count-in at the 30 fps cap fits; one frame over the cap does not.
+    expect(PoseSeries.safeParse(many(43 * 30)).success).toBe(true);
+    expect(PoseSeries.safeParse(many(POSE_MAX_FRAMES + 1)).success).toBe(false);
+    const at = (t: number) => ({ ...s, frames: [{ ...s.frames[0]!, t }] });
+    expect(PoseSeries.safeParse(at(POSE_T_MAX_MS)).success).toBe(true);
+    expect(PoseSeries.safeParse(at(POSE_T_MAX_MS + 1)).success).toBe(false);
+    expect(POSE_T_MAX_MS).toBeGreaterThanOrEqual(ROUTINE_MAX_DURATION_MS + 1_000);
     const back = { ...s, frames: [s.frames[1]!, s.frames[0]!] };
     expect(PoseSeries.safeParse(back).success).toBe(false);
     const badC = [...s.frames[0]!.a!];

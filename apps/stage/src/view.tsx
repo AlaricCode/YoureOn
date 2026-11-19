@@ -12,7 +12,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
-import { DANCE_ROUND_SECONDS } from '@youre-on/shared/dance/terms';
 import { recordLine } from '@youre-on/shared/gg';
 import { isCachedRulingModel } from '@youre-on/shared/ruling';
 import { formatPrice } from '@youre-on/shared/settlement';
@@ -42,6 +41,7 @@ import {
   danceResult,
   danceRoutineOf,
   danceScoreText,
+  danceSecondsText,
   danceSummaryLine,
   dancePlayStep,
   danceVerdictLine,
@@ -673,11 +673,12 @@ const potOf = (bet: BetView): string | null =>
 
 /** "Wave Pop · 15 seconds": the routine both dance to (a dance off has no single performer). */
 function DanceRoutineLine({ bet }: { bet: BetView }) {
-  const title = danceRoutineOf(bet)?.title ?? 'Dance off';
+  const routine = danceRoutineOf(bet);
+  const title = routine?.title ?? 'Dance off';
   return (
     <p className="dance-routine">
       <span className="title">{title}</span>
-      <span className="len">{`${DANCE_ROUND_SECONDS} seconds`}</span>
+      <span className="len">{danceSecondsText(routine)}</span>
     </p>
   );
 }
@@ -763,7 +764,7 @@ export function DanceBoard({ bet }: { bet: BetView }) {
   );
 }
 
-/** The play phase of a dance off: lining up, the 15 s round, then the server scoring it. */
+/** The play phase of a dance off: lining up, the round, then the server scoring it. */
 function DancePlayPanel({ bet }: { bet: BetView }) {
   const step = dancePlayStep(bet);
   const total = potOf(bet);
@@ -840,8 +841,8 @@ function DanceRulesPanel({ bet }: { bet: BetView }) {
       <p className="big">Terms are set. Both confirm on their phones.</p>
       <ul>
         <li className="yes">
-          <span aria-hidden="true">✓</span> {routine?.title ?? 'The routine'}: {DANCE_ROUND_SECONDS}{' '}
-          seconds, side by side
+          <span aria-hidden="true">✓</span> {routine?.title ?? 'The routine'}:{' '}
+          {danceSecondsText(routine)}, side by side
           {n > 0 ? `, ${n} key moves` : ''}
         </li>
         {t.success_criteria.slice(1, 3).map((c, i) => (

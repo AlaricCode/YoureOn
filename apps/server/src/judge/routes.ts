@@ -131,12 +131,17 @@ export const STUCK_JUDGING_MS = 20_000;
 /** gg_secs in the RULING cue when APPEAL_WINDOW_S is unset. */
 const DEFAULT_GG_SECS = 10;
 /**
- * DANCE-OFF §6.2: a dance attempt's recording window (the count-in, the 15 s routine and slack;
- * = the attempts_duration CHECK's 30 s), instead of MS_PER_TRY × count.
+ * DANCE-OFF §6.2: a dance attempt's recording window, instead of MS_PER_TRY × count. Each routine
+ * has its own length (5..40 s); this fits the longest (40 s) + the count-in (3 beats, ≤ 4.5 s at
+ * 40 bpm) + the recording tail, with slack. Informational: the phone stops on the routine's end.
  */
-export const DANCE_MAX_MS = 30_000;
-/** The dance multipart: ≤ 6 key frames × 200 KB + the PoseSeries JSON (≤ 700 frames, ~0.5 MB). */
-export const DANCE_BODY_LIMIT = Math.floor(2.5 * 1024 * 1024);
+export const DANCE_MAX_MS = 50_000;
+/**
+ * The dance multipart: ≤ 6 key frames × 200 KB (1.2 MB) + the PoseSeries JSON. A 40 s round +
+ * count-in at the 30 fps cap is ~1300 frames (POSE_MAX_FRAMES 1500), ≤ ~720 bytes each with both
+ * players (2 × 57 ints of ≤ 5 digits), so ≤ ~1.1 MB of poses. 4 MiB leaves ~1.7 MB of margin.
+ */
+export const DANCE_BODY_LIMIT = 4 * 1024 * 1024;
 
 /** States POST …/attempts may be called in (ATTEMPT/JUDGING only for a replay or after a REDO). */
 const ATTEMPT_FROM: readonly BetRow['state'][] = ['LOCKED', 'ATTEMPT', 'JUDGING'];

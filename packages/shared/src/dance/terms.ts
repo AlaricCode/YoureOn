@@ -1,19 +1,18 @@
 // DANCE-OFF §1: how a routine is bound into the hashed Terms. No new Terms keys: the routine id,
 // version and the first 16 hex of its sha256 ride in success_criteria[0], so terms_hash commits
 // to the exact reference the scorer uses.
-//   claim                 "Dance Off: <title>, 15 seconds, higher match score wins, $X each"
+//   claim                 "Dance Off: <title>, <N> seconds, higher match score wins, $X each"
+//                         (N = round(routine.duration_ms / 1000): "15 seconds" for a 15 s routine)
 //   success_criteria[0]   "Routine <routine_id> v<version> sha256:<first 16 hex of routine sha256>"
 //   success_criteria[1]   "Higher match score wins; scores within <TIE_MARGIN> points are too close
 //                          to call (refund)"
 //   failure_criteria      []
 import { formatUsd } from '../money';
 import type { Terms } from '../terms';
-import { getRoutine, routineSha256, type RoutineData } from './routine';
+import { getRoutine, routineSeconds, routineSha256, type RoutineData } from './routine';
 import { DANCE_SCORING } from './score';
 
 export const DANCE_TERMS_TYPE = 'dance_off' as const;
-/** The round length every routine has, in the claim's words. */
-export const DANCE_ROUND_SECONDS = 15;
 /** The tie margin in display points ("2" for 20 tenths). */
 export const DANCE_TIE_MARGIN_POINTS = DANCE_SCORING.TIE_MARGIN_X10 / 10;
 
@@ -22,9 +21,12 @@ const ROUTINE_LINE_RE =
 
 export const isDanceOff = (t: Pick<Terms, 'type'>): boolean => t.type === DANCE_TERMS_TYPE;
 
-/** "Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each". */
-export const danceClaim = (r: Pick<RoutineData, 'title'>, stakeMicro: string): string =>
-  `Dance Off: ${r.title}, ${DANCE_ROUND_SECONDS} seconds, higher match score wins, ` +
+/** "Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each" (the routine's length). */
+export const danceClaim = (
+  r: Pick<RoutineData, 'title' | 'duration_ms'>,
+  stakeMicro: string,
+): string =>
+  `Dance Off: ${r.title}, ${routineSeconds(r)} seconds, higher match score wins, ` +
   `${formatUsd(stakeMicro)} each`;
 
 /** "Routine wave-pop v1 sha256:812f15c411edd626". */
@@ -84,4 +86,20 @@ export function parseDanceTermsRoutine(
   if (routineSha256(routine).slice(0, 16) !== parsed.sha16)
     return { ok: false, reason: 'sha_mismatch' };
   return { ok: true, routine, ...parsed };
+}
+
+const CLAIM_SECONDS_RE = /^Dance Off: .+?, (\d{1,3}) seconds\b/;
+
+/**
+ * A dance off's round length in whole seconds: the bundled routine's (when the Terms name it and
+ * it verifies), else the number the claim text says, else null. For the UI only.
+ */
+export function danceRoundSeconds(
+  terms: Pick<Terms, 'type' | 'claim' | 'success_criteria'>,
+): number | null {
+  const p = parseDanceTermsRoutine(terms);
+  if (p.ok) return routineSeconds(p.routine);
+  if (terms.type !== DANCE_TERMS_TYPE) return null;
+  const m = CLAIM_SECONDS_RE.exec(terms.claim);
+  return m ? Number(m[1]) : null;
 }
