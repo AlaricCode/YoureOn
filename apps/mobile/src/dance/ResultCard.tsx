@@ -1,4 +1,4 @@
-// The round's result: both final scores (rolling up from 0), the winner or "Too close to call",
+// The round's result: both final scores (rolling up from 0 on the first reveal), the winner or "Too close to call",
 // and the per-move breakdown grid (PERFECT / GOOD / MISS for each player). Used by the judge-cam
 // phone right after the round (local scores) and by DanceResultBreakdown (the server's record).
 // Native-free, so the design preview can render it.
@@ -8,7 +8,15 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { RollingText } from '../ui/RollingNumber';
 import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
-import { DANCE_COPY, danceLabels, dt, GRADE_COPY, scoreText, winsLabel } from './copy';
+import {
+  DANCE_COPY,
+  danceLabels,
+  dt,
+  firstScoreX10,
+  GRADE_COPY,
+  scoreText,
+  winsLabel,
+} from './copy';
 import { GRADE_TINT, PLAYER_TINT } from './theme';
 
 export interface ResultMove {
@@ -27,9 +35,22 @@ export interface ResultData {
   moves: ResultMove[];
 }
 
-/** A score that rolls up from 0.0 once (the odometer), then follows the value. */
-function RollingScore({ x10, tint, label }: { x10: number; tint: string; label: string }) {
-  const [shown, setShown] = useState(0);
+/**
+ * A score that rolls up from 0.0 once (the odometer), then follows the value. `roll={false}`
+ * starts on the score itself (the ruling: the scores were already on screen).
+ */
+function RollingScore({
+  x10,
+  tint,
+  label,
+  roll,
+}: {
+  x10: number;
+  tint: string;
+  label: string;
+  roll: boolean;
+}) {
+  const [shown, setShown] = useState(() => firstScoreX10(x10, roll));
   useEffect(() => {
     const t = setTimeout(() => setShown(x10), 120);
     return () => clearTimeout(t);
@@ -59,10 +80,13 @@ export function ResultCard({
   data,
   names,
   me,
+  roll = true,
 }: {
   data: ResultData;
   names: { a: string; b: string };
   me?: 'A' | 'B' | undefined;
+  /** Roll the scores up from 0.0 (default, the first reveal); false shows them from the first frame. */
+  roll?: boolean;
 }) {
   const verdict = data.tooClose || data.winner === null;
   const labels = danceLabels(names);
@@ -89,6 +113,7 @@ export function ResultCard({
           x10={p === 'A' ? data.scores.a : data.scores.b}
           tint={won ? palette.accent : palette.text}
           label={name}
+          roll={roll}
         />
       </View>
     );

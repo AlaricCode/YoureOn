@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { canRematch } from '../../app/rematch';
 import { bottleFlip, btcCloser, danceOff } from '../../preview/data';
 import {
   betView,
@@ -8,7 +9,9 @@ import {
   clockLabel,
   countdownLabel,
   myResult,
+  rulingEnds,
   rulingFooter,
+  rulingRematch,
   signedUsd,
 } from '../view';
 
@@ -100,6 +103,29 @@ describe('rulingFooter', () => {
     expect(rulingFooter('void', false)).toBe('waiting');
     for (const r of ['won', 'lost', 'void', 'redo'] as const)
       expect(rulingFooter(r, true)).toBe('home');
+  });
+});
+
+describe('the ruling footer never jumps (a VOID: call-off, too close to call, three REDOs)', () => {
+  it('a VOID ruling gets the end footer from the moment it shows, every state through VOIDED', () => {
+    // RULED -> FINALIZED -> VOIDED: Back home all along, never the "Final in" countdown first.
+    for (const over of [false, false, true])
+      expect(rulingFooter('void', rulingEnds('void', over))).toBe('home');
+  });
+  it('decisive rulings keep theirs: the loser GG, the winner waiting, until the bet is over', () => {
+    expect(rulingFooter('lost', rulingEnds('lost', false))).toBe('gg');
+    expect(rulingFooter('won', rulingEnds('won', false))).toBe('waiting');
+    expect(rulingEnds('won', true)).toBe(true);
+    expect(rulingEnds('lost', true)).toBe(true);
+  });
+  it('Double or nothing holds its place, disabled, until the server takes it', () => {
+    // RULED, FINALIZED, VOIDED on a party phone: the secondary button is there in every frame.
+    const frames = (['RULED', 'FINALIZED', 'VOIDED'] as const).map((s) =>
+      rulingRematch(canRematch(s), true),
+    );
+    expect(frames).toEqual(['soon', 'ready', 'ready']);
+    // The judge cam never rematches: Back home alone, as before.
+    expect(rulingRematch(false, false)).toBeNull();
   });
 });
 
