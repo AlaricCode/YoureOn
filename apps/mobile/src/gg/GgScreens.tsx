@@ -9,7 +9,7 @@
 //                   Closes by itself at confirm_by, on the GG, or once the appeal went out; the
 //                   ruling screen (GG / I appeal) is then exactly as before.
 //   GgPayoutScreen  after the loser's GG, a moment like the payout. Winner: "Jake said GG" in
-//                   the serif under a green aurora, the win counting up, the record ticking
+//                   bold under a green aurora, the win counting up, the record ticking
 //                   over, Paying -> Paid. Loser: a calm "Good game" under a faint white light.
 //                   Either may go again: "Double or nothing" (app/rematch, DANCE-OFF §7) once
 //                   it is paid.
@@ -156,7 +156,7 @@ export function ReviewSheet({
   onKeep: () => void;
 }) {
   return (
-    // Not a Modal: a glass sheet over the lower half of the ruling screen, so the result and the
+    // Not a Modal: a soft sheet over the lower half of the ruling screen, so the result and the
     // reason stay readable above it and nothing else on screen (the preview strip) is covered.
     // It sits above everything on that screen (zIndex): the ruling's swipe pill raises itself,
     // and used to draw over this sheet's "Check it again".
@@ -165,7 +165,7 @@ export function ReviewSheet({
         <View style={styles.grabber} />
         <Label variant="heading">{gt(GG_COPY.review)}</Label>
         <View style={styles.gapLg} />
-        {/* What is being reviewed: the judge's own words, in its voice. */}
+        {/* What is being reviewed: the judge's own words. */}
         <DataText variant="spokenSmall">{reason}</DataText>
         <View style={styles.rows}>
           <InfoRow label={gt(GG_COPY.confirmIn)} value={countdownLabel(leftMs)} />
@@ -271,7 +271,7 @@ export function GgPayoutScreen({
       }
     >
       {won ? (
-        // They conceded: the same moment as a payout, said in the serif.
+        // They conceded: the same moment as a payout.
         <MomentGroup>
           <MomentHeadline size="lg">{saidGG(view.theirName)}</MomentHeadline>
           <Text
@@ -321,10 +321,6 @@ const styles = StyleSheet.create({
     backgroundImage: material.glass,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: palette.rim,
     paddingHorizontal: space.page,
     paddingTop: half.x15,
     paddingBottom: space.x5,

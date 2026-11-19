@@ -14,13 +14,13 @@
 
 export const obsidian = {
   black: '#000000',
-  raised: '#0F0F11',
-  line: '#1C1C1F',
-  /** The 1 pt rim of a glass control. */
-  edge: '#2A2A2E',
+  raised: '#161618',
+  line: '#232327',
+  /** One step above `line`: a control on a panel. */
+  edge: '#2E2E33',
   white: '#FFFFFF',
-  grey: '#8D8D93',
-  dim: '#4A4A4F',
+  grey: '#98989F',
+  dim: '#5C5C63',
   green: '#00D47A',
   red: '#FF4F45',
   /** Text on a green fill. */
@@ -30,18 +30,18 @@ export const obsidian = {
 } as const;
 
 export const geist = {
-  light: 'Geist_300Light',
   regular: 'Geist_400Regular',
   medium: 'Geist_500Medium',
   semibold: 'Geist_600SemiBold',
+  bold: 'Geist_700Bold',
 } as const;
 
 type Face = keyof typeof geist;
-const weightOf: Record<Face, '300' | '400' | '500' | '600'> = {
-  light: '300',
+const weightOf: Record<Face, '400' | '500' | '600' | '700'> = {
   regular: '400',
   medium: '500',
   semibold: '600',
+  bold: '700',
 };
 
 /** A text style fragment: family + matching weight (iOS needs both for the fallback). */

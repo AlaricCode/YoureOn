@@ -112,7 +112,7 @@ export function HomeScreen({
   /** The code entry is over the lobby ("Back" returns to it), not the no-room fallback. */
   const lobbyAround = room?.lobby === true || (room === null && lobbyJoining);
 
-  // The roster is one glass object; a hairline separates the people in it.
+  // The roster is one soft panel; a hairline separates the people in it.
   const memberRow = (m: PreviewUser, i: number) => (
     <View key={m.user_id} style={[styles.member, i > 0 && styles.memberRule]}>
       <Avatar name={m.display_name} size={avatarSize.md} online={m.online} />
@@ -120,7 +120,7 @@ export function HomeScreen({
         {m.display_name}
       </DataText>
       {m.online ? (
-        // A small glass pill: the white pill stays the one action (Scan a face).
+        // A small soft pill: the white pill stays the one action (Scan a face).
         <QuietButton
           small
           testID={`challenge-${m.user_id}`}
@@ -485,7 +485,7 @@ const rowDivider = {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   centre: { flex: 1, justifyContent: 'center' },
-  /** The profile name in the serif at 40, like the monogram above it. */
+  /** The profile name: 32 Bold, under the disc. */
   profileName: { textAlign: 'center' },
   brandRow: {
     height: space.x6,
@@ -509,7 +509,7 @@ const styles = StyleSheet.create({
   codeText: { color: palette.textTertiary, letterSpacing: 1, fontVariant: TABULAR },
   list: { paddingBottom: space.x1 },
   listEmpty: { flexGrow: 1, justifyContent: 'center', paddingVertical: space.x3 },
-  /** The roster: one glass object, the people in it separated by hairlines. */
+  /** The roster: one soft panel, the people in it separated by hairlines. */
   roster: { paddingVertical: 0, paddingHorizontal: space.x2 },
   member: {
     minHeight: space.x8 + half.x05,
@@ -518,7 +518,7 @@ const styles = StyleSheet.create({
     gap: half.x15 + half.x05,
   },
   memberRule: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.rim },
-  rowTitle: { fontFamily: fontFamily.medium, fontWeight: fontWeight.medium },
+  rowTitle: { fontFamily: fontFamily.semibold, fontWeight: fontWeight.semibold },
   actions: { gap: half.x15, paddingBottom: space.x1 },
   row: { flexDirection: 'row', gap: half.x15 },
   historyList: { paddingBottom: space.x3 },

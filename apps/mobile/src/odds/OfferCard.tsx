@@ -2,7 +2,7 @@
 //   a party's offer   "Jake offers 3 to 1: your $5 to win $20"  Accept / Counter (Withdraw for
 //                      the author), "Waiting on Jake" once my side is in.
 //   the judge's offer "Judge suggests 3:1", the performer's record ("Bottle flips 10–2 · vs Logan
-//                      4–7"), the judge's reason (in its serif voice), "31% for Jake", and "Demo
+//                      4–7"), the judge's reason (its own words), "31% for Jake", and "Demo
 //                      history" when seed rows went into it. Both tap Accept: the judge never sets
 //                      terms by itself.
 //   agreed            "Odds agreed" until the card is locked in.
@@ -106,7 +106,7 @@ export function OfferCard({ panel }: { panel: OddsOfferPanel }) {
       {c.judge ? (
         <>
           <DataText muted>{c.judge.stats}</DataText>
-          {/* Why: the judge's own words, in its voice. */}
+          {/* Why: the judge's own words. */}
           <DataText variant="spokenSmall">{`“${c.judge.reason}”`}</DataText>
           <DataText variant="labelMedium">{c.judge.chance}</DataText>
         </>

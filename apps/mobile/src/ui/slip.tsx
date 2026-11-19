@@ -1,6 +1,6 @@
-// The bet slip (Limelight): the terms as an object you could hold. A glass ticket with the claim
-// in the serif, the two stakes either side of the pot, and the conditions under perforations,
-// like the stub you keep. Used by the terms card; the pieces are plain Views and one SVG line.
+// The bet slip (Limelight): the terms as an object you could hold. A soft ticket with the claim
+// in bold, the two stakes either side of the pot, and the conditions under perforations, like
+// the stub you keep. Used by the terms card; the pieces are plain Views and one SVG line.
 import type { ReactNode } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Line } from 'react-native-svg';
@@ -8,7 +8,7 @@ import Svg, { Line } from 'react-native-svg';
 import { BackdropProvider } from './kit';
 import { half, material, palette, radius, space, type } from './tokens';
 
-/** The ticket: glass, radius 28, a 1 pt rim. It clips, so a Perforation's notches bite its edge. */
+/** The ticket: a soft panel, radius 32. It clips, so a Perforation's notches bite its edge. */
 export function Slip({
   children,
   style,
@@ -28,8 +28,8 @@ export function Slip({
 }
 
 /**
- * The tear line across a slip: a dashed rule from edge to edge with a half-round notch bitten
- * out of each side (a page-black disc, clipped by the slip). Decorative.
+ * The tear line across a slip: a row of round dots from edge to edge with a half-round notch
+ * bitten out of each side (a page-black disc, clipped by the slip). Decorative.
  */
 export function Perforation() {
   return (
@@ -39,15 +39,16 @@ export function Perforation() {
       importantForAccessibility="no-hide-descendants"
       pointerEvents="none"
     >
-      <Svg width="100%" height={1}>
+      <Svg width="100%" height={2}>
         <Line
           x1="0"
-          y1="0.5"
+          y1="1"
           x2="100%"
-          y2="0.5"
+          y2="1"
           stroke={palette.rim}
-          strokeWidth={1}
-          strokeDasharray="5 5"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeDasharray="1 8"
         />
       </Svg>
       <View style={[styles.notch, styles.notchLeft]} />
@@ -99,16 +100,14 @@ export function Criteria({ items, tone }: { items: readonly string[]; tone: 'yes
   );
 }
 
-const NOTCH = 18;
-const MARK = 18;
+const NOTCH = 20;
+const MARK = 20;
 
 const styles = StyleSheet.create({
   slip: {
     backgroundColor: palette.surface,
     backgroundImage: material.glass,
     borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: palette.rim,
     boxShadow: material.highlight,
     padding: space.page,
     overflow: 'hidden',
@@ -126,8 +125,6 @@ const styles = StyleSheet.create({
     height: NOTCH,
     borderRadius: NOTCH / 2,
     backgroundColor: palette.background,
-    borderWidth: 1,
-    borderColor: palette.rim,
   },
   // Half of each disc hangs outside the slip, which clips it: what is left is the bite.
   notchLeft: { left: -NOTCH / 2 - 1 },
@@ -156,18 +153,18 @@ const styles = StyleSheet.create({
   markNo: { backgroundColor: 'rgba(255, 79, 69, 0.16)' },
   // A tick: a box's left and bottom edges, rotated.
   tick: {
-    width: 8,
-    height: 4.5,
-    borderLeftWidth: 1.75,
-    borderBottomWidth: 1.75,
+    width: 8.5,
+    height: 5,
+    borderLeftWidth: 2.25,
+    borderBottomWidth: 2.25,
     borderColor: palette.accent,
     transform: [{ translateY: -1 }, { rotate: '-45deg' }],
   },
   crossBar: {
     position: 'absolute',
-    width: 9,
-    height: 1.75,
-    borderRadius: 1,
+    width: 9.5,
+    height: 2.25,
+    borderRadius: 1.25,
     backgroundColor: palette.danger,
   },
   crossA: { transform: [{ rotate: '45deg' }] },

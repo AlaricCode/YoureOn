@@ -371,8 +371,8 @@ export function IncomingScreen({
         </>
       }
     >
-      {/* The challenger's monogram, then the line in the serif, in a column 32 pt in from each
-          edge so "challenged you" never runs edge to edge. */}
+      {/* The challenger's disc, then the line in bold, in a column 32 pt in from each edge so
+          "challenged you" never runs edge to edge. */}
       {rematch ? (
         <View style={styles.rematchTag} testID="incoming-rematch">
           <Chip label={t(COPY.rematch.incoming)} tone="accent" />
@@ -1080,13 +1080,13 @@ function ClaimField({
       cursorColor={palette.text}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
-      style={[styles.claimField, { borderColor: focused ? color.borderFocused : palette.rim }]}
+      style={[styles.claimField, { borderColor: focused ? color.borderFocused : 'transparent' }]}
     />
   );
 }
 
 // Limelight: content sits on black at the 20 pt margin; facts are hairline-divided rows, and
-// only the things you could hold (the draft slip, a match) are glass. The judge is the orb.
+// only the things you could hold (the draft slip, a match) are soft panels. The judge is the orb.
 /** The judge's sphere on the terms screen (its rings and halo scale with it). */
 const JUDGE_ORB = 104;
 /** The same once an offer or the draft is on the table. */
@@ -1127,7 +1127,7 @@ const styles = StyleSheet.create({
   judgeStatusCompact: { alignItems: 'flex-start', gap: half.x05 + 2 },
   captions: { gap: space.x3, paddingVertical: space.x2 },
   caption: { gap: half.x05 },
-  /** What a person said: Geist 17, a step back from the judge's serif. */
+  /** What a person said: grey, a step back from the judge's white line. */
   said: { color: palette.textSecondary },
   draft: { marginTop: space.x1, marginBottom: space.x1, gap: half.x15 },
   draftHead: {
@@ -1154,28 +1154,22 @@ const styles = StyleSheet.create({
   frozen: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
   sides: { flexDirection: 'row', gap: half.x15 },
-  // Up / Down: the chosen side is a glass tile with its % in white; the other sits on black with
-  // a grey % inside a faint rim.
+  // Up / Down: two soft tiles. The chosen one is a step lighter with its % in white; the other
+  // is the plain panel with a grey %.
   sideBox: {
     flex: 1,
     height: space.control * 2,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: palette.hairline,
     alignItems: 'center',
     justifyContent: 'center',
     gap: half.x05,
-    backgroundColor: palette.background,
+    backgroundColor: palette.surface,
   },
-  sideOn: {
-    backgroundColor: palette.fill,
-    backgroundImage: material.glassRaised,
-    borderColor: palette.rim,
-  },
+  sideOn: { backgroundColor: palette.rim, backgroundImage: material.glassRaised },
   chipCentred: { alignSelf: 'center' },
   replay: { alignItems: 'flex-start', paddingVertical: half.x15 },
   marketCard: { marginTop: space.x3 },
-  // Dance Off: one row per routine (the chosen one is the #1C1C1F tile).
+  // Dance Off: one row per routine (the chosen one is the soft grey tile).
   routines: { gap: half.x15 },
   routineCard: {
     minHeight: space.control + space.x2,

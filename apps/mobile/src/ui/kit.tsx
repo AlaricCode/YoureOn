@@ -5,7 +5,8 @@
 // ./copyRule.
 //
 // White asks, green answers: the primary pill, a ticked box, a focused field and a done step are
-// white; green is kept for what is on (a saved tick, a switch that is on).
+// white; green is kept for what is on (a saved tick, a switch that is on). Everything is soft:
+// filled, borderless, round, with bold labels.
 //
 // Backdrops: what a component sits on changes how it draws, without new props at the call site.
 // The page is black; a ConfirmSheet, a raised Card or the camera Stage is glass ("raised"), so
@@ -26,7 +27,7 @@ import {
 } from 'react-native';
 
 import { PressScale } from './press';
-import { isVoice, typographic } from './typography';
+import { isDisplay, typographic } from './typography';
 import {
   border,
   color,
@@ -35,6 +36,7 @@ import {
   palette,
   radius,
   space,
+  stroke as glyph,
   type,
   type TypeToken,
 } from './tokens';
@@ -66,7 +68,7 @@ export function useBackdropColor(): string {
 // ---------------------------------------------------------------------------------------
 
 /**
- * UI copy: 1-3 words (copy rule). In a serif variant it is set with real apostrophes; VoiceOver
+ * UI copy: 1-3 words (copy rule). At headline sizes it is set with real apostrophes; VoiceOver
  * and the e2e flows still get the text as written.
  */
 export function Label({
@@ -80,7 +82,7 @@ export function Label({
   style?: StyleProp<TextStyle>;
   testID?: string;
 }) {
-  const shown = isVoice(variant) ? typographic(children) : children;
+  const shown = isDisplay(variant) ? typographic(children) : children;
   return (
     <Text
       testID={testID}
@@ -99,7 +101,7 @@ export function BodyText({ children, style }: { children: string; style?: StyleP
 }
 
 // ---------------------------------------------------------------------------------------
-// Buttons: full pills, 56 pt, Geist 600 17. The primary is white; the rest are glass.
+// Buttons: full pills, 56 pt, Geist 700 17. The primary is white; the rest are soft grey.
 // ---------------------------------------------------------------------------------------
 
 type ButtonProps = {
@@ -177,8 +179,8 @@ export function PrimaryButton(p: ButtonProps) {
 }
 
 /**
- * A secondary action: a glass pill (#1C1C1F, a 1 pt rim) with white text. `small` is the 32 pt
- * in-row pill (white 15/500, 14 pt sides), e.g. "Challenge" on a room row.
+ * A secondary action: a soft grey pill with white text. `small` is the 36 pt in-row pill
+ * (white 15/600, 16 pt sides), e.g. "Challenge" on a room row.
  */
 export function QuietButton({ small = false, ...p }: ButtonProps & { small?: boolean }) {
   return small ? (
@@ -241,7 +243,7 @@ export function DangerButton({ filled = false, ...p }: ButtonProps & { filled?: 
 
 /** A tick drawn with borders (no icon font, no emoji). */
 export function Tick({ size, tint }: { size: number; tint: string }) {
-  const stroke = Math.max(2, Math.round(size * 0.12));
+  const stroke = Math.max(glyph.glyph, Math.round(size * 0.14));
   return (
     <View
       style={{
@@ -288,10 +290,10 @@ export function ChevronLeft({ tint = palette.text }: { tint?: string } = {}) {
   return (
     <View
       style={{
-        width: 11,
-        height: 11,
-        borderLeftWidth: 2,
-        borderBottomWidth: 2,
+        width: 12,
+        height: 12,
+        borderLeftWidth: glyph.glyph,
+        borderBottomWidth: glyph.glyph,
         borderColor: tint,
         transform: [{ translateX: 3 }, { rotate: '45deg' }],
       }}
@@ -437,8 +439,8 @@ export function CheckRow({
 }
 
 /**
- * A labelled one-line text field ("Your name"); the label sits above, never inside. A #0F0F11
- * well with a 1 pt rim (#1C1C1F inside a raised sheet), radius 14; focused, the rim turns white.
+ * A labelled one-line text field ("Your name"); the label sits above, never inside. A soft
+ * well (one step up inside a raised sheet), radius 18; focused, it gets a 2 pt white outline.
  */
 export function TextField({
   label,
@@ -493,7 +495,7 @@ export function TextField({
         style={[
           styles.field,
           { backgroundColor: raised ? palette.fill : palette.surface },
-          { borderColor: focused ? color.borderFocused : palette.rim },
+          { borderColor: focused ? color.borderFocused : 'transparent' },
         ]}
       />
     </View>
@@ -712,14 +714,9 @@ const styles = StyleSheet.create({
   dimmed: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
   primary: { backgroundColor: color.primaryAction, boxShadow: material.bloomPrimary },
-  secondary: {
-    backgroundColor: palette.fill,
-    borderWidth: 1,
-    borderColor: palette.rim,
-    boxShadow: material.highlight,
-  },
+  secondary: { backgroundColor: palette.fill },
   text: { backgroundColor: 'transparent', height: 44, paddingHorizontal: half.x15 },
-  small: { height: space.x4, paddingHorizontal: 14 },
+  small: { height: space.x4 + half.x05, paddingHorizontal: space.x2 },
   dense: { height: space.x4 },
   dangerFilled: { backgroundColor: color.destructive },
   alertSlot: { height: space.x4, alignItems: 'center', justifyContent: 'center' },
@@ -739,7 +736,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   segments: { flex: 1, flexDirection: 'row', gap: half.x05 },
-  segment: { flex: 1, height: 3, borderRadius: 1.5 },
+  segment: { flex: 1, height: glyph.bar, borderRadius: glyph.bar / 2 },
   tagSlot: { minWidth: space.x1, alignItems: 'flex-end', paddingRight: space.page },
   step: { flex: 1, paddingHorizontal: space.page, paddingBottom: space.x2, paddingTop: space.x1 },
   stepBody: { marginTop: space.x1 },
@@ -761,7 +758,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   boxOn: { backgroundColor: color.selected },
-  boxOff: { borderWidth: 1.5, borderColor: palette.textTertiary },
+  boxOff: { borderWidth: 2, borderColor: palette.textTertiary },
   row: {
     minHeight: space.row,
     flexDirection: 'row',
@@ -774,8 +771,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     overflow: 'hidden',
     backgroundColor: palette.surface,
-    borderWidth: 1,
-    borderColor: palette.rim,
   },
   checking: { flexDirection: 'row', alignItems: 'center' },
   dots: { width: 18 },
@@ -821,10 +816,6 @@ const styles = StyleSheet.create({
     backgroundImage: material.glass,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
-    borderTopWidth: 1,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: palette.rim,
     paddingHorizontal: space.page,
     paddingTop: half.x15,
     paddingBottom: space.x5,

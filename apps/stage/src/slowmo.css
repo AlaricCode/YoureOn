@@ -3,7 +3,7 @@
    the slow-mo (auto-play only starts once the burst is over); the other overlays share its slot.
    One accent: the win colour, or the loss colour for a foul. Sized from the stage's em
    (stage.css: ~28px on 1920x1080). Limelight: pills not tracked capitals, a glass chip, and the
-   judge's reason under the frame in the serif, as it was said. */
+   judge's reason under the frame, as it was said. */
 .slowmo {
   --sm-win: var(--good, #00d47a);
   --sm-foul: var(--bad, #ff4f45);
@@ -130,10 +130,9 @@
 }
 .slowmo-reason {
   margin: 0;
-  font-family: var(--serif, Georgia, serif);
-  font-size: 1.7em;
-  font-weight: 400;
-  letter-spacing: -0.01em;
+  font-size: 1.33em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
   line-height: 1.15;
 }
 .slowmo-footer {

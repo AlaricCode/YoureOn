@@ -61,7 +61,7 @@ export function TermsCardScreen({
 
   if (lock.phase === 'locked') {
     // The moment: the bet is on, so the switch flips on. Black under a green aurora, the mark
-    // turning on, the word in the serif, the pot in thin white (a pot is not money moving up, so
+    // turning on, the word in bold, the pot in bold white (a pot is not money moving up, so
     // it is not green), "pot" in grey. Headline and pot rise together (the one reveal).
     return (
       <MomentScreen
@@ -239,7 +239,7 @@ export function TermsCardScreen({
 }
 
 /**
- * One side of the slip: the monogram, then the name over the stake. `right` mirrors it, so the
+ * One side of the slip: the disc, then the name over the stake. `right` mirrors it, so the
  * two stakes face each other across the pot. Signed, the disc is ringed in green light and
  * carries a tick.
  */
@@ -262,7 +262,7 @@ function Party({
   return (
     <View style={[styles.party, right && styles.partyRight]}>
       <View>
-        <Avatar name={name} size={avatarSize.lg} accent={accent && !signed} lit={signed} />
+        <Avatar name={name} size={avatarSize.md} accent={accent && !signed} lit={signed} />
         {signed ? (
           <Appear style={styles.signedTick}>
             <CheckBadge size={TICK} fill={palette.accent} />
@@ -348,7 +348,12 @@ const styles = StyleSheet.create({
   },
   // The two stakes face each other across the pot.
   parties: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  party: { flexDirection: 'row', alignItems: 'center', gap: half.x15, flexShrink: 1 },
+  party: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: half.x05 + half.x05 + 2,
+    flexShrink: 1,
+  },
   partyRight: { flexDirection: 'row-reverse' },
   partyText: { flexShrink: 1 },
   partyTextRight: { alignItems: 'flex-end' },
