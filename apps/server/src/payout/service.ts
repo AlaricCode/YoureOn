@@ -97,6 +97,7 @@ import {
   hexOf,
   iso,
   Inflight,
+  casBetState,
   lockBet,
   readBetAccount,
   statePayload,
@@ -548,26 +549,23 @@ export class PayoutService {
         this.deps.log.info('payout.ruled_by_chain_first', { bet_id: betId, signature });
         return { b, envs: signature ? [await txConfirmed(tx)] : [], moved: true };
       }
-      const [row] = await tx
-        .update(bets)
-        .set({
-          state: 'RULED',
-          outcome: ONCHAIN[outcome].pg,
-          evidence_hash: r.evidenceHash,
-          ruling_hash: r.rulingHash,
-          appeal_deadline: new Date(appealDeadline * 1000),
-          ...(r.resolveDeadline !== null
-            ? { resolve_deadline: new Date(r.resolveDeadline * 1000) }
-            : {}),
-        })
-        .where(eq(bets.id, betId))
-        .returning();
+      const row = await casBetState(tx, betId, RESOLVABLE_STATES, {
+        state: 'RULED',
+        outcome: ONCHAIN[outcome].pg,
+        evidence_hash: r.evidenceHash,
+        ruling_hash: r.rulingHash,
+        appeal_deadline: new Date(appealDeadline * 1000),
+        ...(r.resolveDeadline !== null
+          ? { resolve_deadline: new Date(r.resolveDeadline * 1000) }
+          : {}),
+      });
+      if (!row) return { b, envs: [], moved: false };
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
           payload: statePayload(
-            row!,
+            row,
             b.state,
             `appeal_deadline=${appealDeadline}`,
             signature
@@ -1051,11 +1049,9 @@ export class PayoutService {
           .returning({ id: chainTxs.id });
         rowId = r!.id;
       }
-      const [row] = await tx
-        .update(bets)
-        .set({ state: target })
-        .where(eq(bets.id, betId))
-        .returning();
+      // Compare-and-set (checked RULED above, under the row lock): never over a settled bet.
+      const row = await casBetState(tx, betId, ['RULED'], { state: target });
+      if (!row) throw new HttpError('STATE_MOVED_ON', undefined, { state: b.state });
       const pending = {
         kind,
         signature,
@@ -1067,7 +1063,7 @@ export class PayoutService {
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(row!, b.state, null, pending),
+          payload: statePayload(row, b.state, null, pending),
           now,
         }),
         await appendBetEvent(tx, {
@@ -1078,7 +1074,7 @@ export class PayoutService {
         }),
         // The GG moment: bet.gg in the same commit as CONCEDED (src/gg/service.ts).
         ...(kind === 'concede' && this.o.onConcedeSubmitted
-          ? await this.o.onConcedeSubmitted(tx, row!, now)
+          ? await this.o.onConcedeSubmitted(tx, row, now)
           : []),
       ];
       return { b, envs, rowId: rowId! };
@@ -1156,15 +1152,12 @@ export class PayoutService {
         .where(eq(chainTxs.id, rowId));
       const b = await lockBet(tx, betId);
       if (b?.state !== target) return null;
-      const [row] = await tx
-        .update(bets)
-        .set({ state: 'RULED' })
-        .where(eq(bets.id, betId))
-        .returning();
+      const row = await casBetState(tx, betId, [target], { state: 'RULED' });
+      if (!row) return null;
       const e = await appendBetEvent(tx, {
         bet_id: betId,
         type: 'bet.state',
-        payload: statePayload(row!, target, `${kind}_failed`),
+        payload: statePayload(row, target, `${kind}_failed`),
         now: this.deps.now(),
       });
       return { b, e };
@@ -1283,15 +1276,12 @@ export class PayoutService {
       const out = await this.deps.db.transaction(async (tx) => {
         const cur = await lockBet(tx, b.id);
         if (!cur || (cur.state !== 'CONCEDED' && cur.state !== 'FINALIZED')) return null;
-        const [row] = await tx
-          .update(bets)
-          .set({ state: 'RULED' })
-          .where(eq(bets.id, b.id))
-          .returning();
+        const row = await casBetState(tx, b.id, ['CONCEDED', 'FINALIZED'], { state: 'RULED' });
+        if (!row) return null;
         const e = await appendBetEvent(tx, {
           bet_id: b.id,
           type: 'bet.state',
-          payload: statePayload(row!, cur.state, 'payout_lost'),
+          payload: statePayload(row, cur.state, 'payout_lost'),
           now: this.deps.now(),
         });
         return { cur, e };
@@ -1388,10 +1378,12 @@ export class PayoutService {
     sentAt: number,
     landed: Landed,
   ) {
-    const now = this.deps.now();
     const out = await this.deps.db.transaction(async (tx) => {
       const b = await lockBet(tx, betId);
       if (!b) return null;
+      // Stamped once the row lock is held: a `now` from before the wait would date these events
+      // earlier than ones another path committed (with lower seqs) while this one waited.
+      const now = this.deps.now();
       await tx
         .update(chainTxs)
         .set({
@@ -1407,18 +1399,18 @@ export class PayoutService {
       const stakeA = b.stake_a ?? 0n;
       const amounts = payout(outcome, stakeA, stakeA + (b.stake_b ?? 0n));
       const voided = outcome === 'Refund';
-      const [row] = await tx
-        .update(bets)
-        .set({ state: voided ? 'VOIDED' : 'PAID', payout_via: kind })
-        .where(eq(bets.id, betId))
-        .returning();
+      const row = await casBetState(tx, betId, ['CONCEDED', 'FINALIZED', 'RULED'], {
+        state: voided ? 'VOIDED' : 'PAID',
+        payout_via: kind,
+      });
+      if (!row) return { b, envs: [] as BetEventEnvelope[] };
       const names = await this.names(b, tx);
       const cue = payoutCue(outcome, amounts, names, await this.o.cueContext?.(tx, b, kind));
       const envs = [
         await appendBetEvent(tx, {
           bet_id: betId,
           type: 'bet.state',
-          payload: statePayload(row!, b.state, kind, {
+          payload: statePayload(row, b.state, kind, {
             kind,
             signature,
             submitted_at: iso(sentAt),
