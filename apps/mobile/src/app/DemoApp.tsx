@@ -2,7 +2,9 @@
 // server: the route comes from ./machine selectRoute(app state, the active bet's server state).
 //   signup | demo claim (custodial demo seed -> wallet.importSeed, decision D-A)
 //   -> face enrollment offered right after signup (skippable; consent first) and in Profile
-//   -> home: rooms (create / join / presence) -> challenge from the list (POST /v1/bets 'list')
+//   -> home: the shared lobby, joined by itself on launch (./lobby, POST /v1/rooms/lobby; a code
+//      is the "Private room" option: create / join / presence)
+//      -> challenge from the list (POST /v1/bets 'list')
 //      or by face: "Scan a face" -> on-device embedding -> POST face-match -> "Challenge Jake?"
 //      -> POST /v1/bets 'face' + match_ticket (no match: "No match" and the room list)
 //   -> B: full-screen invite + haptic -> negotiate (captions, draft; on A's phone "Type it
@@ -38,13 +40,15 @@ import {
   useRef,
   useState,
 } from 'react';
-import { AccessibilityInfo, Linking, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, AppState as RNAppState, Linking, StyleSheet, View } from 'react-native';
 
-import type {
-  BetSnapshot,
-  CreateBetResponse,
-  RoomMember,
-  VoiceDynamicVariables,
+import {
+  isLobbySummary,
+  type BetSnapshot,
+  type CreateBetResponse,
+  type JoinRoomResponse,
+  type RoomMember,
+  type VoiceDynamicVariables,
 } from '@youre-on/shared/api';
 import { isReplayTicker } from '@youre-on/shared/judge/market-terms';
 import { agreedFor } from '@youre-on/shared/odds';
@@ -169,6 +173,17 @@ import {
   deviceRoleRequest,
   rejoinAndRebind,
 } from './judgeCam';
+import {
+  homeJoinPlan,
+  isLobby,
+  LOBBY_REFRESH_MS,
+  LOBBY_RETRY_MS,
+  lobbyMembers,
+  lobbyWanted,
+  runJoinPlan,
+  shouldRejoinLobby,
+  type LobbyIntent,
+} from './lobby';
 import { createLiveRetry, RESUME_LIMIT, resumable, type LiveRetry } from './resume';
 import { createSocketStatusHandler } from './socketStatus';
 import { importSafely } from './importSafely';
@@ -210,6 +225,7 @@ import {
 } from './wakeGate';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 
+/** The last PRIVATE room's code (a lobby join and Leave delete it): a restart goes back there. */
 const LAST_ROOM_KEY = 'youreon.room.v1';
 /**
  * This phone's judge-cam memo (./judgeCam): bound to this device and user, it brings a judge cam
@@ -218,6 +234,11 @@ const LAST_ROOM_KEY = 'youreon.room.v1';
 const JUDGE_CAM_KEY = 'youreon.judgecam.v1';
 /** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
 const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
+/**
+ * EXPO_PUBLIC_LOBBY=off: no shared lobby (./lobby); home opens on the room-code entry, as before.
+ * On, every phone joins the one live lobby room by itself and a code is the "Private room" option.
+ */
+const LOBBY_ENABLED = process.env.EXPO_PUBLIC_LOBBY !== 'off';
 /** EXPO_PUBLIC_MARKET=off hides "Bet on Bitcoin" (the server refuses it without the Gemini relay). */
 const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET !== 'off';
 /** A voice SDK that throws while it loads falls back to typed terms (the boundary below). */
@@ -362,6 +383,30 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [demoLink, setDemoLink] = useState<string | null>(null);
   /** A room from a youreon://room/ link that arrived before sign-in. */
   const pendingRoom = useRef<string | null>(null);
+  /**
+   * The lobby (./lobby): this launch, the user joined a room by code, made one or opened a room
+   * link, so the lobby stays out of it until they leave that room.
+   */
+  const privateChosen = useRef(false);
+  /**
+   * POST /v1/rooms/lobby answered 404 (LOBBY_ENABLED=false on the server, or a server without
+   * it): room codes only for the rest of this launch, as before the lobby (no retry loop).
+   */
+  const lobbyOff = useRef(false);
+  const lobbyIntent = (): LobbyIntent => ({
+    enabled: LOBBY_ENABLED && !lobbyOff.current,
+    privateChosen: privateChosen.current,
+  });
+  /** No room yet and the first lobby join is in flight: home shows the lobby, joining. */
+  const [lobbyJoining, setLobbyJoining] = useState(LOBBY_ENABLED);
+  /** Bumped by every join by code: a lobby join that a code join overtook is dropped. */
+  const codeGen = useRef(0);
+  /** The lobby join in flight: concurrent callers (the launch rejoin, a foreground) share it. */
+  const lobbyInFlight = useRef<Promise<string | null> | null>(null);
+  /** The lobby's room id, from the last lobby answer (a private choice leaves it on the server). */
+  const lobbyRoomId = useRef<string | null>(null);
+  /** The signed-in room rejoin (./resume createLiveRetry), for the lobby's retries. */
+  const roomRetryRef = useRef<LiveRetry | null>(null);
   /** POST /v1/bets returns the judge's dynamic variables; only A (the voice host) has them. */
   const voiceVars = useRef(new Map<string, VoiceDynamicVariables>());
   // ---- "Jarvis" state (./wakeGate; the hook and the gating are below the judge session) ----
@@ -450,12 +495,28 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     // A step the server could not answer here (offline at a cold start) runs again once the
     // socket is live (./resume createLiveRetry): it used to wait for the next restart, with the
     // phone on home, room-less, and its open bet stranded.
+    // No room: the last private room's code, then the lobby when it is wanted (./lobby).
     const roomRetry = createLiveRetry(async () => {
       if (appRef.current.room) return true;
       const S = await import('expo-secure-store');
-      const code = await S.getItemAsync(LAST_ROOM_KEY);
-      return !code || !live || (await joinRoomId(code)) !== null;
+      const stored = await S.getItemAsync(LAST_ROOM_KEY);
+      const r = await runJoinPlan(
+        homeJoinPlan({ linked: null, lobby: lobbyWanted(lobbyIntent()), stored }),
+        {
+          joinLobby: () => joinLobbyId(true),
+          joinCode: joinRoomId,
+          live: () => live && !appRef.current.room,
+        },
+      );
+      return !live || !r.tried || r.roomId !== null || appRef.current.room !== null;
     });
+    roomRetryRef.current = roomRetry;
+    // A lobby join that keeps failing while the socket stays up (a 5xx) is tried again quietly;
+    // home shows the code entry meanwhile.
+    const lobbyTick = setInterval(() => {
+      if (live && roomRetry.pending && !appRef.current.room && lobbyWanted(lobbyIntent()))
+        void roomRetry.run();
+    }, LOBBY_RETRY_MS);
     // Re-join the last room (a convenience; the server's room_members row is the truth). A
     // restored judge cam then re-binds itself to that room on the server, which may hold another
     // room or none (a demo claim resets the device to 'phone'). ./judgeCam rejoinAndRebind: the
@@ -470,15 +531,23 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             return S.getItemAsync(LAST_ROOM_KEY);
           },
           currentRoomId: () => appRef.current.room?.room_id ?? null,
-          join: joinRoomId,
-          live: () => live,
+          join: async (code) => {
+            const id = await joinRoomId(code);
+            // A room link is an explicit choice: no lobby for the rest of this launch.
+            if (id !== null && code === linked) privateChosen.current = true;
+            return id;
+          },
+          joinLobby: lobbyWanted(lobbyIntent()) ? () => joinLobbyId() : undefined,
+          // A code, a new room or a link the user chose meanwhile ends the launch rejoin.
+          live: () => live && (linked !== null || !privateChosen.current),
           stillOn: () => camSync.restoredOn,
           bind: (roomId) => void bindJudgeCam(roomId),
         }),
       )
       .then((joined) => {
         if (!joined) roomRetry.markPending();
-      });
+      })
+      .finally(() => setLobbyJoining(false));
     // Back into any bet that is still open (./resume): a restart mid-bet used to strand it.
     const betsRetry = createLiveRetry(async () => {
       let open: BetSnapshot[];
@@ -502,6 +571,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     return () => {
       live = false;
       roomRetry.stop();
+      clearInterval(lobbyTick);
+      roomRetryRef.current = null;
       betsRetry.stop();
       liveRetries.current = [];
       rt.ws.stop();
@@ -518,7 +589,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         dispatch({ type: 'overlay', overlay: 'demoClaim' });
       } else if (appRef.current.auth === 'signedIn') {
         dispatch({ type: 'overlay', overlay: 'none' });
-        void joinRoom(link.code);
+        void joinPrivate(link.code);
       } else {
         pendingRoom.current = link.code;
       }
@@ -549,7 +620,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     // keep following the bet on screen unless it was the only one dropped (then it was refused).
     const c = rt.onForbidden((d) => {
       const cur = appRef.current;
-      if (d.room && cur.room?.room_id === d.room) dispatch({ type: 'room', room: null });
+      if (d.room && cur.room?.room_id === d.room) {
+        dispatch({ type: 'room', room: null });
+        // Back into the lobby on the next live socket or retry tick (./lobby).
+        if (lobbyWanted(lobbyIntent())) roomRetryRef.current?.markPending();
+      }
       if (cur.activeBetId && d.bets.length > 1 && d.bets.includes(cur.activeBetId))
         rt.ws.subscribe(cur.activeBetId);
     });
@@ -562,6 +637,22 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       setConnectionStatus('idle');
     };
   }, [rt, camSync]);
+
+  // ---- the lobby on foreground (./lobby): back in, and its TTL refreshed ---------------------
+  useEffect(() => {
+    let last = 0;
+    const sub = RNAppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      const a = appRef.current;
+      if (!shouldRejoinLobby(lobbyIntent(), a)) return;
+      if (a.room && Date.now() - last < LOBBY_REFRESH_MS) return;
+      last = Date.now();
+      void joinLobbyId(true).then((id) => {
+        if (id === null && !appRef.current.room) roomRetryRef.current?.markPending();
+      });
+    });
+    return () => sub.remove();
+  }, [rt]);
 
   // ---- bet events --------------------------------------------------------------------------
   useEffect(() => {
@@ -1097,32 +1188,106 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     [camSync],
   );
 
-  async function joinRoom(code: string): Promise<boolean> {
-    return (await joinRoomId(code)) !== null;
+  /**
+   * A room the user chose (a typed code, "New room", a room link): it wins over the lobby for the
+   * rest of this launch (./lobby).
+   */
+  async function joinPrivate(code: string): Promise<boolean> {
+    // Chosen before the join answers: a lobby join in flight then steps aside (and leaves the
+    // lobby on the server), and the launch rejoin stops instead of joining a fallback after it.
+    const before = privateChosen.current;
+    privateChosen.current = true;
+    const id = await joinRoomId(code);
+    if (id === null) {
+      privateChosen.current = before;
+      // A lobby join this one cancelled: back into the lobby on the next retry tick.
+      if (!appRef.current.room && lobbyWanted(lobbyIntent())) roomRetryRef.current?.markPending();
+      return false;
+    }
+    // A lobby join this choice overtook may have landed on the server: out of the lobby too, so
+    // face matching there does not see this phone (a second leave is harmless).
+    const stray = lobbyRoomId.current;
+    if (stray && stray !== id) void rt.api.leaveRoom(stray).catch(() => undefined);
+    return true;
+  }
+
+  /** The joined room on screen and on the socket; its room id. */
+  function enterRoom(r: JoinRoomResponse): string {
+    const prev = appRef.current.room;
+    // Switching rooms (a room link, the lobby <-> a private room): leave the old one so presence
+    // there is right (and a phone in a private room is not face-matched in the lobby).
+    if (prev && prev.room_id !== r.room.room_id)
+      void rt.api.leaveRoom(prev.room_id).catch(() => undefined);
+    const lobby = LOBBY_ENABLED && isLobbySummary(r.room);
+    dispatch({
+      type: 'room',
+      room: {
+        room_id: r.room.room_id,
+        code: r.room.code,
+        name: r.room.name ?? r.room.code,
+        lobby,
+      },
+      members: r.members,
+    });
+    rt.ws.subscribeRoom(r.room.room_id);
+    // A judge cam that moved rooms (a room link) judges the new one.
+    if (prev && prev.room_id !== r.room.room_id && appRef.current.judgeCam)
+      void bindJudgeCam(r.room.room_id);
+    // The last room is a PRIVATE room only (./lobby homeJoinPlan): a restart goes back to it,
+    // and a phone in the lobby comes back to the lobby by itself.
+    void import('expo-secure-store')
+      .then((S) =>
+        lobby ? S.deleteItemAsync(LAST_ROOM_KEY) : S.setItemAsync(LAST_ROOM_KEY, r.room.code),
+      )
+      .catch(() => undefined);
+    return r.room.room_id;
   }
 
   /** Join by code; the room id, or null when it failed. */
   async function joinRoomId(code: string): Promise<string | null> {
+    codeGen.current++;
     try {
-      const prev = appRef.current.room;
-      const r = await rt.api.joinRoom(code);
-      // Switching rooms (a room link): leave the old one so presence there is right.
-      if (prev && prev.room_id !== r.room.room_id)
-        void rt.api.leaveRoom(prev.room_id).catch(() => undefined);
-      dispatch({
-        type: 'room',
-        room: { room_id: r.room.room_id, code: r.room.code, name: r.room.name ?? r.room.code },
-        members: r.members,
-      });
-      rt.ws.subscribeRoom(r.room.room_id);
-      // A judge cam that moved rooms (a room link) judges the new one.
-      if (prev && prev.room_id !== r.room.room_id && appRef.current.judgeCam)
-        void bindJudgeCam(r.room.room_id);
-      void import('expo-secure-store')
-        .then((S) => S.setItemAsync(LAST_ROOM_KEY, r.room.code))
-        .catch(() => undefined);
-      return r.room.room_id;
+      return enterRoom(await rt.api.joinRoom(code));
     } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Join the shared lobby (POST /v1/rooms/lobby, ./lobby); the room id, or null when it failed or
+   * a join by code (a code, a link, New room) overtook it. Callers at the same time share one
+   * request, so two lobby joins never cancel each other. `quiet`: a retry, home keeps what it
+   * shows.
+   */
+  function joinLobbyId(quiet = false): Promise<string | null> {
+    if (!quiet && !appRef.current.room) setLobbyJoining(true);
+    let p = lobbyInFlight.current;
+    if (!p) {
+      p = enterLobby().finally(() => {
+        if (lobbyInFlight.current === p) lobbyInFlight.current = null;
+        setLobbyJoining(false);
+      });
+      lobbyInFlight.current = p;
+    }
+    return p;
+  }
+
+  async function enterLobby(): Promise<string | null> {
+    const gen = codeGen.current;
+    try {
+      const r = await rt.api.joinLobby();
+      lobbyRoomId.current = r.room.room_id;
+      if (gen !== codeGen.current || !lobbyWanted(lobbyIntent())) {
+        // Overtaken by a room the user chose: leave the lobby on the server as well.
+        if (!lobbyWanted(lobbyIntent()) && appRef.current.room?.room_id !== r.room.room_id)
+          void rt.api.leaveRoom(r.room.room_id).catch(() => undefined);
+        return null;
+      }
+      return enterRoom(r);
+    } catch (e) {
+      // No lobby on this server (LOBBY_ENABLED=false): room codes for the rest of the launch.
+      if (e instanceof ApiClientError && e.status === 404) lobbyOff.current = true;
+      console.warn('[yo] lobby join', e instanceof Error ? e.message : String(e));
       return null;
     }
   }
@@ -1629,14 +1794,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             change={homeChange}
             pending={false}
             inBetsUsd={balance && balance.in_escrow !== '0' ? balance.in_escrow_display : null}
-            room={app.room ? { code: app.room.code, name: app.room.name } : null}
-            members={app.members
-              .filter((m) => m.user.user_id !== app.me?.user_id)
-              .map(toPreviewUser)}
+            room={
+              app.room
+                ? { code: app.room.code, name: app.room.name, lobby: isLobby(app.room) }
+                : null
+            }
+            lobbyJoining={lobbyJoining && lobbyWanted(lobbyIntent())}
+            members={(isLobby(app.room)
+              ? lobbyMembers(app.members, app.me?.user_id ?? null)
+              : app.members.filter((m) => m.user.user_id !== app.me?.user_id)
+            ).map(toPreviewUser)}
             offline={app.offline}
             note={homeNote}
             creating={creatingRoom}
-            onJoin={joinRoom}
+            onJoin={joinPrivate}
             onCreate={() => {
               if (creatingRoom) return;
               setCreatingRoom(true);
@@ -1645,7 +1816,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 .createRoom()
                 .then(
                   async (r) => {
-                    if (!(await joinRoom(r.code))) setHomeNote(t(COPY.home.createFailed));
+                    if (!(await joinPrivate(r.code))) setHomeNote(t(COPY.home.createFailed));
                   },
                   (e: unknown) => setHomeNote(homeErrorLabel('create', e)),
                 )
@@ -1653,12 +1824,19 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             }}
             onLeave={() => {
               const id = app.room?.room_id;
+              const wasLobby = isLobby(app.room);
               dispatch({ type: 'room', room: null });
               rt.ws.subscribeRoom(null);
               void import('expo-secure-store')
                 .then((S) => S.deleteItemAsync(LAST_ROOM_KEY))
                 .catch(() => undefined);
               if (id) void rt.api.leaveRoom(id).catch(() => undefined);
+              // Out of a private room: back to the lobby (./lobby), retried quietly if it fails.
+              privateChosen.current = false;
+              if (!wasLobby && lobbyWanted(lobbyIntent()))
+                void joinLobbyId().then((joined) => {
+                  if (joined === null && !appRef.current.room) roomRetryRef.current?.markPending();
+                });
             }}
             onScan={
               faceOn && app.room ? () => dispatch({ type: 'overlay', overlay: 'scan' }) : undefined
@@ -1689,7 +1867,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return (
           <PanelErrorBoundary name="Face scan" onError={faceCrashed('scan')}>
             <ScanScreen
-              roomCode={room.code}
+              roomCode={isLobby(room) ? undefined : room.code}
+              lobby={isLobby(room)}
               onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
               scan={(url) =>
                 runScan(

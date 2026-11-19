@@ -14,6 +14,7 @@ import {
   danceUploadPath,
   InviteAnswerResponse,
   JoinRoomResponse,
+  LOBBY_PATH,
   rematchPath,
   RematchResponse,
   RoomPresenceResponse,
@@ -188,6 +189,8 @@ export function createYoApi(c: ApiClient) {
       }),
     joinRoom: (code: string) =>
       c.request('POST', '/v1/rooms/join', { json: { code }, schema: JoinRoomResponse }),
+    /** The shared lobby (../app/lobby): get-or-create the one live lobby room, then join it. */
+    joinLobby: () => c.request('POST', LOBBY_PATH, { json: {}, schema: JoinRoomResponse }),
     leaveRoom: (roomId: string) =>
       c.request('POST', `/v1/rooms/${encodeURIComponent(roomId)}/leave`),
     presence: (roomId: string) =>

@@ -249,6 +249,13 @@ export class RealtimeHub {
     return (this.userConnCount.get(userId) ?? 0) > 0;
   }
 
+  /** Every user with a live socket right now. */
+  onlineUserIds(): string[] {
+    const out: string[] = [];
+    for (const [id, n] of this.userConnCount) if (n > 0) out.push(id);
+    return out;
+  }
+
   onPresence(listener: PresenceListener): () => void {
     this.presenceListeners.add(listener);
     return () => this.presenceListeners.delete(listener);

@@ -1,7 +1,8 @@
 // Stage laptop routes (API-CONTRACT §1.3 "Stage and demo", §2.14, §2.17):
 //   POST /v1/stage/session {stage_key, room_id | room_code} -> 201 StageSessionResponse (scope
 //        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code phone A shows (or
-//        its QR payload). 404 unless STAGE_KEY is configured. The key is compared in constant
+//        its QR payload), or LOBBY_STAGE_ALIAS ('LOBBY', any case) for the shared lobby (opened
+//        if there is none yet; 404 when LOBBY_ENABLED=false). 404 unless STAGE_KEY is configured. The key is compared in constant
 //        time; 10/min per client IP. Also says who signs the lock (LOCK_SIGNER), so the
 //        projector words the signature slots truthfully ('server': custodial demo keys).
 //   GET  /v1/bets/:bet_id -> BetSnapshot, for a party of the bet or a stage session of its room
@@ -25,7 +26,7 @@ import {
   rooms,
   type Db,
 } from '@youre-on/db';
-import { BetSnapshot, parseRoomCode } from '@youre-on/shared/api';
+import { BetSnapshot, isLobbyAlias, parseRoomCode } from '@youre-on/shared/api';
 import { AppealResult } from '@youre-on/shared/appeal';
 import { BetState } from '@youre-on/shared/bet-state';
 import { HearingRuling } from '@youre-on/shared/hearing';
@@ -39,6 +40,8 @@ import { randomB64Url, sha256Hex } from '../crypto';
 import { HttpError, validationError } from '../errors';
 import { readBody } from '../http/body';
 import { betSnapshot, loadUserRefs, partyOf, type SnapshotExtras } from '../bets/snapshot';
+import { demoRoomError } from '../demo/players';
+import { assertLobbyEnabled, getOrCreateLobby } from '../rooms/lobby';
 import { stageCors } from './cors';
 
 /** A stage session outlives a pitch day, not a week. */
@@ -49,7 +52,8 @@ export const STAGE_ROOMS_TTL_MS = 15_000;
 
 /**
  * Exactly one of `room_id` and `room_code`: the presenter can type the 6-char code phone A shows
- * (or paste its youreon://room/ QR payload) instead of the room's uuid.
+ * (or paste its youreon://room/ QR payload), or LOBBY for the shared lobby, instead of the
+ * room's uuid.
  */
 export const StageSessionRequest = z
   .object({
@@ -64,7 +68,11 @@ export const StageSessionRequest = z
         path: ['room_id'],
         message: 'exactly one of room_id, room_code',
       });
-    else if (b.room_code !== undefined && parseRoomCode(b.room_code) === null)
+    else if (
+      b.room_code !== undefined &&
+      !isLobbyAlias(b.room_code) &&
+      parseRoomCode(b.room_code) === null
+    )
       ctx.addIssue({ code: 'custom', path: ['room_code'], message: 'not a room code' });
   });
 export const StageSessionResponse = z.object({
@@ -77,6 +85,28 @@ export const StageSessionResponse = z.object({
   lock_signer: z.enum(['phones', 'server']),
 });
 export type StageSessionResponse = z.infer<typeof StageSessionResponse>;
+
+/** The room a stage session asks for: by uuid, by code, or the lobby (alias). */
+async function stageRoomOf(
+  deps: Pick<AppDeps, 'db' | 'env' | 'now'>,
+  body: z.output<typeof StageSessionRequest>,
+): Promise<{ id: string } | null> {
+  if (body.room_code !== undefined && isLobbyAlias(body.room_code)) {
+    assertLobbyEnabled(deps.env);
+    // DEMO_MODE: a stage session makes its room the demo room (demo/players.ts isDemoRoom) for
+    // STAGE_SESSION_TTL_MS, which would refuse every audience bet in the lobby for 12 h.
+    if (deps.env.DEMO_MODE)
+      throw demoRoomError('The demo stage shows a private room. Use its code.');
+    return getOrCreateLobby(deps);
+  }
+  const code = body.room_code !== undefined ? parseRoomCode(body.room_code) : null;
+  const [room] = await deps.db
+    .select({ id: rooms.id })
+    .from(rooms)
+    .where(code !== null ? eq(rooms.code, code) : eq(rooms.id, body.room_id!))
+    .limit(1);
+  return room ?? null;
+}
 
 /** Constant-time on equal-length digests, so neither content nor length leaks. */
 export function stageKeyMatches(given: string, expected: string): boolean {
@@ -210,12 +240,7 @@ export const stageRoutes: RouteModule = {
         deps.log.warn('stage.session_denied', { room_id: body.room_id ?? null });
         throw new HttpError('AUTH_REQUIRED', 'Wrong stage key.');
       }
-      const code = body.room_code !== undefined ? parseRoomCode(body.room_code) : null;
-      const [room] = await deps.db
-        .select({ id: rooms.id })
-        .from(rooms)
-        .where(code !== null ? eq(rooms.code, code) : eq(rooms.id, body.room_id!))
-        .limit(1);
+      const room = await stageRoomOf(deps, body);
       if (!room) throw new HttpError('NOT_FOUND', 'No such room.');
 
       const now = deps.now();
