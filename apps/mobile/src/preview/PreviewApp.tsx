@@ -33,6 +33,7 @@ import { DANCE_ROUTINE_CHOICES, danceClaimPreview, stakeChips } from '../app/dan
 import { initialLock, lockReducer, type EndReason } from '../bets/lock';
 import { betView, myResult } from '../bets/view';
 import { importSafely } from '../app/importSafely';
+import { firstName } from '../dance/copy';
 import { authorizeOwner } from '../device/authorize';
 import { feel } from '../device/feedback';
 import { PanelErrorBoundary } from '../diagnostics/PanelErrorBoundary';
@@ -561,6 +562,8 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
             speaking={captions[captions.length - 1]?.who === 'judge' && !draftShown}
             hasMic={me === 'A'}
             micMuted={draftShown}
+            // B's phone has no judge session: it says the judge is on A's phone.
+            judgeOn={me === 'B' ? firstName(view.theirName) : undefined}
             draft={draftShown ? view : null}
             onDecline={() => {
               setEndReason('declined');
