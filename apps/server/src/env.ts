@@ -50,6 +50,11 @@ export const EnvSchema = z.object({
   SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
   /**
+   * Under DEMO_MODE, the voice judge (ElevenLabs, billed per conversation) is for the demo players
+   * only. false = every signed-in party gets it (Jarvis and the judge for lobby players too).
+   */
+  VOICE_DEMO_ONLY: z.preprocess(unset, boolStr.default(true)),
+  /**
    * SCHEMAS §2.2: real_world (Gemini BTC 5-minute) bets on our escrow are a devnet demo
    * exception. Unset = follow DEMO_MODE. They also need the market relay (MARKETS_FEED).
    */

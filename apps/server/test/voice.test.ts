@@ -273,6 +273,20 @@ describeDb('voice: POST /v1/voice/tokens and /el/tools/propose_terms (DB)', () =
     }
   });
 
+  it('DEMO_MODE with VOICE_DEMO_ONLY=false: every player mints judge tokens', async () => {
+    el.mode = 'ok';
+    const open = await startTestServer({
+      modules: modules(),
+      env: { ELEVENLABS_AGENT_ID: AGENT, DEMO_MODE: 'true', VOICE_DEMO_ONLY: 'false' },
+    });
+    try {
+      const player = await signUp(open.base, 'Quandale');
+      expect((await post(open, player, '/v1/voice/tokens', { purpose: 'terms' })).status).toBe(201);
+    } finally {
+      await open.server.close();
+    }
+  });
+
   it('the pre-minted conversation is bound by POST /v1/bets (D0-J4 binding)', async () => {
     const s = await betWithVoice();
     const [row] = await ctx.deps.db
