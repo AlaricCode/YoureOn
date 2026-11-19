@@ -45,12 +45,24 @@ export function tagWidth(label: string, icon: boolean): number {
   return Math.ceil(2 * N.PAD_X + label.length * N.CHAR_W + (icon ? N.ICON_W : 0));
 }
 
+/** The live score part of a tag, "· 87", or null while nothing scores. */
+export function tagScore(meter: number | null): string | null {
+  if (meter === null) return null;
+  const v = Math.max(0, Math.min(100, Math.round(meter)));
+  return `· ${v}`;
+}
+
 /** "Logan · 87" while the round scores, else the first name alone. */
 export function tagLabel(first: string, meter: number | null): string {
-  if (meter === null) return first;
-  const v = Math.max(0, Math.min(100, Math.round(meter)));
-  return `${first} · ${v}`;
+  const score = tagScore(meter);
+  return score === null ? first : `${first} ${score}`;
 }
+
+/**
+ * The widest a pill gets: the panel less its margins. A longer label is cut there, and only
+ * the NAME is ellipsized (the score after it always shows: LiveParts NameTag).
+ */
+export const maxTagWidth = (panel: Size): number => Math.max(0, panel.width - 2 * N.MARGIN);
 
 /** A pill's top-left for an anchor (bottom-centre), kept inside the panel. */
 export function placeTag(anchor: Point, width: number, panel: Size): Point {
@@ -141,7 +153,10 @@ export function stepTag(
 export interface TagInput {
   /** The player's keypoints in this frame, null when not tracked. */
   k: readonly number[] | null;
+  /** The name (or a whole label). */
   label: string;
+  /** The live score part (tagScore), shown after the label and never cut. */
+  score?: string | null;
   icon: boolean;
 }
 
@@ -152,6 +167,7 @@ export interface PlacedTag {
   width: number;
   opacity: number;
   label: string;
+  score: string | null;
   icon: boolean;
 }
 
@@ -168,9 +184,11 @@ export function createTagSmoother() {
 
   const place = (s: TagState, input: TagInput, panel: Size): PlacedTag | null => {
     if (!s.pos || s.opacity <= 0) return null;
-    const width = tagWidth(input.label, input.icon);
+    const score = input.score ?? null;
+    const full = score === null ? input.label : `${input.label} ${score}`;
+    const width = Math.min(tagWidth(full, input.icon), maxTagWidth(panel));
     const at = placeTag(s.pos, width, panel);
-    return { ...at, width, opacity: s.opacity, label: input.label, icon: input.icon };
+    return { ...at, width, opacity: s.opacity, label: input.label, score, icon: input.icon };
   };
 
   return {

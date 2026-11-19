@@ -8,7 +8,7 @@
 //
 // Frames go to framingCheck while framing, and to the round pipeline (tracker → live scorer →
 // series) from the count-in on; the display reads everything from the live store, so a frame
-// re-renders the meters and skeletons, not the screen.
+// re-renders the name tags (their live scores) and skeletons, not the screen.
 //
 // Face assignment (DANCE-OFF §3, ./faceIdentify): with `faceId` (a bet round), when the framing
 // check passes the engine takes one still and asks who is who; the answer (if both players are
@@ -20,7 +20,10 @@
 // same server instant the display phone (DanceDisplayScreen) starts the reference and the music
 // on. While a display phone is there (`displayPhone`, decided once per round when the count-in
 // starts), this phone stays silent and shows no reference: the display plays both. Without one
-// (or a run that could not meet go_at), it plays the music itself (today's one-phone layout).
+// (or a run that could not meet go_at), it plays the music itself (today's one-phone layout);
+// a run that could not meet go_at while the display is still playing that timeline stays silent
+// until the display's routine is over (`mutedUntil`, ./model/schedule fallbackMutedUntil), so
+// the room never hears two copies of the song out of step.
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { PoseSeries } from '@youre-on/shared/dance/pose';
@@ -43,7 +46,7 @@ import { routineMedia } from './media';
 import { createPlayerIdentity, type PlayerIdentity } from './model/identity';
 import { createLiveStore, type LiveStore } from './model/liveStore';
 import { createRoundPipeline, type RoundPipeline } from './model/pipeline';
-import { recorderCountIn } from './model/schedule';
+import { fallbackMutedUntil, recorderCountIn } from './model/schedule';
 import {
   beatAt,
   countInBeatIndex,
@@ -113,6 +116,11 @@ export interface DanceRoundEngine {
    * round from its count-in on (the live `displayPhone` before that).
    */
   display: boolean;
+  /**
+   * This run's reference music is silent until this instant (nowMs clock): a run out of step
+   * with a display phone that is still playing. null: not muted.
+   */
+  mutedUntil: number | null;
   onPoses: (e: { nativeEvent: PoseFrameEvent }) => void;
   onStatus: (e: { nativeEvent: StatusEvent }) => void;
   dispatch: (e: RoundEvent) => { prev: RoundState; next: RoundState };
@@ -162,6 +170,10 @@ export function useDanceRound(opts: {
   const goTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The count-in about to start ran from go_at (in sync with the display phone). */
   const nextSynced = useRef(false);
+  /** The go_at (round clock) the count-in about to start was planned from. */
+  const nextGoAtLocal = useRef<number | null>(null);
+  /** This run's music mute (fallbackMutedUntil), null: none. */
+  const [mutedUntil, setMutedUntil] = useState<number | null>(null);
   /** This round's display decision (null: no round counting in or running). */
   const [runDisplay, setRunDisplay] = useState<boolean | null>(null);
   /** Who is who while framing (face assignment), created on the first frame (its size). */
@@ -274,11 +286,26 @@ export function useDanceRound(opts: {
         );
       }
       // A display phone plays the music, if it is there and this run is on its timeline.
-      const display = optsRef.current.displayPhone === true && nextSynced.current;
+      const synced = nextSynced.current;
+      const displayPhone = optsRef.current.displayPhone === true;
+      const display = displayPhone && synced;
+      const muted =
+        next.goAt === null
+          ? null
+          : fallbackMutedUntil({
+              synced,
+              displayPhone,
+              goAtLocal: nextGoAtLocal.current,
+              cfg: cfgRef.current,
+              runT0: next.goAt,
+            });
       nextSynced.current = false;
+      nextGoAtLocal.current = null;
       setRunDisplay(display);
+      setMutedUntil(muted);
       const media = routineMedia(routine);
-      if (!display && media.audio !== null && media.video === null) {
+      // A separate track cannot start mid-song in step: a muted run plays none.
+      if (!display && muted === null && media.audio !== null && media.video === null) {
         const asset = media.audio;
         void importSafely(() => import('expo-audio'))
           .then((A) => {
@@ -301,6 +328,7 @@ export function useDanceRound(opts: {
       startAtRef.current = null;
       setStartAt(null);
       setRunDisplay(null);
+      setMutedUntil(null);
       stopAudio();
       store.reset();
     }
@@ -458,6 +486,7 @@ export function useDanceRound(opts: {
       const at = nowMs();
       const plan = recorderCountIn(goAtLocal ?? null, at, cfgRef.current.beatMs);
       nextSynced.current = plan.synced;
+      nextGoAtLocal.current = goAtLocal ?? null;
       dispatch({
         type: 'attempt',
         at,
@@ -466,6 +495,7 @@ export function useDanceRound(opts: {
         countInAt: plan.countInAt,
       });
       nextSynced.current = false;
+      nextGoAtLocal.current = null;
     },
     [dispatch],
   );
@@ -483,6 +513,7 @@ export function useDanceRound(opts: {
     camera,
     startAt,
     display: runDisplay ?? opts.displayPhone === true,
+    mutedUntil,
     onPoses,
     onStatus,
     dispatch,

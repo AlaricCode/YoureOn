@@ -51,6 +51,7 @@ import {
   type DanceCheck,
 } from '../src/judge/dance';
 import { isDanceOffBet } from '../src/judge/dance-bet';
+import { noteDanceFaces } from '../src/judge/dance-faces';
 import {
   createJudgeRoutes,
   DANCE_BODY_LIMIT,
@@ -822,6 +823,34 @@ describeDb('dance judge pipeline (DB)', () => {
         .set({ role: 'phone', judge_room_id: null })
         .where(eq(devices.id, bCam!.id));
     }
+  });
+
+  it('A on the right is a side swap unless this server identified both by face', async () => {
+    await unbindCam();
+    /** A dances on the right of the picture, B stands on the left. */
+    const shift = (k: number[], dx: number) =>
+      k.map((v, i) => (i % 3 === 0 ? Math.max(0, Math.min(10_000, v + dx)) : v));
+    const base = series('dance', 'still');
+    const aRight: PoseSeries = {
+      ...base,
+      frames: base.frames.map((f) => ({ ...f, a: shift(f.a!, 1_500), b: shift(f.b!, -1_500) })),
+    };
+    const stored = async (byFace: boolean) => {
+      const betId = await lockedDance();
+      if (byFace) noteDanceFaces(ctx.deps, betId, true);
+      expect(
+        (await post(A, `/v1/bets/${betId}/attempts`, { attempt_no: 1, recorder: 'self' })).status,
+      ).toBe(201);
+      expect((await uploadDance(A, betId, 1, { series: aRight })).status).toBe(202);
+      await judge.idle();
+      const [att] = await ctx.deps.db.select().from(attempts).where(eq(attempts.bet_id, betId));
+      return DanceEvidence.parse(JSON.parse(att!.evidence_canonical!));
+    };
+    const plain = await stored(false);
+    expect(plain.checks.side_swaps).toBe(1);
+    expect('a_start_side' in plain.checks).toBe(false);
+    const byFace = await stored(true);
+    expect(byFace.checks).toMatchObject({ side_swaps: 0, a_start_side: 'right' });
   });
 
   it('upload -> re-scored DanceEvidence -> JUDGING -> dance.scored + ruling.issued + judge.cue', async () => {

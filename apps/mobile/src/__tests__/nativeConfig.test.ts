@@ -239,19 +239,48 @@ describe('Metro', () => {
     const resolveTo = (res: Res) =>
       config.resolver.resolveRequest({ resolveRequest: () => res }, 'x', 'ios');
     const asset = (p: string): Res => ({ type: 'assetFiles', filePaths: [p] });
+    const saved = {
+      opt: process.env.DANCE_LOCAL_MEDIA,
+      ci: process.env.CI,
+      eas: process.env.EAS_BUILD,
+    };
+    const setEnv = (k: string, v: string | undefined) => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    const committed = [join(danceDir, name)];
+    const local = [join(localDir, name)];
+    setEnv('CI', undefined);
+    setEnv('EAS_BUILD', undefined);
+    setEnv('DANCE_LOCAL_MEDIA', '1');
     // No local file: the committed one.
-    expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual([join(danceDir, name)]);
+    expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual(committed);
     mkdirSync(localDir, { recursive: true });
     writeFileSync(join(localDir, name), '');
     try {
-      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual([join(localDir, name)]);
+      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual(local);
       // Only assets directly under assets/dance/, and never source files.
       const other = here(`../../assets/${name}`);
       expect(resolveTo(asset(other)).filePaths).toEqual([other]);
       const src: Res = { type: 'sourceFile', filePath: join(danceDir, name) };
       expect(resolveTo(src)).toBe(src);
+      // Opt-in only: without DANCE_LOCAL_MEDIA=1, or in CI / on an EAS builder, the committed
+      // file even though the local one exists (expo export for an OTA update never takes it).
+      setEnv('DANCE_LOCAL_MEDIA', undefined);
+      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual(committed);
+      setEnv('DANCE_LOCAL_MEDIA', 'true');
+      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual(committed);
+      setEnv('DANCE_LOCAL_MEDIA', '1');
+      setEnv('CI', 'true');
+      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual(committed);
+      setEnv('CI', undefined);
+      setEnv('EAS_BUILD', 'true');
+      expect(resolveTo(asset(join(danceDir, name))).filePaths).toEqual(committed);
     } finally {
       rmSync(join(localDir, name), { force: true });
+      setEnv('DANCE_LOCAL_MEDIA', saved.opt);
+      setEnv('CI', saved.ci);
+      setEnv('EAS_BUILD', saved.eas);
     }
   });
 

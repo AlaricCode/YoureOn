@@ -45,11 +45,14 @@ export function ReferencePanel({
   routine,
   startAt,
   size,
+  mutedUntil = null,
 }: {
   routine: RoutineData;
   /** The round's t0 on the nowMs clock, or null (not started). */
   startAt: number | null;
   size: Size;
+  /** The clip is silent until this instant (nowMs clock; null: never). */
+  mutedUntil?: number | null;
 }) {
   const media = routineMedia(routine);
   const playing = startAt !== null;
@@ -59,7 +62,12 @@ export function ReferencePanel({
   if (media.video !== null) {
     return (
       <Suspense fallback={null}>
-        <ReferenceVideo source={media.video} startAt={startAt} />
+        <ReferenceVideo
+          source={media.video}
+          startAt={startAt}
+          durationMs={routine.duration_ms}
+          mutedUntil={mutedUntil}
+        />
       </Suspense>
     );
   }
@@ -195,6 +203,7 @@ export function DanceStage({
   syncOffsetMs,
   footer,
   reference = true,
+  mutedUntil = null,
 }: {
   routine: RoutineData;
   names: { a: string; b: string };
@@ -212,6 +221,8 @@ export function DanceStage({
   footer?: ReactNode;
   /** Show the reference panel (false: a display phone shows it; the camera panel only). */
   reference?: boolean;
+  /** The reference's music is silent until this instant (nowMs clock; null: never). */
+  mutedUntil?: number | null;
 }) {
   const [box, setBox] = useState<Size>({ width: 0, height: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
@@ -227,7 +238,12 @@ export function DanceStage({
       <View style={styles.panels} onLayout={onLayout}>
         {reference ? (
           <View style={[styles.panel, panel]}>
-            <ReferencePanel routine={routine} startAt={startAt} size={panel} />
+            <ReferencePanel
+              routine={routine}
+              startAt={startAt}
+              size={panel}
+              mutedUntil={mutedUntil}
+            />
           </View>
         ) : null}
         <View style={[styles.panel, panel]}>

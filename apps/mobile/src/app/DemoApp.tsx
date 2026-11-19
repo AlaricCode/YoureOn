@@ -127,6 +127,7 @@ import {
   startDanceAttemptVia,
   type PreparedDance,
 } from './danceFlow';
+import { useDanceClockOffset } from './danceClock';
 import {
   canConfirmDance,
   canSubmitDance,
@@ -763,6 +764,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const bet: BetModel | null = app.activeBetId ? (rt.hub.get(app.activeBetId) ?? null) : null;
   const route = selectRoute(app, bet);
+  // The two-phone Dance Off maps go_at with a round-trip-compensated offset (./danceClock).
+  const danceClockOffsetMs = useDanceClockOffset({
+    active: route === 'dance' || route === 'danceDisplay',
+    betId: bet?.bet_id ?? null,
+    baseUrl: rt.baseUrl,
+    fallbackMs: rt.clock.offsetMs,
+  });
   // An alert belongs to the screen it was raised on: a new screen starts without one (it used
   // to follow into the next screens as a toast that never cleared).
   useEffect(() => setAlert(null), [route]);
@@ -2255,7 +2263,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 // through the clock offset, so its count-in lands on the same instant as the
                 // display phone's (../dance/model/schedule).
                 attempt={a ? { attempt_no: a.attempt_no, go_at: a.go_at, max_ms: a.max_ms } : null}
-                clockOffsetMs={rt.clock.offsetMs}
+                clockOffsetMs={danceClockOffsetMs}
                 // B's phone is the display when B is online in the bet's room (./danceFlow).
                 displayPhone={danceDisplayPresent({
                   members: app.members,
@@ -2309,7 +2317,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 attempt={
                   a && state === 'ATTEMPT' ? { attempt_no: a.attempt_no, go_at: a.go_at } : null
                 }
-                clockOffsetMs={rt.clock.offsetMs}
+                clockOffsetMs={danceClockOffsetMs}
               />
             </Suspense>
           </PanelErrorBoundary>

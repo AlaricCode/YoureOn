@@ -12,9 +12,12 @@ import {
 } from '../model/round';
 import {
   CLIP_DRIFT_MAX_MS,
+  CLIP_END_SLACK_MS,
   clipDriftMs,
   clipPositionSec,
+  clipResumeSec,
   displayPhase,
+  fallbackMutedUntil,
   RECORDER_MIN_LEAD_MS,
   recorderCountIn,
   roundTimeline,
@@ -172,5 +175,52 @@ describe('the display phone', () => {
     expect(clipDriftMs(5_000, 7_000, 2.2)).toBeCloseTo(200, 9);
     expect(clipDriftMs(5_000, 7_000, 1.9)).toBeCloseTo(-100, 9);
     expect(CLIP_DRIFT_MAX_MS).toBeGreaterThanOrEqual(100);
+  });
+});
+
+describe('an interrupted clip', () => {
+  it('resumes where the round is, only inside the routine', () => {
+    const startAt = 10_000;
+    const dur = LONG.duration_ms;
+    expect(clipResumeSec(startAt, 9_999, dur)).toBeNull();
+    expect(clipResumeSec(startAt, 10_000, dur)).toBe(0);
+    // Back from the background 12.5 s into the round: the clip seeks to 12.5 s, not 0.
+    expect(clipResumeSec(startAt, 22_500, dur)).toBe(12.5);
+    expect(clipResumeSec(startAt, startAt + dur - CLIP_END_SLACK_MS - 1, dur)).not.toBeNull();
+    // Finishing or finished: left alone.
+    expect(clipResumeSec(startAt, startAt + dur - CLIP_END_SLACK_MS, dur)).toBeNull();
+    expect(clipResumeSec(startAt, startAt + dur + 5_000, dur)).toBeNull();
+    expect(clipResumeSec(startAt, 12_000, 0)).toBeNull();
+    expect(clipResumeSec(startAt, 12_000, Number.NaN)).toBeNull();
+  });
+});
+
+describe('a recorder run out of step with the display', () => {
+  const cfg = roundConfig(LONG);
+  const goAtLocal = 50_000;
+  const { endAt } = roundTimeline(goAtLocal, cfg);
+
+  it('is silent while the display still plays the go_at timeline, then plays its own music', () => {
+    // "Dance again" 5 s after go_at on the same attempt: the display is mid-song.
+    const runT0 = goAtLocal + 5_000 + COUNT_IN_BEATS * cfg.beatMs;
+    expect(fallbackMutedUntil({ synced: false, displayPhone: true, goAtLocal, cfg, runT0 })).toBe(
+      endAt,
+    );
+  });
+
+  it('is not muted when in sync, alone, after the display is done, or without a go_at', () => {
+    const runT0 = goAtLocal + 5_000;
+    expect(
+      fallbackMutedUntil({ synced: true, displayPhone: true, goAtLocal, cfg, runT0 }),
+    ).toBeNull();
+    expect(
+      fallbackMutedUntil({ synced: false, displayPhone: false, goAtLocal, cfg, runT0 }),
+    ).toBeNull();
+    expect(
+      fallbackMutedUntil({ synced: false, displayPhone: true, goAtLocal, cfg, runT0: endAt }),
+    ).toBeNull();
+    expect(
+      fallbackMutedUntil({ synced: false, displayPhone: true, goAtLocal: null, cfg, runT0 }),
+    ).toBeNull();
   });
 });

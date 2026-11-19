@@ -89,6 +89,7 @@ import {
   type DanceVoidWhy,
 } from './cues';
 import { buildDanceRuling, callDanceValidator, type DanceCheck } from './dance';
+import { danceFacesIdentified } from './dance-faces';
 import {
   applyCameraVeto,
   runAttemptChecks,
@@ -1411,6 +1412,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           series: upload.series,
           frames: upload.frames.map((f) => ({ index: f.index, t_ms: f.t_ms, sha256: f.sha256 })),
           clip_sha256: upload.clip_sha256,
+          // A may start on the right only when this server identified both by face.
+          faces_identified: danceFacesIdentified(deps, betId),
         });
         const canonical = jcs(evidence);
         const evidenceHash = sha256Hex(canonical);

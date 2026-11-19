@@ -7,14 +7,16 @@
 //   t0 + duration_ms              the routine ends (the recorder keeps ROUND_TAIL_MS more)
 //
 // Each phone maps the server instant onto its own monotonic round clock (nowMs, i.e.
-// performance.now) through the server-time offset the app already keeps (net/signedFetch Clock:
-// offsetMs = server time − Date.now(), synced from the socket's welcome and the session's
-// server_time). The recording phone films and scores on that clock; the display phone plays the
+// performance.now) through a server-time offset (server time − Date.now()): the round-trip-
+// compensated probe the app takes when it enters a dance screen (app/danceClock, net/clockProbe:
+// within rtt / 2), or until it answers the app Clock's (one-way samples: the socket's welcome,
+// the session's server_time). The recording phone films and scores on that clock; the display phone plays the
 // mirrored reference with the music on it.
 //
 // A recorder that is handed an attempt too late to meet its t0 (an attempt given back by "Dance
 // again", one already open when the screen mounted) counts in from now instead, and that run is
-// not in sync with the display: it plays its own music and shows its own reference.
+// not in sync with the display: it shows its own reference, and plays its own music once the
+// display is done with go_at's timeline (fallbackMutedUntil: never two songs out of step).
 // Pure TS: tested in node.
 import { COUNT_IN_BEATS } from './round';
 
@@ -110,4 +112,41 @@ export const CLIP_DRIFT_MAX_MS = 150;
 export function clipDriftMs(startAt: number, now: number, clipSec: number): number | null {
   if (now < startAt) return null;
   return clipSec * 1000 - (now - startAt);
+}
+
+/** A paused clip this close to its end is left alone (it is finishing, not interrupted). */
+export const CLIP_END_SLACK_MS = 250;
+
+/**
+ * Where a clip that is NOT playing should be resumed at `now` (seconds), or null to leave it.
+ * Inside the round's window [startAt, startAt + duration − slack) a paused clip was interrupted
+ * (the app went to the background, a call or Siri took the audio session): it picks up where
+ * the round is. Before t0 the start timer plays it; after the end it stays finished.
+ */
+export function clipResumeSec(startAt: number, now: number, durationMs: number): number | null {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+  if (now < startAt || now >= startAt + durationMs - CLIP_END_SLACK_MS) return null;
+  return clipPositionSec(startAt, now);
+}
+
+/**
+ * A recorder run that could not meet go_at while a display phone is in the room (DANCE-OFF
+ * §6.2): the display still plays its own timeline, with its music, until its endAt. The run is
+ * silent until then (one song in the room, not two out of step), and plays its own music from
+ * then on. Returns the instant (round clock) the run's music may start, or null: no wait.
+ */
+export function fallbackMutedUntil(p: {
+  /** This run is on the go_at timeline (then the display plays the music, nothing to do). */
+  synced: boolean;
+  displayPhone: boolean;
+  /** The attempt's go_at on this phone's round clock, null when unknown. */
+  goAtLocal: number | null;
+  cfg: { beatMs: number; durationMs: number };
+  /** The run's own t0 (its count-in start + the count-in). */
+  runT0: number;
+}): number | null {
+  if (p.synced || !p.displayPhone) return null;
+  if (p.goAtLocal === null || !Number.isFinite(p.goAtLocal)) return null;
+  const { endAt } = roundTimeline(p.goAtLocal, p.cfg);
+  return endAt > p.runT0 ? endAt : null;
 }

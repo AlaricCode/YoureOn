@@ -302,13 +302,19 @@ export function createTracker(opts: {
 }
 
 /**
- * The deterministic checks DanceEvidence carries, recomputed from a series (server side). The
- * starting sides are read from the first frame where both players' hip centres are seen (A right
- * of B there: A started on the right, as a face-identified A may); a side swap is A and B on the
- * other's starting side for SWAP_MIN_MS. A series whose A starts on the left (every left / right
- * round) counts exactly as before.
+ * The deterministic checks DanceEvidence carries, recomputed from a series (server side). A side
+ * swap is A and B each on the other's starting side for SWAP_MIN_MS. The starting sides:
+ *   - by default (the left / right rule), A starts on the LEFT: any sustained A-right-of-B is a
+ *     swap, exactly as before the face assignment existed;
+ *   - `byFace` (the server holds this bet's face identification of both players, judge/
+ *     dance-faces), the series' first frame where both players' hip centres are seen (A right of
+ *     B there: A started on the right).
+ * `a_start` is where A is on that first frame either way (null when never seen with B).
  */
-export function seriesChecks(series: PoseSeries): {
+export function seriesChecks(
+  series: PoseSeries,
+  opts: { byFace?: boolean } = {},
+): {
   max_people: number;
   frames_over_two: number;
   side_swaps: number;
@@ -320,6 +326,7 @@ export function seriesChecks(series: PoseSeries): {
   let side_swaps = 0;
   let since: number | null = null;
   let counted = false;
+  /** Where A is on the first frame with both. */
   let aRight: boolean | null = null;
   for (const f of series.frames) {
     if (f.n > max_people) max_people = f.n;
@@ -328,7 +335,7 @@ export function seriesChecks(series: PoseSeries): {
     const cb = f.b ? hipCenter(dequantizePerson(f.b)) : null;
     if (!ca || !cb) continue;
     aRight ??= ca[0] > cb[0];
-    if (isSwapped(ca, cb, aRight)) {
+    if (isSwapped(ca, cb, opts.byFace === true ? aRight : false)) {
       if (since === null) {
         since = f.t;
         counted = false;

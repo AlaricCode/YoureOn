@@ -428,6 +428,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
         syncOffsetMs={settings.syncOffsetMs}
         footer={footer}
         reference={!engine.display}
+        mutedUntil={engine.mutedUntil}
       />
     </Screen>
   );

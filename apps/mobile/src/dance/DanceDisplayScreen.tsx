@@ -1,10 +1,12 @@
 // B's phone during a Dance Off round: the DISPLAY (../app/danceFlow showsDanceDisplay). The
 // recording phone (A's phone or the judge cam) films both dancers; this phone stands where they
 // can see it and plays the routine for them:
-//   - full screen, portrait, the reference MIRRORED (scaleX −1: players copy it like a mirror,
-//     DANCE-OFF §4.2) and contain-fit on the routine's dark backdrop, with its music. A routine
-//     with no clip (the synthetic ones) shows its mirrored skeleton full screen instead, with its
-//     music if it has any;
+//   - full screen, the reference MIRRORED (scaleX −1: players copy it like a mirror, DANCE-OFF
+//     §4.2) and contain-fit on the routine's dark backdrop, with its music. A routine with no clip
+//     (the synthetic ones) shows its mirrored skeleton full screen instead, with its music if it
+//     has any. It follows the phone's orientation like the rest of the app (no orientation lock:
+//     that needs expo-screen-orientation, a native module the binary does not have): meant to
+//     stand upright, and on its side the contain-fit still shows the whole reference, smaller;
 //   - the screen kept awake (expo-keep-awake) for as long as it is up;
 //   - a big "3, 2, 1" on the routine's beat from the attempt's go_at, then the reference from t0
 //     = go_at + 3 beats: the server's instant mapped onto this phone's clock (./model/schedule),
