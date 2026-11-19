@@ -26,13 +26,7 @@ export const DANCE_TRACKING = {
 const T = DANCE_TRACKING;
 
 export type FramingReason =
-  | 'ok'
-  | 'need_two'
-  | 'too_many'
-  | 'feet'
-  | 'head'
-  | 'same_side'
-  | 'too_close';
+  'ok' | 'need_two' | 'too_many' | 'feet' | 'head' | 'same_side' | 'too_close';
 
 export interface FramingResult {
   ok: boolean;

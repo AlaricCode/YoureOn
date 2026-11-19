@@ -141,9 +141,7 @@ export const DANCE_RECORDER: PartyKey = 'A';
 
 /** How the round came out, once ruled: a winner, too close to call, or no contest. */
 export type DanceResult =
-  | { kind: 'win'; winner: PartyKey }
-  | { kind: 'too_close' }
-  | { kind: 'no_contest' };
+  { kind: 'win'; winner: PartyKey } | { kind: 'too_close' } | { kind: 'no_contest' };
 
 export function danceResult(b: BetView): DanceResult | null {
   const o = b.appeal_result?.final_outcome ?? b.ruling?.outcome;

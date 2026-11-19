@@ -68,11 +68,7 @@ export function ResultCard({
   const headline = verdict
     ? dt(DANCE_COPY.tooCloseToCall)
     : winsLabel(data.winner === 'A' ? names.a : names.b);
-  const tint = verdict
-    ? palette.text
-    : data.winner === 'A'
-      ? PLAYER_TINT.A
-      : PLAYER_TINT.B;
+  const tint = verdict ? palette.text : data.winner === 'A' ? PLAYER_TINT.A : PLAYER_TINT.B;
   const you = dt(DANCE_COPY.you);
   const side = (p: 'A' | 'B') => {
     const name = p === 'A' ? names.a : names.b;

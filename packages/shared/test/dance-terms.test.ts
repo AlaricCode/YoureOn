@@ -72,9 +72,7 @@ describe('Terms dance_off (§1)', () => {
     const { terms, terms_hash } = computeTermsHash(danceTerms());
     expect(terms.type).toBe('dance_off');
     expect(terms_hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(terms.claim).toBe(
-      'Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each',
-    );
+    expect(terms.claim).toBe('Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each');
     expect(terms.success_criteria[0]).toBe(
       `Routine wave-pop v1 sha256:${routineSha256(R).slice(0, 16)}`,
     );
@@ -133,10 +131,7 @@ describe('Terms dance_off (§1)', () => {
   it('every routine claim is benign: no guardrail hit, category other (no odds prior)', () => {
     for (const r of ROUTINES) {
       const text = danceTermsText(r, '20000000');
-      expect(
-        prefilterRefusal({ ...text, edge_cases: [] }),
-        `${r.id}: ${text.claim}`,
-      ).toBeNull();
+      expect(prefilterRefusal({ ...text, edge_cases: [] }), `${r.id}: ${text.claim}`).toBeNull();
       expect(classifyChallenge(text)).toBe('other');
       expect(text.claim.length).toBeLessThanOrEqual(200);
     }

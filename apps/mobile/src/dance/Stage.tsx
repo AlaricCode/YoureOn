@@ -155,11 +155,7 @@ export function CountInOverlay({
     <View style={[StyleSheet.absoluteFill, styles.countIn]} pointerEvents="none">
       <View style={[StyleSheet.absoluteFill, styles.scrim]} />
       <Text
-        style={[
-          styles.countNumeral,
-          go && { color: palette.accent },
-          { transform: [{ scale }] },
-        ]}
+        style={[styles.countNumeral, go && { color: palette.accent }, { transform: [{ scale }] }]}
         accessibilityLiveRegion="assertive"
       >
         {go ? dt(DANCE_COPY.go) : label}

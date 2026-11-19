@@ -98,6 +98,7 @@ ffmpeg -ss S -i tools/dance-ref/work/raw.mov -i tools/dance-ref/work/track.m4a \
 ```
 
 Notes:
+
 - `-ss` before the first `-i` trims only the video, so the track still starts at 0. Video and music
   now share one clock, and t = 0 in the mp4 is the routine start.
 - ffmpeg auto-rotates portrait iPhone clips while re-encoding, so the output is upright. The tool

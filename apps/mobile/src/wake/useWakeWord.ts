@@ -79,7 +79,7 @@ async function loadWakeNative(): Promise<WakeNative | null> {
 }
 
 // At launch AppState can briefly be 'unknown' (or null on old RN typings) in the foreground.
-const isForeground = (s: AppStateStatus | null | undefined) =>
+const isForeground = (s: AppStateStatus | string | null | undefined) =>
   s === 'active' || s === 'unknown' || s == null;
 
 export function useWakeWord(options: UseWakeWordOptions): WakeWordState {

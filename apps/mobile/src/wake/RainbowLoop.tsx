@@ -293,7 +293,7 @@ const GlowSegment = memo(function GlowSegment({
 
 const styles = StyleSheet.create({
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: LOOP.zIndex,
   },
 });

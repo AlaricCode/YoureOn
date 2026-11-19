@@ -117,9 +117,7 @@ describe('routine import', () => {
     expect(explicit.key_moves.map((m) => m.t)).toEqual(picked);
     const names = BB.key_moves.slice(0, 8).map((m) => m.name);
     expect(explicit.key_moves.map((m) => m.name)).toEqual(names);
-    expect(() => routineFromImport(toolJson(BB), { keyMoves: '1000,2000' })).toThrow(
-      /2 key moves/,
-    );
+    expect(() => routineFromImport(toolJson(BB), { keyMoves: '1000,2000' })).toThrow(/2 key moves/);
     expect(() => routineFromImport(toolJson(BB), { every: '1.5' })).toThrow(/--every/);
   });
 

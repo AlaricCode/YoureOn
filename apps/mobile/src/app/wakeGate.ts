@@ -68,8 +68,14 @@ export function judgeWaitsForWake(i: {
 const NEGOTIATION: ReadonlySet<string> = new Set(['DRAFTING', 'TERMS_PROPOSED']);
 
 /** The judge starts without a wake: no wake gate, or the bet left the negotiation (not over). */
-export function judgeAutoStarts(i: { waits: boolean; state: string; over: boolean }): boolean {
+export function judgeAutoStarts(i: {
+  waits: boolean;
+  state: string | null;
+  over: boolean;
+}): boolean {
   if (!i.waits) return true;
+  // No state yet: the bet is still being drafted, so the judge waits for the wake word too.
+  if (i.state === null) return false;
   return !NEGOTIATION.has(i.state) && !i.over;
 }
 

@@ -212,7 +212,11 @@ export type LoopSegment = {
  * `n` equal dashes covering a loop of `length` pt, each running `overlap` pt into the next.
  * The dash never exceeds the whole loop (one segment, or an overlap larger than the gap).
  */
-export function segmentDashes(length: number, n: number, overlap = LOOP.overlap): LoopSegment[] {
+export function segmentDashes(
+  length: number,
+  n: number,
+  overlap: number = LOOP.overlap,
+): LoopSegment[] {
   const count = Math.max(1, Math.floor(n));
   if (!(length > 0)) return [];
   const seg = length / count;

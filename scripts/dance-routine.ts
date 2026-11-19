@@ -410,9 +410,11 @@ function writeRoutine(r: RoutineData, how: string): string {
 }
 
 async function selftest(): Promise<boolean> {
-  const { ROUTINES, RoutineData: Schema, routineSha256 } = await import(
-    '../packages/shared/src/dance/routine'
-  );
+  const {
+    ROUTINES,
+    RoutineData: Schema,
+    routineSha256,
+  } = await import('../packages/shared/src/dance/routine');
   const { scoreRound } = await import('../packages/shared/src/dance/score');
   let ok = true;
   for (const r of ROUTINES) {
