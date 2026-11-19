@@ -179,6 +179,7 @@ import {
 } from './marketTerms';
 import { balanceSeries, HISTORY_LIMIT, historyFrom, netCents, settledOnce } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
+import { judgeHostLabel } from './judgeHead';
 import { demoLinkLives, parseDeepLink } from './deepLink';
 import {
   attemptStartAlert,
@@ -2110,6 +2111,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             hasMic={me === 'A' && VOICE_ENABLED && !typedForced}
             micMuted={!voiceLive || micMutedFor(state)}
             voice={VOICE_ENABLED}
+            // The judge session runs on A's phone only (hostsVoice): B's says where it is, and A's
+            // listens only once that session is live (./judgeHead).
+            judgeLive={voiceLive}
+            judgeOn={me === 'B' && bet ? judgeHostLabel(bet) : undefined}
             draft={view}
             typed={
               negotiating && typed.bet_id === bet?.bet_id
