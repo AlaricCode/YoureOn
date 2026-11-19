@@ -338,9 +338,7 @@ describe('the big panel (view.tsx)', () => {
     expect(card('paid')).toContain('Logan wins · Logan 87.4 · Jake 71.0');
     const tie = card('paid', 'tie-');
     expect(tie).toContain('Too close to call · Logan 78.3 · Jake 77.1');
-    expect(phaseSteps(at('paid', 'tie-').bet).find((s) => s.key === 'paid')?.label).toBe(
-      'Refund',
-    );
+    expect(phaseSteps(at('paid', 'tie-').bet).find((s) => s.key === 'paid')?.label).toBe('Refund');
   });
 });
 

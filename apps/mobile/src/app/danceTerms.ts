@@ -76,8 +76,7 @@ export interface ShownDanceCard {
 }
 
 export type SubmitDanceOutcome =
-  | { kind: 'proposed'; terms_hash: string }
-  | { kind: 'error'; note: string };
+  { kind: 'proposed'; terms_hash: string } | { kind: 'error'; note: string };
 
 export type DanceEvent =
   /**

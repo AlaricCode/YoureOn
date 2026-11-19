@@ -218,7 +218,9 @@ describe('pose quantization (§2)', () => {
       );
       expect(quantizePerson(dequantizePerson(q))).toEqual(q);
     }
-    const k = Array.from({ length: 57 }, (_, i) => (i % 3 === 2 ? 2 : i === 0 ? -0.0 : 1.5));
+    const k: number[] = Array.from({ length: 57 }, (_, i) =>
+      i % 3 === 2 ? 2 : i === 0 ? -0.0 : 1.5,
+    );
     k[3] = Number.NaN;
     const q = quantizePerson(k);
     expect(q[0]).toBe(0);

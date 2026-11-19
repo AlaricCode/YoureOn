@@ -56,10 +56,7 @@ export const RoutineData = z
       .array(z.strictObject({ t: Int.min(0).max(ROUTINE_DURATION_MS), k: RoutineKeypoints }))
       .min(2)
       .max(1_000),
-    key_moves: z
-      .array(RoutineKeyMove)
-      .min(ROUTINE_MIN_KEY_MOVES)
-      .max(ROUTINE_MAX_KEY_MOVES),
+    key_moves: z.array(RoutineKeyMove).min(ROUTINE_MIN_KEY_MOVES).max(ROUTINE_MAX_KEY_MOVES),
     media: z.strictObject({ video: z.string().nullable(), audio: z.string().nullable() }),
   })
   .superRefine((r, ctx) => {

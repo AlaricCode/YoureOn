@@ -143,7 +143,13 @@ describe('prunePopups', () => {
   });
 
   it('drops expired ones and keeps the newest few per player', () => {
-    const list = [pop(1, 'A', 0), pop(2, 'A', 500), pop(3, 'A', 600), pop(4, 'A', 700), pop(5, 'B', 0)];
+    const list = [
+      pop(1, 'A', 0),
+      pop(2, 'A', 500),
+      pop(3, 'A', 600),
+      pop(4, 'A', 700),
+      pop(5, 'B', 0),
+    ];
     const kept = prunePopups(list, POPUP_TTL_MS + 1);
     expect(kept.map((p) => p.id)).toEqual([3, 4].slice(-POPUPS_PER_PLAYER));
     expect(prunePopups(list, 700).map((p) => p.id)).toEqual([3, 4, 5]);

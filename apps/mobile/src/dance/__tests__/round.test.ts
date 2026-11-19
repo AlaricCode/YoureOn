@@ -113,7 +113,10 @@ describe('start → count-in → dancing → scoring', () => {
 
   it('the attempt starts the count-in; GO is three beats later', () => {
     const s = run(
-      [{ type: 'start', at: 1_100 }, { type: 'attempt', at: 2_000, attemptNo: 1 }],
+      [
+        { type: 'start', at: 1_100 },
+        { type: 'attempt', at: 2_000, attemptNo: 1 },
+      ],
       ready(),
     );
     expect(s.phase).toBe('countIn');
@@ -150,7 +153,10 @@ describe('start → count-in → dancing → scoring', () => {
 
   it('runs the routine plus the tail, then scores', () => {
     const counting = run(
-      [{ type: 'start', at: 1_100 }, { type: 'attempt', at: 2_000, attemptNo: 1 }],
+      [
+        { type: 'start', at: 1_100 },
+        { type: 'attempt', at: 2_000, attemptNo: 1 },
+      ],
       ready(),
     );
     expect(run([{ type: 'tick', at: 3_499 }], counting).phase).toBe('countIn');
@@ -357,14 +363,14 @@ describe('snapshot schedule', () => {
   });
 
   it('falls back to evenly spread times with too few key moves', () => {
-    const r = { key_moves: [{ id: 'a', t: 1_000, name: 'A' }], duration_ms: 15_000 };
+    const r = { key_moves: [{ id: 'a', t: 1_000, name: 'A' }], duration_ms: 15_000 as const };
     expect(snapshotSchedule(r)).toEqual([1_875, 5_625, 9_375, 13_125]);
   });
 
   it('never schedules past the end', () => {
     const r = {
       key_moves: Array.from({ length: 8 }, (_, i) => ({ id: `k${i}`, t: 14_950, name: 'x' })),
-      duration_ms: 15_000,
+      duration_ms: 15_000 as const,
     };
     expect(snapshotSchedule(r)).toEqual([14_999]);
   });

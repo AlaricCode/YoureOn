@@ -17,7 +17,8 @@ export const DANCE_ROUND_SECONDS = 15;
 /** The tie margin in display points ("2" for 20 tenths). */
 export const DANCE_TIE_MARGIN_POINTS = DANCE_SCORING.TIE_MARGIN_X10 / 10;
 
-const ROUTINE_LINE_RE = /^Routine ([a-z0-9]+(?:-[a-z0-9]+)*) v([1-9][0-9]{0,5}) sha256:([0-9a-f]{16})$/;
+const ROUTINE_LINE_RE =
+  /^Routine ([a-z0-9]+(?:-[a-z0-9]+)*) v([1-9][0-9]{0,5}) sha256:([0-9a-f]{16})$/;
 
 export const isDanceOff = (t: Pick<Terms, 'type'>): boolean => t.type === DANCE_TERMS_TYPE;
 

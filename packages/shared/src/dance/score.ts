@@ -136,10 +136,7 @@ export interface LimbVectors {
 }
 
 /** Aspect-correct points (x·w/h, y) of the 19 joints + the 2 virtual points, with presence. */
-function points(
-  k: readonly number[],
-  aspect: number,
-): { x: number[]; y: number[]; ok: boolean[] } {
+function points(k: readonly number[], aspect: number): { x: number[]; y: number[]; ok: boolean[] } {
   const x = new Array<number>(POINT_COUNT).fill(0);
   const y = new Array<number>(POINT_COUNT).fill(0);
   const ok = new Array<boolean>(POINT_COUNT).fill(false);
@@ -539,12 +536,7 @@ export function gradeKeyMove(model: RoutineModel, track: PlayerTrack, k: number)
       tb - S.KEY_MOTION_WINDOW_MS,
       tb,
     );
-    const theirs = meanSpeed(
-      model.t,
-      (i) => model.vel[i]!,
-      key.t - S.KEY_MOTION_WINDOW_MS,
-      key.t,
-    );
+    const theirs = meanSpeed(model.t, (i) => model.vel[i]!, key.t - S.KEY_MOTION_WINDOW_MS, key.t);
     moved =
       theirs === null || theirs <= EPS || (mine !== null && mine >= S.KEY_MOTION_MIN * theirs);
   }

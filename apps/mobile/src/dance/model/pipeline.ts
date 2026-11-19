@@ -127,7 +127,10 @@ export function createRoundPipeline(opts: {
     push(f) {
       ensure(f.w, f.h);
       const clock = f.ts ?? f.t;
-      const tracked = tracker!.push(clock, f.people.map((p) => p.k));
+      const tracked = tracker!.push(
+        clock,
+        f.people.map((p) => p.k),
+      );
       // The same arrays as in `people` (the overlay tells A / B from the rest by identity).
       const a = tracked.a;
       const b = tracked.b;
@@ -201,7 +204,9 @@ export function selfTestSeries(routine: RoutineData): PoseSeries {
 }
 
 /** The sync offsets the calibration sweep tries (ms). */
-export const SYNC_SWEEP_MS: readonly number[] = [-300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300];
+export const SYNC_SWEEP_MS: readonly number[] = [
+  -300, -200, -150, -100, -50, 0, 50, 100, 150, 200, 300,
+];
 
 /**
  * Re-scores a saved round at each sync offset (the series keeps its raw times; the scorer

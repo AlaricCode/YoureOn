@@ -24,7 +24,15 @@ describe('Dance Off copy', () => {
   });
 
   it('every framing reason, grade and error has a line', () => {
-    for (const r of ['ok', 'need_two', 'too_many', 'feet', 'head', 'same_side', 'too_close'] as const)
+    for (const r of [
+      'ok',
+      'need_two',
+      'too_many',
+      'feet',
+      'head',
+      'same_side',
+      'too_close',
+    ] as const)
       expect(checkCopy(FRAMING_COPY[r][0], FRAMING_COPY[r][1])).toEqual([]);
     for (const g of ['PERFECT', 'GOOD', 'MISS'] as const)
       expect(checkCopy(GRADE_COPY[g][0], 'label')).toEqual([]);

@@ -350,9 +350,7 @@ export default function DanceCalibrationScreen({ onClose }: { onClose: () => voi
     setSweep(
       `saved offset ${s.series.sync_offset_ms} ms: A ${scoreText(saved.a.score_x10)} B ` +
         `${scoreText(saved.b.score_x10)}\n` +
-        rows
-          .map((x) => `${x.offsetMs} ms  A ${scoreText(x.a)}  B ${scoreText(x.b)}`)
-          .join('\n') +
+        rows.map((x) => `${x.offsetMs} ms  A ${scoreText(x.a)}  B ${scoreText(x.b)}`).join('\n') +
         `\nbest ${best ?? '–'} ms`,
     );
   };

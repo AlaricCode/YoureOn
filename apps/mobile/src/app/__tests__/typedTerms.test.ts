@@ -521,7 +521,7 @@ describe('odds in the typed form', () => {
 });
 
 describe('typed terms and the other bet kinds', () => {
-  it('a Dance Off card on screen is not the typed form\'s (the dance panel holds it)', () => {
+  it("a Dance Off card on screen is not the typed form's (the dance panel holds it)", () => {
     const d = danceOff('Logan', 'Jake');
     expect(typedCardOf({ terms: d.terms, terms_hash: d.termsHash })).toBeNull();
   });

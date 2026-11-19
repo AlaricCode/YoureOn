@@ -138,8 +138,7 @@ export function prepareDance(bundle: DanceBundleIn): PreparedDance {
 function uploadNote(e: unknown): string {
   if (e instanceof ApiClientError) {
     if (e.code === 'NETWORK') return t(COPY.app.offline);
-    if (e.code === 'INVALID_STATE' || e.code === 'ATTEMPT_NOT_OPEN')
-      return t(COPY.dance.roundOver);
+    if (e.code === 'INVALID_STATE' || e.code === 'ATTEMPT_NOT_OPEN') return t(COPY.dance.roundOver);
   }
   return t(COPY.dance.uploadFailed);
 }

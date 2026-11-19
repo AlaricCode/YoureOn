@@ -350,9 +350,7 @@ export function previewDanceAt(
   nowMs: number,
   preview: string = DANCE_PREVIEW,
 ): { state: TickerState; now: number; t: number } {
-  let rest = preview.startsWith(`${DANCE_PREVIEW}-`)
-    ? preview.slice(DANCE_PREVIEW.length + 1)
-    : '';
+  let rest = preview.startsWith(`${DANCE_PREVIEW}-`) ? preview.slice(DANCE_PREVIEW.length + 1) : '';
   let variant: Variant = 'win';
   if (rest === 'tie' || rest.startsWith('tie-')) {
     variant = 'tie';
