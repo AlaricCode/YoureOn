@@ -2436,7 +2436,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         const breakdown = scored ? (
           <PanelErrorBoundary name={t(COPY.dance.panel)} onError={() => undefined}>
             <Suspense fallback={null}>
-              <DanceResultBreakdown scored={scored} names={partyNames(view)} />
+              <DanceResultBreakdown scored={scored} names={partyNames(view)} omitLine={reason} />
             </Suspense>
           </PanelErrorBoundary>
         ) : null;
@@ -2472,6 +2472,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 // No appeal on a dance off: its score is deterministic (DANCE-OFF §5).
                 onAppeal={result === 'lost' && !isDance ? () => void appealNow() : undefined}
                 onRematch={onRematch}
+                // Over (VOIDED: called off, too close to call, three REDOs): nothing moves this
+                // screen on any more, so it gets Back home like the payout screen.
+                onHome={isOver(bet.state) ? dismiss : undefined}
                 rematchBusy={rematchBusy}
                 tag={tag}
               />

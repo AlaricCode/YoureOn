@@ -26,6 +26,7 @@ import {
   canConcede,
   countdownLabel,
   RESULT_TITLE,
+  rulingFooter,
   signedUsd,
   type BetView,
   type MyResult,
@@ -427,6 +428,7 @@ export function RulingScreen({
   onGG,
   onAppeal,
   onRematch,
+  onHome,
   rematchBusy = false,
   tag,
 }: {
@@ -450,10 +452,17 @@ export function RulingScreen({
   onAppeal?: (() => void) | undefined;
   /** Double or nothing, once the bet is over (a void round's refund is done): DANCE-OFF §7. */
   onRematch?: (() => void) | undefined;
+  /**
+   * "Back home", passed once the bet is over (VOIDED: a call-off, a dance too close to call, three
+   * REDOs, a void ruling). The bet never leaves this screen by itself then, so without it the
+   * phone was stuck here.
+   */
+  onHome?: (() => void) | undefined;
   rematchBusy?: boolean;
   tag?: string | undefined;
 }) {
   const now = useNow(200);
+  const footer = rulingFooter(result, onHome !== undefined);
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
   const left = appealDeadlineMs - now;
@@ -462,15 +471,39 @@ export function RulingScreen({
   return (
     <MomentScreen
       top={<TopBar tag={tag} />}
+      // A dance off's breakdown (or a long reason) runs taller than the screen: the body scrolls
+      // between the top bar and the footer instead of spilling under the status bar and footer.
+      scroll
       footer={
         <>
           <View>
-            <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
-            <DrainBar endsAtMs={appealDeadlineMs} windowMs={APPEAL_WINDOW_MS} />
+            {footer === 'home' ? null : (
+              <>
+                <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
+                <DrainBar endsAtMs={appealDeadlineMs} windowMs={APPEAL_WINDOW_MS} />
+              </>
+            )}
             <InfoRow label={t(COPY.live.pot)} value={view.potUsd} />
           </View>
           <AlertLine message={alert ?? null} />
-          {result === 'lost' ? (
+          {footer === 'home' && onHome ? (
+            // The same pair as the payout screen: Back home, then Double or nothing.
+            <>
+              <PrimaryButton
+                testID="ruling-home"
+                label={t(COPY.ruling.backHome)}
+                onPress={onHome}
+              />
+              {onRematch ? (
+                <QuietButton
+                  testID="ruling-rematch"
+                  label={t(COPY.rematch.button)}
+                  busy={rematchBusy}
+                  onPress={onRematch}
+                />
+              ) : null}
+            </>
+          ) : footer === 'gg' ? (
             <>
               {/* GG pays the other side now: a swipe up, the same deliberate gesture as the lock. */}
               <SwipeToConfirm
