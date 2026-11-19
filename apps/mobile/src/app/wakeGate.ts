@@ -11,7 +11,8 @@
 //                     negotiation (typed terms, Bet on Bitcoin, Dance off), so it still hosts the
 //                     lock, the attempt and the ruling as before; never for a bet that is over
 //   - homeWakeAction  "Jarvis, …" on Home starts a challenge the way Home's buttons do: the person
-//                     it names, else the face scan, else the one person online, else "pick one"
+//                     it names, else the face scan, else the one person online, else "pick one";
+//                     nothing when it was overheard (it names this phone's own player first)
 //   - heldUtterance   what was said on Home waits (HOLD_MS) for that challenge's negotiate screen
 //   - loopReducer     the RainbowLoop: listening from the wake through the sentence, thinking
 //                     while the judge connects, off once the judge talks (or it failed / was cancelled)
@@ -97,6 +98,12 @@ const nameWords = (name: string) =>
     .split(' ')
     .filter((w) => w.length >= 2);
 
+/** Where the sentence first says one of `name`'s words (a word index), or -1. */
+function nameAt(words: readonly string[], name: string): number {
+  const mine = new Set(nameWords(name));
+  return words.findIndex((w) => mine.has(w));
+}
+
 /** The one online opponent whose name the sentence says, if exactly one. */
 export function namedOpponent(
   text: string,
@@ -109,15 +116,40 @@ export function namedOpponent(
   return hits.length === 1 ? (hits[0] ?? null) : null;
 }
 
+/**
+ * Every phone on Home listens, so the opponent's phone a metre away hears the challenger's
+ * "Jarvis, I bet Jake can't…" too, and must not start a challenge of its own (crossed bets, a
+ * pair_busy refusal, or the roles flipped). The wake word has no speaker, so the sentence decides:
+ * it is someone else's challenge to me when it says my name and no opponent's, or says my name
+ * before the opponent's ("Logan bets Jake…" heard on Jake's phone). The challenger's invite
+ * reaches this phone anyway. A sentence that names nobody cannot be told apart: both phones act.
+ */
+export function overheardChallenge(
+  text: string,
+  meName: string | null | undefined,
+  named: WakeOpponent | null,
+): boolean {
+  if (!meName) return false;
+  const words = normalizeTranscript(text).split(' ');
+  const mine = nameAt(words, meName);
+  if (mine < 0) return false;
+  if (!named) return true;
+  const theirs = nameAt(words, named.display_name);
+  return theirs < 0 || mine > theirs;
+}
+
 /** What "Jarvis, …" does on Home. */
 export function homeWakeAction(i: {
   text: string;
   inRoom: boolean;
   canScan: boolean;
   opponents: readonly WakeOpponent[];
+  /** This phone's player (overheardChallenge): a sentence about them is not theirs to act on. */
+  meName?: string | null | undefined;
 }): HomeWake {
   if (!i.inRoom) return { kind: 'none' };
   const named = namedOpponent(i.text, i.opponents);
+  if (overheardChallenge(i.text, i.meName, named)) return { kind: 'none' };
   if (named) return { kind: 'challenge', userId: named.user_id };
   if (i.canScan) return { kind: 'scan' };
   const online = i.opponents.filter((o) => o.online);

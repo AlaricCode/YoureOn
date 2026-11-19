@@ -528,7 +528,6 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           linked: null,
           lobby: lobbyWanted(lobbyIntent()),
           stored,
-          judgeCam: appRef.current.judgeCam,
         }),
         {
           joinLobby: () => joinLobbyId(true),
@@ -672,13 +671,19 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     let last = 0;
     const sub = RNAppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
-      const a = appRef.current;
-      if (!shouldRejoinLobby(lobbyIntent(), a)) return;
-      if (a.room && Date.now() - last < LOBBY_REFRESH_MS) return;
-      last = Date.now();
-      void joinLobbyId(true).then((id) => {
-        if (id === null && !appRef.current.room) roomRetryRef.current?.markPending();
-      });
+      // The launch rejoin first (it may be going back to a private room): a lobby join racing it
+      // would land the phone in both, and the private join takes it out of the lobby.
+      void Promise.resolve(launchJoin.current)
+        .catch(() => undefined)
+        .then(() => {
+          const a = appRef.current;
+          if (!shouldRejoinLobby(lobbyIntent(), a)) return;
+          if (a.room && Date.now() - last < LOBBY_REFRESH_MS) return;
+          last = Date.now();
+          void joinLobbyId(true).then((id) => {
+            if (id === null && !appRef.current.room) roomRetryRef.current?.markPending();
+          });
+        });
     });
     return () => sub.remove();
   }, [rt]);
@@ -1703,6 +1708,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         inRoom: a.room !== null,
         canScan: faceOn && a.room !== null,
         opponents,
+        meName: a.me?.display_name,
       });
       // Kept for the challenge's negotiate screen (openNewBet), '' included: the judge starts
       // there without waiting for another "Jarvis".

@@ -1,8 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { payout, MAX_MOMENT_MS, MAX_TRANSITION_MS } from '../tokens';
 import {
   CENTS_STRIP,
+  stripHeight,
   columnsOf,
   dollarDigits,
   leadingReveal,
@@ -185,5 +190,27 @@ describe('ticker tuning', () => {
     expect(TICKER.colorMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
     expect(TICKER.leadMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
     expect(TICKER.minScale).toBe(0.6);
+  });
+});
+
+describe('strip height (every digit drawn, not just 0)', () => {
+  it('covers every row of the strip, with a spare line', () => {
+    expect(stripHeight(CENTS_STRIP, 40)).toBe(12 * 40);
+    expect(stripHeight(TEXT_STRIP, 30)).toBe(21 * 30);
+    // The deepest row a column translates to still sits inside the Text.
+    expect(stripHeight(CENTS_STRIP, 40)).toBeGreaterThan(10 * 40 + 40 - 1);
+  });
+
+  it('RollingNumber gives each strip Text its full height (a one-line column drew row 0 only)', () => {
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../RollingNumber.tsx'),
+      'utf8',
+    );
+    for (const strip of ['CENTS_STRIP', 'TEXT_STRIP']) {
+      const tag = new RegExp(
+        `<Animated\\.Text style=\\{\\[[^\\]]*height: stripHeight\\(${strip}, lineHeight\\)[^\\]]*\\]\\}>\\s*\\{${strip}\\}`,
+      );
+      expect(src).toMatch(tag);
+    }
   });
 });
