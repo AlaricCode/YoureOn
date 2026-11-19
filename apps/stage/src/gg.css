@@ -1,6 +1,7 @@
-/* The GG moment and the review banner (gg-moment.tsx). Only the :root tokens of stage.css
-   (--text, --muted, --good, --bad, --accent, --line, --radius, --mono): the stage reskin
-   restyles them there. */
+/* The GG moment and the review banner (gg-moment.tsx), in the stage's Limelight look
+   (stage.css): the words that are said ("Logan: GG", "Good game.") in the serif, the record and
+   the money in Geist, glass for the chips, and green only for what landed (GG, the win that
+   ticked over, the payout once paid). Uses the :root tokens of stage.css. */
 
 /* ---- the GG moment (full screen, in the PAID moment's place; below the REPLAY overlay) ---- */
 .gg-moment {
@@ -12,28 +13,26 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.7em;
-  background: rgb(0 0 0 / 0.97);
+  gap: 0.5em;
+  /* nearly opaque: the stage behind must not ghost through the words */
+  background: rgb(0 0 0 / 0.99);
   color: var(--text);
   animation: gg-in 0.18s ease-out;
 }
+/* the aurora behind the stamp */
 .gg-glow {
   position: absolute;
   inset: 0;
-  background: radial-gradient(
-    circle at 50% 38%,
-    color-mix(in srgb, var(--good) 22%, transparent),
-    transparent 55%
-  );
+  background: radial-gradient(ellipse 60% 52% at 50% 34%, rgb(0 212 122 / 0.28), transparent 72%);
   animation: gg-glow 1.6s ease-out forwards;
 }
 .gg-stamp {
   position: relative;
-  font-size: 8.5em;
-  font-weight: 900;
+  font-family: var(--serif);
+  font-size: 9.5em;
+  font-weight: 400;
   line-height: 0.95;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: -0.02em;
   white-space: nowrap;
   animation: gg-stamp 0.18s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
@@ -42,13 +41,15 @@
 }
 .gg-word {
   color: var(--good);
-  text-shadow: 0 0 0.2em color-mix(in srgb, var(--good) 45%, transparent);
+  text-shadow: 0 0 0.3em rgb(0 212 122 / 0.4);
 }
 .gg-line {
   position: relative;
   margin: 0;
-  font-size: 2em;
-  font-weight: 600;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 2.4em;
+  font-weight: 400;
   color: var(--muted);
 }
 
@@ -60,18 +61,28 @@
   gap: 0.35em;
   margin-top: 0.6em;
 }
+/* "HEAD TO HEAD" reads "Head to head" */
+.gg-record > .label {
+  text-transform: lowercase;
+}
+.gg-record > .label::first-letter {
+  text-transform: uppercase;
+}
+/* the record: names in Geist, the two counts in big thin numerals */
 .gg-score {
   display: flex;
   align-items: baseline;
-  gap: 0.45em;
-  font-size: 2.6em;
-  font-weight: 800;
-  text-transform: uppercase;
+  gap: 0.4em;
+  font-size: 3em;
+  font-weight: 300;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
 }
 .gg-name {
   color: var(--muted);
-  font-size: 0.7em;
-  letter-spacing: 0.06em;
+  font-size: 0.55em;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 .gg-name.won {
   color: var(--text);
@@ -80,7 +91,6 @@
   display: inline-block;
   min-width: 0.7em;
   text-align: center;
-  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
 .gg-num.rolled {
@@ -96,17 +106,19 @@
   min-height: 1.6em;
 }
 .gg-chip {
-  font-size: 0.85em;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 0.2em 0.7em;
+  font-size: 0.8em;
+  font-weight: 500;
+  padding: 0.25em 0.85em;
   border-radius: 999px;
-  border: 0.08em solid var(--line);
+  background: var(--glass);
+  box-shadow: var(--glass-edge);
   color: var(--text);
   animation: gg-pop 0.3s ease-out both;
 }
 .gg-chip.rival {
-  border-color: var(--good);
+  box-shadow:
+    inset 0 0 0 1px rgb(0 212 122 / 0.5),
+    0 0 1em rgb(0 212 122 / 0.18);
   color: var(--good);
 }
 .gg-chip.first {
@@ -118,26 +130,31 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 0.2em;
   min-width: 20em;
   margin-top: 0.6em;
 }
+/* hairline rows, like the PAID panel: the name, then the amount in thin numerals */
 .gg-payout {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   gap: 2em;
-  font-size: 1.8em;
-  font-weight: 700;
+  padding: 0.12em 0;
+  border-bottom: 1px solid var(--rim);
+  font-size: 1.7em;
+  font-weight: 500;
   color: var(--muted);
 }
 .gg-payout .amt {
-  font-family: var(--mono);
+  font-weight: 300;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }
 .gg-payout.won.paid {
   color: var(--good);
 }
 .gg-status {
+  margin-top: 0.7em;
   font-size: 0.75em;
   text-align: center;
 }
@@ -156,16 +173,19 @@
 
 /* ---- the review banner (in the ruling) ---- */
 /* In the appeal bar's place (two short lines, about its height), so the ruling keeps its room. */
+/* A glass strip. It asks (someone has to confirm on their phone), so it is white, with a white
+   bar down its left edge; once answered the bar goes quiet. */
 .review-banner {
   display: flex;
   flex-direction: column;
   gap: 0.1em;
   min-width: 0;
   margin-top: 0.2em;
-  padding: 0.25em 0.7em;
-  border-left: 0.22em solid var(--accent);
-  border-radius: 0.3em;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 0.3em 0.8em 0.35em;
+  border-left: 0.18em solid var(--accent);
+  border-radius: 0.35em var(--radius-in) var(--radius-in) 0.35em;
+  background: var(--glass);
+  box-shadow: var(--glass-edge);
   white-space: nowrap;
   animation: gg-pop 0.25s ease-out both;
 }
@@ -174,30 +194,35 @@
   align-items: baseline;
   gap: 0.6em;
 }
+/* "REVIEW REQUESTED" reads "Review requested" */
 .review-tag {
   font-size: 1.05em;
-  font-weight: 900;
-  letter-spacing: 0.06em;
+  font-weight: 600;
   color: var(--accent);
+  text-transform: lowercase;
+}
+.review-tag::first-letter {
+  text-transform: uppercase;
 }
 .review-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 0.85em;
-  font-weight: 600;
+  font-weight: 500;
+  color: var(--muted);
 }
 .review-banner.confirmed {
-  border-left-color: var(--text);
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-left-color: var(--good);
 }
 .review-banner.confirmed .review-tag {
   color: var(--text);
 }
 .review-banner.declined,
 .review-banner.lapsed {
-  border-left-color: var(--line);
+  border-left-color: var(--line-strong);
   background: transparent;
+  box-shadow: inset 0 0 0 1px var(--rim);
 }
 .review-banner.declined .review-tag,
 .review-banner.lapsed .review-tag {
@@ -206,9 +231,9 @@
 
 /* ---- the PAID panel's "how" (GG / Ruling stands / After appeal) ---- */
 .paid-via {
-  font-size: 1.3em;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  font-size: 1.2em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .paid-via.gg {
   color: var(--good);
@@ -216,7 +241,7 @@
 .paid-record {
   margin: 0.2em 0 0;
   color: var(--muted);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 @keyframes gg-in {

@@ -2,7 +2,8 @@
    the overlays' z 10 and comes after the PAID moment in the DOM, so R during the PAID burst shows
    the slow-mo (auto-play only starts once the burst is over); the other overlays share its slot.
    One accent: the win colour, or the loss colour for a foul. Sized from the stage's em
-   (stage.css: ~28px on 1920x1080). */
+   (stage.css: ~28px on 1920x1080). Limelight: pills not tracked capitals, a glass chip, and the
+   judge's reason under the frame in the serif, as it was said. */
 .slowmo {
   --sm-win: var(--good, #00d47a);
   --sm-foul: var(--bad, #ff4f45);
@@ -28,21 +29,25 @@
   position: absolute;
   top: 3vh;
   z-index: 2;
-  padding: 0.3em 0.8em;
-  border-radius: 0.3em;
-  font-weight: 900;
+  padding: 0.3em 0.95em;
+  border-radius: 999px;
+  font-weight: 600;
 }
+/* "SLOW-MO" reads "Slow-mo" */
 .slowmo-badge {
   left: 2vw;
   background: var(--sm-accent);
   color: #000;
-  letter-spacing: 0.2em;
+  text-transform: lowercase;
+}
+.slowmo-badge::first-letter {
+  text-transform: uppercase;
 }
 .slowmo-chip {
   right: 2vw;
-  font-size: 1.25em;
-  letter-spacing: 0.02em;
-  border: 1px solid rgb(255 255 255 / 0.18);
+  font-size: 1.15em;
+  background: var(--glass, rgb(255 255 255 / 0.06));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
 }
 .slowmo-col {
   display: flex;
@@ -58,9 +63,9 @@
   aspect-ratio: 4 / 3;
   max-width: 92vw;
   overflow: hidden;
-  border-radius: 0.6em;
+  border-radius: 0.8em;
   background: #0a0a0a;
-  box-shadow: 0 0 0 0.08em rgb(255 255 255 / 0.08);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.14);
   transition: box-shadow 0.45s ease;
 }
 .slowmo-frame.clip {
@@ -82,8 +87,8 @@
 }
 .slowmo-frame.holding {
   box-shadow:
-    0 0 0 0.16em var(--sm-accent),
-    0 0 3em color-mix(in srgb, var(--sm-accent) 32%, transparent);
+    0 0 0 0.12em var(--sm-accent),
+    0 0 4em color-mix(in srgb, var(--sm-accent) 36%, transparent);
 }
 .slowmo-vignette {
   position: absolute;
@@ -107,13 +112,16 @@
   position: absolute;
   left: 0.8em;
   bottom: 0.8em;
-  padding: 0.3em 0.7em;
-  border-radius: 0.3em;
+  padding: 0.3em 0.9em;
+  border-radius: 999px;
   background: var(--sm-accent);
   color: #000;
-  font-weight: 900;
-  letter-spacing: 0.14em;
+  font-weight: 600;
+  text-transform: lowercase;
   animation: slowmo-hold-in 0.4s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+.slowmo-hold::first-letter {
+  text-transform: uppercase;
 }
 /* as wide as the frame, never wider (it does not size the column) */
 .slowmo-lower {
@@ -122,15 +130,16 @@
 }
 .slowmo-reason {
   margin: 0;
-  font-size: 1.2em;
-  font-weight: 600;
-  line-height: 1.3;
+  font-family: var(--serif, Georgia, serif);
+  font-size: 1.7em;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
 }
 .slowmo-footer {
-  margin: 0.35em 0 0;
-  color: var(--muted, #a3a9bd);
+  margin: 0.4em 0 0;
+  color: var(--muted, #8d8d93);
   font-size: 0.8em;
-  letter-spacing: 0.04em;
 }
 .slowmo-progress {
   position: absolute;
@@ -152,11 +161,11 @@
   bottom: 8vh;
   z-index: 12;
   transform: translateX(-50%);
-  padding: 0.5em 1.1em;
-  border-radius: 0.6em;
-  border: 1px solid var(--line, #262b3b);
-  background: var(--fill, #1c1c1f);
-  font-weight: 700;
+  padding: 0.5em 1.2em;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, #2c2c30);
+  background: var(--panel, #0f0f11);
+  font-weight: 500;
   pointer-events: none;
 }
 @keyframes slowmo-in {
