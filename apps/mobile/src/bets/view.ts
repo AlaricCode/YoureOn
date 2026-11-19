@@ -149,6 +149,20 @@ export function myResult(outcome: RulingOutcome, me: Party): MyResult {
   return (outcome === 'A_WINS') === (me === 'A') ? 'won' : 'lost';
 }
 
+/**
+ * This phone's result on the ruling and payout screens, from the outcome that pays
+ * (store finalOutcome). A VOID outcome is a refund in every state (RULED, FINALIZED, VOIDED),
+ * and so is a VOIDED bet whatever its ruling said; no outcome yet reads as no contest.
+ */
+export function screenResult(
+  outcome: RulingOutcome | null,
+  state: string | null,
+  me: Party | null,
+): MyResult {
+  if (!outcome || !me || outcome === 'VOID' || state === 'VOIDED') return 'void';
+  return myResult(outcome, me);
+}
+
 export const RESULT_TITLE: Readonly<Record<MyResult, string>> = {
   won: 'You won',
   lost: 'You lost',

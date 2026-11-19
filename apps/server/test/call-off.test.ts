@@ -542,24 +542,39 @@ describeDb('call it off (DB)', () => {
     expect(again.json).toMatchObject({ status: 'agreed', ruling_hash: rows[0]!.ruling_hash });
     expect(await rulingRows(betId)).toHaveLength(1);
 
-    // if the in-process resolve failed, the keeper's resolve-due sends it again (dated first in
-    // its oldest-first batch, past other suites' JUDGING bets in a shared database)
+    // if the in-process resolve failed, the keeper's resolve-due sends it again. Dated a second
+    // before the oldest ruling in the database, so it is first in the oldest-first batch past
+    // other suites' (and earlier runs') JUDGING bets in a shared database; put back afterwards so
+    // it does not crowd later runs out of that batch.
+    const [own] = await rulingRows(betId);
+    const [oldest] = await ctx.deps.db
+      .select({ at: rulings.created_at })
+      .from(rulings)
+      .orderBy(asc(rulings.created_at))
+      .limit(1);
     await ctx.deps.db
       .update(rulings)
-      .set({ created_at: new Date('2001-01-01T00:00:00Z') })
+      .set({ created_at: new Date(oldest!.at.getTime() - 1_000) })
       .where(eq(rulings.bet_id, betId));
-    const resent: string[] = [];
-    const n = await resolveDue(
-      {
-        db: ctx.deps.db,
-        log: ctx.deps.log,
-        onRuling: async (id, ruling) => {
-          if (id === betId) resent.push(ruling.model);
+    try {
+      const resent: string[] = [];
+      const n = await resolveDue(
+        {
+          db: ctx.deps.db,
+          log: ctx.deps.log,
+          onRuling: async (id, ruling) => {
+            if (id === betId) resent.push(ruling.model);
+          },
         },
-      },
-      Date.now() + RESOLVE_GRACE_MS + 1_000,
-    );
-    expect(n).toBeGreaterThanOrEqual(1);
-    expect(resent).toEqual([CALLED_OFF_MODEL]);
+        Date.now() + RESOLVE_GRACE_MS + 1_000,
+      );
+      expect(n).toBeGreaterThanOrEqual(1);
+      expect(resent).toEqual([CALLED_OFF_MODEL]);
+    } finally {
+      await ctx.deps.db
+        .update(rulings)
+        .set({ created_at: own!.created_at })
+        .where(eq(rulings.bet_id, betId));
+    }
   });
 });

@@ -765,7 +765,7 @@ export default function PreviewApp({ onClose }: { onClose: () => void }) {
         return (
           <PayoutScreen
             view={view}
-            won={myResult(result, me) === 'won'}
+            result={myResult(result, me)}
             balanceCents={balance}
             phase={payoutPhase}
             onRetry={() => openPayout(true)}
