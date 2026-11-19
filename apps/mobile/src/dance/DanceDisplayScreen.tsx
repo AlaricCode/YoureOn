@@ -25,7 +25,7 @@ import { importSafely } from '../app/importSafely';
 import { AlertLine } from '../ui/kit';
 import { DotsLabel } from '../ui/parts';
 import { half, palette, space, type } from '../ui/tokens';
-import { DANCE_COPY, dt, firstName } from './copy';
+import { DANCE_COPY, danceLabels, dt } from './copy';
 import { nowMs, useFrameClock } from './hooks';
 import { routineMedia } from './media';
 import type { Size } from './model/overlay';
@@ -214,11 +214,11 @@ function Display({
           </Text>
           <View style={styles.versus}>
             <Text style={[styles.name, { color: PLAYER_TINT.A }]} numberOfLines={1}>
-              {firstName(names.a)}
+              {danceLabels(names).a}
             </Text>
             <Text style={styles.vs}>{dt(DANCE_COPY.versus)}</Text>
             <Text style={[styles.name, { color: PLAYER_TINT.B }]} numberOfLines={1}>
-              {firstName(names.b)}
+              {danceLabels(names).b}
             </Text>
           </View>
         </View>

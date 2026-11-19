@@ -532,6 +532,51 @@ both.
   restart, set `CACHED_RULING = "true"` there and `fly deploy` from a checkout of the deployed
   commit (a deploy ships whatever is checked out).
 
+### A bet is stuck after the lock (no evidence: camera dead, judge-cam phone died, simulator)
+
+Symptom: both phones sit on the attempt / dance screens ("Your turn", framing, "Dance off live",
+the display) and nothing gets uploaded. Without a ruling the bet would wait for `resolve_deadline`
+(lock + 1 h, then the keeper's `timeout_refund`), a relaunch comes back to the same screen, and B's
+phone ignores new invites until the bet is over.
+
+1. **On the phones: "Call it off".** Every post-lock, pre-ruling screen has a small "Call it off"
+   in the top-left corner. One player taps it and confirms ("Both of you get your money back.
+   {Other} has to agree."); the other phone asks "{Name} wants to call it off. Refund both?"
+   (Agree / Keep playing). Agree issues a VOID ruling (`void_reason: 'safety_stop'`, model
+   `rule/called-off@1`, reason "Called off by both players. Everyone gets their money back."):
+   `resolve(Refund)` on chain, then the normal VOIDED path, and both phones end on the refund and
+   go Home. An unanswered request lapses after 60 s. It only works while nothing is being judged
+   (LOCKED, a round not yet uploaded, or right after a REDO); once a ruling is in flight or out,
+   it is refused (and so is an appeal of a called-off bet).
+2. **From the laptop (operator fallback, `DEMO_MODE` only):** the same VOID at once, no player
+   asked:
+
+   ```sh
+   demo -X POST "$SERVER/v1/demo/bets/$BET/void" -d '{}'
+   # {"status":"agreed","expires_at":null,"ruling_hash":"…"}
+   ```
+
+   `409 INVALID_STATE {reason:'ruling_in_flight'|'too_late'}` means a ruling is being made or is
+   out: wait for it (the normal path settles it). A repeat answers the same `ruling_hash`.
+   `$BET` is the newest locked bet (`stuck_bets` in the health report only lists bets past their
+   deadline), e.g. in the Neon SQL console:
+
+   ```sql
+   SELECT id, state, created_at FROM bets
+    WHERE state IN ('LOCKED', 'ATTEMPT', 'JUDGING') ORDER BY created_at DESC LIMIT 3;
+   ```
+
+3. If the resolve did not land (an RPC hiccup), the keeper's `resolve-due` sends it again within
+   ~15 s; `POST /v1/demo/sweep` runs it now.
+
+**Two simulators.** The Simulator has no camera, so the recording phone (A) can't film a dance
+round. In the bet's dance screen it offers "Simulator: play a sample round": the normal round
+(`POST /attempts`, the count-in on `go_at`, recording, local score, upload, ruling) on synthetic
+poses (A follows the routine, B lags and stops halfway, so A should win) with tiny placeholder key
+frames. It is offered only in the Simulator (by the app's container path), never on a phone. The
+live round check may still call those placeholder frames invalid (a VOID refund); with
+`cached_ruling` on the check is the canned VALID one, so the score decides.
+
 ### The voice judge fails
 
 A failed voice session ends cleanly on A's phone, and the negotiate screen offers "Type it

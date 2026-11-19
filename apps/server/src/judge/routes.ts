@@ -983,11 +983,13 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             .where(eq(attempts.bet_id, betId))
             .orderBy(desc(attempts.attempt_no));
           const same = prior.find((a) => a.attempt_no === body.attempt_no);
-          // Idem (bet_id, attempt_no): the same attempt, still current, replays its 201.
+          // Idem (bet_id, attempt_no): the same attempt, still current, replays its 201. A
+          // called-off attempt (./call-off.ts: no recorder, it never recorded) is not one.
           if (
             same &&
             same === prior[0] &&
             same.status !== 'redo' &&
+            same.recorded_by_device_id !== null &&
             (bet.state === 'ATTEMPT' || bet.state === 'JUDGING')
           ) {
             return { res: startResponse(same, performer), events: [], recorderUser: null };

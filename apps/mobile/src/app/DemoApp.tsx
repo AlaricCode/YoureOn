@@ -228,6 +228,8 @@ import {
   type LoopState,
 } from './wakeGate';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
+import { CallOffLayer } from '../screens/CallOff';
+import { callOffOnRoute } from './callOff';
 
 /** The last PRIVATE room's code (a lobby join and Leave delete it): a restart goes back there. */
 const LAST_ROOM_KEY = 'youreon.room.v1';
@@ -1495,6 +1497,25 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
    * DanceOffScreen's Start (after its framing check): POST /attempts asking for the judge cam,
    * then (A's phone, none in the room) this phone. The count-in follows attempt.started.
    */
+  /**
+   * "Call it off" (./callOff): ask, agree (true) or keep playing (false). Both agreeing VOIDs the
+   * bet on the server; the bet then follows the normal VOIDED path on both phones. A refusal
+   * (the round was uploaded meanwhile, a ruling is out) is a short alert; the events say the rest.
+   */
+  const callOff = useCallback(
+    async (agree: boolean) => {
+      const id = appRef.current.activeBetId;
+      if (!id) return;
+      try {
+        await rt.api.callOff(id, agree);
+      } catch (e) {
+        console.warn('[yo] call off', e);
+        if (agree) setAlert(t(COPY.callOff.failed));
+      }
+    },
+    [rt],
+  );
+
   const startDance = useCallback(async (): Promise<DanceAnswer> => {
     const a = appRef.current;
     const b = a.activeBetId ? rt.hub.get(a.activeBetId) : undefined;
@@ -2534,6 +2555,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             />
           </Suspense>
         </PanelErrorBoundary>
+      ) : null}
+      {/* "Call it off" (./callOff): every post-lock, pre-ruling screen, and the other phone's prompt. */}
+      {bet && me && callOffOnRoute(route) ? (
+        <CallOffLayer
+          bet={bet}
+          me={me}
+          judgeCam={app.judgeCam}
+          offsetMs={rt.clock.offsetMs}
+          onCall={callOff}
+        />
       ) : null}
       {alert && route !== 'ruling' && route !== 'terms' && route !== 'payout' ? (
         <View style={styles.toast} pointerEvents="none">

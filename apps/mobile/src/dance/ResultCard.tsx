@@ -8,7 +8,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { RollingText } from '../ui/RollingNumber';
 import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
-import { DANCE_COPY, dt, firstName, GRADE_COPY, scoreText, winsLabel } from './copy';
+import { DANCE_COPY, danceLabels, dt, GRADE_COPY, scoreText, winsLabel } from './copy';
 import { GRADE_TINT, PLAYER_TINT } from './theme';
 
 export interface ResultMove {
@@ -65,27 +65,30 @@ export function ResultCard({
   me?: 'A' | 'B' | undefined;
 }) {
   const verdict = data.tooClose || data.winner === null;
+  const labels = danceLabels(names);
   const headline = verdict
     ? dt(DANCE_COPY.tooCloseToCall)
-    : winsLabel(data.winner === 'A' ? names.a : names.b);
+    : data.winner === 'A'
+      ? winsLabel(names.a, labels.a)
+      : winsLabel(names.b, labels.b);
   const tint = verdict ? palette.text : data.winner === 'A' ? PLAYER_TINT.A : PLAYER_TINT.B;
   const you = dt(DANCE_COPY.you);
   const side = (p: 'A' | 'B') => {
-    const name = p === 'A' ? names.a : names.b;
+    const name = p === 'A' ? labels.a : labels.b;
     const won = !verdict && data.winner === p;
     return (
       <View style={styles.side}>
         <View style={styles.sideHead}>
           <View style={[styles.swatch, { backgroundColor: PLAYER_TINT[p] }]} />
           <Text style={styles.sideName} numberOfLines={1}>
-            {firstName(name)}
+            {name}
           </Text>
           {me === p ? <Text style={styles.tag}>{you}</Text> : null}
         </View>
         <RollingScore
           x10={p === 'A' ? data.scores.a : data.scores.b}
           tint={won ? palette.accent : palette.text}
-          label={firstName(name)}
+          label={name}
         />
       </View>
     );
@@ -105,10 +108,10 @@ export function ResultCard({
           <View style={styles.row}>
             <Text style={[styles.moveName, styles.gridHead]}>{dt(DANCE_COPY.moves)}</Text>
             <Text style={[styles.cell, styles.gridHead, styles.center]} numberOfLines={1}>
-              {firstName(names.a)}
+              {labels.a}
             </Text>
             <Text style={[styles.cell, styles.gridHead, styles.center]} numberOfLines={1}>
-              {firstName(names.b)}
+              {labels.b}
             </Text>
           </View>
           {data.moves.map((m) => (

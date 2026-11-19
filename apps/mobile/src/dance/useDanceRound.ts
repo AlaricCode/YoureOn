@@ -138,7 +138,8 @@ export interface DanceRoundEngine {
 
 export function useDanceRound(opts: {
   routine: RoutineData;
-  pose: DancePoseModule | null;
+  /** The pose module's payload parsers (the native module, or the pure ones for a sample round). */
+  pose: Pick<DancePoseModule, 'toPoseFrame' | 'toStatusEvent'> | null;
   syncOffsetMs: number;
   /** Ask the native view for key-frame JPEGs (the bet round; calibration needs none). */
   snapshots: boolean;

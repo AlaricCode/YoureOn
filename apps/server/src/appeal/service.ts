@@ -117,7 +117,7 @@ import {
 } from '../chain/tx';
 import { sha256Hex, verifyEd25519 } from '../crypto';
 import { HttpError } from '../errors';
-import { isDanceOffBet } from '../judge/dance-bet';
+import { isCalledOffBet, isDanceOffBet } from '../judge/dance-bet';
 import {
   fanout,
   hexBytes,
@@ -323,6 +323,7 @@ export class AppealService {
     try {
       if (bet.evidence_source === 'gemini') return null; // SCHEMAS §7: no "I appeal!" on a market
       if (await isDanceOffBet(this.deps.db, bet.id)) return null; // DANCE-OFF §5: the score decides
+      if (await isCalledOffBet(this.deps.db, bet.id)) return null; // both agreed: nothing to appeal
       this.windowOrThrow(bet, this.deps.now());
       return await this.buildRequest(rt, bet, loser);
     } catch (err) {
@@ -340,6 +341,12 @@ export class AppealService {
       throw new HttpError('INVALID_STATE', 'The score decides a dance off. No appeals.', {
         state: bet.state,
         reason: 'dance_off',
+      });
+    // A call-off (judge/call-off.ts): both players agreed to the refund, so there is no appeal.
+    if (await isCalledOffBet(this.deps.db, bet.id))
+      throw new HttpError('INVALID_STATE', 'Called off. No appeals.', {
+        state: bet.state,
+        reason: 'called_off',
       });
   }
 

@@ -7,7 +7,7 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { getRoutine } from '@youre-on/shared/dance/routine';
 import { danceTermsText } from '@youre-on/shared/dance/terms';
-import { DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
+import { CALLED_OFF_MODEL, DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
 import {
   danceResult,
   danceRoutineLabel,
@@ -217,6 +217,15 @@ describe('the result of a dance off', () => {
       kind: 'too_close',
     });
     expect(danceResult({ ...emptyBet('z'), dance: scored })).toBeNull();
+  });
+
+  it('a called-off round (both agreed, no round) is no contest, never "too close"', () => {
+    const off: RulingView = {
+      ...ruling('VOID'),
+      model: CALLED_OFF_MODEL,
+      void_reason: 'safety_stop',
+    };
+    expect(danceResult({ ...emptyBet('z'), ruling: off })).toEqual({ kind: 'no_contest' });
   });
 
   it('the summary line', () => {
