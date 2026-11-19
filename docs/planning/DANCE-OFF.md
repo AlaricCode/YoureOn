@@ -61,7 +61,9 @@ UNMIRRORED image, with a top-left origin and y pointing down. c is in [0,1]. A m
 
 **Quantized** (hashed and uploaded): every value is an int. x and y are in 0..10000, c is in 0..1000.
 `quantizePerson`/`dequantizePerson` live in shared. All scoring runs on DEQUANTIZED values, so the phone and
-the server score bit-identical inputs. No floats are ever hashed.
+the server score bit-identical inputs. No floats are ever hashed, except a routine's `bpm` (whole or one
+decimal, e.g. bye-bye-shuffle's 172.6; JCS prints it with ECMAScript's shortest round trip, and
+`ROUTINE_SHA256_PINS` checks the routine shas on V8 in tests and on Hermes in the calibration self-test).
 
 ```ts
 PoseSeries = strict {
