@@ -62,20 +62,13 @@ describe('homeJoinPlan: what a phone with no room joins', () => {
     ]);
   });
 
-  it('the lobby first, the last private room as the fallback; no private room: the lobby', () => {
-    // A private join after the lobby would take the phone out of the lobby on the server.
+  it('the last private room first, the lobby as the fallback; no private room: the lobby', () => {
+    // The demo phones go back to the private room the stage watches (DEMO_MODE refuses the lobby).
     expect(homeJoinPlan({ linked: null, lobby: true, stored: 'ABC123' })).toEqual([
-      { kind: 'lobby' },
       { kind: 'code', code: 'ABC123' },
+      { kind: 'lobby' },
     ]);
     expect(homeJoinPlan({ linked: null, lobby: true, stored: null })).toEqual([{ kind: 'lobby' }]);
-  });
-
-  it('a restored judge cam goes back to its private room first', () => {
-    expect(homeJoinPlan({ linked: null, lobby: true, stored: 'ABC123', judgeCam: true })).toEqual([
-      { kind: 'code', code: 'ABC123' },
-      { kind: 'lobby' },
-    ]);
   });
 
   it('lobby off: exactly the old rejoin', () => {
@@ -179,16 +172,18 @@ describe('rejoinAndRebind with the lobby', () => {
     expect(r.calls).toEqual(['lobby']);
   });
 
-  it('a phone that was in a private room joins the lobby after a restart, never both', async () => {
-    const r = run({ stored: 'ABC123', lobby: 'room-lobby', joins: { ABC123: 'room-1' } });
+  it('a phone that was in a private room goes back to it after a restart, never the lobby too', async () => {
+    // The stage watches A's private room: a relaunch (the runbook's force-quit before the pitch)
+    // must not leave A in the lobby, where B is not and the projector is not looking.
+    const r = run({ stored: 'STAGE1', lobby: 'room-lobby', joins: { STAGE1: 'room-1' } });
     expect(await r.done).toBe(true);
-    expect(r.calls).toEqual(['lobby']);
+    expect(r.calls).toEqual(['STAGE1']);
   });
 
-  it('the lobby failing: the stored room; both failing retries later', async () => {
-    const a = run({ stored: 'ABC123', lobby: null, joins: { ABC123: 'room-1' } });
+  it('that room gone: the lobby; both failing retries later', async () => {
+    const a = run({ stored: 'GONE01', lobby: 'room-lobby' });
     expect(await a.done).toBe(true);
-    expect(a.calls).toEqual(['lobby', 'ABC123']);
+    expect(a.calls).toEqual(['GONE01', 'lobby']);
     const b = run({ stored: null, lobby: null });
     expect(await b.done).toBe(false);
   });

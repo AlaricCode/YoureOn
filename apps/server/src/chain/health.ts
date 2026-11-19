@@ -12,8 +12,10 @@ import { address, type Address } from '@solana/kit';
 import { bets, chainEvents, chainTxs, noncePool } from '@youre-on/db';
 import type { BetState } from '@youre-on/shared/bet-state';
 import { findConfigPda, getConfigDecoder, type Config } from '@youre-on/shared/escrow-client';
+import { PANEL_SEATS } from '@youre-on/shared/appeal';
 import { formatUsd } from '@youre-on/shared/money';
 import type { AppDeps } from '../context';
+import type { Env } from '../env';
 import type { Logger } from '../log';
 import type { KeeperStatus } from '../keeper/keeper';
 import { lifecycleOf } from '../lock/runtime';
@@ -564,6 +566,8 @@ export async function chainHealth(
       'warn',
       `The camera checks' last SAM call failed (${checks.last_error}): rulings stand on the judge alone (no veto). POST /v1/demo/toggles {"checks": false} to stop calling it.`,
     );
+  const panel = appealPanelKeysWarning(deps.env);
+  if (panel) warnings.push(panel);
   if (toggles.cached_ruling)
     warn(
       'cached_ruling_on',
@@ -660,6 +664,38 @@ export function healthLine(r: ChainHealthReport): Record<string, unknown> {
   };
 }
 
+/** Each appeal panel seat's key (providers/live/llm KEY_NAMES): a seat without one abstains. */
+export const PANEL_KEY_NAMES = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+} as const satisfies Record<(typeof PANEL_SEATS)[number], keyof Env>;
+
+/**
+ * Beat 5: with the live LLM, a panel seat whose vendor has no key abstains on every appeal. Two
+ * agreeing votes decide, so with two seats keyless no appeal can ever flip a ruling ("upheld, no
+ * majority" every time). Warn-level (the first ruling does not need the panel). The mock LLM
+ * answers every seat, so it is not flagged.
+ */
+export function appealPanelKeysWarning(
+  env: Pick<Env, 'LLM_PROVIDER' | (typeof PANEL_KEY_NAMES)[keyof typeof PANEL_KEY_NAMES]>,
+): HealthWarning | null {
+  if (env.LLM_PROVIDER !== 'live') return null;
+  const missing = PANEL_SEATS.filter((v) => !env[PANEL_KEY_NAMES[v]]?.trim());
+  if (!missing.length) return null;
+  const names = missing.map((v) => PANEL_KEY_NAMES[v]);
+  const left = PANEL_SEATS.length - missing.length;
+  return {
+    code: 'appeal_panel_keys_missing',
+    level: 'warn',
+    message: `${names.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set: ${missing.length} of ${PANEL_SEATS.length} appeal panel seats abstain on every appeal, so ${
+      left >= 2
+        ? `a flip needs both remaining seats to agree`
+        : 'no appeal can reach the 2 votes a flip needs (every appeal upholds the ruling)'
+    }. fly secrets set ${names.map((n) => `${n}=...`).join(' ')} -a youre-on.`,
+  };
+}
+
 /** Every 10 min: log only when something is wrong (the boot line is always logged). */
 export const HEALTH_LOG_MS = 10 * 60_000;
 
@@ -674,6 +710,7 @@ export const JUDGE_WARNING_CODES: ReadonlySet<string> = new Set([
   'judge_failing',
   'cached_ruling_on',
   'checks_sam_failing',
+  'appeal_panel_keys_missing',
 ]);
 
 /** Does the chain / money path need a human? Any warning but a warn-level judge one. */
