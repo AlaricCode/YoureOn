@@ -49,7 +49,18 @@ export const RoutineData = z
     title: z.string().min(1).max(40),
     /** Royalty-free or ElevenLabs Music only (DANCE-OFF §8). */
     song: z.string().min(1).max(80),
-    bpm: z.number().min(40).max(240),
+    /**
+     * The one non-integer field a routine may hash: the tempo, whole or with ONE decimal
+     * (bye-bye-shuffle is 172.6). JCS writes it with ECMAScript Number::toString (the shortest
+     * round trip, fixed by the spec), so Hermes and V8 both print "172.6"; limiting it to one
+     * decimal keeps that form short and obvious. Pinned by test/dance-duration.test.ts and the
+     * phone's calibration self-test (routine sha pins).
+     */
+    bpm: z
+      .number()
+      .min(40)
+      .max(240)
+      .refine((b) => Math.round(b * 10) / 10 === b, 'at most one decimal place'),
     /** The round length (the dancing after the count-in), per routine. */
     duration_ms: Int.min(ROUTINE_MIN_DURATION_MS).max(ROUTINE_MAX_DURATION_MS),
     /** The first downbeat after t0; the count-in plays the 3 beats before t0. ≤ duration_ms. */
@@ -119,6 +130,19 @@ export const ROUTINES: readonly RoutineData[] = [
 ];
 
 export const ROUTINE_IDS: readonly string[] = ROUTINES.map((r) => r.id);
+
+/**
+ * Each bundled routine's routineSha256 as V8 (Node, the server) computes it. The phone hashes
+ * the same routine on Hermes and the server refuses a mismatch ('wrong_routine'), so these are
+ * checked on both engines: test/dance-duration.test.ts on V8 and the phone's calibration
+ * self-test on Hermes. bye-bye-shuffle's bpm (172.6) is the only float any routine hashes.
+ * Re-importing a routine changes its sha: update the pin with it (the test names the new one).
+ */
+export const ROUTINE_SHA256_PINS: Readonly<Record<string, string>> = {
+  'bye-bye-shuffle': 'c60e0f2b6a99e2229334d128777abf3cecb7b9e5f50afab496fc5489bef1ef35',
+  'wave-pop': '812f15c411edd6269364f0af6b5d25cacba42a2ca953b33fc69c24275d26e454',
+  'bounce-back': '7cfedcae2fd032a0e490209d4244f212a047ea3fe179929602bab672e0b86fd1',
+};
 
 export function getRoutine(id: string): RoutineData | null {
   for (const r of ROUTINES) if (r.id === id) return r;

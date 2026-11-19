@@ -122,6 +122,18 @@ export function fitPanels(box: Size, aspect: number, gap: number, count = 2): Si
   return { width, height: width / aspect };
 }
 
+/**
+ * The live camera's upright aspect (the native module streams 720x1280 buffers, the preview
+ * layer contain-fits them). Both stage panels take this aspect: never the routine's, since a
+ * Vision take can be any shape (bye-bye-shuffle is 960x1080) and the camera view, the player
+ * skeletons and the popup anchors must keep filling their panel. The reference skeleton
+ * contain-fits inside its 9:16 panel (SkeletonLayer).
+ */
+export const CAMERA_ASPECT = 720 / 1280;
+
+/** The two stage panels (reference + camera): equal, at the camera's aspect. */
+export const stagePanels = (box: Size, gap: number): Size => fitPanels(box, CAMERA_ASPECT, gap);
+
 /** Where a player's popup sits inside the camera panel: A over the left half, B the right. */
 export function popupAnchor(panel: Size, player: 'A' | 'B'): Point {
   return { x: panel.width * (player === 'A' ? 0.25 : 0.75), y: panel.height * 0.22 };

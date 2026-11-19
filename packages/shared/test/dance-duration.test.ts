@@ -18,6 +18,7 @@ import {
   POSE_MAX_FRAMES,
   ROUTINE_MAX_DURATION_MS,
   ROUTINE_MIN_DURATION_MS,
+  ROUTINE_SHA256_PINS,
   RoutineData,
   ROUTINES,
   routineSeconds,
@@ -26,6 +27,7 @@ import {
   Terms,
 } from '../src';
 import { routineFromImport } from '../src/dance/routine-import';
+import { jcs } from '../src/jcs';
 import { lcg, makePlayer, selfSeries, seriesOf } from './dance-helpers';
 import { skillTerms } from './fixtures';
 
@@ -143,6 +145,29 @@ describe('per-routine round length (§2)', () => {
     expect(BYE_BYE.frames.at(-1)!.t).toBeLessThanOrEqual(BYE_BYE.duration_ms);
     expect(routineSeconds(BYE_BYE)).toBe(33);
     expect(danceCoverageBins(BYE_BYE)).toBe(66);
+  });
+
+  it('routine sha pins match, and the one hashed float (bpm 172.6) prints as a short decimal', () => {
+    expect(Object.keys(ROUTINE_SHA256_PINS).sort()).toEqual(ROUTINES.map((r) => r.id).sort());
+    for (const r of ROUTINES) expect(routineSha256(r), r.id).toBe(ROUTINE_SHA256_PINS[r.id]);
+    expect(ROUTINE_SHA256_PINS['bye-bye-shuffle']).toBe(
+      'c60e0f2b6a99e2229334d128777abf3cecb7b9e5f50afab496fc5489bef1ef35',
+    );
+    expect(jcs(BYE_BYE)).toContain('"bpm":172.6,');
+    // Every other number a routine hashes is an int.
+    const floats: string[] = [];
+    const walk = (v: unknown, path: string): void => {
+      if (typeof v === 'number' && !Number.isInteger(v)) floats.push(path);
+      else if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      else if (v && typeof v === 'object')
+        for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+    };
+    for (const r of ROUTINES) walk(r, r.id);
+    expect(floats).toEqual(['bye-bye-shuffle.bpm']);
+    // bpm is whole or one decimal; anything finer is refused.
+    const bpm = (b: number) => RoutineData.safeParse({ ...WAVE_POP, bpm: b }).success;
+    expect([bpm(120), bpm(172.6), bpm(99.9)]).toEqual([true, true, true]);
+    expect([bpm(172.63), bpm(120.05), bpm(1 / 3 + 100)]).toEqual([false, false, false]);
   });
 
   it('duration_ms is 5000..40000 and bounds every frame, key move and the first beat', () => {

@@ -16,7 +16,7 @@ import { useFrameClock } from './hooks';
 import { CameraSkeletons, DebugReadout, LiveMeters, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
 import type { LiveStore } from './model/liveStore';
-import { fitPanels, type Size } from './model/overlay';
+import { stagePanels, type Size } from './model/overlay';
 import { referencePoseAt, upcomingKeyMove } from './model/reference';
 import { beatAt, countInLabel, type RoundState } from './model/round';
 import { SkeletonLayer } from './SkeletonLayer';
@@ -29,8 +29,6 @@ const PANEL_GAP = space.x1;
 /** A beat flash fades over this long. */
 const FLASH_MS = 180;
 const BEATS_PER_BAR = 4;
-
-const nineSixteen = (r: Pick<RoutineData, 'w' | 'h'>) => r.w / r.h;
 
 // ---------------------------------------------------------------------------------------
 // Reference
@@ -205,7 +203,9 @@ export function DanceStage({
     const { width, height } = e.nativeEvent.layout;
     if (width !== box.width || height !== box.height) setBox({ width, height });
   };
-  const panel = fitPanels(box, nineSixteen(routine), PANEL_GAP);
+  // Both panels at the CAMERA's 9:16, whatever the routine's own shape: the reference skeleton
+  // contain-fits inside its panel, the live view keeps its full size.
+  const panel = stagePanels(box, PANEL_GAP);
   return (
     <View style={styles.stage}>
       <LiveMeters store={store} names={names} me={me} />
