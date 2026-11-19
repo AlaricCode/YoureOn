@@ -8,6 +8,7 @@ import {
   clockLabel,
   countdownLabel,
   myResult,
+  rulingFooter,
   signedUsd,
 } from '../view';
 
@@ -89,6 +90,16 @@ describe('betView (DANCE-OFF §1 dance off)', () => {
     const v = betView(terms, termsHash, 'B');
     expect(canAppeal(v, 'lost', 10_000, 0)).toBe(false);
     expect(canConcede('lost', 10_000, 0)).toBe(true);
+  });
+});
+
+describe('rulingFooter', () => {
+  it('GG for the loser while open, Back home once the bet is over, else waiting', () => {
+    expect(rulingFooter('lost', false)).toBe('gg');
+    expect(rulingFooter('won', false)).toBe('waiting');
+    expect(rulingFooter('void', false)).toBe('waiting');
+    for (const r of ['won', 'lost', 'void', 'redo'] as const)
+      expect(rulingFooter(r, true)).toBe('home');
   });
 });
 

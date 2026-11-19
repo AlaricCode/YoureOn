@@ -325,10 +325,17 @@ export const fill = {
   bpm: (bpm: number) => `${Math.round(bpm)} bpm`,
   /** A routine card's tempo and length: "120 bpm · 15s" (data; each routine has its own). */
   routineMeta: (bpm: number, seconds: number) => `${Math.round(bpm)} bpm · ${seconds}s`,
-  /** The call-off confirm sheet's body (body copy). First name only. */
-  callOffBody: (name: string) =>
-    `Both of you get your money back. ${name.trim().split(/\s+/)[0] || 'They'} has to agree.`,
-  /** The other phone's prompt (contract copy, ui/copyRule). First name only. */
-  callOffAsk: (name: string) =>
-    `${name.trim().split(/\s+/)[0] || 'They'} wants to call it off. Refund both?`,
+  /**
+   * The call-off copy takes the party's on-screen label as it is (../app/callOff callOffLabels:
+   * the first name, or first name + initial when both share one, the Dance Off's naming).
+   * The confirm sheet's body (body copy).
+   */
+  callOffBody: (label: string) =>
+    `Both of you get your money back. ${label.trim() || 'They'} has to agree.`,
+  /** The other phone's prompt (contract copy, ui/copyRule). */
+  callOffAsk: (label: string) => `${label.trim() || 'They'} wants to call it off. Refund both?`,
+  /** The asker's corner while the other phone decides (contract copy: "Sim A" is two words). */
+  callOffWaiting: (label: string) => `Waiting for ${label.trim() || 'them'}`,
+  /** The asker's note when the other phone tapped Keep playing (contract copy). */
+  keptPlaying: (label: string) => `${label.trim() || 'They'} wants to keep playing`,
 } as const;

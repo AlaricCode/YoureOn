@@ -57,15 +57,18 @@ export function Label({
   children,
   variant = 'label',
   style,
+  lines = 1,
   testID,
 }: {
   children: string;
   variant?: TypeToken;
   style?: StyleProp<TextStyle>;
+  /** Lines before the tail is cut (default 1); a sheet title that is contract copy wraps. */
+  lines?: number;
   testID?: string;
 }) {
   return (
-    <Text testID={testID} style={[type[variant], style]} numberOfLines={1}>
+    <Text testID={testID} style={[type[variant], style]} numberOfLines={lines}>
       {children}
     </Text>
   );
@@ -657,7 +660,10 @@ export function ConfirmSheet({
       <BackdropProvider value="raised">
         <View style={styles.sheet}>
           <View style={styles.grabber} />
-          <Label variant="subtitle">{title}</Label>
+          {/* Up to 3 lines: "{Name} wants to call it off. Refund both?" must show whole. */}
+          <Label variant="subtitle" lines={3}>
+            {title}
+          </Label>
           <BodyText style={styles.stepBody}>{body}</BodyText>
           <View style={styles.sheetButtons}>
             <View style={styles.flex}>

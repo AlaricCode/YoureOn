@@ -12,12 +12,13 @@
 // so a player who sees the local result can't ask, or agree, to get out of it. Entering a round
 // withdraws this phone's own open request (callOffWithdrawDue): a request made before the round
 // never carries past it.
-import { callOffOpen } from '@youre-on/shared/call-off';
+import { callOffOpen, type CallOffPayload } from '@youre-on/shared/call-off';
 import type { DisplayPhase } from '../dance/model/schedule';
 import type { RoundPhase } from '../dance/model/round';
 import type { Party } from '@youre-on/shared/primitives';
 
 import type { BetModel } from '../bets/store';
+import { danceLabels } from '../dance/copy';
 import type { Route } from './machine';
 
 /** The screens the button shows on: every post-lock, pre-ruling one (waiting screens included). */
@@ -149,3 +150,43 @@ export function callOffName(
   const fromTerms = p === 'A' ? terms?.party_a.display_name : terms?.party_b.display_name;
   return ref?.display_name ?? fromTerms ?? 'They';
 }
+
+/**
+ * Both parties as the call-off copy names them: the Dance Off labels (../dance/copy danceLabels),
+ * first names unless both share one ("Sim A" / "Sim B"), so "Sim wants to call it off" never
+ * leaves the player guessing which Sim.
+ */
+export function callOffLabels(
+  b: Pick<BetModel, 'party_a' | 'party_b' | 'envelope'>,
+): Readonly<Record<Party, string>> {
+  const l = danceLabels({ a: callOffName(b, 'A'), b: callOffName(b, 'B') });
+  return { A: l.a, B: l.b };
+}
+
+/**
+ * Did the other party just turn this phone's request down ("Keep playing")? This phone's open
+ * request (`prev`), then a `cleared` step by the other party (`next`). A withdrawal of its own,
+ * a lapse (no event) or the agree are not.
+ */
+export function keptPlayingBy(
+  prev: Pick<CallOffPayload, 'status' | 'by'> | null,
+  next: Pick<CallOffPayload, 'status' | 'by'> | null,
+  me: Party,
+): Party | null {
+  if (!prev || !next || prev.status !== 'requested' || prev.by !== me) return null;
+  if (next.status !== 'cleared' || next.by === me || next.by === 'operator') return null;
+  return next.by;
+}
+
+/** How long the "{Name} wants to keep playing" note stays up. */
+export const KEPT_PLAYING_NOTE_MS = 4_000;
+
+/**
+ * The corner's widest box (pt): its right edge stops TITLE_HALF_PT left of the screen's centre,
+ * so its text (12 pt in from that edge) ends about 7 pt before the top bar's centred title (the
+ * widest on these screens, "Judge cam" / "Dance off" at 17 pt, is about 90 pt). The label's tail
+ * is cut beyond it. `left` is the corner's own inset from the screen edge.
+ */
+const TITLE_HALF_PT = 40;
+export const callOffCornerWidth = (screenWidth: number, left: number): number =>
+  Math.max(0, Math.floor(screenWidth / 2 - TITLE_HALF_PT - left));
