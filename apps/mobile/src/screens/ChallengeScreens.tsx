@@ -553,8 +553,10 @@ export function NegotiateScreen({
 
   const typing = typed?.mode === 'typed';
   const offerCard = odds ? <OfferCard panel={odds} /> : null;
+  /** An odds offer (or its counter sheet, or the agreed odds) is showing, not just its buttons. */
+  const offerOut = Boolean(odds && (odds.card || odds.counter || odds.agreed));
   /** A card is on the table: the judge's head becomes one compact row, the terms get the room. */
-  const compact = odds !== undefined || draft !== null;
+  const compact = offerOut || draft !== null;
   const draftCard = draft ? (
     <Card raised style={styles.draft}>
       <View style={styles.draftHead}>
@@ -703,11 +705,18 @@ export function NegotiateScreen({
           ref={scroll}
           style={styles.flex}
           contentContainerStyle={styles.captions}
-          onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}
+          // What was just said is at the end; an odds offer is at the top, and it is what the
+          // screen is asking about, so that is what stays in view.
+          onContentSizeChange={() =>
+            offerOut
+              ? scroll.current?.scrollTo({ y: 0, animated: true })
+              : scroll.current?.scrollToEnd({ animated: true })
+          }
         >
-          {/* With a card on the table only the line being said now stays: the cards are the
-              conversation's result, and they must fit on the screen with it. */}
-          {(compact ? captions.slice(-1) : captions).map((c, i) => (
+          {/* With a card on the table only the line being said now stays, and none at all next
+              to an odds offer (its card carries the judge's reason): the cards are the
+              conversation's result, and they must fit on the screen. */}
+          {(offerOut ? [] : compact ? captions.slice(-1) : captions).map((c, i) => (
             <View key={compact ? captions.length - 1 : i} style={styles.caption}>
               <DataText variant="small" muted>
                 {nameOf(c.who)}
