@@ -16,7 +16,7 @@ import { nowMs, useLive } from './hooks';
 import { POPUP_TTL_MS, type LiveStore, type Popup } from './model/liveStore';
 import {
   createTagSmoother,
-  tagLabel,
+  tagScore,
   type PlacedTag,
   type TagInput,
   type TagSmoother,
@@ -64,9 +64,20 @@ function NameTag({ tag, player }: { tag: PlacedTag; player: 'A' | 'B' }) {
       ]}
     >
       {tag.icon ? <FaceMark color={TAG_INK[player]} /> : null}
-      <Text style={[styles.tagText, { color: TAG_INK[player] }]} numberOfLines={1}>
+      {/* A long name is cut with an ellipsis inside the pill (capped at the panel's width); the
+          score after it always shows. */}
+      <Text
+        style={[styles.tagText, styles.tagName, { color: TAG_INK[player] }]}
+        numberOfLines={1}
+        ellipsizeMode="tail"
+      >
         {tag.label}
       </Text>
+      {tag.score !== null ? (
+        <Text style={[styles.tagText, { color: TAG_INK[player] }]} numberOfLines={1}>
+          {` ${tag.score}`}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -91,7 +102,8 @@ export function NameTags({
   const rect = containRect(size, { width: view.w, height: view.h });
   const input = (k: number[] | null, live: LivePlayerState | null, name: string): TagInput => ({
     k: live !== null || view.byFace ? k : null,
-    label: tagLabel(firstName(name), live ? live.meter : null),
+    label: firstName(name),
+    score: tagScore(live ? live.meter : null),
     icon: view.byFace,
   });
   const tags = smoother.current.step(view.version, nowMs(), rect, size, {
@@ -309,6 +321,7 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   tagText: { ...type.smallStrong, fontVariant: TABULAR },
+  tagName: { flexShrink: 1 },
   popup: { position: 'absolute', alignItems: 'center' },
   popupGrade: { ...type.figure, letterSpacing: 1 },
   popupName: { ...type.smallStrong, color: palette.textSecondary },

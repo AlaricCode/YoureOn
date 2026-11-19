@@ -94,10 +94,12 @@ The bundled routines, in card order:
   Its reference is a silhouette clip (`media.video = 'bye-bye-shuffle.mp4'`, `media.audio = null`: the music
   is muxed in): a neon SAM 3.1 mask of the dancer on a dark `#0b0614` background, 720x808, 23.976 fps,
   32.6 s, with an ORIGINAL synthesized drum track (first beat at 235 ms). The source footage is never
-  bundled. A local demo build may carry the original song instead: Metro (`apps/mobile/metro.config.js`)
-  bundles `apps/mobile/assets/dance/local/<name>` in place of `apps/mobile/assets/dance/<name>` when it
-  exists; that folder is gitignored and in `.easignore`, so only the drum version is ever committed or
-  uploaded. The routine (and its sha256) is the same either way.
+  bundled. A local demo build may carry the original song instead: with `DANCE_LOCAL_MEDIA=1` (opt-in,
+  ignored in CI and on an EAS builder), Metro (`apps/mobile/metro.config.js`) bundles
+  `apps/mobile/assets/dance/local/<name>` in place of `apps/mobile/assets/dance/<name>` when it exists.
+  That folder is gitignored and in `.easignore`, and `scripts/eas-update.ts` strips the flag and refuses
+  an export whose assetmap lists a file from it, so only the drum version is ever committed, built on
+  EAS or published over the air. The routine (and its sha256) is the same either way.
 - `wave-pop`, `bounce-back` (15 s each): SYNTHETIC placeholders, generated procedurally by
   `scripts/dance-routine.ts synth`. Their bytes, sha256s and scores are unchanged by the per-routine length.
 
@@ -118,10 +120,18 @@ Everything timed on the round comes from the routine's `duration_ms`: the scorer
   **A = left in the image** (the challenger stands on the left of the display), exactly as before. From then
   on, each person is matched to the nearest previous hip-center (greedy NN with a max jump). Extra people are
   counted (`n`) and never become A or B. The tracker also counts side swaps RELATIVE to the starting sides
-  (A and B each on the other's starting side for ≥ SWAP_MIN_MS) and frames with n > 2. `seriesChecks` (server)
-  reads the starting sides from the series' first frame with both players and counts the same way; a round
-  whose A started on the right records `checks.a_start_side = 'right'` in DanceEvidence (absent otherwise, so
-  every left / right record and its evidence_hash are unchanged).
+  (A and B each on the other's starting side for ≥ SWAP_MIN_MS) and frames with n > 2. The phone's round
+  tracker makes that round-start assignment on the series' FIRST frame (t ≥ −3000; a bet round's count-in
+  starts earlier, at go_at, so a preview tracker colours the count-in and the round tracker replays the
+  buffered frames from the window's start, `apps/mobile/src/dance/model/pipeline.ts`), so the phone and the
+  server see the same starting sides. `seriesChecks` (server) counts the same way, with the starting sides:
+  - A on the LEFT (the left / right rule, any sustained A-right-of-B is a swap), unless
+  - the server itself identified both players by face for this bet (`apps/server/src/judge/dance-faces.ts`:
+    the identify route notes the bet in memory when its answer assigned both parties, 30 min; no faces or
+    scores kept; a restart forgets it, which is the left / right rule): then the series' first frame with
+    both players, and a round whose A started on the right records `checks.a_start_side = 'right'` in
+    DanceEvidence. Absent otherwise, so every left / right record and its evidence_hash are unchanged, and
+    a recorder that labels B as A from the start is still a side swap.
 
 **Face assignment** (who is A, who is B). The recording phone tries it once the framing check passes, and it
 never blocks or fails the round:
@@ -137,8 +147,8 @@ never blocks or fails the round:
    device. The server compares the probes ONLY with the two parties' active enrollments (the caller's own
    included) with the face-match threshold (0.30) and margin (0.05), both ways: a face is party p only when p
    is clearly that face's best party and that face is clearly p's best face, so each party gets at most one
-   face (`decideDanceAssignments`). No scores or vectors in the answer, nothing stored (not even
-   last_used_at), bodies never logged, the same plain-v0 / sealed embedding forms; one call in flight per user
+   face (`decideDanceAssignments`). No scores or vectors in the answer, nothing about the faces stored (not
+   even last_used_at; only the in-memory per-bet note that both were identified, §3 above), bodies never logged, the same plain-v0 / sealed embedding forms; one call in flight per user
    and 30/min in its own bucket `face-match/dance`.
 4. Both players identified, as two different people: the phone follows them through the rest of framing
    (`dance/model/identity.ts`, the shared tracker seeded at the still's frame) and seeds the round's tracker
@@ -224,7 +234,7 @@ DanceEvidence = strict {           // packages/shared/src/evidence.ts; evidence_
   DanceEvidence, and stores `attempts.evidence_canonical = jcs(DanceEvidence)`. The bet moves to JUDGING.
 - Validation job (Claude, `apps/server/src/judge/dance.ts`) gets the terms, both scores, the per-move breakdown,
   the deterministic checks (including who started on which side: A left unless `checks.a_start_side` says
-  right) and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
+  right, which only a server-side face identification allows, §3) and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
   nobody_left, no_third_person, no_side_swap, notes, announcer_line}`. `valid` comes first, so the mock LLM's
   default is the happy path. If the LLM fails or times out, the round settles on the score with a canned line,
   and the validation is recorded as skipped.
@@ -277,17 +287,27 @@ worklets package is not installed.
      (the server's instant, GO_DELAY_MS after POST /attempts).
   4. At one shared instant t0 = `go_at` + 3 beats: `startRound`, the reference video (or skeleton) and the
      music start, and the live scoring starts. Both phones map `go_at` onto their own monotonic clock
-     through the server-time offset the app keeps (`apps/mobile/src/dance/model/schedule.ts`), so they
-     agree to within the clock-sync error. A recorder handed an attempt too late to meet its t0 ("Dance
-     again" on an attempt already used, one open at mount) counts in from now and plays the music itself.
+     (`apps/mobile/src/dance/model/schedule.ts`) through a round-trip-compensated server-clock offset:
+     each phone probes `GET /health` (5 samples, the minimum-RTT one, offset = server_time − the
+     request's midpoint) when it enters a dance screen (`apps/mobile/src/app/danceClock.ts`,
+     `apps/mobile/src/net/clockProbe.ts`), falling back to the app Clock's offset until it answers. The
+     phones then agree to within each probe's RTT / 2. A recorder handed an attempt too late to meet its
+     t0 ("Dance again" on an attempt already used, one open at mount) counts in from now and shows its
+     own reference; while a display phone is still playing that attempt's go_at timeline it stays silent
+     until the display's routine is over (`fallbackMutedUntil`: one song in the room, never two out of
+     step), then plays its own music.
   5. The routine's `duration_ms` of dancing (the music, if any, plays from t0).
   6. `stopRound` → local final scoring → result screen, with no network so far.
   7. Upload → ruling → the existing RulingScreen, GG and payout.
 - B's phone is the DISPLAY while the bet is LOCKED or in ATTEMPT (the recorder is always one of A's devices,
-  so B's phone never records): full screen, portrait, the reference MIRRORED and contain-fit on the
-  routine's dark backdrop, with its music, the screen kept awake, a big beat-synced "3, 2, 1" from `go_at`,
-  then the reference from t0. A routine without a clip shows its mirrored skeleton full screen. From
-  JUDGING on it shows the "Dance off live" screen with the score, then the usual ruling screens.
+  so B's phone never records): full screen, the reference MIRRORED and contain-fit on the routine's dark
+  backdrop, with its music, the screen kept awake, a big beat-synced "3, 2, 1" from `go_at`, then the
+  reference from t0. A routine without a clip shows its mirrored skeleton full screen. It follows the
+  phone's orientation like the rest of the app (no orientation lock: that needs a native module the
+  binary does not have), so it is meant to stand upright; on its side the contain-fit still shows the
+  whole reference, smaller. A clip paused by an interruption (the app backgrounded, a call, Siri) seeks
+  to where the round is and plays again when the app is active (`clipResumeSec`). From JUDGING on it
+  shows the "Dance off live" screen with the score, then the usual ruling screens.
 - Presence: the recorder plays the music and shows its own reference only when there is no display
   phone: party B online in the bet's room (room presence: a live socket now or within 30 s), read when
   the count-in starts. With a display phone it is silent and shows the camera panel only. There is no

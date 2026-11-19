@@ -17,6 +17,11 @@ export interface BuildDanceEvidenceInput {
   /** The uploaded key frames (index 0..n−1, sha256 of each JPEG). */
   frames: EvidenceFrame[];
   clip_sha256: string | null;
+  /**
+   * The server identified both players by face for this bet (judge/dance-faces): only then may A
+   * start on the right (`checks.a_start_side`). Absent / false: the left / right rule.
+   */
+  faces_identified?: boolean;
 }
 
 /**
@@ -28,7 +33,8 @@ export function buildDanceEvidence(i: BuildDanceEvidenceInput): {
   result: DanceRoundResult;
 } {
   const result = scoreRound(i.routine, i.series);
-  const checks = seriesChecks(i.series);
+  const byFace = i.faces_identified === true;
+  const checks = seriesChecks(i.series, { byFace });
   const evidence = DanceEvidence.parse({
     schema_version: 1,
     kind: 'dance',
@@ -50,7 +56,7 @@ export function buildDanceEvidence(i: BuildDanceEvidenceInput): {
       coverage_b_pct: result.b.coverage_pct,
       max_people: checks.max_people,
       side_swaps: checks.side_swaps,
-      ...(checks.a_start === 'right' ? { a_start_side: 'right' as const } : {}),
+      ...(byFace && checks.a_start === 'right' ? { a_start_side: 'right' as const } : {}),
     },
     frames: i.frames,
     clip_sha256: i.clip_sha256,

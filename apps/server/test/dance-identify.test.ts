@@ -8,7 +8,7 @@
 // Skips without DATABASE_URL.
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, or } from 'drizzle-orm';
 import { auditLog, betTermsVersions, createDb, devices, faceEnrollments } from '@youre-on/db';
 import { danceIdentifyPath } from '@youre-on/shared/api';
 import { ESCROW_ID, USDC_MINT_DEVNET } from '@youre-on/shared/chain/constants';
@@ -23,6 +23,7 @@ import {
 import { jcs } from '@youre-on/shared/jcs';
 import { computeTermsHash } from '@youre-on/shared/terms';
 import { issueAppSession } from '../src/auth/sessions';
+import { danceFacesIdentified } from '../src/judge/dance-faces';
 import { createDeps, startServer, type RunningServer } from '../src/server';
 import { routeModules } from '../src/routes';
 import type { AppDeps } from '../src/context';
@@ -233,9 +234,14 @@ describeDb('dance identify: POST /v1/bets/:bet_id/dance/identify (DB)', () => {
       ],
     });
     expect(r.text).not.toMatch(/0\.6|0\.7|score|user/);
+    // Both identified: the upload may start A on the right (judge/dance-faces).
+    expect(danceFacesIdentified(deps, betId)).toBe(true);
     // A third person in the picture is never anyone (C is enrolled and in the room).
     const third = await identify(A, betId, [basis(3), probeWith({ 1: 0.7 })]);
     expect(third.json).toEqual({ assignments: [{ face_index: 1, party: 'A' }] });
+    // A later answer without both drops the note: the left / right rule again.
+    expect(danceFacesIdentified(deps, betId)).toBe(false);
+    expect(danceFacesIdentified(deps, await bet())).toBe(false);
   });
 
   it('the face-match threshold and margin apply; one face per party', async () => {
@@ -354,7 +360,22 @@ describeDb('dance identify: POST /v1/bets/:bet_id/dance/identify (DB)', () => {
       .select({ u: faceEnrollments.user_id, last: faceEnrollments.last_used_at })
       .from(faceEnrollments)
       .where(eq(faceEnrollments.user_id, uid(A)));
-    const audits = (await deps.db.select({ id: auditLog.id }).from(auditLog)).length;
+    // Only this test's rows: the other test files write audit rows to the same database at the
+    // same time (vitest runs them in parallel).
+    const ours = async () =>
+      (
+        await deps.db
+          .select({ id: auditLog.id })
+          .from(auditLog)
+          .where(
+            or(
+              inArray(auditLog.actor_user_id, [uid(A), uid(B)]),
+              inArray(auditLog.subject_user_id, [uid(A), uid(B)]),
+              eq(auditLog.bet_id, betId),
+            ),
+          )
+      ).length;
+    const audits = await ours();
     const probes = [dense(71), dense(72)];
     expect((await identify(A, betId, probes)).status).toBe(200);
     expect((await identify(A, betId, [probeWith({ 1: 0.8 })])).json!.assignments).toHaveLength(1);
@@ -363,7 +384,7 @@ describeDb('dance identify: POST /v1/bets/:bet_id/dance/identify (DB)', () => {
       .from(faceEnrollments)
       .where(eq(faceEnrollments.user_id, uid(A)));
     expect(after).toEqual(before);
-    expect((await deps.db.select({ id: auditLog.id }).from(auditLog)).length).toBe(audits);
+    expect(await ours()).toBe(audits);
     for (const v of probes) {
       const b64 = sealed(v).ct_b64;
       for (const line of lines) {

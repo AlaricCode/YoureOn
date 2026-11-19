@@ -5,12 +5,14 @@ import { describe, expect, it } from 'vitest';
 import {
   createTagSmoother,
   emptyTag,
+  maxTagWidth,
   NAME_TAG,
   placeTag,
   separateTags,
   stepTag,
   tagAnchor,
   tagLabel,
+  tagScore,
   tagWidth,
   type TagState,
 } from '../model/nameTags';
@@ -133,6 +135,26 @@ describe('createTagSmoother', () => {
       expect(t.x).toBeGreaterThanOrEqual(NAME_TAG.MARGIN);
       expect(t.x + t.width).toBeLessThanOrEqual(PANEL.width - NAME_TAG.MARGIN);
     }
+  });
+
+  it('a long name never makes a pill wider than the panel; the score stays a separate part', () => {
+    // The 175 pt camera panel of a 358 x 520 two-panel stage, and a 20-letter first name.
+    const panel = { width: 175, height: 311 };
+    const rect = { x: 0, y: 0, width: 175, height: 311 };
+    const sm = createTagSmoother();
+    const long = (k: number[] | null) => ({
+      A: { k, label: 'Anne-Marie-Christine', score: tagScore(87), icon: true },
+      B: { k: null, label: 'Jake', score: null, icon: false },
+    });
+    expect(tagWidth('Anne-Marie-Christine · 87', true)).toBeGreaterThan(panel.width);
+    let out = sm.step(1, 0, rect, panel, long(L));
+    for (let v = 2, t = 66; v < 6; v++, t += 66) out = sm.step(v, t, rect, panel, long(L));
+    expect(out.A!.width).toBe(maxTagWidth(panel));
+    expect(out.A!.x).toBeGreaterThanOrEqual(NAME_TAG.MARGIN);
+    expect(out.A!.x + out.A!.width).toBeLessThanOrEqual(panel.width - NAME_TAG.MARGIN);
+    expect(out.A).toMatchObject({ label: 'Anne-Marie-Christine', score: '· 87' });
+    expect(tagScore(null)).toBeNull();
+    expect(tagScore(140)).toBe('· 100');
   });
 
   it('is idempotent per store version (a re-render never advances it), and resets', () => {

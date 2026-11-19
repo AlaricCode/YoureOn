@@ -218,7 +218,7 @@ describe('seriesChecks', () => {
     });
   });
 
-  it('reads the starting sides from the first frame with both: A started right, swaps relative', () => {
+  it('byFace: reads the starting sides from the first frame with both; swaps count from there', () => {
     const at = (t: number, aX: number, bX: number) => ({
       t,
       n: 2,
@@ -231,7 +231,8 @@ describe('seriesChecks', () => {
       frames: [{ t: 0, n: 1, a: quantizePerson(person(0.7)), b: null }],
     };
     for (let t = 100; t <= 4000; t += 100) stay.frames.push(at(t, 0.7, 0.3));
-    expect(seriesChecks(stay)).toEqual({
+    const byFace = { byFace: true };
+    expect(seriesChecks(stay, byFace)).toEqual({
       max_people: 2,
       frames_over_two: 0,
       side_swaps: 0,
@@ -240,7 +241,35 @@ describe('seriesChecks', () => {
     const swap: PoseSeries = { ...base, frames: [] };
     for (let t = 0; t <= 4000; t += 100)
       swap.frames.push(t < 2000 ? at(t, 0.7, 0.3) : at(t, 0.3, 0.7));
-    expect(seriesChecks(swap)).toMatchObject({ side_swaps: 1, a_start: 'right' });
-    expect(seriesChecks({ ...base, frames: [] }).a_start).toBeNull();
+    expect(seriesChecks(swap, byFace)).toMatchObject({ side_swaps: 1, a_start: 'right' });
+    expect(seriesChecks({ ...base, frames: [] }, byFace).a_start).toBeNull();
+  });
+
+  it('without a face identification, A is expected on the LEFT: A on the right is a swap', () => {
+    // A recorder that labels B's skeleton as A from the start (or players who crossed before
+    // the series window): the left / right rule flags it, as it did before the face assignment.
+    const at = (t: number, aX: number, bX: number) => ({
+      t,
+      n: 2,
+      a: quantizePerson(person(aX)),
+      b: quantizePerson(person(bX)),
+    });
+    const base = { schema_version: 1 as const, w: 720, h: 1280, fps_cap: 10, sync_offset_ms: 0 };
+    const right: PoseSeries = { ...base, frames: [] };
+    for (let t = 0; t <= 4000; t += 100) right.frames.push(at(t, 0.7, 0.3));
+    expect(seriesChecks(right)).toEqual({
+      max_people: 2,
+      frames_over_two: 0,
+      side_swaps: 1,
+      a_start: 'right',
+    });
+    expect(seriesChecks(right, { byFace: false }).side_swaps).toBe(1);
+    // The same series with A on the left counts no swap either way.
+    const left: PoseSeries = {
+      ...base,
+      frames: right.frames.map((f) => ({ ...f, a: f.b, b: f.a })),
+    };
+    expect(seriesChecks(left).side_swaps).toBe(0);
+    expect(seriesChecks(left, { byFace: true })).toMatchObject({ side_swaps: 0, a_start: 'left' });
   });
 });

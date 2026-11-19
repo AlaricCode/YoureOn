@@ -19,7 +19,7 @@
 //                    count-in starts. There is no display-to-recorder ack on the wire, and adding
 //                    one (an event type, a route) costs more than it buys for a phone that routes
 //                    to the display by itself whenever its socket is up. The failure modes: B's
-//                    socket dropped inside the 30 s grace (no music: the meters still run), or
+//                    socket dropped inside the 30 s grace (no music: the name tags and their live scores still run), or
 //                    B's phone online on another screen (it cannot be: a locked dance bet routes
 //                    it to the display).
 //   upload           POST /v1/bets/:id/attempts/:n/dance, multipart `upload` (DanceUpload JSON)

@@ -3,7 +3,8 @@
 //     the routine's dark background (the SAM 3.1 mask of the source take, never the footage
 //     itself), 720x808 at 23.976 fps, 32.6 s, with an ORIGINAL synthesized drum track (172.6 BPM,
 //     royalty-free by construction) muxed in: one clock for picture and music.
-//     A local demo build may carry the original song instead: metro.config.js bundles
+//     A local demo build may carry the original song instead: with DANCE_LOCAL_MEDIA=1 (opt-in,
+//     never in CI / on EAS; scripts/eas-update.ts refuses it) metro.config.js bundles
 //     assets/dance/local/bye-bye-shuffle.mp4 (gitignored, never committed) in place of the
 //     committed drum version when that file exists. The routine's hash is the same either way.
 //   - wave-pop, bounce-back: SYNTHETIC placeholders, silent: the phone draws the reference as a

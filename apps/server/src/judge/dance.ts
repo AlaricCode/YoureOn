@@ -232,8 +232,9 @@ export function danceTermsBlock(input: Pick<DanceValidatorInput, 'terms' | 'name
 }
 
 /**
- * Where the players started (DANCE-OFF §3): A on the left, unless the recording phone identified
- * both by face with A on the right (DanceEvidence.checks.a_start_side).
+ * Where the players started (DANCE-OFF §3): A on the left, unless this server identified both by
+ * face for the bet (judge/dance-faces) and A started on the right (DanceEvidence.checks
+ * .a_start_side, written only then).
  */
 export function startingPlaces(e: DanceEvidence, names: DanceNames): string {
   const aRight = e.checks.a_start_side === 'right';

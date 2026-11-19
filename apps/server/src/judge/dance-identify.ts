@@ -13,8 +13,9 @@
 //
 // Privacy, as face-match (API-CONTRACT §2.4) and stricter: the probes are compared ONLY with the
 // two parties' active enrollments (the caller's own included, since both dance), with the
-// face-match threshold and margin (shared decideDanceAssignments); nothing is stored, not even
-// last_used_at; the answer carries face indices and parties, never a score or a vector; bodies are
+// face-match threshold and margin (shared decideDanceAssignments); nothing about the faces is
+// stored, not even last_used_at (only, in memory, that this bet had both players identified:
+// ./dance-faces, so the upload may start A on the right); the answer carries face indices and parties, never a score or a vector; bodies are
 // never logged (nothing in this server logs bodies; the face service strips DB error messages).
 //
 // Rate limits, as face-match (§1.7): one call in flight per user, then 30/min per user in its own
@@ -34,6 +35,7 @@ import { partyOf, type BetRow } from '../bets/snapshot';
 import { faceMatchGate } from '../face/routes';
 import { identifyDanceParties } from '../face/service';
 import { isDanceOffBet } from './dance-bet';
+import { bothPartiesAssigned, noteDanceFaces } from './dance-faces';
 import { assertRecorder, findDanceJudgeCam } from './routes';
 
 export const DANCE_IDENTIFY_BUCKET = FACE_MATCH_BUCKETS.tap;
@@ -103,6 +105,8 @@ export function createDanceIdentifyRoutes(): RouteModule {
               { A: bet.party_a_id, B: bet.party_b_id },
               body,
             );
+            // The upload may start A on the right only after this (./dance-faces).
+            noteDanceFaces(deps, bet.id, bothPartiesAssigned(out.assignments));
             return c.json(out, 200);
           },
           () => readBody(c, DanceIdentifyRequest),
