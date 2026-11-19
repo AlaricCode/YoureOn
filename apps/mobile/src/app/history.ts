@@ -69,6 +69,18 @@ export function historyFrom(items: readonly unknown[]): HistoryItem[] {
   });
 }
 
+/**
+ * Home's change label and sparkline come from this list, so a bet that settles (PAID / VOIDED)
+ * makes it stale. It is fetched again once per settled bet: true (and `betId` recorded in `seen`)
+ * the first time a bet is seen settled; false for the same bet again (its state event, then the
+ * Back home that follows) or for a state that is not settled.
+ */
+export function settledOnce(seen: Set<string>, betId: string, state: string | null): boolean {
+  if (state === null || !SETTLED.has(state) || seen.has(betId)) return false;
+  seen.add(betId);
+  return true;
+}
+
 /** micro-USDC (signed, as a string) -> whole cents, rounded toward zero like the balance. */
 const centsOf = (micro: string) => Number(BigInt(micro) / 10_000n);
 

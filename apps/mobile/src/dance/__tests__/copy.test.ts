@@ -8,6 +8,7 @@ import {
   ERROR_COPY,
   danceLabels,
   firstName,
+  firstScoreX10,
   FRAMING_COPY,
   GRADE_COPY,
   meterText,
@@ -81,6 +82,14 @@ describe('Dance Off copy', () => {
     expect(meterText(87.6)).toBe('88');
     expect(meterText(140)).toBe('100');
     for (const v of [scoreText(874), meterText(50)]) expect(checkCopy(v, 'data')).toEqual([]);
+  });
+
+  it('the ruling card starts on the real scores, never 0.0 v 0.0 (first reveal still rolls)', () => {
+    // The judged screen showed 98.8 v 22.8; the ruling's card (roll false) opens on them.
+    expect(scoreText(firstScoreX10(988, false))).toBe('98.8');
+    expect(scoreText(firstScoreX10(228, false))).toBe('22.8');
+    // The round's own result card (the first reveal) rolls up from 0.0.
+    expect(scoreText(firstScoreX10(988, true))).toBe('0.0');
   });
 
   it('the routine cards are the three bundled routines, with clean data', () => {

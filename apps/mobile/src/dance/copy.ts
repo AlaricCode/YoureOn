@@ -125,6 +125,13 @@ export const scoreText = (x10: number): string => {
   return `${Math.floor(v / 10)}.${v % 10}`;
 };
 
+/**
+ * The score (tenths) a result card draws on its first frame: 0 when it rolls up (the round's
+ * first reveal), else the score itself. The ruling's card comes after a screen that already showed
+ * the scores, so it never starts over at "0.0".
+ */
+export const firstScoreX10 = (x10: number, roll: boolean): number => (roll ? 0 : x10);
+
 /** A live meter 0..100 → "87" (data). */
 export const meterText = (meter: number): string =>
   String(Math.max(0, Math.min(100, Math.round(meter))));

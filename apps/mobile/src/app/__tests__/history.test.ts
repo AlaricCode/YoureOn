@@ -5,7 +5,14 @@ import type { z } from 'zod/v4';
 
 import { createYoApi } from '../../net/api';
 import { createClock, type ApiClient } from '../../net/signedFetch';
-import { balanceSeries, HISTORY_LIMIT, historyFrom, historyItemOf, netCents } from '../history';
+import {
+  balanceSeries,
+  HISTORY_LIMIT,
+  historyFrom,
+  historyItemOf,
+  netCents,
+  settledOnce,
+} from '../history';
 import { ME_B, snapshot } from './fixtures';
 
 /** A GET /v1/me/bets item for party A, parsed like the app does. */
@@ -173,5 +180,34 @@ describe('balance sparkline series (Home)', () => {
   it('is empty with no settled bets', () => {
     expect(balanceSeries(2_000, [])).toEqual([]);
     expect(netCents([])).toBe(0);
+  });
+});
+
+describe("Home's history after a settle (the change label and sparkline)", () => {
+  it('is fetched once per bet that settles: the state event, then Back home, is one request', () => {
+    const seen = new Set<string>();
+    const loads: string[] = [];
+    const settle = (id: string, state: string | null) => {
+      if (settledOnce(seen, id, state)) loads.push(id);
+    };
+    settle('bet-1', 'RULED'); // not settled yet
+    settle('bet-1', 'FINALIZED');
+    settle('bet-1', 'PAID'); // bet.state PAID: the refresh
+    settle('bet-1', 'PAID'); // a replayed event
+    settle('bet-1', 'PAID'); // Back home from the payout
+    settle('bet-2', 'VOIDED'); // a call-off refund
+    settle('bet-3', null);
+    expect(loads).toEqual(['bet-1', 'bet-2']);
+  });
+
+  it('the refreshed list moves the change and the chart to the new bet', () => {
+    const before = historyFrom([item({ bet_id: '00000000-0000-4000-8000-000000000001' })]);
+    const after = historyFrom([
+      item({ bet_id: '00000000-0000-4000-8000-000000000002', my_payout: '0' }),
+      item({ bet_id: '00000000-0000-4000-8000-000000000001' }),
+    ]);
+    expect(netCents(before)).toBe(500);
+    expect(netCents(after)).toBe(0);
+    expect(balanceSeries(1000, after)).toEqual([1000, 1500, 1000]);
   });
 });
