@@ -2,7 +2,8 @@
 //
 //   https://<app>.fly.dev/stage/?room=ABC234#key=<STAGE_KEY>
 //
-// Query (not secret): room (6-char code or uuid), bet (a bet already in progress), preview[=step]
+// Query (not secret): room (6-char code, uuid, or LOBBY for the shared lobby), bet (a bet already
+// in progress), preview[=step]
 // (sample data, no server), nopreload. Fragment (secret, never sent to any server or written to its
 // logs): key (STAGE_KEY), token (a ready stage token), demo (DEMO_ADMIN_TOKEN: optional, the health
 // strip reads /v1/demo/health with the stage token itself). Secrets are read from the fragment only (a ?key= has already reached the server's and
@@ -11,7 +12,7 @@
 // page a crafted ?server= link would send the typed stage key and demo admin key to another host.
 // The session (stage token, room, demo key, the bets on screen) is kept in sessionStorage so a
 // reload of the same tab reconnects to the same card without the URL.
-import { parseRoomCode } from '@youre-on/shared/api';
+import { isLobbyAlias, LOBBY_STAGE_ALIAS, parseRoomCode } from '@youre-on/shared/api';
 
 export interface LaunchParams {
   /** null: live. '' : the looping sample sequence. Otherwise a step name to freeze on. */
@@ -129,10 +130,11 @@ export function foreignServer(serverUrl: string | null | undefined, origin: stri
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (s: string) => UUID_RE.test(s.trim());
 
-/** The header's room label: the canonical code (upper case), or a uuid's first block. */
+/** The header's room label: the canonical code (upper case), LOBBY, or a uuid's first block. */
 export function roomLabelOf(room: string): string {
   const r = room.trim();
   if (isUuid(r)) return r.slice(0, 8);
+  if (isLobbyAlias(r)) return LOBBY_STAGE_ALIAS;
   return parseRoomCode(r) ?? r;
 }
 

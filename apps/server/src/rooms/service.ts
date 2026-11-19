@@ -4,6 +4,9 @@ import { randomInt } from 'node:crypto';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { roomMembers, rooms, users, type Db } from '@youre-on/db';
 import {
+  LOBBY_RECENT_MS,
+  LOBBY_ROOM_KIND,
+  LOBBY_ROOM_NAME,
   PRESENCE_ONLINE_GRACE_MS,
   ROOM_CODE_ALPHABET,
   roomQrPayload,
@@ -48,6 +51,16 @@ export function roomSummary(r: RoomRow): RoomSummary {
     expires_at: r.expires_at.toISOString(),
   };
 }
+
+/**
+ * The shared lobby (rooms/lobby.ts): kind 'nearby' (POST /v1/rooms only creates 'session', demo
+ * rooms are seeded as 'demo'), named LOBBY_ROOM_NAME, created by the server (created_by null),
+ * not a seeded demo room. No user can make a room that passes this.
+ */
+export const isLobbyRoom = (
+  r: Pick<RoomRow, 'kind' | 'name' | 'created_by' | 'is_demo'>,
+): boolean =>
+  r.kind === LOBBY_ROOM_KIND && r.name === LOBBY_ROOM_NAME && r.created_by === null && !r.is_demo;
 
 export const isRoomLive = (r: Pick<RoomRow, 'closed_at' | 'expires_at'>, nowMs: number) =>
   r.closed_at === null && r.expires_at.getTime() > nowMs;
@@ -138,6 +151,19 @@ export class PresenceTracker {
     return off !== undefined && this.deps.now() - off < this.graceMs;
   }
 
+  /** Everyone `isOnline` says yes to: a live socket now, or one that closed within the grace. */
+  onlineUserIds(): string[] {
+    const out = new Set(this.deps.hub.onlineUserIds());
+    const t = this.deps.now();
+    for (const [id, off] of this.lastOffline) if (t - off < this.graceMs) out.add(id);
+    return [...out];
+  }
+
+  /** The lobby's "around" rule (LOBBY_RECENT_MS): online, or seen within the window. */
+  isAround(userId: string, lastSeenAt: Date): boolean {
+    return this.isOnline(userId) || this.deps.now() - lastSeenAt.getTime() < LOBBY_RECENT_MS;
+  }
+
   stop(): void {
     this.unsubscribe();
     for (const t of this.timers.values()) clearTimeout(t);
@@ -194,10 +220,16 @@ export class PresenceTracker {
   }
 }
 
-/** Current members of a room (left members excluded), oldest join first. */
+type PresenceView = Pick<PresenceTracker, 'isOnline'> & Partial<Pick<PresenceTracker, 'isAround'>>;
+
+/**
+ * Current members of a room (left members excluded), oldest join first. In the lobby, only the
+ * members who are around (PresenceTracker.isAround): everyone who ever opened the app is a
+ * member, and the list (and every room.presence frame) would otherwise grow all day.
+ */
 export async function loadMembers(
   db: Reader,
-  presence: Pick<PresenceTracker, 'isOnline'>,
+  presence: PresenceView,
   roomId: string,
 ): Promise<RoomMember[]> {
   const rows = await db
@@ -207,12 +239,21 @@ export async function loadMembers(
       wallet_pubkey: users.wallet_pubkey,
       deleted_at: users.deleted_at,
       last_seen_at: roomMembers.last_seen_at,
+      kind: rooms.kind,
+      name: rooms.name,
+      created_by: rooms.created_by,
+      is_demo: rooms.is_demo,
     })
     .from(roomMembers)
     .innerJoin(users, eq(users.id, roomMembers.user_id))
+    .innerJoin(rooms, eq(rooms.id, roomMembers.room_id))
     .where(and(eq(roomMembers.room_id, roomId), isNull(roomMembers.left_at)))
     .orderBy(asc(roomMembers.joined_at), asc(users.id));
-  const live = rows.filter((r) => r.deleted_at === null);
+  const lobby = rows[0] !== undefined && isLobbyRoom(rows[0]);
+  const around = presence.isAround?.bind(presence);
+  const live = rows.filter(
+    (r) => r.deleted_at === null && (!lobby || !around || around(r.id, r.last_seen_at)),
+  );
   const enrolled = await faceEnrolledIds(
     db,
     live.map((r) => r.id),
@@ -234,10 +275,33 @@ export async function loadMembers(
 /** Pushes the `room.presence` control frame (§3.1) to room:<roomId>. */
 export async function publishPresence(
   deps: Pick<AppDeps, 'db' | 'hub'>,
-  presence: Pick<PresenceTracker, 'isOnline'>,
+  presence: PresenceView,
   roomId: string,
 ): Promise<RoomMember[]> {
   const members = await loadMembers(deps.db, presence, roomId);
   deps.hub.publishToRoom(roomId, { op: 'room.presence', room_id: roomId, members });
   return members;
+}
+
+/**
+ * Adds `userId` to a live room (POST /v1/rooms/join and the lobby), then pushes room.presence
+ * and returns the member list. Idem: room_members PK; a re-join clears left_at. The caller has
+ * already checked liveness and any demo-room rule.
+ */
+export async function joinRoomAs(
+  deps: Pick<AppDeps, 'db' | 'hub' | 'now'>,
+  presence: PresenceView,
+  room: Pick<RoomRow, 'id'>,
+  userId: string,
+  via: (typeof roomMembers.$inferInsert)['joined_via'],
+): Promise<RoomMember[]> {
+  const at = new Date(deps.now());
+  await deps.db
+    .insert(roomMembers)
+    .values({ room_id: room.id, user_id: userId, joined_via: via, joined_at: at, last_seen_at: at })
+    .onConflictDoUpdate({
+      target: [roomMembers.room_id, roomMembers.user_id],
+      set: { left_at: null, last_seen_at: at },
+    });
+  return publishPresence(deps, presence, room.id);
 }

@@ -57,8 +57,11 @@ name: signup
     visible:
       id: balance-header
     timeout: 30000
-- assertVisible:
-    id: room-code
+# Home: the lobby ("Everyone here") by default; the code entry with EXPO_PUBLIC_LOBBY=off.
+- extendedWaitUntil:
+    visible:
+      id: lobby-title|room-code
+    timeout: 20000
 - assertNotVisible:
     id: reconnect-banner
 - takeScreenshot: 03-home

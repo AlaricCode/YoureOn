@@ -114,6 +114,11 @@ export const EnvSchema = z.object({
    * the spec is never in the hashed Terms, and a check can only turn a decisive verdict into REDO.
    */
   CHECKS_ENABLED: z.preprocess(unset, boolStr.default(false)),
+  /**
+   * The shared lobby (POST /v1/rooms/lobby, rooms/lobby.ts; the stage's ?room=LOBBY): on by
+   * default. false = the route and the stage alias answer 404, and phones fall back to codes.
+   */
+  LOBBY_ENABLED: z.preprocess(unset, boolStr.default(true)),
   /** The deployed SAM 3.1 service (services/sam3/modal_app.py), e.g. https://<ws>--sam3-…modal.run. */
   SAM3_URL: opt(z.url()),
   /** Bearer token for POST /segment (secret; never logged). */

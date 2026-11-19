@@ -2,6 +2,9 @@
 //   POST /v1/rooms                      (S)          -> 201 {room_id, code, qr_payload, expires_at}
 //   POST /v1/rooms/join                 (S)          -> 200 {room: RoomSummary, members: RoomMember[]}
 //                                                       (DEMO_MODE: the demo room admits demo players only)
+//   POST /v1/rooms/lobby                (S, `{}`)    -> 200 {room, members}: the shared lobby, created on
+//                                                       first use (./lobby.ts; 404 when LOBBY_ENABLED=false)
+//                                                       (POST /v1/rooms and a /join elsewhere leave it)
 //   POST /v1/rooms/:room_id/leave       (S)          -> 204
 //   GET  /v1/rooms/:room_id/presence    (B, member)  -> 200 {members: RoomMember[]}
 // plus the `room.presence` WS control frame to room:<room_id> on join, leave and every
@@ -11,11 +14,14 @@ import { roomMembers, rooms } from '@youre-on/db';
 import {
   CreateRoomRequest,
   JoinRoomRequest,
+  LOBBY_PATH,
+  LobbyJoinRequest,
   parseRoomCode,
   ROOM_QR_PREFIX,
   roomQrPayload,
   type CreateRoomResponse,
   type JoinRoomResponse,
+  type LobbyJoinResponse,
   type RoomPresenceResponse,
 } from '@youre-on/shared/api';
 import type { AppDeps, RouteModule } from '../context';
@@ -28,13 +34,16 @@ import {
   generateRoomCode,
   getRoomOr404,
   isActiveMember,
+  isLobbyRoom,
   isUniqueViolation,
+  joinRoomAs,
   loadMembers,
   PresenceTracker,
   publishPresence,
   ROOM_TTL_MS,
   roomSummary,
 } from './service';
+import { assertLobbyEnabled, getOrCreateLobby, leaveLobbies } from './lobby';
 
 const trackers = new WeakMap<AppDeps['hub'], PresenceTracker>();
 
@@ -49,6 +58,17 @@ function pushPresence(deps: AppDeps, roomId: string): void {
   void publishPresence(deps, presenceFor(deps), roomId).catch((err: unknown) =>
     deps.log.warn('rooms.presence_publish_failed', { room_id: roomId, err }),
   );
+}
+
+/**
+ * A phone that goes into a private room leaves the lobby (rooms/lobby.ts leaveLobbies): it can no
+ * longer be listed, face-matched or challenged there until its next lobby join.
+ */
+async function leaveLobbiesFor(deps: AppDeps, userId: string): Promise<void> {
+  for (const roomId of await leaveLobbies(deps.db, userId, deps.now())) {
+    deps.hub.leaveRoom(userId, roomId);
+    pushPresence(deps, roomId);
+  }
 }
 
 export const roomsRoutes: RouteModule = {
@@ -91,6 +111,7 @@ export const roomsRoutes: RouteModule = {
       }
       if (!created) throw new HttpError('INTERNAL', 'Could not allocate a room code. Try again.');
       pushPresence(deps, created.id);
+      await leaveLobbiesFor(deps, me.user_id);
       const out: CreateRoomResponse = {
         room_id: created.id,
         code: created.code,
@@ -124,23 +145,29 @@ export const roomsRoutes: RouteModule = {
       assertRoomLive(room, now);
       if ((await isDemoRoom(deps, room)) && (await nonDemoPlayers(deps, [me.user_id])).length)
         throw demoRoomError('This room is for the demo players.');
-      // Idem: room_members PK. A re-join clears left_at.
-      await deps.db
-        .insert(roomMembers)
-        .values({
-          room_id: room.id,
-          user_id: me.user_id,
-          joined_via: viaQr ? 'qr' : 'code',
-          joined_at: new Date(now),
-          last_seen_at: new Date(now),
-        })
-        .onConflictDoUpdate({
-          target: [roomMembers.room_id, roomMembers.user_id],
-          set: { left_at: null, last_seen_at: new Date(now) },
-        });
-      const presence = presenceFor(deps);
-      const members = await publishPresence(deps, presence, room.id);
+      const members = await joinRoomAs(
+        deps,
+        presenceFor(deps),
+        room,
+        me.user_id,
+        viaQr ? 'qr' : 'code',
+      );
+      if (!isLobbyRoom(room)) await leaveLobbiesFor(deps, me.user_id);
       const out: JoinRoomResponse = { room: roomSummary(room), members };
+      return c.json(out, 200);
+    });
+
+    // The shared lobby. No demo-room gate here, on purpose: the lobby is everyone's room. In
+    // DEMO_MODE the stage refuses the lobby alias (stage/routes.ts), so the lobby never becomes
+    // the demo room, and createChallenge (bets/routes.ts) keeps strangers' bets off the demo
+    // players there.
+    app.post(LOBBY_PATH, requireSignedRequest, async (c) => {
+      assertLobbyEnabled(deps.env);
+      const me = appAuth(c);
+      await readBody(c, LobbyJoinRequest);
+      const room = await getOrCreateLobby(deps);
+      const members = await joinRoomAs(deps, presenceFor(deps), room, me.user_id, 'nearby');
+      const out: LobbyJoinResponse = { room: roomSummary(room), members };
       return c.json(out, 200);
     });
 

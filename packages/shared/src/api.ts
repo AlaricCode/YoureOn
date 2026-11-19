@@ -861,6 +861,37 @@ export type RoomPresenceResponse = z.infer<typeof RoomPresenceResponse>;
 /** `online` = a live WS now or within this many ms (§2.3 "a live WS within 30 s"). */
 export const PRESENCE_ONLINE_GRACE_MS = 30_000;
 
+// ---- the lobby (§2.3a) ------------------------------------------------------------------
+// One shared live room every phone joins on launch, so nobody types a code: a face scan in the
+// lobby matches the people who have the app open, and the challenge arrives as the usual
+// bet.invited. Under the hood it is an ordinary room (bets, the stage and face scoping need a
+// room_id); codes stay for private rooms.
+
+/** POST, signed, body `{}` -> 200 JoinRoomResponse (the lobby, created on first use). */
+export const LOBBY_PATH = '/v1/rooms/lobby';
+/** The lobby's RoomSummary: kind LOBBY_ROOM_KIND (no API-created room has it), this name. */
+export const LOBBY_ROOM_NAME = 'Lobby';
+export const LOBBY_ROOM_KIND = 'nearby' as const;
+/** What the stage takes as `?room=` / room_code to open the lobby without knowing its code. */
+export const LOBBY_STAGE_ALIAS = 'LOBBY';
+/**
+ * Lobby members count as "around" (listed in its presence, face-match candidates) while online
+ * or seen within this window; everyone else who once opened the app is left out.
+ */
+export const LOBBY_RECENT_MS = 15 * 60_000;
+
+export const LobbyJoinRequest = z.object({});
+export type LobbyJoinRequest = z.infer<typeof LobbyJoinRequest>;
+export const LobbyJoinResponse = JoinRoomResponse;
+export type LobbyJoinResponse = JoinRoomResponse;
+
+/** Is this RoomSummary the lobby? */
+export const isLobbySummary = (r: Pick<RoomSummary, 'kind' | 'name'>): boolean =>
+  r.kind === LOBBY_ROOM_KIND && r.name === LOBBY_ROOM_NAME;
+
+/** Is a typed stage room (or room_code) the lobby alias? Case and whitespace don't matter. */
+export const isLobbyAlias = (s: string): boolean => s.trim().toUpperCase() === LOBBY_STAGE_ALIAS;
+
 export const ChallengeMethod = z.enum(['face', 'list', 'link']);
 export type ChallengeMethod = z.infer<typeof ChallengeMethod>;
 
