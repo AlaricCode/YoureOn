@@ -89,6 +89,7 @@ import {
   type DanceVoidWhy,
 } from './cues';
 import { buildDanceRuling, callDanceValidator, type DanceCheck } from './dance';
+import { danceFacesIdentified } from './dance-faces';
 import {
   applyCameraVeto,
   runAttemptChecks,
@@ -295,7 +296,7 @@ const nonPerformerId = (bet: BetRow, performer: Party) =>
  * (the mobile judge-cam poll follows A's bets), so only A's judge-cam devices count: a judge cam
  * B binds to the room never becomes a dance recorder (the recorder uploads the whole PoseSeries).
  */
-async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
+export async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
   // findJudgeCam takes the PERFORMER and returns the other party's cam: 'B' -> A's devices.
   return findJudgeCam(db, bet, 'B');
 }
@@ -341,7 +342,7 @@ function danceAccepted(e: DanceEvidence, client: { a: number; b: number }): Danc
  * Evidence provenance (ARCHITECTURE §6): only the attempt's recorder device may upload, and for a
  * judge_cam attempt only while it is still this room's judge cam.
  */
-async function assertRecorder(
+export async function assertRecorder(
   deps: AppDeps,
   att: AttemptRow,
   bet: BetRow,
@@ -982,11 +983,15 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             .where(eq(attempts.bet_id, betId))
             .orderBy(desc(attempts.attempt_no));
           const same = prior.find((a) => a.attempt_no === body.attempt_no);
-          // Idem (bet_id, attempt_no): the same attempt, still current, replays its 201.
+          // Idem (bet_id, attempt_no): the same attempt, still current and still live
+          // (recording, or its evidence in with the judge), replays its 201. One that is over
+          // (ruled, including a called-off one from ./call-off.ts; redo; failed) is not.
           if (
             same &&
             same === prior[0] &&
-            same.status !== 'redo' &&
+            (same.status === 'recording' ||
+              same.status === 'uploaded' ||
+              same.status === 'judging') &&
             (bet.state === 'ATTEMPT' || bet.state === 'JUDGING')
           ) {
             return { res: startResponse(same, performer), events: [], recorderUser: null };
@@ -1411,6 +1416,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           series: upload.series,
           frames: upload.frames.map((f) => ({ index: f.index, t_ms: f.t_ms, sha256: f.sha256 })),
           clip_sha256: upload.clip_sha256,
+          // A may start on the right only when this server identified both by face.
+          faces_identified: danceFacesIdentified(deps, betId),
         });
         const canonical = jcs(evidence);
         const evidenceHash = sha256Hex(canonical);

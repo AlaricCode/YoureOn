@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import type { BetState } from '@youre-on/shared/bet-state';
+
 import { initialLock, lockReducer, type LockState } from '../../bets/lock';
 import {
   applyBetEvent,
@@ -9,9 +11,11 @@ import {
   lockSignals,
   type BetModel,
 } from '../../bets/store';
+import { rulingFooter, type MyResult } from '../../bets/view';
 import {
   appReducer,
   initialApp,
+  isOver,
   nextAttemptNo,
   routeForBet,
   selectRoute,
@@ -274,10 +278,11 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
       10,
     );
 
-  it('the locked card first; then A records and B watches', () => {
+  it('the locked card first; then A records and B is the display', () => {
     expect(routeForBet(A, locked())).toBe('terms');
     expect(routeForBet(ack(A), locked())).toBe('dance');
-    expect(routeForBet(ack(B), locked('B'))).toBe('danceWatch');
+    expect(routeForBet(ack(B), locked('B'))).toBe('danceDisplay');
+    expect(routeForBet(B, locked('B'))).toBe('terms');
   });
 
   it('two phones: A filming itself stays on the dance screen through the judging', () => {
@@ -285,7 +290,9 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
     expect(routeForBet(ack(A), m)).toBe('dance');
     m = fold(m, stateEv('JUDGING', 11));
     expect(routeForBet(ack(A), m)).toBe('dance');
-    const b = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_A), stateEv('JUDGING', 11));
+    const live = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_A));
+    expect(routeForBet(ack(B), live)).toBe('danceDisplay');
+    const b = fold(live, stateEv('JUDGING', 11));
     expect(routeForBet(ack(B), b)).toBe('danceWatch');
   });
 
@@ -294,6 +301,9 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
     const m = fold(locked(), stateEv('ATTEMPT', 9), started(DEVICE_CAM));
     expect(routeForBet(cam, m)).toBe('dance');
     expect(routeForBet(ack(A), m)).toBe('danceWatch');
+    // B's phone is the display whoever records.
+    const bm = fold(locked('B'), stateEv('ATTEMPT', 9), started(DEVICE_CAM));
+    expect(routeForBet(ack(B), bm)).toBe('danceDisplay');
     // Before the lock the judge cam stands by, as for any bet.
     const drafting = fromSnapshot(snapshot({ state: 'DRAFTING', envelope: danceEnvelope() }));
     expect(routeForBet(cam, drafting)).toBe('judgeCam');
@@ -317,6 +327,44 @@ describe('route for a Dance Off (DANCE-OFF §6.2)', () => {
   it('other bets keep their routes (the bottle flip after the lock)', () => {
     const m = fromSnapshot(snapshot({ state: 'LOCKED', envelope: envelope() }));
     expect(routeForBet(ack(A), m)).toBe('live');
+  });
+});
+
+describe('every finished bet has a way home', () => {
+  const A = signedIn();
+  const cam = appReducer(signedIn(ME_A, DEVICE_CAM), { type: 'judge_cam', on: true });
+  const ackA = appReducer(A, { type: 'lock_ack', bet_id: BET });
+  const at = (state: BetState) =>
+    fromSnapshot(snapshot({ state, prev_state: 'JUDGING', envelope: envelope() }));
+  const results: MyResult[] = ['won', 'lost', 'void'];
+
+  it('a VOIDED bet (called off, too close to call, three REDOs) lands on the ruling with Back home', () => {
+    for (const app of [ackA, cam]) {
+      const b = at('VOIDED');
+      expect(routeForBet(app, b)).toBe('ruling');
+      expect(isOver(b.state)).toBe(true);
+      // Whatever the ruling read on this phone: never GG, never a "Waiting" nothing ends.
+      for (const r of results) expect(rulingFooter(r, isOver(b.state))).toBe('home');
+    }
+  });
+
+  it('each terminal state routes to a screen with a Home button', () => {
+    // payout: PayoutScreen / GgPayoutScreen "Back home"; lockEnded: "Back home"; ruling: above.
+    const withHome = new Set(['payout', 'lockEnded', 'ruling']);
+    for (const state of ['PAID', 'VOIDED', 'CANCELLED', 'EXPIRED', 'FINALIZED'] as const) {
+      expect(withHome.has(routeForBet(ackA, at(state)))).toBe(true);
+      // The judge-cam device stays on its camera (with its own Back) until the bet is over.
+      if (isOver(state)) expect(withHome.has(routeForBet(cam, at(state)))).toBe(true);
+    }
+  });
+
+  it('RULED, still open: the loser gets GG, the others wait for it', () => {
+    const b = at('RULED');
+    expect(routeForBet(ackA, b)).toBe('ruling');
+    expect(isOver(b.state)).toBe(false);
+    expect(rulingFooter('lost', false)).toBe('gg');
+    expect(rulingFooter('won', false)).toBe('waiting');
+    expect(rulingFooter('void', false)).toBe('waiting');
   });
 });
 

@@ -12,7 +12,7 @@
 import { getRoutine, routineSeconds } from '@youre-on/shared/dance/routine';
 import { DANCE_TERMS_TYPE, parseDanceRoutineLine } from '@youre-on/shared/dance/terms';
 import type { DanceScoredPayload } from '@youre-on/shared/realtime';
-import { DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
+import { CALLED_OFF_MODEL, DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
 import type { BetView, PartyKey } from './ticker';
 
 export type DanceGrade = 'PERFECT' | 'GOOD' | 'MISS';
@@ -153,6 +153,8 @@ export function danceResult(b: BetView): DanceResult | null {
   if (o === 'A_WINS') return { kind: 'win', winner: 'A' };
   if (o === 'B_WINS') return { kind: 'win', winner: 'B' };
   if (o !== 'VOID') return null;
+  // A call-off (both players agreed, or the operator): no round, so no contest.
+  if (b.ruling?.model === CALLED_OFF_MODEL) return { kind: 'no_contest' };
   const d = b.dance;
   // DANCE-OFF §5: an invalid round (someone left, a third dancer, a side swap) is void with the
   // reason naming it; a too-close or failed (coverage) round is "too close to call".

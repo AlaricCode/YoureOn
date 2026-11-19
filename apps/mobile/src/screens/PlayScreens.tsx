@@ -15,6 +15,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { judgeCamGuard, type CallOffGuard } from '../app/callOff';
 import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
 import { recordedSpan } from '../attempt/span';
@@ -25,6 +26,7 @@ import {
   canConcede,
   countdownLabel,
   RESULT_TITLE,
+  rulingFooter,
   signedUsd,
   type BetView,
   type MyResult,
@@ -65,6 +67,7 @@ import { RollingText } from '../ui/RollingNumber';
 import { Perforation, Slip } from '../ui/slip';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
 import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
+import { useReportCallOffGuard } from './CallOff';
 import { COPY, fill, t } from './copy';
 
 // ---------------------------------------------------------------------------------------
@@ -184,12 +187,15 @@ export function JudgeCamScreen({
   onSend,
   arm,
   tag,
+  onCallOffGuard,
 }: {
   onBack?: (() => void) | undefined;
   onSend: (clip: Clip | null) => Promise<void>;
   /** undefined = preview (manual start); null = waiting for the server; set = armed. */
   arm?: CamArm | null;
   tag?: string | undefined;
+  /** "Call it off" (../app/callOff judgeCamGuard): held while recording, off with a clip. */
+  onCallOffGuard?: ((guard: CallOffGuard) => void) | undefined;
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<CamPhase>('standby');
@@ -210,6 +216,10 @@ export function JudgeCamScreen({
   const lastClip = useRef<Clip | null>(null);
   /** A retake counts down on its own clock (go_at is already past). */
   const manualCountdown = useRef(false);
+  useReportCallOffGuard(
+    onCallOffGuard,
+    judgeCamGuard(phase, { failed, hasClip: lastClip.current !== null }),
+  );
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) void requestPermission();
@@ -428,6 +438,7 @@ export function RulingScreen({
   onGG,
   onAppeal,
   onRematch,
+  onHome,
   rematchBusy = false,
   tag,
 }: {
@@ -451,10 +462,17 @@ export function RulingScreen({
   onAppeal?: (() => void) | undefined;
   /** Double or nothing, once the bet is over (a void round's refund is done): DANCE-OFF §7. */
   onRematch?: (() => void) | undefined;
+  /**
+   * "Back home", passed once the bet is over (VOIDED: a call-off, a dance too close to call, three
+   * REDOs, a void ruling). The bet never leaves this screen by itself then, so without it the
+   * phone was stuck here.
+   */
+  onHome?: (() => void) | undefined;
   rematchBusy?: boolean;
   tag?: string | undefined;
 }) {
   const now = useNow(200);
+  const footer = rulingFooter(result, onHome !== undefined);
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
   const left = appealDeadlineMs - now;
@@ -464,15 +482,39 @@ export function RulingScreen({
     <MomentScreen
       aurora={result === 'won' ? 'in' : result === 'lost' ? 'out' : 'neutral'}
       top={<TopBar tag={tag} />}
+      // A dance off's breakdown (or a long reason) runs taller than the screen: the body scrolls
+      // between the top bar and the footer instead of spilling under the status bar and footer.
+      scroll
       footer={
         <>
           <View>
-            <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
-            <DrainBar endsAtMs={appealDeadlineMs} windowMs={APPEAL_WINDOW_MS} />
+            {footer === 'home' ? null : (
+              <>
+                <InfoRow label={t(COPY.ruling.finalIn)} value={countdownLabel(left)} />
+                <DrainBar endsAtMs={appealDeadlineMs} windowMs={APPEAL_WINDOW_MS} />
+              </>
+            )}
             <InfoRow label={t(COPY.live.pot)} value={view.potUsd} />
           </View>
           <AlertLine message={alert ?? null} />
-          {result === 'lost' ? (
+          {footer === 'home' && onHome ? (
+            // The same pair as the payout screen: Back home, then Double or nothing.
+            <>
+              <PrimaryButton
+                testID="ruling-home"
+                label={t(COPY.ruling.backHome)}
+                onPress={onHome}
+              />
+              {onRematch ? (
+                <QuietButton
+                  testID="ruling-rematch"
+                  label={t(COPY.rematch.button)}
+                  busy={rematchBusy}
+                  onPress={onRematch}
+                />
+              ) : null}
+            </>
+          ) : footer === 'gg' ? (
             <>
               {/* GG pays the other side now: a swipe up, the same deliberate gesture as the lock. */}
               <SwipeToConfirm
@@ -559,7 +601,7 @@ export type PayoutPhase = 'processed' | 'confirmed' | 'reverted';
 
 export function PayoutScreen({
   view,
-  won,
+  result,
   balanceCents,
   phase,
   onRetry,
@@ -570,7 +612,8 @@ export function PayoutScreen({
   tag,
 }: {
   view: BetView;
-  won: boolean;
+  /** 'void' (a refund) never reads as a loss: "No contest", both stakes back. */
+  result: MyResult;
   balanceCents: number;
   phase: PayoutPhase;
   onRetry: () => void;
@@ -581,6 +624,7 @@ export function PayoutScreen({
   alert?: string | null;
   tag?: string | undefined;
 }) {
+  const won = result === 'won';
   // micro-USDC → cents, for the figure that counts up.
   const winCents = Number(BigInt(view.theirStake) / 10_000n);
   // The balance is one quiet grey line under the hero, never a second big figure.
@@ -627,6 +671,14 @@ export function PayoutScreen({
             {balance}
           </MomentGroup>
         )
+      ) : result === 'void' ? (
+        // A refund: no glow, no money moving either way (routeForBet sends a VOID to the ruling
+        // screen; this is the fallback when the outcome is not known on this phone).
+        <MomentGroup>
+          <MomentHeadline>{RESULT_TITLE.void}</MomentHeadline>
+          <BodyText style={styles.centerText}>{t(COPY.ruling.refund)}</BodyText>
+          {balance}
+        </MomentGroup>
       ) : (
         // The mirror image: red, static, the same aurora in red at a lower opacity.
         <MomentGroup glow="out">

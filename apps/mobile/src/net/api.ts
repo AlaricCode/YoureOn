@@ -10,8 +10,11 @@ import {
   BetSnapshot,
   CreateBetResponse,
   CreateRoomResponse,
+  danceIdentifyPath,
+  DanceIdentifyResponse,
   DanceUploadResponse,
   danceUploadPath,
+  type DanceIdentifyRequest,
   InviteAnswerResponse,
   JoinRoomResponse,
   LOBBY_PATH,
@@ -21,6 +24,7 @@ import {
   SignRequest,
   type PartySignature,
 } from '@youre-on/shared/api';
+import { callOffPath, CallOffResponse } from '@youre-on/shared/call-off';
 import {
   AuthorizeRequest,
   type PartyAuthorization,
@@ -201,6 +205,12 @@ export function createYoApi(c: ApiClient) {
     // §2.4 face match (Beat 1): the probe embedding only; a match addresses, never authorizes
     faceMatch: (roomId: string, req: FaceMatchRequest) =>
       c.request('POST', faceMatchPath(roomId), { json: req, schema: FaceMatchResponse }),
+    /**
+     * DANCE-OFF §3 face assignment: which of these faces (embeddings only) is which party. Only
+     * the dance off's filming device may ask; no scores come back, nothing is stored.
+     */
+    danceIdentify: (betId: string, req: DanceIdentifyRequest) =>
+      c.request('POST', danceIdentifyPath(betId), { json: req, schema: DanceIdentifyResponse }),
     /** §2.5 challenge addressed by a face match: the 60 s ticket from faceMatch(). */
     createFaceBet: (roomId: string, opponentUserId: string, matchTicket: string) =>
       c.request('POST', '/v1/bets', {
@@ -398,6 +408,18 @@ export function createYoApi(c: ApiClient) {
      */
     declineReview: (betId: string) =>
       c.request('POST', `${bet(betId)}/review/decline`, { schema: ReviewDeclined }),
+
+    /**
+     * §2.9a "Call it off": ask (agree:true), agree to the other party's ask (agree:true,
+     * answer:true: never opens a request of its own), or decline / withdraw (agree:false). The
+     * server dedupes by bet state (a repeat is the same request, or 'agreed' once it is voided),
+     * so no pinned key is needed.
+     */
+    callOff: (betId: string, agree: boolean, answer = false) =>
+      c.request('POST', callOffPath(betId), {
+        json: answer ? { agree, answer } : { agree },
+        schema: CallOffResponse,
+      }),
 
     // §2.15 judge-cam role
     setDeviceRole: (role: 'phone' | 'judge_cam', roomId?: string) =>

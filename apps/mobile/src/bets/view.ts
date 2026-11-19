@@ -149,6 +149,20 @@ export function myResult(outcome: RulingOutcome, me: Party): MyResult {
   return (outcome === 'A_WINS') === (me === 'A') ? 'won' : 'lost';
 }
 
+/**
+ * This phone's result on the ruling and payout screens, from the outcome that pays
+ * (store finalOutcome). A VOID outcome is a refund in every state (RULED, FINALIZED, VOIDED),
+ * and so is a VOIDED bet whatever its ruling said; no outcome yet reads as no contest.
+ */
+export function screenResult(
+  outcome: RulingOutcome | null,
+  state: string | null,
+  me: Party | null,
+): MyResult {
+  if (!outcome || !me || outcome === 'VOID' || state === 'VOIDED') return 'void';
+  return myResult(outcome, me);
+}
+
 export const RESULT_TITLE: Readonly<Record<MyResult, string>> = {
   won: 'You won',
   lost: 'You lost',
@@ -210,6 +224,15 @@ export const appealVerdict = (
 /** GG is the loser's concede, for decisive outcomes only (CONCEDE_NOT_ALLOWED otherwise). */
 export const canConcede = (result: MyResult, appealDeadlineMs: number, nowMs: number): boolean =>
   result === 'lost' && nowMs < appealDeadlineMs + 1000;
+
+/**
+ * The ruling screen's footer: GG for the loser while the window is open; once the bet is over (a
+ * VOID refunded, or any other terminal state) "Back home" with Double or nothing, never a GG or a
+ * "Waiting" that no event will ever end; else "Waiting" for the loser or the settlement.
+ */
+export type RulingFooter = 'gg' | 'home' | 'waiting';
+export const rulingFooter = (result: MyResult, over: boolean): RulingFooter =>
+  over ? 'home' : result === 'lost' ? 'gg' : 'waiting';
 
 /** "+$5.00", "−$7.00", "$0.00" from a signed micro-USDC string (ui/money: one result format). */
 export function signedUsd(signedMicro: string): string {

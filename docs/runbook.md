@@ -30,6 +30,27 @@ Check these first; each changes the script ([`pitch.md`](pitch.md)).
 | Beat 6 rehearsal            | Ran live once on 2026-11-18 (see measurements). Rehearse again on the day; keep `REPLAY 6` and the Gemini replay feed ready.                                                                                         | `GET /v1/demo/health` `gemini.current.lockable`                     |
 | Beat 5 appeal rehearsal     | Rehearse it on devnet before showing it ("The appeal (Beat 5)" below); without the appeal key an appealed bet is refunded after 300 s instead of paid.                                                               | `appeal_key` set and no `appeal_key_*` warning in the health report |
 
+Found by the 2026-11-19 verification (details in the sections named):
+
+- **Appeal panel keys.** `OPENAI_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` were not Fly secrets,
+  so the GPT and Gemini seats abstained on every appeal and no appeal could flip ("upheld, no
+  majority", 0-0-3). The health report now warns `appeal_panel_keys_missing` (demo-check shows it
+  as `server.appeal_panel_keys_missing`). Fix: `fly secrets set OPENAI_API_KEY=...
+GOOGLE_GENERATIVE_AI_API_KEY=... -a youre-on`. Beat 5 is talk-only in the pitch, so this matters
+  only if you show the panel.
+- **`LOCK_SIGNER=server` on prod.** The server signs both stakes with the demo keys: there is no
+  hold + Face ID on the phones (Beat 3's "Hold → Face ID" does not happen; the stage words the slots
+  "demo key"), and any pair that is not demo-a + demo-b fails at Lock it in ("Couldn't lock it.
+  Nothing moved.", `lock.custodial_key_mismatch`). For the Face ID beat, set `LOCK_SIGNER=phones`
+  before the pitch and rehearse a lock on both phones. Otherwise reword Beat 3 ("the server signs
+  for the demo accounts").
+- **Camera checks timing and the table.** With checks on, a ruling waits for SAM: 7-10 s instead of
+  about 3 s ("Camera checks" below), and the live compile gates the bottle flip on the table, which
+  no real clip has validated. Rehearse one real flip with checks on, or switch them off for the
+  pitch (`{"checks": false}`).
+- **"Jarvis" on the voice path.** A's judge waits for "Jarvis" or **Tap to talk** on the negotiate
+  screen; it no longer starts by itself ("Phones and room" below).
+
 ## 1. Pre-show checklist (start 60 minutes before)
 
 ### Server and chain: one command
@@ -212,7 +233,22 @@ free nonces are enough for the demo. If `free` is low:
   A's mic. Camera permission must already be granted on A's phone (the face scan asks for it). If
   A performs, B's phone has Start and films. A judge cam left on but dead still gets the attempt
   (the server has no liveness check on it): turn it off on that phone, or play REPLAY `4`.
-- Phone A creates the room; its 6-character code goes into the stage URL.
+- Phone A creates the room; its 6-character code goes into the stage URL. B joins it by code. A
+  relaunched phone (the force-quit above, or a crash) goes back to its last private room by
+  itself, before the lobby: check that Home on both phones shows the room code, not the lobby, after
+  every relaunch. Only Leave sends a phone to the lobby (it forgets the room). In the lobby the
+  stage cannot see the bet (`DEMO_MODE` refuses `?room=` for the lobby) and B is not found by A's
+  face scan.
+- **The judge waits for "Jarvis".** On A's negotiate screen the voice judge starts on "Jarvis, …"
+  (the sentence goes to the judge) or on **Tap to talk**, not on its own. Beat 2's line is "Jarvis,
+  bet you five bucks you can't land a bottle flip." On the typed form, Bet on Bitcoin and Dance off
+  the judge starts by itself once the terms are agreed, so its opening line ("Order. Court is in
+  session. …: what's the bet?") plays during the lock (in the cold open, over the presenter). To
+  have it open on the negotiate screen as before, A taps **Tap to talk** before the panel.
+- **"Jarvis" on Home.** Both phones on Home listen. A sentence that names B ("Jarvis, I bet Jake
+  can't…") does nothing on B's phone, but one that names nobody ("Jarvis, bet you can't…") acts on
+  both phones (B's opens the face scan, or challenges A when face is off). On Home, say B's name, or
+  start Beat 1 with the "Scan a face" tap as the pitch does.
 - Pick the pitch start time for the Bitcoin closer: about 1:05 after a five-minute mark
   ([`pitch.md`](pitch.md#timing-the-closer-beat-6)).
 
@@ -328,9 +364,20 @@ terms version, `CHECKS_MODEL`, cached per wording). Check `GET /v1/demo/health` 
 `enabled`, `sam_configured`, `toggle`, `active` must all be true; `last_ok_at` / `last_ok_ms` /
 `last_error` are the SAM calls since boot (`checks_sam_failing` warns when the last one failed).
 
-- **Timing.** SAM gets `SAM_TIMEOUT_MS` (10 s, the judge's own budget) per attempt, retry included,
-  so a ruling is never later than before. A late or failing SAM is recorded as `unavailable` and
-  the judge's call stands (no veto). SAM is ~3.5 s per prompt warm (a spec has 1-3) and 25-45 s
+- **Timing.** SAM gets `SAM_TIMEOUT_MS` (10 s, the judge's own budget) per attempt, retry included.
+  It runs next to the vision call, but the ruling waits for it (the veto is applied before the
+  ruling is built), so a checked ruling lands when SAM does: 7-10 s on prod (warm SAM took
+  6.7-9.0 s for a 2-prompt spec), against about 3 s without checks. The pitch's "ruled in about
+  three seconds" holds only with checks off. A late or failing SAM is recorded as `unavailable` and
+  the judge's call stands (no veto), so a SAM at the 10 s cap costs the full wait for nothing.
+- **The bottle-flip spec.** The live compile (Opus) has turned "Jake lands a water bottle flip
+  upright on the table." into a gate on the TABLE plus `on_top(bottle, table)` and
+  `at_rest(bottle, ref table)`, although the few-shot for that claim gates on the bottle alone. No
+  real SAM fixture has a `table` prompt, so this path is unvalidated: if SAM misses the table from
+  the judge cam's side view, every MET becomes REDO ("Couldn't see the table…"), and after the redo
+  limit the bet is VOID (`max_redos`) and refunded on stage. Before the pitch, rehearse one real flip
+  with checks on and read `attempt_checks.report`; if it did not confirm a clean flip, switch
+  checks off. SAM is ~3.5 s per prompt warm (a spec has 1-3) and 25-45 s
   cold: the server wakes it (`GET /health`) when the terms are confirmed and again when recording
   starts. It stays warm 5 minutes after the last request.
 - **Cost.** One Modal GPU (A10G or L4, about $0.80-1.10 per hour while a container is up), at most
@@ -484,6 +531,54 @@ both.
   the env `CACHED_RULING` in `fly.toml [env]` (`"false"`) applies again. To make it survive a
   restart, set `CACHED_RULING = "true"` there and `fly deploy` from a checkout of the deployed
   commit (a deploy ships whatever is checked out).
+
+### A bet is stuck after the lock (no evidence: camera dead, judge-cam phone died, simulator)
+
+Symptom: both phones sit on the attempt / dance screens ("Your turn", framing, "Dance off live",
+the display) and nothing gets uploaded. Without a ruling the bet would wait for `resolve_deadline`
+(lock + 1 h, then the keeper's `timeout_refund`), a relaunch comes back to the same screen, and B's
+phone ignores new invites until the bet is over.
+
+1. **On the phones: "Call it off".** Every post-lock, pre-ruling screen has a small "Call it off"
+   in the top-left corner. One player taps it and confirms ("Both of you get your money back.
+   {Other} has to agree."); the other phone asks "{Name} wants to call it off. Refund both?"
+   (Agree / Keep playing). Agree issues a VOID ruling (`void_reason: 'safety_stop'`, model
+   `rule/called-off@1`, reason "Called off by both players. Everyone gets their money back."):
+   `resolve(Refund)` on chain, then the normal VOIDED path, and both phones end on the refund and
+   go Home. An unanswered request lapses after 60 s. It only works while nothing is being judged
+   (LOCKED, a round not yet uploaded, or right after a REDO); once a ruling is in flight or out,
+   it is refused (and so is an appeal of a called-off bet). The phone running the round hides
+   it while the round counts in, dances or records, and once it shows a local result (a Dance
+   Off score, a clip still to send): to call off a round whose upload keeps failing after a
+   score, use the operator fallback below.
+2. **From the laptop (operator fallback, `DEMO_MODE` only):** the same VOID at once, no player
+   asked:
+
+   ```sh
+   demo -X POST "$SERVER/v1/demo/bets/$BET/void" -d '{}'
+   # {"status":"agreed","expires_at":null,"ruling_hash":"…"}
+   ```
+
+   `409 INVALID_STATE {reason:'ruling_in_flight'|'too_late'}` means a ruling is being made or is
+   out: wait for it (the normal path settles it). A repeat answers the same `ruling_hash`.
+   `$BET` is the newest locked bet (`stuck_bets` in the health report only lists bets past their
+   deadline), e.g. in the Neon SQL console:
+
+   ```sql
+   SELECT id, state, created_at FROM bets
+    WHERE state IN ('LOCKED', 'ATTEMPT', 'JUDGING') ORDER BY created_at DESC LIMIT 3;
+   ```
+
+3. If the resolve did not land (an RPC hiccup), the keeper's `resolve-due` sends it again within
+   ~15 s; `POST /v1/demo/sweep` runs it now.
+
+**Two simulators.** The Simulator has no camera, so the recording phone (A) can't film a dance
+round. In the bet's dance screen it offers "Simulator: play a sample round": the normal round
+(`POST /attempts`, the count-in on `go_at`, recording, local score, upload, ruling) on synthetic
+poses (A follows the routine, B lags and stops halfway, so A should win) with tiny placeholder key
+frames. It is offered only in the Simulator (by the app's container path), never on a phone. The
+live round check may still call those placeholder frames invalid (a VOID refund); with
+`cached_ruling` on the check is the canned VALID one, so the score decides.
 
 ### The voice judge fails
 
