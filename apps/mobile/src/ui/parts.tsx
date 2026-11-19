@@ -34,7 +34,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Defs, Ellipse, Path, RadialGradient, Stop } from 'react-native-svg';
 
 import { useReconnecting } from './connection';
-import { BackButton, BackdropProvider, ChevronLeft, Label, Tick, useBackdropColor } from './kit';
+import {
+  BackButton,
+  BackdropProvider,
+  ChevronLeft,
+  Label,
+  Tick,
+  useBackdropColor,
+  useColumn,
+} from './kit';
 import { centsToUsd, signedCentsToUsd } from './money';
 import { SPARK_MIN_POINTS, sparkDirection, sparkGeometry } from './spark';
 import { balance, isDisplay, typographic } from './typography';
@@ -63,13 +71,16 @@ import {
 // ---------------------------------------------------------------------------------------
 
 /**
- * A screen arriving (tokens `motion.screenMs`): its content fades in and settles up a few points,
- * once, when the screen mounts. Each route renders its own screen component, so moving through
- * the app is a glide instead of a hard cut. The black behind it never moves. Reduce Motion: the
- * content is simply there.
+ * A screen's content: laid out in the content column (the whole window on a phone, a centred
+ * phone-width column on an iPad), and arriving (tokens `motion.screenMs`) with a fade and a small
+ * rise, once, when the screen mounts. Each route renders its own screen component, so moving
+ * through the app is a glide instead of a hard cut. The black behind it never moves. Reduce
+ * Motion: the content is simply there.
  */
 function ScreenEnter({ children }: { children: ReactNode }) {
   const reduced = useReduceMotion();
+  // On an iPad the screen's content is one phone-width column in the middle (./column).
+  const column = useColumn();
   const k = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (reduced === null) return;
@@ -88,7 +99,13 @@ function ScreenEnter({ children }: { children: ReactNode }) {
   }, [k, reduced]);
   const translateY = k.interpolate({ inputRange: [0, 1], outputRange: [motion.screenRise, 0] });
   return (
-    <Animated.View style={[styles.flex, { opacity: k, transform: [{ translateY }] }]}>
+    <Animated.View
+      style={[
+        styles.flex,
+        column.wide && { width: column.width, alignSelf: 'center' },
+        { opacity: k, transform: [{ translateY }] },
+      ]}
+    >
       {children}
     </Animated.View>
   );
@@ -1335,7 +1352,7 @@ export function MomentHeadline({
 }) {
   // iOS shrink-to-fit only counts lines, so a word wider than the line is split mid-word and
   // still "fits". Size down first so the longest word fits on one line.
-  const { width } = useWindowDimensions();
+  const { width } = useColumn();
   const base = size === 'xl' ? type.moment : type.momentSmall;
   const column = width - 2 * inset;
   const longest = Math.max(1, ...children.split(/\s+/).map((w) => w.length));

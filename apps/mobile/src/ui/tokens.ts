@@ -408,6 +408,16 @@ export const space = {
   row: 56,
 } as const;
 
+/**
+ * Wide screens (an iPad): the app is one phone-width column, centred (./column). A window whose
+ * short side is under `tabletMinSide` (any phone, either way up; a narrow iPad split) is never
+ * constrained.
+ */
+export const layout = {
+  maxContentWidth: 540,
+  tabletMinSide: 600,
+} as const;
+
 /** Half-steps of the grid, for tight inner gaps (chip padding, label-to-field). */
 export const half = { x05: 4, x15: 12 } as const;
 

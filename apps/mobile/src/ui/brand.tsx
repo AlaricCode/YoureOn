@@ -11,7 +11,7 @@ import { Animated, Easing, StyleSheet, Text, View, useWindowDimensions } from 'r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { COPY, t } from '../screens/copy';
-import { Label, PrimaryButton } from './kit';
+import { Label, PrimaryButton, useColumn } from './kit';
 import { DotsLabel, useReduceMotion } from './parts';
 import { material, motion, palette, space, type } from './tokens';
 import { typographic } from './typography';
@@ -149,6 +149,7 @@ export function SplashView({
 }) {
   const insets = useSafeAreaInsets();
   const { height: windowH } = useWindowDimensions();
+  const column = useColumn();
   const root = useRef<ComponentRef<typeof View>>(null);
   // Where this view starts in the window (0 at the app root; lower inside the design preview).
   const [offsetY, setOffsetY] = useState(0);
@@ -181,7 +182,16 @@ export function SplashView({
         )}
       </View>
       {failed && onRetry ? (
-        <View style={[styles.retry, { bottom: insets.bottom + space.x2 }]}>
+        <View
+          style={[
+            styles.retry,
+            {
+              bottom: insets.bottom + space.x2,
+              left: column.inset + space.page,
+              right: column.inset + space.page,
+            },
+          ]}
+        >
           <PrimaryButton testID="splash-retry" label={t(COPY.app.failed)} onPress={onRetry} />
         </View>
       ) : null}
