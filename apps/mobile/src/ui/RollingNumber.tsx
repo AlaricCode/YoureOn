@@ -47,6 +47,15 @@ import { motion, TABULAR } from './tokens';
 
 const easeOut = Easing.bezier(...motion.easing);
 
+/**
+ * Rows in each digit strip. The strip's Text is given its full height (rows x line height)
+ * explicitly: inside a one-line column the new architecture measures a Text "at most" as tall as
+ * its parent, clamps it to one line and draws only that line, so every digit but 0 (row 0) came
+ * out blank ("$ . 0" for $12.50). A set height is not clamped.
+ */
+const CENTS_ROWS = CENTS_STRIP.split('\n').length;
+const TEXT_ROWS = TEXT_STRIP.split('\n').length;
+
 /** A figure style: a type token (type.balance, type.money, type.value …). */
 export type FigureStyle = TextStyle & { readonly fontSize: number; readonly lineHeight: number };
 
@@ -222,7 +231,9 @@ function CentsColumn({
   });
   return (
     <Animated.View style={[styles.column, { height: lineHeight }, reveal]} onLayout={onDigitWidth}>
-      <Animated.Text style={[textStyle, strip]}>{CENTS_STRIP}</Animated.Text>
+      <Animated.Text style={[textStyle, { height: lineHeight * CENTS_ROWS }, strip]}>
+        {CENTS_STRIP}
+      </Animated.Text>
     </Animated.View>
   );
 }
@@ -373,7 +384,9 @@ function TextColumn({
   }));
   return (
     <View style={[styles.column, { height: lineHeight }]}>
-      <Animated.Text style={[textStyle, strip]}>{TEXT_STRIP}</Animated.Text>
+      <Animated.Text style={[textStyle, { height: lineHeight * TEXT_ROWS }, strip]}>
+        {TEXT_STRIP}
+      </Animated.Text>
     </View>
   );
 }
