@@ -18,6 +18,7 @@
 // Pure TS: tested in node.
 import { ApiClientError } from '../net/signedFetch';
 import { COPY, t } from '../screens/copy';
+import { homeJoinPlan, runJoinPlan } from './lobby';
 
 export type DeviceRoleRequest =
   | { ok: true; role: 'judge_cam'; roomId: string }
@@ -199,6 +200,11 @@ export interface RejoinDeps {
   currentRoomId(): string | null;
   /** Join by code; the room id, or null when the join failed. */
   join(code: string): Promise<string | null>;
+  /**
+   * Join the shared lobby (./lobby), tried before the stored room when there is no room link;
+   * omitted when the lobby is off or a private room was chosen this launch.
+   */
+  joinLobby?: (() => Promise<string | null>) | undefined;
   /** The signed-in effect is still mounted. */
   live(): boolean;
   /** The restored judge cam has not been turned on or off since (JudgeCamSync.restoredOn). */
@@ -208,7 +214,8 @@ export interface RejoinDeps {
 }
 
 /**
- * At sign-in, after the memo was read: re-join the last room (or a room link's), then re-bind a
+ * At sign-in, after the memo was read: re-join the lobby or the last room (or a room link's:
+ * ./lobby homeJoinPlan), then re-bind a
  * restored judge cam to the room this phone is in now. That room comes from the join itself: the
  * app state lags a render behind, and reading it right after the join found no room, so every
  * restored judge cam turned itself off ("Join room first") and the memo never brought it back.
@@ -216,13 +223,23 @@ export interface RejoinDeps {
  * socket is live: ./resume createLiveRetry).
  */
 export async function rejoinAndRebind(d: RejoinDeps): Promise<boolean> {
-  const code = d.linked ?? (await d.storedCode().catch(() => null)) ?? null;
+  const stored = d.linked ? null : await d.storedCode().catch(() => null);
   let roomId = d.currentRoomId();
   let joined = true;
-  if (code && d.live() && (d.linked || !roomId)) {
-    const id = await d.join(code);
-    joined = id !== null;
-    roomId = id ?? roomId;
+  if (d.live() && (d.linked || !roomId)) {
+    const joinLobby = d.joinLobby;
+    const r = await runJoinPlan(
+      homeJoinPlan({
+        linked: d.linked,
+        lobby: joinLobby !== undefined,
+        stored,
+      }),
+      { joinLobby: joinLobby ?? (() => Promise.resolve(null)), joinCode: d.join, live: d.live },
+    );
+    if (r.tried) {
+      joined = r.roomId !== null;
+      roomId = r.roomId ?? roomId;
+    }
   }
   if (d.live() && d.restored === 'judge_cam' && d.stillOn()) d.bind(roomId);
   return joined;

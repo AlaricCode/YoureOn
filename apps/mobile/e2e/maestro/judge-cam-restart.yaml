@@ -18,6 +18,14 @@ name: judge-cam-restart
       notVisible:
         id: room-leave
     commands:
+      # The lobby (on by default) hides the code entry and "New room" behind "Private room".
+      - runFlow:
+          when:
+            visible:
+              id: home-private
+          commands:
+            - tapOn:
+                id: home-private
       - tapOn:
           id: room-create
       - extendedWaitUntil:

@@ -1,6 +1,6 @@
 // Home (rooms: TASKS D1-M6, API-CONTRACT §2.3; balance: D3-M2, §2.14), bet history and the
 // profile page (D5-M2).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 
+import { homeMode } from '../app/lobby';
 import { signedUsd } from '../bets/view';
 import type { HistoryItem, PreviewUser } from '../preview/data';
 import { AlertLine, Label, PrimaryButton, QuietButton, TextField } from '../ui/kit';
@@ -61,6 +62,7 @@ export function HomeScreen({
   onTitleLongPress,
   note,
   creating = false,
+  lobbyJoining = false,
   series,
   change,
 }: {
@@ -68,7 +70,8 @@ export function HomeScreen({
   balanceCents: number;
   pending: boolean;
   inBetsUsd: string | null;
-  room: { code: string; name: string } | null;
+  /** `lobby`: the shared lobby (app/lobby): "Everyone here", no code, "Private room". */
+  room: { code: string; name: string; lobby?: boolean | undefined } | null;
   members: readonly PreviewUser[];
   offline: boolean;
   tag?: string | undefined;
@@ -87,6 +90,8 @@ export function HomeScreen({
   note?: string | null | undefined;
   /** "New room" is in flight. */
   creating?: boolean | undefined;
+  /** No room yet and the lobby join is in flight: the lobby shows, joining, not the code entry. */
+  lobbyJoining?: boolean | undefined;
   /** Balance points (cents, oldest first) for the sparkline; hidden under 2 points. */
   series?: readonly number[] | null | undefined;
   /** Net change over those points, shown green / red under the balance; omitted when unknown. */
@@ -95,6 +100,36 @@ export function HomeScreen({
   const [code, setCode] = useState('');
   const [alert, setAlert] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** "Private room" tapped in the lobby: today's code entry and "New room" show instead. */
+  const [showPrivate, setShowPrivate] = useState(false);
+  const inPrivateRoom = room !== null && room.lobby !== true;
+  useEffect(() => {
+    if (inPrivateRoom) setShowPrivate(false);
+  }, [inPrivateRoom]);
+  const mode = homeMode({ room, lobbyJoining, showPrivate });
+  /** The code entry is over the lobby ("Back" returns to it), not the no-room fallback. */
+  const lobbyAround = room?.lobby === true || (room === null && lobbyJoining);
+
+  const memberRow = (m: PreviewUser) => (
+    <View key={m.user_id} style={styles.member}>
+      <Avatar name={m.display_name} size={avatarSize.md} online={m.online} />
+      <DataText variant="heading" style={[styles.flex, styles.rowTitle]} lines={1}>
+        {m.display_name}
+      </DataText>
+      {m.online ? (
+        // A small grey pill, not green: green stays "the one action" (Scan a face).
+        <QuietButton
+          small
+          testID={`challenge-${m.user_id}`}
+          label={t(COPY.home.challenge)}
+          onPress={() => onChallenge(m)}
+        />
+      ) : (
+        // Presence is the dot on the disc; the word stays, quietly, in grey.
+        <Label variant="small">{t(COPY.home.offline)}</Label>
+      )}
+    </View>
+  );
 
   const join = async () => {
     setBusy(true);
@@ -140,7 +175,52 @@ export function HomeScreen({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <Page>
-          {room ? (
+          {mode === 'lobby' ? (
+            <>
+              {/* The lobby: everyone with the app open. No code to read out; scan or tap. */}
+              <View style={styles.roomHead}>
+                <Label testID="lobby-title" variant="heading">
+                  {t(COPY.home.everyone)}
+                </Label>
+              </View>
+              <ScrollView
+                style={styles.flex}
+                contentContainerStyle={
+                  room === null || members.length === 0 ? styles.listEmpty : styles.list
+                }
+              >
+                {room === null ? (
+                  <StatusHero mark="ring" title={t(COPY.home.joining)} />
+                ) : members.length === 0 ? (
+                  <StatusHero mark="ring" title={t(COPY.home.lobbyEmpty)} />
+                ) : (
+                  members.map(memberRow)
+                )}
+              </ScrollView>
+              <AlertLine testID="home-alert" message={note ?? null} />
+              <View style={styles.actions}>
+                {onScan ? (
+                  <PrimaryButton testID="home-scan" label={t(COPY.home.scan)} onPress={onScan} />
+                ) : null}
+                <View style={styles.row}>
+                  <View style={styles.flex}>
+                    <QuietButton
+                      testID="home-history"
+                      label={t(COPY.home.history)}
+                      onPress={onHistory}
+                    />
+                  </View>
+                  <View style={styles.flex}>
+                    <QuietButton
+                      testID="home-private"
+                      label={t(COPY.home.privateRoom)}
+                      onPress={() => setShowPrivate(true)}
+                    />
+                  </View>
+                </View>
+              </View>
+            </>
+          ) : mode === 'room' && room ? (
             <>
               <View style={styles.roomHead}>
                 <Label variant="heading">{t(COPY.home.room)}</Label>
@@ -157,26 +237,7 @@ export function HomeScreen({
                 {members.length === 0 ? (
                   <StatusHero mark="ring" title={t(COPY.home.empty)} />
                 ) : (
-                  members.map((m) => (
-                    <View key={m.user_id} style={styles.member}>
-                      <Avatar name={m.display_name} size={avatarSize.md} online={m.online} />
-                      <DataText variant="heading" style={[styles.flex, styles.rowTitle]} lines={1}>
-                        {m.display_name}
-                      </DataText>
-                      {m.online ? (
-                        // A small grey pill, not green: green stays "the one action" (Scan a face).
-                        <QuietButton
-                          small
-                          testID={`challenge-${m.user_id}`}
-                          label={t(COPY.home.challenge)}
-                          onPress={() => onChallenge(m)}
-                        />
-                      ) : (
-                        // Presence is the dot on the disc; the word stays, quietly, in grey.
-                        <Label variant="small">{t(COPY.home.offline)}</Label>
-                      )}
-                    </View>
-                  ))
+                  members.map(memberRow)
                 )}
               </ScrollView>
               <AlertLine testID="home-alert" message={note ?? null} />
@@ -238,11 +299,23 @@ export function HomeScreen({
                     />
                   </View>
                   <View style={styles.flex}>
-                    <QuietButton
-                      testID="home-history"
-                      label={t(COPY.home.history)}
-                      onPress={onHistory}
-                    />
+                    {lobbyAround ? (
+                      <QuietButton
+                        testID="home-lobby"
+                        label={t(COPY.home.back)}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          setShowPrivate(false);
+                          setAlert(null);
+                        }}
+                      />
+                    ) : (
+                      <QuietButton
+                        testID="home-history"
+                        label={t(COPY.home.history)}
+                        onPress={onHistory}
+                      />
+                    )}
                   </View>
                 </View>
               </View>

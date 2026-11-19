@@ -35,6 +35,7 @@ import type { AppDeps, AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import { appAuth, requireAppSession, requireSignedRequest } from '../auth/middleware';
+import { presenceFor } from '../rooms/routes';
 import { faceConfigOf } from './config';
 import { faceRetentionTask } from './retention';
 import {
@@ -112,7 +113,13 @@ export function createFaceRoutes(): RouteModule {
         const me = appAuth(c);
         return matchGate(
           me.user_id,
-          async (body) => c.json(await matchInRoom(deps, me.user_id, roomIdOf(c), body), 200),
+          async (body) =>
+            c.json(
+              await matchInRoom(deps, me.user_id, roomIdOf(c), body, {
+                onlineUserIds: () => presenceFor(deps).onlineUserIds(),
+              }),
+              200,
+            ),
           () => readBody(c, FaceMatchRequest),
         );
       });

@@ -45,6 +45,8 @@ export interface RoomInfo {
   room_id: string;
   code: string;
   name: string;
+  /** The shared lobby (./lobby): joined without a code, and home shows no code for it. */
+  lobby?: boolean | undefined;
 }
 
 export interface AppState {

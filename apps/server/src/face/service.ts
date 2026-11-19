@@ -8,13 +8,20 @@
 //    No confident match stores nothing; a match only bumps the matched row's day-truncated
 //    last_used_at (retention).
 //  - Candidates are the opted-in (status 'active'), current members of the caller's room with
-//    the same model, never the caller, never anyone outside the room (DATA-MODEL §7.2).
+//    the same model, never the caller, never anyone outside the room (DATA-MODEL §7.2). In the
+//    shared lobby (rooms/lobby.ts), only the members who are around: online now, or seen within
+//    LOBBY_RECENT_MS, most recently seen first, so a day of past visitors is never compared.
 //  - Scores stay here. The response is a user + ticket, or null.
 //  - Database errors are re-thrown without their message (Drizzle puts query parameters, i.e.
 //    ciphertext, in it) so the app's error log never sees face bytes.
-import { and, asc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { auditLog, faceEnrollments, roomMembers, users, type Db } from '@youre-on/db';
-import { REQUEST_CLOCK_SKEW_MS, RIVAL_MIN_SETTLED, type HeadToHead } from '@youre-on/shared/api';
+import {
+  LOBBY_RECENT_MS,
+  REQUEST_CLOCK_SKEW_MS,
+  RIVAL_MIN_SETTLED,
+  type HeadToHead,
+} from '@youre-on/shared/api';
 import {
   bytesToEmbedding,
   cosineSimilarity,
@@ -38,7 +45,7 @@ import { formatUsd } from '@youre-on/shared/money';
 import type { AppDeps } from '../context';
 import { HttpError } from '../errors';
 import { userRefOf } from '../bets/snapshot';
-import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
+import { assertRoomLive, getRoomOr404, isActiveMember, isLobbyRoom } from '../rooms/service';
 import { faceConfigOf } from './config';
 import { issueMatchTicket } from './ticket';
 import { atRestAad, kekFor, openAtRest, openRequestEmbedding, sealAtRest } from './vault';
@@ -346,13 +353,33 @@ interface CandidateRow {
   key_id: string;
 }
 
-/** DATA-MODEL §7.2: opted-in current members of `roomId` with this model, minus the scanner. */
+/** The lobby's candidate rule: who counts as around (see LOBBY_RECENT_MS). */
+export interface AroundFilter {
+  /** Members seen at or after this instant. */
+  seenSince: Date;
+  /** Plus these users (online now, whatever their last_seen_at says). */
+  onlineIds: readonly string[];
+}
+
+/**
+ * DATA-MODEL §7.2: opted-in current members of `roomId` with this model, minus the scanner.
+ * With `around` (the lobby): only those seen since `seenSince` or online, online first, then the
+ * most recently seen, so the FACE_MATCH_MAX_CANDIDATES cap only ever drops the stalest.
+ */
 async function roomCandidates(
   db: Pick<Db, 'select'>,
   roomId: string,
   scannerId: string,
   model: FaceModelRef,
+  around?: AroundFilter,
 ): Promise<CandidateRow[]> {
+  const online = around?.onlineIds.length ? [...around.onlineIds] : null;
+  const isOnline = online ? inArray(roomMembers.user_id, online) : sql`false`;
+  const base = and(
+    eq(roomMembers.room_id, roomId),
+    isNull(roomMembers.left_at),
+    ne(roomMembers.user_id, scannerId),
+  );
   return db
     .select({
       user_id: faceEnrollments.user_id,
@@ -374,14 +401,17 @@ async function roomCandidates(
       ),
     )
     .innerJoin(users, and(eq(users.id, roomMembers.user_id), isNull(users.deleted_at)))
-    .where(
-      and(
-        eq(roomMembers.room_id, roomId),
-        isNull(roomMembers.left_at),
-        ne(roomMembers.user_id, scannerId),
-      ),
+    .where(around ? and(base, or(gte(roomMembers.last_seen_at, around.seenSince), isOnline)) : base)
+    .orderBy(
+      ...(around
+        ? [
+            // Only with an online list: `ORDER BY false` is a constant, which Postgres refuses.
+            ...(online ? [desc(isOnline)] : []),
+            desc(roomMembers.last_seen_at),
+            asc(roomMembers.user_id),
+          ]
+        : [asc(roomMembers.joined_at), asc(roomMembers.user_id)]),
     )
-    .orderBy(asc(roomMembers.joined_at), asc(roomMembers.user_id))
     .limit(FACE_MATCH_MAX_CANDIDATES);
 }
 
@@ -396,6 +426,8 @@ export async function matchInRoom(
   scannerId: string,
   roomId: string,
   req: FaceMatchRequest,
+  /** Who is online now (the presence tracker); lobby scans use it with LOBBY_RECENT_MS. */
+  opts: { onlineUserIds?: () => readonly string[] } = {},
 ): Promise<FaceMatchResponse> {
   const cfg = faceConfigOf(deps.env);
   const now = deps.now();
@@ -415,8 +447,14 @@ export async function matchInRoom(
     path: 'probe',
   });
   try {
+    const around: AroundFilter | undefined = isLobbyRoom(room)
+      ? {
+          seenSince: new Date(now - LOBBY_RECENT_MS),
+          onlineIds: opts.onlineUserIds?.() ?? [],
+        }
+      : undefined;
     const rows = await sanitized(deps, 'candidates', () =>
-      roomCandidates(deps.db, room.id, scannerId, req.model),
+      roomCandidates(deps.db, room.id, scannerId, req.model, around),
     );
     const scored: ScoredCandidate[] = [];
     let unreadable = 0;
