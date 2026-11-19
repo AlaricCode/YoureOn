@@ -22,7 +22,7 @@ import type { Party } from '@youre-on/shared/primitives';
 import { countdownLabel, type BetView } from '../bets/view';
 import { feel } from '../device/feedback';
 import { COPY, t } from '../screens/copy';
-import { AlertLine, Label, PrimaryButton, QuietButton } from '../ui/kit';
+import { AlertLine, Label, PrimaryButton, QuietButton, useColumn } from '../ui/kit';
 import {
   Appear,
   BalanceLine,
@@ -155,12 +155,14 @@ export function ReviewSheet({
   onCheck: () => void;
   onKeep: () => void;
 }) {
+  // On an iPad the sheet spans the column the ruling sits in, not the whole screen.
+  const column = useColumn();
   return (
     // Not a Modal: a soft sheet over the lower half of the ruling screen, so the result and the
     // reason stay readable above it and nothing else on screen (the preview strip) is covered.
     // It sits above everything on that screen (zIndex): the ruling's swipe pill raises itself,
     // and used to draw over this sheet's "Check it again".
-    <Appear style={styles.sheet}>
+    <Appear style={[styles.sheet, { left: column.inset, right: column.inset }]}>
       <View testID="review-sheet" accessibilityViewIsModal>
         <View style={styles.grabber} />
         <Label variant="heading">{gt(GG_COPY.review)}</Label>

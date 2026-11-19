@@ -21,11 +21,13 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
   type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
 
+import { columnFor, type Column } from './column';
 import { PressScale } from './press';
 import { isDisplay, typographic } from './typography';
 import {
@@ -61,6 +63,20 @@ export function useBackdrop(): Backdrop {
 /** The colour of the surface under the component (for cut-out rings around presence dots). */
 export function useBackdropColor(): string {
   return useBackdrop() === 'raised' ? palette.surface : palette.background;
+}
+
+// ---------------------------------------------------------------------------------------
+// Column
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The content column for this window (./column): the window itself on a phone, a centred
+ * phone-width column on an iPad. Screens (ui/parts Screen, MomentScreen) apply it; anything
+ * placed against the window's own edges (a sheet, a corner control) uses its `inset`.
+ */
+export function useColumn(): Column {
+  const { width, height } = useWindowDimensions();
+  return columnFor(width, height);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -673,13 +689,15 @@ export function ConfirmSheet({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  // On an iPad the sheet is as wide as the column the screens sit in, centred at the bottom.
+  const column = useColumn();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <Pressable style={styles.sheetBackdrop} onPress={onCancel} accessibilityLabel="Close">
         <View style={[StyleSheet.absoluteFill, styles.backdropTint]} />
       </Pressable>
       <BackdropProvider value="raised">
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, column.wide && { width: column.width, alignSelf: 'center' }]}>
           <View style={styles.grabber} />
           {/* Up to 3 lines: "{Name} wants to call it off. Refund both?" must show whole. */}
           <Label variant="subtitle" lines={3}>

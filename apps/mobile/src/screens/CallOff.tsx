@@ -2,7 +2,7 @@
 // pre-ruling screen (the top bar's left slot, empty on those screens), its confirm sheet, and
 // the other phone's prompt. Drawn over the screen by DemoApp, so no screen changes its layout.
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { StyleSheet, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Party } from '@youre-on/shared/primitives';
@@ -18,7 +18,7 @@ import {
   type CallOffView,
 } from '../app/callOff';
 import type { BetModel } from '../bets/store';
-import { ConfirmSheet, Label, TextButton } from '../ui/kit';
+import { ConfirmSheet, Label, TextButton, useColumn } from '../ui/kit';
 import { useNow } from '../ui/parts';
 import { half, palette, radius, space } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
@@ -46,7 +46,9 @@ export function CallOffControl({
   onAnswer: (agree: boolean) => void;
 }) {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  // The corner sits on the content column's margin (the window's own on a phone).
+  const column = useColumn();
+  const width = column.width;
   const left = insets.left + space.page - half.x15;
   // The sheet closes whenever the view leaves 'ask' (their request came in, the round started,
   // the upload landed): it never pops back up later without a tap.
@@ -75,7 +77,11 @@ export function CallOffControl({
         <View
           style={[
             styles.corner,
-            { top: insets.top + space.x1, left, maxWidth: callOffCornerWidth(width, left) },
+            {
+              top: insets.top + space.x1,
+              left: column.inset + left,
+              maxWidth: callOffCornerWidth(width, left),
+            },
           ]}
         >
           {view.kind === 'ask' ? (
