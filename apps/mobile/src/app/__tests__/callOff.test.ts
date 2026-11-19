@@ -10,6 +10,8 @@ import {
   CALL_OFF_ROUTES,
   callOffAllowed,
   callOffConfirm,
+  callOffCornerWidth,
+  callOffLabels,
   callOffName,
   callOffOnRoute,
   callOffView,
@@ -17,6 +19,7 @@ import {
   danceDisplayGuard,
   danceRoundGuard,
   judgeCamGuard,
+  keptPlayingBy,
   type CallOffConfirmEvent,
   type CallOffGuard,
   type CallOffView,
@@ -128,6 +131,49 @@ describe('callOffView', () => {
     expect(callOffName(b, 'A')).toBe(flip.terms.party_a.display_name);
     expect(callOffName({ ...emptyBet(BET), envelope: null }, 'B')).toBe('They');
   });
+
+  it('names the parties like the Dance Off labels: first names, initials when they share one', () => {
+    const b = locked('B');
+    expect(callOffLabels(b)).toEqual({ A: 'Logan', B: 'Jake' });
+    const sims = {
+      ...b,
+      party_a: { ...b.party_a!, display_name: 'Sim A' },
+      party_b: { ...b.party_b!, display_name: 'Sim B' },
+    };
+    expect(callOffLabels(sims)).toEqual({ A: 'Sim A', B: 'Sim B' });
+    const alexes = {
+      ...b,
+      party_a: { ...b.party_a!, display_name: 'Alex Kim' },
+      party_b: { ...b.party_b!, display_name: 'Alex Ruiz' },
+    };
+    expect(callOffLabels(alexes)).toEqual({ A: 'Alex K', B: 'Alex R' });
+    expect(callOffLabels({ ...emptyBet(BET), envelope: null })).toEqual({ A: 'They', B: 'They' });
+  });
+
+  it('Keep playing on the other phone is noticed by the asker only', () => {
+    const mine = { status: 'requested', by: 'A' } as const;
+    expect(keptPlayingBy(mine, { status: 'cleared', by: 'B' }, 'A')).toBe('B');
+    // My own withdrawal, the agree, a lapse (no new step), the operator: no note.
+    expect(keptPlayingBy(mine, { status: 'cleared', by: 'A' }, 'A')).toBeNull();
+    expect(keptPlayingBy(mine, { status: 'agreed', by: 'B' }, 'A')).toBeNull();
+    expect(keptPlayingBy(mine, mine, 'A')).toBeNull();
+    expect(keptPlayingBy(mine, { status: 'cleared', by: 'operator' }, 'A')).toBeNull();
+    // Their request, cleared by them (or declined by me): not mine to be told about.
+    expect(
+      keptPlayingBy({ status: 'requested', by: 'B' }, { status: 'cleared', by: 'B' }, 'A'),
+    ).toBeNull();
+    expect(keptPlayingBy(null, { status: 'cleared', by: 'B' }, 'A')).toBeNull();
+  });
+
+  it("the corner's label stops short of the top bar's centred title", () => {
+    // iPhone 17 / 17 Pro (402 pt) and Pro Max (440 pt), the corner 8 pt in.
+    expect(callOffCornerWidth(402, 8)).toBe(153);
+    expect(callOffCornerWidth(440, 8)).toBe(172);
+    // "Judge cam" (17 pt semibold) is about 90 pt wide, centred: its left edge.
+    for (const w of [393, 402, 440])
+      expect(8 + callOffCornerWidth(w, 8)).toBeLessThan(w / 2 - 45 + 12);
+    expect(callOffCornerWidth(80, 8)).toBe(0);
+  });
 });
 
 describe('the round on this phone (CallOffGuard)', () => {
@@ -227,14 +273,17 @@ describe('call-off copy passes the copy rule', () => {
   it.each(Object.entries(COPY.callOff))('%s', (_k, line) => {
     expect(checkCopy(line[0], line[1])).toEqual([]);
   });
-  it('the prompt is contract copy, the confirm body is body copy (first names)', () => {
-    for (const n of ['Jake', 'Eva Santos', 'Zoë-Anne'])
+  it('the prompt is contract copy, the confirm body is body copy (the party labels)', () => {
+    for (const n of ['Jake', 'Sim A', 'Alex K', 'Zoë-Anne']) {
       expect(checkCopy(fill.callOffAsk(n), 'contract')).toEqual([]);
-    expect(fill.callOffAsk('Eva Santos')).toBe('Eva wants to call it off. Refund both?');
-    expect(fill.callOffBody('Eva Santos')).toBe(
-      'Both of you get your money back. Eva has to agree.',
-    );
-    expect(checkCopy(fill.callOffBody('Jake'), 'body')).toEqual([]);
+      expect(checkCopy(fill.callOffWaiting(n), 'contract')).toEqual([]);
+      expect(checkCopy(fill.keptPlaying(n), 'contract')).toEqual([]);
+      expect(checkCopy(fill.callOffBody(n), 'body')).toEqual([]);
+    }
+    expect(fill.callOffAsk('Sim A')).toBe('Sim A wants to call it off. Refund both?');
+    expect(fill.callOffBody('Sim A')).toBe('Both of you get your money back. Sim A has to agree.');
+    expect(fill.callOffWaiting('Sim A')).toBe('Waiting for Sim A');
+    expect(fill.keptPlaying('Sim A')).toBe('Sim A wants to keep playing');
     expect(t(COPY.callOff.button)).toBe('Call it off');
     expect(checkCopy(fill.waitingFor('Jake'), 'label')).toEqual([]);
   });
