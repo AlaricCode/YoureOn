@@ -87,10 +87,11 @@ export function SignupScreen({
             accessibilityElementsHidden
             importantForAccessibility="no-hide-descendants"
           >
-            <AppMark width={MARK_WIDTH} />
+            <AppMark width={MARK_WIDTH} lit />
           </View>
+          {/* The name of the app, said once, in the italic serif. */}
           <OperatorHold onHold={onTitleLongPress}>
-            <Label variant="display">{SIGNUP_COPY.title}</Label>
+            <Label variant="hero">{SIGNUP_COPY.title}</Label>
           </OperatorHold>
           <BodyText style={styles.gap}>{SIGNUP_COPY.body}</BodyText>
           <View style={styles.form}>

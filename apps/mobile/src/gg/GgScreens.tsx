@@ -8,9 +8,11 @@
 //                   existing appeal: tap + Face ID, device policy 'appeal') and "Keep ruling".
 //                   Closes by itself at confirm_by, on the GG, or once the appeal went out; the
 //                   ruling screen (GG / I appeal) is then exactly as before.
-//   GgPayoutScreen  after the loser's GG. Winner: "Jake said GG", the win counting up, the
-//                   record ticking over, Paying -> Paid. Loser: a calm "Good game". Either may
-//                   go again: "Double or nothing" (app/rematch, DANCE-OFF §7) once it is paid.
+//   GgPayoutScreen  after the loser's GG, a moment like the payout. Winner: "Jake said GG" in
+//                   the serif under a green aurora, the win counting up, the record ticking
+//                   over, Paying -> Paid. Loser: a calm "Good game" under a faint white light.
+//                   Either may go again: "Double or nothing" (app/rematch, DANCE-OFF §7) once
+//                   it is paid.
 import { useEffect, useReducer, useRef, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -23,21 +25,20 @@ import { COPY, t } from '../screens/copy';
 import { AlertLine, Label, PrimaryButton, QuietButton } from '../ui/kit';
 import {
   Appear,
-  BalanceHeader,
-  Card,
+  BalanceLine,
   centsToUsd,
   Chip,
   CountdownBar,
   DataText,
   DotsLabel,
   InfoRow,
-  Page,
-  Screen,
-  StatusHero,
+  MomentGroup,
+  MomentHeadline,
+  MomentScreen,
   TopBar,
   useNow,
 } from '../ui/parts';
-import { palette, radius, space, type } from '../ui/tokens';
+import { half, material, palette, radius, space, type } from '../ui/tokens';
 import { FAILURE_COPY, GG_COPY, gt, saidGG, streakLabel } from './copy';
 import {
   confirmFailureOf,
@@ -155,15 +156,17 @@ export function ReviewSheet({
   onKeep: () => void;
 }) {
   return (
-    // Not a Modal: a sheet over the lower half of the ruling screen, so the result and the reason
-    // stay readable above it and nothing else on screen (the preview strip) is covered.
+    // Not a Modal: a glass sheet over the lower half of the ruling screen, so the result and the
+    // reason stay readable above it and nothing else on screen (the preview strip) is covered.
+    // It sits above everything on that screen (zIndex): the ruling's swipe pill raises itself,
+    // and used to draw over this sheet's "Check it again".
     <Appear style={styles.sheet}>
       <View testID="review-sheet" accessibilityViewIsModal>
+        <View style={styles.grabber} />
         <Label variant="heading">{gt(GG_COPY.review)}</Label>
         <View style={styles.gapLg} />
-        <Card>
-          <DataText>{reason}</DataText>
-        </Card>
+        {/* What is being reviewed: the judge's own words, in its voice. */}
+        <DataText variant="spokenSmall">{reason}</DataText>
         <View style={styles.rows}>
           <InfoRow label={gt(GG_COPY.confirmIn)} value={countdownLabel(leftMs)} />
           <CountdownBar fraction={leftMs / spanMs} />
@@ -224,68 +227,85 @@ export function GgPayoutScreen({
   const winCents = won ? ggWinCents(gg, me, view.myStake) : 0;
   const shownWin = countUp(0, winCents, t0 + 300, now);
   const rec = myRecord(gg, me, now - t0);
-  return (
-    <Screen>
-      <TopBar tag={tag} />
-      <Page>
-        <BalanceHeader
-          cents={balanceCents}
-          pending={won && phase === 'processed'}
-          delta={won ? `+${centsToUsd(winCents)}` : null}
-        />
-        <View style={styles.center}>
-          {won ? (
-            <>
-              <StatusHero mark="check" title={saidGG(view.theirName)} pulse />
-              <Text style={[type.display, styles.win]} testID="gg-win">
-                {`+${centsToUsd(shownWin)}`}
-              </Text>
-            </>
-          ) : (
-            <StatusHero mark="ring" title={gt(GG_COPY.goodGame)} detail={`−${view.myStakeUsd}`} />
-          )}
-          {rec ? (
-            <View style={styles.record} testID="gg-record">
-              <Label style={styles.muted}>{gt(GG_COPY.record)}</Label>
-              <Appear key={rec.ticked ? 'after' : 'before'}>
-                <DataText variant="heading">{recordLabel(rec)}</DataText>
-              </Appear>
-            </View>
-          ) : null}
-          <View style={styles.chips}>
-            {rec?.first ? <Chip label={gt(GG_COPY.firstMeeting)} /> : null}
-            {rec && rec.streak >= 2 ? (
-              <Chip label={`${gt(GG_COPY.streak)} ${streakLabel(rec.streak)}`} tone="accent" />
-            ) : null}
-          </View>
-          {won ? (
-            phase === 'processed' ? (
-              <DotsLabel text={t(COPY.ruling.paying)} variant="label" />
-            ) : (
-              <Chip label={t(COPY.ruling.paid)} tone="accent" />
-            )
+  // The record and its chips: the rivalry, under the money.
+  const record = rec ? (
+    <View style={styles.recordBlock}>
+      <View style={styles.record} testID="gg-record">
+        <Label style={styles.muted}>{gt(GG_COPY.record)}</Label>
+        <Appear key={rec.ticked ? 'after' : 'before'}>
+          <DataText variant="amount">{recordLabel(rec)}</DataText>
+        </Appear>
+      </View>
+      {rec.first || rec.streak >= 2 ? (
+        <View style={styles.chips}>
+          {rec.first ? <Chip label={gt(GG_COPY.firstMeeting)} /> : null}
+          {rec.streak >= 2 ? (
+            <Chip label={`${gt(GG_COPY.streak)} ${streakLabel(rec.streak)}`} tone="accent" />
           ) : null}
         </View>
-        {onRematch ? <AlertLine message={alert ?? null} /> : null}
-        <PrimaryButton
-          testID="payout-home"
-          label={t(COPY.ruling.backHome)}
-          disabled={won && phase === 'processed'}
-          onPress={onHome}
-        />
-        {onRematch ? (
-          <>
-            <View style={styles.gap} />
+      ) : null}
+    </View>
+  ) : null;
+  return (
+    <MomentScreen
+      aurora={won ? 'in' : 'neutral'}
+      top={<TopBar tag={tag} />}
+      footer={
+        <>
+          {onRematch ? <AlertLine message={alert ?? null} /> : null}
+          <PrimaryButton
+            testID="payout-home"
+            label={t(COPY.ruling.backHome)}
+            disabled={won && phase === 'processed'}
+            onPress={onHome}
+          />
+          {onRematch ? (
             <QuietButton
               testID="payout-rematch"
               label={t(COPY.rematch.button)}
               busy={rematchBusy}
               onPress={onRematch}
             />
-          </>
-        ) : null}
-      </Page>
-    </Screen>
+          ) : null}
+        </>
+      }
+    >
+      {won ? (
+        // They conceded: the same moment as a payout, said in the serif.
+        <MomentGroup>
+          <MomentHeadline size="lg">{saidGG(view.theirName)}</MomentHeadline>
+          <Text
+            style={[type.money, styles.win]}
+            testID="gg-win"
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.5}
+          >
+            {`+${centsToUsd(shownWin)}`}
+          </Text>
+          <BalanceLine cents={balanceCents} pending={phase === 'processed'} />
+        </MomentGroup>
+      ) : (
+        // A calm ending: no red field, the stake stated once in grey.
+        <MomentGroup>
+          <MomentHeadline size="lg">{gt(GG_COPY.goodGame)}</MomentHeadline>
+          <DataText variant="amount" muted style={styles.centerText}>
+            {`−${view.myStakeUsd}`}
+          </DataText>
+          <BalanceLine cents={balanceCents} />
+        </MomentGroup>
+      )}
+      {record}
+      {won ? (
+        <View style={styles.payStatus}>
+          {phase === 'processed' ? (
+            <DotsLabel text={t(COPY.ruling.paying)} variant="value" />
+          ) : (
+            <Chip label={t(COPY.ruling.paid)} tone="accent" />
+          )}
+        </View>
+      ) : null}
+    </MomentScreen>
   );
 }
 
@@ -295,21 +315,37 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    // Over everything on the ruling screen, the swipe pill included.
+    zIndex: 2,
     backgroundColor: palette.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.hairline,
+    backgroundImage: material.glass,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: palette.rim,
     paddingHorizontal: space.page,
-    paddingTop: space.x3,
+    paddingTop: half.x15,
     paddingBottom: space.x5,
   },
+  grabber: {
+    alignSelf: 'center',
+    width: space.x5,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: palette.textTertiary,
+    marginBottom: space.x2,
+  },
   gap: { height: space.x1 },
-  gapLg: { height: space.x3 },
-  rows: { marginTop: space.x2 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.x2 },
-  win: { color: palette.accent },
-  record: { flexDirection: 'row', alignItems: 'center', gap: space.x2 },
+  gapLg: { height: half.x15 },
+  rows: { marginTop: space.x3 },
+  centerText: { textAlign: 'center' },
+  win: { color: palette.accent, textAlign: 'center', alignSelf: 'stretch' },
+  recordBlock: { alignItems: 'center', gap: half.x15 },
+  record: { flexDirection: 'row', alignItems: 'baseline', gap: half.x15 },
   muted: { color: palette.textSecondary },
   chips: { flexDirection: 'row', gap: space.x1 },
+  // A row, so a Chip's own alignSelf: 'flex-start' cannot pull it to the left edge.
+  payStatus: { alignSelf: 'stretch', flexDirection: 'row', justifyContent: 'center' },
 });

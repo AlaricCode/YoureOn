@@ -60,7 +60,9 @@ import {
   useNow,
 } from '../ui/parts';
 import { DrainBar } from '../ui/DrainBar';
+import { JudgeOrb } from '../ui/JudgeOrb';
 import { RollingText } from '../ui/RollingNumber';
+import { Perforation, Slip } from '../ui/slip';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
 import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
@@ -93,16 +95,19 @@ export function LiveScreen({
     <Screen>
       <TopBar title={t(COPY.live.title)} tag={tag} />
       <Page>
-        <DataText variant="statement">{view.claim}</DataText>
-        {/* You (white ring), the pot in thin numerals, them; hairlines above and below. */}
-        <View style={styles.vs}>
-          <Avatar name={view.myName} size={avatarSize.vs} accent />
-          <View style={styles.pot}>
-            <Label variant="small">{t(COPY.live.pot)}</Label>
-            <DataText variant="figure">{view.potUsd}</DataText>
+        {/* The slip, kept: the claim, then you (white ring), the pot in thin numerals, them. */}
+        <Slip>
+          <DataText variant="statement">{view.claim}</DataText>
+          <Perforation />
+          <View style={styles.vs}>
+            <Avatar name={view.myName} size={avatarSize.vs} accent />
+            <View style={styles.pot}>
+              <Label variant="small">{t(COPY.live.pot)}</Label>
+              <DataText variant="figure">{view.potUsd}</DataText>
+            </View>
+            <Avatar name={view.theirName} size={avatarSize.vs} />
           </View>
-          <Avatar name={view.theirName} size={avatarSize.vs} />
-        </View>
+        </Slip>
         <View style={styles.center}>
           {phase === 'locked' ? (
             <StatusHero mark="check" title={t(COPY.live.locked)} loud />
@@ -117,7 +122,9 @@ export function LiveScreen({
               loud
             />
           ) : (
-            <View style={styles.hero}>
+            // The judge is looking at it: the orb, breathing.
+            <View style={styles.judging}>
+              <JudgeOrb size={JUDGING_ORB} listening label={t(COPY.ruling.judge)} />
               <DotsLabel text={t(COPY.live.judging)} variant="subtitle" />
             </View>
           )}
@@ -157,6 +164,9 @@ export interface Clip {
   durationMs: number;
   endedAtMs: number;
 }
+
+/** The judge's sphere while it deliberates on the live screen. */
+const JUDGING_ORB = 88;
 
 /** The appeal window the ruling counts down (SCHEMAS §9.3, 10 s demo). */
 const APPEAL_WINDOW_MS = 10_000;
@@ -448,10 +458,11 @@ export function RulingScreen({
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
   const left = appealDeadlineMs - now;
-  // A moment, on both phones: the call in big thin white type on black. The money waits for the
-  // payout; the only colour here is the green action.
+  // A moment, on both phones: the call in the serif on black, under an aurora of the result
+  // (green won, red lost, white for no contest). The money waits for the payout.
   return (
     <MomentScreen
+      aurora={result === 'won' ? 'in' : result === 'lost' ? 'out' : 'neutral'}
       top={<TopBar tag={tag} />}
       footer={
         <>
@@ -502,9 +513,10 @@ export function RulingScreen({
         </DataText>
         {note ? <BodyText style={styles.centerText}>{note}</BodyText> : null}
       </View>
+      {/* Why: the judge's own words, in its voice. */}
       <View style={styles.call}>
         <Label variant="small">{judgeLabel ?? t(COPY.ruling.judge)}</Label>
-        <DataText variant="label" style={styles.centerText}>
+        <DataText variant="spokenSmall" style={styles.centerText}>
           {reason}
         </DataText>
       </View>
@@ -608,8 +620,7 @@ export function PayoutScreen({
             {balance}
           </View>
         ) : (
-          // The signature: a giant green figure counting up over a soft green glow (drawn behind
-          // the headline too, so "You won" stays pure white).
+          // The signature: a giant green figure counting up under a green aurora.
           <MomentGroup glow="in">
             <MomentHeadline>{RESULT_TITLE.won}</MomentHeadline>
             <MomentMoney direction="in" cents={winCents} />
@@ -617,7 +628,7 @@ export function PayoutScreen({
           </MomentGroup>
         )
       ) : (
-        // The mirror image: red, static, the same soft glow in red at a lower opacity.
+        // The mirror image: red, static, the same aurora in red at a lower opacity.
         <MomentGroup glow="out">
           <MomentHeadline>{t(COPY.ruling.gg)}</MomentHeadline>
           <MomentMoney direction="out" text={signedUsd(`-${view.myStake}`)} />
@@ -693,7 +704,7 @@ export function HearingScreen({
             <DotsLabel text={t(COPY.hearing.judging)} variant="subtitle" />
           ) : turnEndsAtMs ? (
             // The turn clock: big thin tabular numerals.
-            <Text style={type.moment}>{countdownLabel(turnEndsAtMs - now)}</Text>
+            <Text style={type.display}>{countdownLabel(turnEndsAtMs - now)}</Text>
           ) : null}
         </View>
         {myTurnOpen ? (
@@ -870,19 +881,10 @@ const styles = StyleSheet.create({
   centerText: { textAlign: 'center' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.x2 },
   centerStage: { alignItems: 'center', justifyContent: 'center' },
-  hero: { paddingVertical: space.x3 },
+  judging: { alignItems: 'center', gap: space.x1 },
   gapLg: { height: space.x3 },
   // Live
-  vs: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: space.x3,
-    paddingVertical: space.x3,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.divider,
-  },
+  vs: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pot: { alignItems: 'center', gap: half.x05 },
   shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x3 },
   // Moments (ruling, payout)
@@ -927,7 +929,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.black,
     opacity: hold.progressOpacity,
   },
-  talkText: { color: color.onAccent },
+  talkText: { color: color.onPrimary },
   // Appeal
   seats: { marginTop: space.x1 },
   seat: {
