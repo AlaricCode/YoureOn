@@ -19,23 +19,30 @@
 //   6. Upload (onUpload) → "Sending to judge" → the announcer line once the ruling lands (the bet
 //      flow then moves on to the ruling screen).
 // The pose module loads lazily (importSafely); without it the camera panel says "No camera".
+// In the iOS Simulator only (no camera; ../device/simulator), "Simulator: play a sample round"
+// runs this same flow on synthetic poses and key frames (./model/simRound): A follows the
+// routine, B lags and stops halfway, so two simulators can test the display, sync and ruling.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import type { RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { Terms } from '@youre-on/shared/terms';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import { toPoseFrame, toStatusEvent } from '../../modules/dance-pose/src/frame';
+import { simulatorSampleOffered } from '../device/simulator';
 
 import { AlertLine, PrimaryButton, QuietButton, TextButton } from '../ui/kit';
 import { DotsLabel, Screen, TopBar } from '../ui/parts';
 import { half, palette, space, type } from '../ui/tokens';
 import { safeLine } from './DanceResultBreakdown';
-import { DANCE_COPY, dt, ERROR_COPY, firstName, FRAMING_COPY } from './copy';
-import { readFileBytes } from './fs';
+import { DANCE_COPY, danceLabels, dt, ERROR_COPY, FRAMING_COPY } from './copy';
+import { appDocumentsUri, readFileBytes } from './fs';
 import { nowMs, useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
 import type { LiveStore } from './model/liveStore';
 import { attemptCountIn, framingProgress, type RoundState } from './model/round';
 import { serverIsoToLocalMs } from './model/schedule';
+import { createSimPoseSource, SIM_FRAME_MS, type SimPoseSource } from './model/simRound';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
 import type { DanceFaceId } from './faceIdentify';
 import { ResultCard, type ResultData } from './ResultCard';
@@ -66,6 +73,9 @@ export type DanceOffScreenProps = {
   ) => Promise<{ ok: true } | { ok: false; message: string }>;
   onLeave?: () => void;
 };
+
+/** The pose payload parsers without the native module (the Simulator's sample round). */
+const POSE_PARSERS = { toPoseFrame, toStatusEvent };
 
 /** A server go_at on the round clock, read now (the offset can re-sync at any time). */
 const goAtOnRoundClock = (goAt: string, offsetMs: number): number | null =>
@@ -126,10 +136,10 @@ function FramingGuide({
       <View style={[styles.centerLine, ok && styles.centerLineOk]} />
       <View style={styles.guideRow}>
         <Text style={[styles.guideName, { color: PLAYER_TINT.A }]} numberOfLines={1}>
-          {`${firstName(names.a)} ←`}
+          {`${danceLabels(names).a} ←`}
         </Text>
         <Text style={[styles.guideName, { color: PLAYER_TINT.B }]} numberOfLines={1}>
-          {`→ ${firstName(names.b)}`}
+          {`→ ${danceLabels(names).b}`}
         </Text>
       </View>
     </View>
@@ -142,11 +152,14 @@ function FramingFooter({
   store,
   camera,
   onStart,
+  onSample,
 }: {
   round: RoundState;
   store: LiveStore;
   camera: 'ok' | 'none' | 'error';
   onStart: () => void;
+  /** The Simulator only: run the sample round (undefined: not offered). */
+  onSample?: (() => void) | undefined;
 }) {
   const now = useFrameClock(round.phase === 'framing' && round.okSince !== null, 30);
   const reason = useLive(store, (v) => v.framing?.reason ?? null);
@@ -178,6 +191,13 @@ function FramingFooter({
         disabled={!ready}
         testID="dance-start"
       />
+      {onSample ? (
+        <QuietButton
+          testID="dance-sim-sample"
+          label={dt(DANCE_COPY.simSample)}
+          onPress={onSample}
+        />
+      ) : null}
     </View>
   );
 }
@@ -194,6 +214,12 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   const { routine, names, me } = props;
   const [settings] = useDanceSettings();
   const pose = useDancePose();
+  /** The Simulator's sample round: synthetic poses in place of the camera (./model/simRound). */
+  const [sim, setSim] = useState<SimPoseSource | null>(null);
+  const simRef = useRef<SimPoseSource | null>(null);
+  simRef.current = sim;
+  /** Where iOS put this app's sandbox, read once (../device/simulator). */
+  const [documentsUri] = useState(appDocumentsUri);
   const [result, setResult] = useState<DanceRoundResult | null>(null);
   const bundle = useRef<DanceUploadBundle | null>(null);
   /** Start was pressed and POST /attempts is out: the next unused attempt counts in. */
@@ -227,7 +253,10 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     (out: DanceRoundOutput) => {
       void (async () => {
         setResult(out.result);
-        const snaps = await readSnapshots(out.stop.snapshots, readFileBytes);
+        const snaps = await readSnapshots(
+          out.stop.snapshots,
+          simRef.current ? simRef.current.read : readFileBytes,
+        );
         const built = buildDanceUploadBundle({
           routine,
           series: out.series,
@@ -252,7 +281,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
 
   const engine = useDanceRound({
     routine,
-    pose: pose.mod,
+    pose: sim ? POSE_PARSERS : pose.mod,
     syncOffsetMs: settings.syncOffsetMs,
     snapshots: true,
     displayPhone: props.displayPhone,
@@ -261,6 +290,23 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   });
   engineRef.current = engine;
   const { state } = engine;
+
+  // The sample round: frames at SIM_FPS through the same onPoses path, and the sample source
+  // standing in for the native view's handle (startRound / stopRound / the key frames).
+  useEffect(() => {
+    if (!sim) return;
+    const id = setInterval(() => {
+      const e = engineRef.current;
+      if (!e) return;
+      e.handleRef.current = sim.handle;
+      e.onPoses({ nativeEvent: sim.frame(nowMs()) });
+    }, SIM_FRAME_MS);
+    return () => clearInterval(id);
+  }, [sim]);
+  // Framing holds by itself on synthetic poses: Start as soon as it unlocks (one tap in all).
+  useEffect(() => {
+    if (sim && state.phase === 'ready') engineRef.current?.start();
+  }, [sim, state.phase]);
 
   // 2. Start → the attempt. An attempt already open (and not danced) is used as is (its go_at is
   // long past, so it counts in from now, out of step with the display); otherwise POST /attempts
@@ -332,12 +378,21 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     engine.reset();
   };
 
-  const cameraKind: 'ok' | 'none' | 'error' =
+  const realCamera: 'ok' | 'none' | 'error' =
     pose.status === 'missing' || engine.camera === 'no_camera'
       ? 'none'
       : engine.camera === 'error'
         ? 'error'
         : 'ok';
+  const cameraKind = sim ? 'ok' : realCamera;
+  // Only in the iOS Simulator (its app container), only with no camera: never on a phone.
+  const simOffered =
+    sim === null &&
+    simulatorSampleOffered({
+      platform: Platform.OS,
+      documentsUri,
+      camera: realCamera,
+    });
   const showResult =
     result !== null &&
     (state.phase === 'result' ||
@@ -362,7 +417,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     );
   }
 
-  const Pose = pose.status === 'ready' ? pose.mod.DancePoseView : null;
+  const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
   const camera = Pose ? (
     <Pose
       ref={engine.handleRef}
@@ -374,7 +429,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     />
   ) : (
     <View style={[StyleSheet.absoluteFill, styles.noCamera]}>
-      {pose.status === 'loading' ? null : (
+      {pose.status === 'loading' || sim ? null : (
         <Text style={styles.noCameraText}>{dt(DANCE_COPY.noCamera)}</Text>
       )}
     </View>
@@ -387,6 +442,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       store={engine.store}
       camera={cameraKind}
       onStart={() => engine.start()}
+      onSample={simOffered ? () => setSim(createSimPoseSource(routine, nowMs)) : undefined}
     />
   ) : state.phase === 'starting' ? (
     <StatusFooter>

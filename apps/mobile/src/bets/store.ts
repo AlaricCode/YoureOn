@@ -11,6 +11,7 @@ import type { BetSnapshot, SignRequest } from '@youre-on/shared/api';
 import type { AppealResult, AppealVote } from '@youre-on/shared/appeal';
 import type { AuthorizeRequest } from '@youre-on/shared/authorization';
 import type { BetState, ChainAck, OnchainStatus, PendingTx } from '@youre-on/shared/bet-state';
+import type { CallOffPayload } from '@youre-on/shared/call-off';
 import type { GeminiSettlementRecord } from '@youre-on/shared/evidence';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import type { HearingRuling } from '@youre-on/shared/hearing';
@@ -83,6 +84,8 @@ export interface BetModel {
   rematchOf: string | null;
   /** Double or nothing: the stake (dollars per side) the pickers default to. */
   suggestedStakeUsd: number | null;
+  /** "Call it off" (bet.call_off): the latest request step, ../app/callOff reads it. */
+  callOff: CallOffPayload | null;
 }
 
 export const emptyBet = (bet_id: string, my_party: Party | null = null): BetModel => ({
@@ -123,6 +126,7 @@ export const emptyBet = (bet_id: string, my_party: Party | null = null): BetMode
   danceScored: null,
   rematchOf: null,
   suggestedStakeUsd: null,
+  callOff: null,
 });
 
 export function fromSnapshot(s: BetSnapshot, prev?: BetModel): BetModel {
@@ -273,6 +277,8 @@ export function applyBetEvent(m: BetModel, e: RealtimeEvent): BetModel {
       return { ...base, settlement: e.payload.record };
     case 'dance.scored':
       return { ...base, danceScored: e.payload };
+    case 'bet.call_off':
+      return { ...base, callOff: e.payload };
     case 'appeal.vote': {
       const v = e.payload.vote;
       const votes = [...m.appealVotes.filter((x) => x.seat !== v.seat), v];

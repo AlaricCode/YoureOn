@@ -22,7 +22,7 @@
 // Only shape checks here (looseObject): the caller already parsed the event, and a line is never
 // worth failing over.
 import { z } from 'zod/v4';
-import { DANCE_OFF_MODEL } from './ruling';
+import { CALLED_OFF_MODEL, DANCE_OFF_MODEL } from './ruling';
 
 export const StageVoiceName = z.enum(['judge', 'seat_1', 'seat_2', 'seat_3']);
 export type StageVoiceName = z.infer<typeof StageVoiceName>;
@@ -189,6 +189,8 @@ function rulingLine(r: z.infer<typeof RulingLite>, name: (p: 'A' | 'B') => strin
     // A dance off's VOID reason is the announcer's line naming why ("Too close to call. …").
     if (r.model === DANCE_OFF_MODEL && clean(r.reason))
       return `${sentence(r.reason)} It's void: both stakes go back.`;
+    // A call-off's reason already says it ("Called off by both players. Everyone gets…").
+    if (r.model === CALLED_OFF_MODEL && clean(r.reason)) return sentence(r.reason);
     return `${VOID_LINE[r.void_reason ?? ''] ?? ''} It's void: both stakes go back.`.trim();
   }
   const won = `${name(r.outcome === 'A_WINS' ? 'A' : 'B')} wins. ${sentence(r.reason)}`;

@@ -54,6 +54,8 @@ export const DANCE_COPY = {
   leave: ['Leave', 'label'],
   // Problems (red lines, 1-3 words).
   noCamera: ['No camera', 'error'],
+  // The iOS Simulator only (model/simRound, device/simulator): no camera, so a synthetic round.
+  simSample: ['Simulator: play a sample round', 'contract'],
   cameraError: ['Camera error', 'error'],
   startFailed: ["Couldn't start", 'error'],
   noAttempt: ['Judge not ready', 'error'],
@@ -93,8 +95,29 @@ export const ERROR_COPY: Readonly<Record<RoundError, Line>> = {
 export const firstName = (name: string, fallback = 'They'): string =>
   name.trim().split(/\s+/)[0] || fallback;
 
-/** "Logan wins". */
-export const winsLabel = (name: string): string => `${firstName(name)} ${dt(DANCE_COPY.wins)}`;
+/**
+ * The two dancers' on-screen names (the framing hint, the name tags, "X vs Y", the result): first
+ * names, unless both share one ("Alex Kim" and "Alex Ruiz"), then first name + last initial
+ * ("Alex K" / "Alex R": no period, so "Alex K wins" stays a label), or the full names when that
+ * still reads the same.
+ */
+export function danceLabels(names: { a: string; b: string }): { a: string; b: string } {
+  const fa = firstName(names.a);
+  const fb = firstName(names.b);
+  if (fa.toLocaleLowerCase() !== fb.toLocaleLowerCase()) return { a: fa, b: fb };
+  const initialed = (name: string, first: string) => {
+    const last = name.trim().split(/\s+/).slice(1).at(-1);
+    return last ? `${first} ${last[0]!.toLocaleUpperCase()}` : first;
+  };
+  const ia = initialed(names.a, fa);
+  const ib = initialed(names.b, fb);
+  if (ia.toLocaleLowerCase() !== ib.toLocaleLowerCase()) return { a: ia, b: ib };
+  return { a: names.a.trim() || fa, b: names.b.trim() || fb };
+}
+
+/** "Logan wins" (a first name), or with `label` the danceLabels label as it is ("Alex K wins"). */
+export const winsLabel = (name: string, label?: string): string =>
+  `${label ?? firstName(name)} ${dt(DANCE_COPY.wins)}`;
 
 /** Tenths → "87.4" (data). */
 export const scoreText = (x10: number): string => {

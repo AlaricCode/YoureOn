@@ -30,6 +30,7 @@ import {
   stakesLine,
   suggestOdds,
   typedSuggestBody,
+  typedSuggestShown,
   withdrawOdds,
   type OddsControl,
 } from '../odds';
@@ -396,5 +397,15 @@ describe('calls', () => {
     // A server line that breaks the copy rule never reaches the screen.
     expect(note('INSUFFICIENT_FUNDS', 409, {}, 'Top up your wallet')).toBe(t(COPY.app.failed));
     expect(oddsErrorNote(new Error('boom'))).toBe(t(COPY.app.failed));
+  });
+});
+
+describe('"Suggest odds" shows once on the typed form', () => {
+  it("the form's button only before the card is proposed; the offer card's row after", () => {
+    expect(typedSuggestShown({ state: 'DRAFTING', envelope: null })).toBe(true);
+    expect(typedSuggestShown({ state: null, envelope: null })).toBe(true);
+    // the card is on the table: the offer card's "Suggest odds | Offer odds" row has it
+    expect(typedSuggestShown({ state: 'TERMS_PROPOSED', envelope: {} })).toBe(false);
+    expect(typedSuggestShown({ state: 'AWAITING_AUTHORIZATIONS', envelope: {} })).toBe(false);
   });
 });
