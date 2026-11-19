@@ -421,14 +421,15 @@ code,
 /* The two names are the cast of the moment: the serif, like the verdict that will name one. */
 .party .name {
   font-family: var(--serif);
-  font-size: 3.5em;
+  font-size: 3.3em;
   font-weight: 400;
   letter-spacing: -0.015em;
-  /* a tight line box, so the band is no taller than it was; the padding (taken back by the
-     margin) is room inside the ellipsis clip for the serif's overhangs: a J's hook, a g's tail */
+  /* a tight line box, so the band stays short; the padding is room inside the ellipsis clip for
+     the serif's overhangs (a J's hook, a g's tail). The margin takes most of it back, but leaves
+     the tail of a g clear of the status line under the name. */
   line-height: 0.84;
   padding: 0.08em 0.09em 0.22em;
-  margin: -0.08em -0.09em -0.22em;
+  margin: -0.08em -0.09em -0.12em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -722,7 +723,11 @@ code,
     var(--aurora, transparent),
     transparent 72%
   );
-  animation: aurora-in 0.9s ease-out;
+  /* it comes up, then swells and dims very slowly for as long as the moment is on screen: light,
+     not an animation (the app's aurora does the same) */
+  animation:
+    aurora-in 0.9s ease-out,
+    aurora-breathe 8.4s ease-in-out 0.9s infinite alternate;
 }
 /* on: locked, a decisive ruling, paid */
 .moment:has(.stamp.good, .stamp.win, .ruling.decisive, .dance-score.won) {
@@ -2121,6 +2126,12 @@ code,
 @keyframes aurora-in {
   from {
     opacity: 0;
+  }
+}
+@keyframes aurora-breathe {
+  to {
+    opacity: 0.8;
+    transform: scale(1.05);
   }
 }
 @media (prefers-reduced-motion: reduce) {
