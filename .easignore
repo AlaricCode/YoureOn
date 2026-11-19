@@ -78,6 +78,8 @@ programs/escrow/.surfpool
 *.aab
 *.xcarchive
 *.dSYM.zip
+# Sample videos (mirrors .gitignore)
+*.mov
 
 # --- Local Expo modules (apps/mobile/modules/*) -------------------------------------------------
 # Their Swift sources live in modules/<name>/ios/, which the repo-wide `ios/` rule above would drop.

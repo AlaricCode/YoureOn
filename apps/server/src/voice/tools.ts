@@ -38,6 +38,7 @@ import { loadUserRefs } from '../bets/snapshot';
 import type { AppDeps, AppEnv } from '../context';
 import { HttpError } from '../errors';
 import { sha256Hex } from '../crypto';
+import { onTermsFrozen } from '../judge/camera-checks';
 import { lifecycleOf } from '../lock/runtime';
 import { newRoundLine } from '@youre-on/shared/judge/market-terms';
 import { confirmTerms, isNewRound, persistEvaluation, type ConfirmOptions } from '../lock/terms';
@@ -459,7 +460,11 @@ export async function confirmAndLock(
       say: CONFIRM_SAY.QUOTE_STALE,
     };
   if (!r.ok) return { ok: false, fix: 'NOT_PROPOSED', say: CONFIRM_SAY.NOT_PROPOSED };
-  if (!r.already) lifecycleOf(deps).lock.startInBackground(betId);
+  if (!r.already) {
+    lifecycleOf(deps).lock.startInBackground(betId);
+    // Camera checks: the frozen terms_hash gets its spec (if not compiled yet), then SAM warms.
+    void onTermsFrozen(deps, betId);
+  }
   const t = r.envelope.terms;
   return fitReply({
     ok: true,

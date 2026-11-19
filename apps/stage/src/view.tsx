@@ -60,6 +60,8 @@ import { BEAT_TITLES, replayProgress, type ReplayStatus } from './replays';
 import { verifiedChain, type Verification } from './verify';
 import { liveGg, payoutLabel, reviewBannerOn } from './gg';
 import { ReviewBanner } from './gg-moment';
+import { boxFrame, reportFor } from './checks';
+import { RefCamFrame, RefCamResult, RefCamTermsLine } from './checks-view';
 
 const nameOf = (b: BetView, p: PartyKey) => b.names[p] ?? (p === 'A' ? 'Player A' : 'Player B');
 
@@ -267,6 +269,10 @@ export function TermsCard({ bet }: { bet: BetView }) {
             </span>
           )}
         </div>
+        {/* a dance off is camera evidence too, but the pose score decides: no ref cam line */}
+        {t.evidence_source === 'camera' && !isDanceBet(bet) && (
+          <RefCamTermsLine checks={bet.checks} termsHash={env.terms_hash} />
+        )}
       </div>
       {bet.terms_code && (
         <div className="code-box" aria-label="terms code">
@@ -397,9 +403,7 @@ function AppealBar({ bet, now }: { bet: BetView; now: number }) {
   const what = isDanceBet(bet) ? 'GG window' : 'Appeal window';
   return (
     <div className={`appeal ${left > 0 ? 'open' : 'closed'}`}>
-      <span className="countdown">
-        {left > 0 ? `${what} ${clock(left)}` : `${what} closed`}
-      </span>
+      <span className="countdown">{left > 0 ? `${what} ${clock(left)}` : `${what} closed`}</span>
       <span className="bar" aria-hidden="true">
         <span style={{ width: `${(frac * 100).toFixed(1)}%` }} />
       </span>
@@ -487,6 +491,9 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
   if (isDanceBet(bet)) return <DanceRulingPanel bet={bet} now={now} />;
   const cited = r.cited_frames[0];
   const citedUrl = cited !== undefined ? bet.frame_urls[cited] : undefined;
+  // the ref cam's result for this attempt (checks.report, sent just before the ruling)
+  const refcam = r.stage === 'attempt' ? reportFor(bet.checks, r.attempt_no) : null;
+  const boxIdx = refcam ? boxFrame(refcam, bet.frame_urls, r.cited_frames) : null;
   return (
     <div
       className={`ruling ${r.outcome === 'REDO' ? 'redo' : r.outcome === 'VOID' ? 'void' : 'decisive'}`}
@@ -524,12 +531,23 @@ function RulingPanel({ bet, now }: { bet: BetView; now: number }) {
             !reviewBannerOn(bet, now) && (
               <span className="countdown">Appealed · the panel is reviewing</span>
             )}
+          {/* last: the appeal clock and the review banner never give way to it */}
+          {refcam && <RefCamResult report={refcam} reason={r.reason} />}
         </div>
-        {citedUrl && (
-          <figure className="cited">
-            <img src={citedUrl} alt={`cited frame ${cited}`} />
-            <figcaption>frame {cited}</figcaption>
-          </figure>
+        {refcam && boxIdx !== null ? (
+          <RefCamFrame
+            report={refcam}
+            idx={boxIdx}
+            url={bet.frame_urls[boxIdx]!}
+            cited={r.cited_frames.includes(boxIdx)}
+          />
+        ) : (
+          citedUrl && (
+            <figure className="cited">
+              <img src={citedUrl} alt={`cited frame ${cited}`} />
+              <figcaption>frame {cited}</figcaption>
+            </figure>
+          )
         )}
       </div>
     </div>
@@ -616,11 +634,7 @@ function PaidPanel({ bet }: { bet: BetView }) {
         )}
         <span className="pot muted">{p.event} · devnet</span>
       </div>
-      {bet.dance && (
-        <p className="paid-record">
-          {danceSummaryLine(bet, (k) => nameOf(bet, k))}
-        </p>
-      )}
+      {bet.dance && <p className="paid-record">{danceSummaryLine(bet, (k) => nameOf(bet, k))}</p>}
       {gg && (
         <p className="paid-record">
           {nameOf(bet, gg.by)} said GG
@@ -766,7 +780,9 @@ function DancePlayPanel({ bet }: { bet: BetView }) {
         <>
           <p className="sub">Both stakes, one atomic transaction, three signatures:</p>
           <SignerSlots bet={bet} />
-          <p className="big muted">Get in frame: {a} on the left, {b} on the right.</p>
+          <p className="big muted">
+            Get in frame: {a} on the left, {b} on the right.
+          </p>
         </>
       ) : step === 'dancing' ? (
         <>
@@ -824,8 +840,8 @@ function DanceRulesPanel({ bet }: { bet: BetView }) {
       <p className="big">Terms are set. Both confirm on their phones.</p>
       <ul>
         <li className="yes">
-          <span aria-hidden="true">✓</span> {routine?.title ?? 'The routine'}:{' '}
-          {DANCE_ROUND_SECONDS} seconds, side by side
+          <span aria-hidden="true">✓</span> {routine?.title ?? 'The routine'}: {DANCE_ROUND_SECONDS}{' '}
+          seconds, side by side
           {n > 0 ? `, ${n} key moves` : ''}
         </li>
         {t.success_criteria.slice(1, 3).map((c, i) => (

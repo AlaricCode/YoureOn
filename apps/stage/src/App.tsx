@@ -11,8 +11,9 @@
 // Gemini's result (preview-market.ts), ?preview=gg / ?preview=review the GG moment and the spoken
 // review request (preview-gg.ts), ?preview=odds walks two players agreeing the odds
 // (preview-odds.ts), ?preview=dance / ?preview=dance-tie a Dance Off to its scoreboard
-// (preview-dance.ts). A ruled Gemini bet's evidence chain is fetched and re-checked here
-// (verify.ts), and the projector says whether it verified. The judge is heard
+// (preview-dance.ts), ?preview=refcam… the ref cam's checks on a ruling (preview-checks.ts). A
+// ruled Gemini bet's evidence chain is fetched and re-checked here (verify.ts), and the
+// projector says whether it verified. The judge is heard
 // on the projector (voice.ts): the ElevenLabs clip the server announces with stage.voice, else
 // the browser's voice; the cues play ElevenLabs Sound Effects when the server has them.
 // Keys: 1-6 REPLAY clips, R slow-mo, Esc closes, F full screen, Q big Explorer QR, M mute, V voice,
@@ -68,6 +69,7 @@ import { ggCoversPayout, ggMomentOn } from './gg';
 import { GgMoment, useGgSounds } from './gg-moment';
 import { MARKET_PREVIEW, MARKET_PREVIEW_SLOT_MS, previewMarketState } from './preview-market';
 import { isOddsPreview, previewOddsAt } from './preview-odds';
+import { isRefcamPreview, previewRefcamAt } from './preview-checks';
 import { freshSounds, isSfx, StageAudio, type Sfx } from './sound';
 import { browserSpeech, cancelSpeech, freshVoiceLines, StageVoice, type VoiceHow } from './voice';
 import { settlementFetches, verifyEvidence, type Verification } from './verify';
@@ -401,7 +403,9 @@ export function App() {
               ? previewOddsAt(previewStart, now, launch.preview)
               : isDancePreview(launch.preview)
                 ? previewDanceAt(previewStart, now, launch.preview)
-                : previewAt(previewStart, now, launch.preview || null),
+                : isRefcamPreview(launch.preview)
+                  ? previewRefcamAt(previewStart, launch.preview)
+                  : previewAt(previewStart, now, launch.preview || null),
     [launch.preview, marketPv, previewStart, now],
   );
   const shown = pv ? pv.state : state;

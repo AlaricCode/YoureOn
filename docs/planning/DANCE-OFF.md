@@ -183,6 +183,10 @@ DanceEvidence = strict {           // packages/shared/src/evidence.ts; evidence_
   appended in the same commit as `ruling.issued`, following the `market.settled` precedent.
 - No appeal or "check it again" for dance offs, because the score is deterministic. They are gated the same way
   as gemini.
+- No SAM 3.1 camera checks (`apps/server/src/judge/camera-checks.ts`, PR #13), although the terms are
+  `evidence_source 'camera'`: `checksEligible()` refuses `dance_off` terms, so no `bet_checks` row and no
+  `checks.compiled` is ever written for one; the dance ruling path never calls `runAttemptChecks` (no
+  `checks.report`), POST …/attempts never warms SAM for a dance off, and the stage shows no ref cam line on it.
 
 ## 6. Mobile
 

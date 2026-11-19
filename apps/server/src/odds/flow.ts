@@ -19,6 +19,7 @@ import { lockBet, type Tx } from '../lock/common';
 import { loadEnvelope, persistInTx, proposalOf } from '../lock/terms';
 import { spendableMicro } from '../me/balance';
 import { maxStakeOf } from '../markets/quote';
+import { scheduleCompileCurrent } from '../judge/camera-checks';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import {
   assertOddsState,
@@ -272,6 +273,8 @@ export async function acceptOdds(
     return { bet, offer, envs, agreed: true, termsHash };
   });
   publish(deps, out.bet, out.envs);
+  // A recomposed card is a new terms_hash: compile its camera checks in the background.
+  if (out.agreed && out.termsHash !== bet0.terms_hash) void scheduleCompileCurrent(deps, bet0.id);
   deps.log.info('odds.accept', { bet_id: bet0.id, n, party: me, agreed: out.agreed });
   return { offer: out.offer, agreed: out.agreed, terms_hash: out.termsHash };
 }

@@ -12,3 +12,5 @@ docs/reference/
 /migrations/
 # local smoke output (screenshots, Maestro logs); git ignores it through .git/info/exclude
 .claude-artifacts/
+# recorded SAM 3.1 replies (test fixtures, kept byte-for-byte as captured)
+packages/shared/test/fixtures/sam3/

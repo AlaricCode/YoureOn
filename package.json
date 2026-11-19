@@ -31,7 +31,9 @@
     "qn-stream": "tsx scripts/qn-stream.ts",
     "e2e:local": "bash scripts/e2e-local.sh",
     "judge-eval": "tsx scripts/judge-eval.ts",
-    "gemini-record": "tsx scripts/gemini-record.ts"
+    "gemini-record": "tsx scripts/gemini-record.ts",
+    "sam3-smoke": "tsx scripts/sam3-smoke.ts",
+    "checks-eval": "tsx --env-file-if-exists=apps/server/.env scripts/checks-compile-eval.ts"
   },
   "devDependencies": {
     "@codama/nodes-from-anchor": "1.5.6",
