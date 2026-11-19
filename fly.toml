@@ -13,6 +13,7 @@ primary_region = "dfw"
   PORT = "8080"
   LOCK_MODE = "atomic"
   DEMO_MODE = "true"
+  VOICE_DEMO_ONLY = "false" # the voice judge (and "Jarvis") for every player, not just demo-a/demo-b
   CACHED_RULING = "false" # boot default; "true" = the stored demo-bottle ruling (no model call). POST /v1/demo/toggles switches it at runtime, no restart
   LLM_PROVIDER = "live"
   ALLOW_SPEND = "true" # the spend guard: live providers refuse to start without it
