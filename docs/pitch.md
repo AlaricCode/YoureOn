@@ -79,7 +79,10 @@ the room".
 
 ### 1:20–2:00 · Beat 2: terms by voice
 
-> **A (to the phone):** "Bet you five bucks you can't land a bottle flip."
+> **A (to the phone):** "Jarvis, bet you five bucks you can't land a bottle flip."
+>
+> (The judge waits for "Jarvis" or **Tap to talk** on A's negotiate screen: without the wake word
+> nothing is heard. [`runbook.md`](runbook.md#phones-and-room).)
 >
 > **Judge (ElevenLabs, from A's phone):** asks one or two edge-case questions (cap landing? one
 > try?) and reads the terms back.
@@ -106,6 +109,10 @@ we'll type it."
 | ------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Hold → Face ID → "Locked" | Hold → Face ID → "Locked" | LOCKED moment (lock sound); the ticker shows the lock transaction; `Q` puts its Explorer QR on screen |
 
+Needs `LOCK_SIGNER=phones` on the server: with `LOCK_SIGNER=server` (what prod ran on 2026-11-19)
+the server signs for the demo accounts and neither phone holds or asks for Face ID, so check
+`lock_signer` in demo-check before the pitch and reword this beat if it is `server`.
+
 Expect about 4–5 seconds from confirm to LOCKED on devnet. Fill it: "That's a real devnet escrow:
 scan the QR."
 
@@ -127,6 +134,9 @@ scan the QR."
 Stage: the PAID moment and its sound, the payout amount, the `concede` (or `finalize`) transaction
 in the ticker. Winner's phone: the payout. If nobody taps GG, the 10-second window closes and the
 server finalizes.
+
+"About three seconds" is with camera checks off; with them on the ruling takes 7-10 s (it waits
+for SAM), so say "in a few seconds" or switch checks off ([`runbook.md`](runbook.md#camera-checks-sam-31-ref-cam-off-by-default)).
 
 If the ruling is REDO ("Run it back"), flip again: that is the deterministic checks refusing a
 verdict they can't confirm. If the judge is slow or wrong, see the runbook: the cached ruling is a

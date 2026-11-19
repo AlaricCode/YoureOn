@@ -5,6 +5,7 @@
 // chain.unhealthy means a chain or money-path problem.
 import { describe, expect, it } from 'vitest';
 import {
+  appealPanelKeysWarning,
   chainNeedsAttention,
   logHealthReport,
   type ChainHealthReport,
@@ -100,5 +101,52 @@ describe('health log lines: judge warnings alone are not chain.unhealthy', () =>
     const boot = recorder();
     logHealthReport(boot.log, r, { boot: true });
     expect(boot.lines.map((l) => [l.level, l.msg])).toEqual([['info', 'chain.boot_health']]);
+  });
+});
+
+describe('appealPanelKeysWarning: a panel seat without its key abstains on every appeal', () => {
+  const live = {
+    LLM_PROVIDER: 'live' as const,
+    ANTHROPIC_API_KEY: 'k',
+    OPENAI_API_KEY: 'k',
+    GOOGLE_GENERATIVE_AI_API_KEY: 'k',
+  };
+
+  it('all three keys (or the mock LLM): no warning', () => {
+    expect(appealPanelKeysWarning(live)).toBeNull();
+    expect(
+      appealPanelKeysWarning({
+        LLM_PROVIDER: 'mock',
+        ANTHROPIC_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+        GOOGLE_GENERATIVE_AI_API_KEY: undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it('prod as found (GPT and Gemini keyless): no appeal can ever flip, named with the fix', () => {
+    const x = appealPanelKeysWarning({
+      ...live,
+      OPENAI_API_KEY: undefined,
+      GOOGLE_GENERATIVE_AI_API_KEY: '  ',
+    });
+    expect(x).toMatchObject({ code: 'appeal_panel_keys_missing', level: 'warn' });
+    expect(x!.message).toContain('OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY are not set');
+    expect(x!.message).toContain('no appeal can reach the 2 votes');
+    expect(x!.message).toContain(
+      'fly secrets set OPENAI_API_KEY=... GOOGLE_GENERATIVE_AI_API_KEY=...',
+    );
+    // never a key value in the message
+    expect(x!.message).not.toContain("'k'");
+  });
+
+  it('one seat keyless: the other two must agree', () => {
+    const x = appealPanelKeysWarning({ ...live, GOOGLE_GENERATIVE_AI_API_KEY: undefined });
+    expect(x!.message).toContain('1 of 3');
+    expect(x!.message).toContain('both remaining seats to agree');
+  });
+
+  it('is a judge-side warning: alone it never makes chain.unhealthy', () => {
+    expect(chainNeedsAttention(report([w('appeal_panel_keys_missing')]))).toBe(false);
   });
 });

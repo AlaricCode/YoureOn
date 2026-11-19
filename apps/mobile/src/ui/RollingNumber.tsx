@@ -1,6 +1,8 @@
 // Rolling numerals (design §3): money figures that roll like an odometer instead of re-rendering a
 // counting string every frame. Every digit is a column clipped to one line, holding a strip of
-// digits ("0 1 … 9 0") that slides on the UI thread (Reanimated); $ . , + − stay put. The maths
+// digits ("0 1 … 9 0") that slides on the UI thread (Reanimated); $ . , + − stay put. The strip's
+// Text carries its full height explicitly (odometer stripHeight): left to size itself inside the
+// one-line column it drew only its first row, so every digit but 0 showed blank. The maths
 // lives in ./odometer (pure, tested).
 //
 // - RollingCents: a cents value (the balance, a payout). It rolls from the old value to the new
@@ -38,6 +40,7 @@ import {
   leadingReveal,
   odometerRow,
   rollPlan,
+  stripHeight,
   TEXT_STRIP,
   textDirection,
   TICKER,
@@ -222,7 +225,9 @@ function CentsColumn({
   });
   return (
     <Animated.View style={[styles.column, { height: lineHeight }, reveal]} onLayout={onDigitWidth}>
-      <Animated.Text style={[textStyle, strip]}>{CENTS_STRIP}</Animated.Text>
+      <Animated.Text style={[textStyle, { height: stripHeight(CENTS_STRIP, lineHeight) }, strip]}>
+        {CENTS_STRIP}
+      </Animated.Text>
     </Animated.View>
   );
 }
@@ -373,7 +378,9 @@ function TextColumn({
   }));
   return (
     <View style={[styles.column, { height: lineHeight }]}>
-      <Animated.Text style={[textStyle, strip]}>{TEXT_STRIP}</Animated.Text>
+      <Animated.Text style={[textStyle, { height: stripHeight(TEXT_STRIP, lineHeight) }, strip]}>
+        {TEXT_STRIP}
+      </Animated.Text>
     </View>
   );
 }
