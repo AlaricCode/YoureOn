@@ -1,13 +1,19 @@
 // "Call it off" (../app/callOff): a small text button in the top-left corner of every post-lock,
 // pre-ruling screen (the top bar's left slot, empty on those screens), its confirm sheet, and
 // the other phone's prompt. Drawn over the screen by DemoApp, so no screen changes its layout.
-import { useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Party } from '@youre-on/shared/primitives';
 
-import { callOffName, callOffView, type CallOffView } from '../app/callOff';
+import {
+  callOffConfirm,
+  callOffName,
+  callOffView,
+  type CallOffGuard,
+  type CallOffView,
+} from '../app/callOff';
 import type { BetModel } from '../bets/store';
 import { ConfirmSheet, Label, TextButton } from '../ui/kit';
 import { useNow } from '../ui/parts';
@@ -34,7 +40,10 @@ export function CallOffControl({
   onAnswer: (agree: boolean) => void;
 }) {
   const insets = useSafeAreaInsets();
-  const [confirming, setConfirming] = useState(false);
+  // The sheet closes whenever the view leaves 'ask' (their request came in, the round started,
+  // the upload landed): it never pops back up later without a tap.
+  const [confirming, confirm] = useReducer(callOffConfirm, false);
+  useEffect(() => confirm({ type: 'view', kind: view.kind }), [view.kind]);
   if (view.kind === 'none') return null;
   return (
     <>
@@ -53,7 +62,7 @@ export function CallOffControl({
               dense
               label={t(COPY.callOff.button)}
               busy={busy}
-              onPress={() => setConfirming(true)}
+              onPress={() => confirm({ type: 'open' })}
             />
           ) : (
             <View style={styles.waiting} testID="call-off-waiting">
@@ -72,10 +81,10 @@ export function CallOffControl({
         cancelLabel={t(COPY.callOff.keepPlaying)}
         busy={busy}
         onConfirm={() => {
-          setConfirming(false);
+          confirm({ type: 'close' });
           onAsk();
         }}
-        onCancel={() => setConfirming(false)}
+        onCancel={() => confirm({ type: 'close' })}
       />
       <ConfirmSheet
         visible={view.kind === 'prompt'}
@@ -94,13 +103,15 @@ export function CallOffControl({
 /**
  * The control for the bet on screen: the view from ../app/callOff on a 1 s clock (so a lapsed
  * request closes the prompt by itself), on the server's clock via `offsetMs`. `onCall` posts
- * POST /v1/bets/:id/call-off {agree}; its failure line goes to the app's alert.
+ * POST /v1/bets/:id/call-off {agree, answer}; its failure line goes to the app's alert. `guard`
+ * is the round running on this phone (../app/callOff CallOffGuard).
  */
 export function CallOffLayer({
   bet,
   me,
   judgeCam,
   offsetMs,
+  guard,
   onCall,
 }: {
   bet: BetModel;
@@ -108,15 +119,17 @@ export function CallOffLayer({
   judgeCam: boolean;
   /** rt.clock.offsetMs: local + offset = the server's clock. */
   offsetMs: number;
-  onCall: (agree: boolean) => Promise<void>;
+  guard: CallOffGuard;
+  /** `answer`: the prompt's Agree (never opens a request of this phone's own). */
+  onCall: (agree: boolean, answer: boolean) => Promise<void>;
 }) {
   const now = useNow(1000);
   const [busy, setBusy] = useState(false);
-  const view = callOffView(bet, { nowMs: now + offsetMs, judgeCam });
-  const run = (agree: boolean) => {
+  const view = callOffView(bet, { nowMs: now + offsetMs, judgeCam, guard });
+  const run = (agree: boolean, answer: boolean) => {
     if (busy) return;
     setBusy(true);
-    void onCall(agree).finally(() => setBusy(false));
+    void onCall(agree, answer).finally(() => setBusy(false));
   };
   const them: Party = me === 'A' ? 'B' : 'A';
   return (
@@ -125,10 +138,24 @@ export function CallOffLayer({
       theirName={callOffName(bet, them)}
       askerName={view.kind === 'prompt' ? callOffName(bet, view.by) : ''}
       busy={busy}
-      onAsk={() => run(true)}
-      onAnswer={run}
+      onAsk={() => run(true, false)}
+      onAnswer={(agree) => run(agree, agree)}
     />
   );
+}
+
+/**
+ * A round screen reports where its round stands (../app/callOff CallOffGuard) to DemoApp, which
+ * hands it to CallOffLayer; leaving the screen reports 'open'.
+ */
+export function useReportCallOffGuard(
+  report: ((guard: CallOffGuard) => void) | undefined,
+  guard: CallOffGuard,
+): void {
+  const ref = useRef(report);
+  ref.current = report;
+  useEffect(() => ref.current?.(guard), [guard]);
+  useEffect(() => () => ref.current?.('open'), []);
 }
 
 const styles = StyleSheet.create({

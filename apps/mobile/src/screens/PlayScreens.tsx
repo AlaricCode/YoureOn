@@ -15,6 +15,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { judgeCamGuard, type CallOffGuard } from '../app/callOff';
 import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
 import { recordedSpan } from '../attempt/span';
@@ -63,6 +64,7 @@ import { DrainBar } from '../ui/DrainBar';
 import { RollingText } from '../ui/RollingNumber';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
 import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
+import { useReportCallOffGuard } from './CallOff';
 import { COPY, fill, t } from './copy';
 
 // ---------------------------------------------------------------------------------------
@@ -174,12 +176,15 @@ export function JudgeCamScreen({
   onSend,
   arm,
   tag,
+  onCallOffGuard,
 }: {
   onBack?: (() => void) | undefined;
   onSend: (clip: Clip | null) => Promise<void>;
   /** undefined = preview (manual start); null = waiting for the server; set = armed. */
   arm?: CamArm | null;
   tag?: string | undefined;
+  /** "Call it off" (../app/callOff judgeCamGuard): held while recording, off with a clip. */
+  onCallOffGuard?: ((guard: CallOffGuard) => void) | undefined;
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<CamPhase>('standby');
@@ -200,6 +205,10 @@ export function JudgeCamScreen({
   const lastClip = useRef<Clip | null>(null);
   /** A retake counts down on its own clock (go_at is already past). */
   const manualCountdown = useRef(false);
+  useReportCallOffGuard(
+    onCallOffGuard,
+    judgeCamGuard(phase, { failed, hasClip: lastClip.current !== null }),
+  );
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) void requestPermission();

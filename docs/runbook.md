@@ -547,7 +547,10 @@ phone ignores new invites until the bet is over.
    `resolve(Refund)` on chain, then the normal VOIDED path, and both phones end on the refund and
    go Home. An unanswered request lapses after 60 s. It only works while nothing is being judged
    (LOCKED, a round not yet uploaded, or right after a REDO); once a ruling is in flight or out,
-   it is refused (and so is an appeal of a called-off bet).
+   it is refused (and so is an appeal of a called-off bet). The phone running the round hides
+   it while the round counts in, dances or records, and once it shows a local result (a Dance
+   Off score, a clip still to send): to call off a round whose upload keeps failing after a
+   score, use the operator fallback below.
 2. **From the laptop (operator fallback, `DEMO_MODE` only):** the same VOID at once, no player
    asked:
 

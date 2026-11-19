@@ -2,6 +2,7 @@
 // VOID 'safety_stop'), the bet.call_off event and the open-request rule.
 import { describe, expect, it } from 'vitest';
 import {
+  CALL_OFF_ANSWER_GRACE_MS,
   CALL_OFF_TTL_MS,
   CALLED_OFF_MODEL,
   CALLED_OFF_REASON,
@@ -115,6 +116,11 @@ describe('bet.call_off and the request', () => {
     expect(CallOffRequest.safeParse({ agree: true }).success).toBe(true);
     expect(CallOffRequest.safeParse({ agree: 'yes' }).success).toBe(false);
     expect(CallOffRequest.safeParse({ agree: true, extra: 1 }).success).toBe(false);
+    // an Agree to the other party's prompt says so (never opens a request of its own)
+    expect(CallOffRequest.safeParse({ agree: true, answer: true }).success).toBe(true);
+    expect(CallOffRequest.safeParse({ agree: true, answer: 1 }).success).toBe(false);
+    expect(CALL_OFF_ANSWER_GRACE_MS).toBeGreaterThan(0);
+    expect(CALL_OFF_ANSWER_GRACE_MS).toBeLessThan(CALL_OFF_TTL_MS);
     expect(callOffPath(BET)).toBe(`/v1/bets/${BET}/call-off`);
   });
   it('the stage reads the call-off reason, not "Stopped for safety"', () => {
