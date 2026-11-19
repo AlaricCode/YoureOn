@@ -44,20 +44,23 @@ export type JoinStep = { kind: 'lobby' } | { kind: 'code'; code: string };
 
 /**
  * The joins to try, in order, for a phone with no room: a room link's code alone (it wins);
- * else the last private room's code first, then the lobby. LAST_ROOM_KEY only ever holds a
- * private room (a lobby join deletes it, Leave deletes it), so a phone that was in a private
- * room before a restart goes back there (the demo phones the stage watches, a restored judge
- * cam bound to that room), and the lobby is the fallback when that room is gone. With no
- * stored code (never in a private room, or it left one) it is the lobby alone.
+ * else the lobby first, then the last private room's code as the fallback. Joining a private
+ * room takes a phone out of the lobby on the server, so a stale private room must never be
+ * joined after (or alongside) the lobby: the lobby is where face scans find people. The one
+ * exception is a restored judge cam: it is bound to its room, so it goes back there first.
+ * LAST_ROOM_KEY only ever holds a private room (a lobby join deletes it, Leave deletes it).
  */
 export function homeJoinPlan(o: {
   linked: string | null;
   lobby: boolean;
   stored: string | null;
+  /** This phone was restored as its room's judge cam: its private room wins. */
+  judgeCam?: boolean;
 }): JoinStep[] {
   if (o.linked) return [{ kind: 'code', code: o.linked }];
   const stored: JoinStep[] = o.stored ? [{ kind: 'code', code: o.stored }] : [];
-  return o.lobby ? [...stored, { kind: 'lobby' }] : stored;
+  if (!o.lobby) return stored;
+  return o.judgeCam ? [...stored, { kind: 'lobby' }] : [{ kind: 'lobby' }, ...stored];
 }
 
 export interface JoinPlanDeps {

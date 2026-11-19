@@ -135,10 +135,18 @@ export async function startWakeWord(options?: WakeWordStartOptions): Promise<Wak
 }
 
 /** Stops listening; resolves once the microphone and audio session are released. Never rejects. */
+/** stopWakeWord resolves after this at the latest. */
+export const STOP_TIMEOUT_MS = 1_500;
+
 export async function stopWakeWord(): Promise<void> {
   if (!WakeWord) return;
   try {
-    await WakeWord.stop();
+    // Never hold the challenge hostage to a native stop that does not answer: the judge (and
+    // onUtterance) waits on this, so it gives up after STOP_TIMEOUT_MS.
+    await Promise.race([
+      WakeWord.stop(),
+      new Promise<void>((resolve) => setTimeout(resolve, STOP_TIMEOUT_MS)),
+    ]);
   } catch {
     // Nothing to release that a failed stop could still hold; native tears down unconditionally.
   }
