@@ -62,6 +62,8 @@ function setup(
     /** Results of successive mintToken calls (an Error rejects); overrides `token`. */
     mints?: Array<typeof TOKEN | Error>;
     mic?: () => Promise<boolean>;
+    /** What A said after "Jarvis" (../wake). */
+    initialUtterance?: string;
   } = {},
 ) {
   const conv = mockConversation();
@@ -85,6 +87,7 @@ function setup(
         : Promise.resolve(TOKEN);
     },
     dynamicVariables: VARS,
+    ...(o.initialUtterance !== undefined ? { initialUtterance: o.initialUtterance } : {}),
     postLines: async (l) => void posted.push(l),
     onCaption: (c) => captions.push(c),
     onFailed: (r) => failed.push(r),
@@ -503,5 +506,60 @@ describe('judge session: captions + transcript relay', () => {
     expect(isEventLine('[EVENT] PAID winner=Jake :: x')).toBe(true);
     expect(isEventLine('  [event] x')).toBe(true);
     expect(isEventLine('Event over.')).toBe(false);
+  });
+});
+
+describe('judge session: the "Jarvis" utterance (../wake)', () => {
+  it("is the first user message once connected, ahead of queued cues, and A's first caption", async () => {
+    const t = setup({ initialUtterance: "  I bet Jake can't do ten pushups " });
+    await t.started();
+    t.s.onCue(cue('INVITE_ACCEPTED'));
+    expect(t.conv.sent()).toEqual([]);
+    t.connected();
+    expect(t.conv.sent()).toEqual([
+      ['sendUserMessage', "I bet Jake can't do ten pushups"],
+      ['sendUserMessage', '[EVENT] INVITE_ACCEPTED x=1 :: Do the thing.'],
+    ]);
+    // Plain text, not an [EVENT] line; sent once even though connect reports twice.
+    expect(isEventLine("I bet Jake can't do ten pushups")).toBe(false);
+    expect(t.captions.map((c) => [c.who, c.text])).toEqual([
+      ['a', "I bet Jake can't do ten pushups"],
+    ]);
+    expect(Uuid.safeParse(t.captions[0]!.id).success).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(t.posted.flat()).toEqual([
+      expect.objectContaining({
+        role: 'party',
+        party: 'A',
+        text: "I bet Jake can't do ten pushups",
+      }),
+    ]);
+  });
+
+  it('an SDK echo of it is not a second line; a later identical line is', async () => {
+    const t = setup({ initialUtterance: 'Ten pushups' });
+    await t.started();
+    t.connected();
+    t.s.onMessage({ role: 'user', message: 'Ten pushups', event_id: 1 });
+    expect(t.captions).toHaveLength(1);
+    t.s.onMessage({ role: 'user', message: 'Ten pushups', event_id: 4 });
+    expect(t.captions).toHaveLength(2);
+  });
+
+  it('blank or omitted: nothing extra is sent', async () => {
+    for (const initialUtterance of [undefined, '', '   ']) {
+      const t = setup(initialUtterance === undefined ? {} : { initialUtterance });
+      await t.started();
+      t.connected();
+      expect(t.conv.sent()).toEqual([]);
+      expect(t.captions).toEqual([]);
+    }
+  });
+
+  it('a failed session never sends it', async () => {
+    const t = setup({ token: 'fail', initialUtterance: 'Ten pushups' });
+    await t.started();
+    expect(t.failed).toEqual(['token']);
+    expect(t.conv.sent()).toEqual([]);
   });
 });

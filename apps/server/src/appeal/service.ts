@@ -117,6 +117,7 @@ import {
 } from '../chain/tx';
 import { sha256Hex, verifyEd25519 } from '../crypto';
 import { HttpError } from '../errors';
+import { isDanceOffBet } from '../judge/dance-bet';
 import {
   fanout,
   hexBytes,
@@ -308,6 +309,7 @@ export class AppealService {
   async appealRequest(betId: string, userId: string): Promise<SignRequest> {
     const rt = await this.rt();
     const bet = await this.bet(betId);
+    await this.danceOffOrThrow(bet);
     const party = this.appellantOrThrow(bet, userId, this.deps.now());
     return this.buildRequest(rt, bet, party);
   }
@@ -320,12 +322,25 @@ export class AppealService {
   async pushRequest(rt: ChainRuntime, bet: BetRow, loser: Party): Promise<SignRequest | null> {
     try {
       if (bet.evidence_source === 'gemini') return null; // SCHEMAS §7: no "I appeal!" on a market
+      if (await isDanceOffBet(this.deps.db, bet.id)) return null; // DANCE-OFF §5: the score decides
       this.windowOrThrow(bet, this.deps.now());
       return await this.buildRequest(rt, bet, loser);
     } catch (err) {
       this.deps.log.warn('appeal.push_request_failed', { bet_id: bet.id, err: String(err) });
       return null;
     }
+  }
+
+  /**
+   * DANCE-OFF §5: a dance off is decided by the deterministic score, so it has no appeal (no
+   * "check it again"), as a Gemini market has none.
+   */
+  private async danceOffOrThrow(bet: Pick<BetRow, 'id' | 'state'>): Promise<void> {
+    if (await isDanceOffBet(this.deps.db, bet.id))
+      throw new HttpError('INVALID_STATE', 'The score decides a dance off. No appeals.', {
+        state: bet.state,
+        reason: 'dance_off',
+      });
   }
 
   /** The caller's party if they may appeal now (SCHEMAS §5.3 loser; the window; RULED). */
@@ -491,6 +506,7 @@ export class AppealService {
     // Idem (bet_id, 'appeal'): the same appellant again (a lost 202) gets the filed appeal back.
     const filed = await this.replayOf(betId, party);
     if (filed) return filed;
+    await this.danceOffOrThrow(bet);
     this.appellantOrThrow(bet, userId, this.deps.now());
     if (body.party && body.party !== party) throw new HttpError('NOT_LOSER');
     const wallet = party === 'A' ? bet.party_a_wallet! : bet.party_b_wallet!;

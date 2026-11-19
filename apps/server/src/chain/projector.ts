@@ -52,7 +52,7 @@ import { auditLog, bets, chainEvents, chainTxs, outbox, users, type Db } from '@
 import { ChainEvents, type ChainEventName } from '@youre-on/shared';
 import { formatUsd } from '@youre-on/shared/money';
 import type { RealtimeEventType } from '@youre-on/shared/realtime';
-import { judgeCue } from '../bets/cues';
+import { judgeCue, lockedInstruction } from '../bets/cues';
 import type { BetRow } from '../bets/snapshot';
 import { statePayload } from '../lock/common';
 import { loadEnvelope } from '../lock/terms';
@@ -787,12 +787,12 @@ async function cueFor(tx: Tx, before: BetRow, after: BetRow, move: StateMove, fo
   if (move.state === 'LOCKED') {
     const names = await partyNames(tx, before);
     const pot = usd((after.stake_a ?? 0n) + (after.stake_b ?? 0n));
-    const performer = (await loadEnvelope(tx, before.id, { finalOnly: true }))?.envelope.terms
-      .performer;
+    const terms = (await loadEnvelope(tx, before.id, { finalOnly: true }))?.envelope.terms;
+    const performer = terms?.performer;
     return judgeCue(
       'LOCKED',
       { pot, a: names.A, b: names.B, ...(performer ? { performer: names[performer] } : {}), tx: 1 },
-      'Announce both stakes are locked in one transaction, then call request_attempt with attempt_no 1.',
+      lockedInstruction(terms?.type, names),
     );
   }
   const t = fold.terminal;

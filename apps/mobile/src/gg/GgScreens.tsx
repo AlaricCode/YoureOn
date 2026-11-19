@@ -9,7 +9,8 @@
 //                   Closes by itself at confirm_by, on the GG, or once the appeal went out; the
 //                   ruling screen (GG / I appeal) is then exactly as before.
 //   GgPayoutScreen  after the loser's GG. Winner: "Jake said GG", the win counting up, the
-//                   record ticking over, Paying -> Paid. Loser: a calm "Good game".
+//                   record ticking over, Paying -> Paid. Loser: a calm "Good game". Either may
+//                   go again: "Double or nothing" (app/rematch, DANCE-OFF §7) once it is paid.
 import { useEffect, useReducer, useRef, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -199,6 +200,9 @@ export function GgPayoutScreen({
   balanceCents,
   phase,
   onHome,
+  onRematch,
+  rematchBusy = false,
+  alert,
   tag,
 }: {
   view: BetView;
@@ -208,6 +212,10 @@ export function GgPayoutScreen({
   /** 'processed' until PAID (the pending tint, "Paying"), then 'confirmed'. */
   phase: 'processed' | 'confirmed';
   onHome: () => void;
+  /** Double or nothing (the bet is over): a new challenge, any bet type, at twice the stake. */
+  onRematch?: (() => void) | undefined;
+  rematchBusy?: boolean;
+  alert?: string | null;
   tag?: string | undefined;
 }) {
   const now = useNow(50);
@@ -258,12 +266,24 @@ export function GgPayoutScreen({
             )
           ) : null}
         </View>
+        {onRematch ? <AlertLine message={alert ?? null} /> : null}
         <PrimaryButton
           testID="payout-home"
           label={t(COPY.ruling.backHome)}
           disabled={won && phase === 'processed'}
           onPress={onHome}
         />
+        {onRematch ? (
+          <>
+            <View style={styles.gap} />
+            <QuietButton
+              testID="payout-rematch"
+              label={t(COPY.rematch.button)}
+              busy={rematchBusy}
+              onPress={onRematch}
+            />
+          </>
+        ) : null}
       </Page>
     </Screen>
   );

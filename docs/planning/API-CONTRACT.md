@@ -240,11 +240,11 @@ Legend: **B** = bearer; **S** = signed write (§1.3); **U** = unauthenticated; *
 | 2.2 | `GET /v1/face/consent` · `POST /v1/face/enrollment` · `PATCH /v1/face/enrollment` · `DELETE /v1/face/enrollment` | B / S | biometric enrollment |
 | 2.3 | `POST /v1/rooms` · `POST /v1/rooms/join` · `POST /v1/rooms/:room_id/leave` · `GET /v1/rooms/:room_id/presence` | S / B | rooms |
 | 2.4 | `POST /v1/rooms/:room_id/face-match` | S | probe → candidate or nothing |
-| 2.5 | `POST /v1/bets` · `POST /v1/bets/:bet_id/invite/accept` · `POST /v1/bets/:bet_id/invite/decline` | S | challenge |
+| 2.5 | `POST /v1/bets` · `POST /v1/bets/:bet_id/invite/accept` · `POST /v1/bets/:bet_id/invite/decline` · `POST /v1/bets/:bet_id/rematch` | S | challenge; double or nothing |
 | 2.6 | `POST /v1/voice/tokens` · `POST /v1/bets/:bet_id/voice/lines` · `POST /v1/bets/:bet_id/cues` | S | ElevenLabs token; transcript and cue relay |
-| 2.7 | `GET /v1/bets/:bet_id/terms/draft` · `GET /v1/bets/:bet_id/terms` | B+P | draft and final terms |
+| 2.7 | `GET /v1/bets/:bet_id/terms/draft` · `GET /v1/bets/:bet_id/terms` · `POST /v1/bets/:bet_id/terms/dance` | B+P / S+A | draft and final terms; Dance Off terms |
 | 2.8 | `GET /v1/bets/:bet_id/lock` · `POST /v1/bets/:bet_id/lock/authorizations` · `POST /v1/bets/:bet_id/lock/decline` | B+P / S+P | atomic-lock authorization |
-| 2.9 | `POST /v1/bets/:bet_id/attempts` · `POST …/attempts/:n/frames` · `POST …/attempts/:n/clip-upload` · `POST …/attempts/:n/clip-complete` | S+P | evidence |
+| 2.9 | `POST /v1/bets/:bet_id/attempts` · `POST …/attempts/:n/frames` · `POST …/attempts/:n/dance` · `POST …/attempts/:n/clip-upload` · `POST …/attempts/:n/clip-complete` | S+P | evidence |
 | 2.10 | `GET /v1/bets/:bet_id/concede` · `POST /v1/bets/:bet_id/concede` | B+P / S+P | GG |
 | 2.11 | `POST /v1/bets/:bet_id/hearing/turns` | S+P | hearing turn |
 | 2.12 | `GET /v1/bets/:bet_id/appeal` · `POST /v1/bets/:bet_id/appeal` | B+P / S+P | appeal |
@@ -353,6 +353,15 @@ Flows are in §1.3.
 - Allowed in `DRAFTING` and `TERMS_PROPOSED`. After that, B declines through §2.8.
 - Effects: state `CANCELLED`, `end_reason='declined'`; `judge.cue DECLINED`.
 
+**`POST /v1/bets/:bet_id/rematch`** (S, A or B): double or nothing (DANCE-OFF §7, every bet type)
+
+- Request `RematchRequest = {}`. Allowed only once the bet is over: `PAID`, `VOIDED`, `FINALIZED` or `EXPIRED` (else `409 INVALID_STATE {reason:'not_finished'}`; a seed history row or a bet without a room is `409 {reason:'no_rematch'}`).
+- Creates a new `DRAFTING` bet in the **same room** with the **caller as A** and the other party as B, `supersedes_bet_id` = this bet, `challenge_method 'list'`. It goes through the same code as `POST /v1/bets` (room live, both still members, demo room, age, `pair_busy`, the open-bet cap, the 6/min `bets` bucket), so every effect of a challenge applies: `bet.invited` (+ **NEW** `rematch_of`, `suggested_stake_usd`) then `bet.state DRAFTING`, outbox `challenge_received` to B ("Logan wants a rematch" / "Double or nothing?"), an audit row.
+- `suggested_stake_usd` = 2 × the old per-side stake (the larger side of an odds bet), capped at max_stake, in dollars to the cent (`suggestedRematchStakeUsd`); $5 when the old bet never had stakes. It is only the stake chip's default: the challenger then picks ANY bet type on the normal negotiate screen.
+- Response 201: `RematchResponse {bet_id, suggested_stake_usd}` plus the `CreateBetResponse` fields `bet` (BetSnapshot, DRAFTING) and `voice.dynamic_variables`, so the phone can open the negotiate screen at once.
+- Idem: a repeat by the same caller while its rematch is still pre-lock answers that rematch again (201, same `bet_id`). The other party asking meanwhile gets `409 INVALID_STATE {reason:'pair_busy', bet_id}`.
+- Errors: `NOT_A_PARTY`, `NOT_FOUND`, `INVALID_STATE`, `NOT_IN_ROOM`, `ROOM_EXPIRED`, `AGE_REQUIRED`, `RATE_LIMITED`.
+
 ### 2.6 Voice session token and relays
 
 **`POST /v1/voice/tokens`** (S): mint an ElevenLabs conversation token
@@ -386,6 +395,14 @@ Flows are in §1.3.
   - `terms_code` = the first 8 hex chars of `terms_hash`, shown as `"0586·0f0a"`.
   - Before `TERMS_PROPOSED` the call returns `409 TERMS_NOT_FINAL`.
   - The client **must** recompute `hashJcs(envelope.terms)` and compare it to `envelope.terms_hash`; `TermsEnvelope.parse` does this (SCHEMAS §2.3).
+
+**`POST /v1/bets/:bet_id/terms/dance`** (S, party A; `DRAFTING` | `TERMS_PROPOSED`): Dance Off terms (DANCE-OFF §1)
+
+- Request `DanceTermsRequest {routine_id, amount_usd}` (dollars per person; the phone offers `DANCE_STAKES_USD` 1/5/10/20).
+- The server builds the projection with `danceTermsArgs` (`type 'dance_off'`, `evidence_source 'camera'`, `performer` none, `yes_party 'A'`, one `single` round, even stakes, no edge cases; the routine's id, version and sha256 prefix in `success_criteria[0]`) and runs the same `evaluateProposeTerms` + `persistEvaluation` as `/terms/typed` (`bet_terms_versions.source_tool 'dance'`, `drafted_by 'party_a'`). The card title is `Dance Off: <routine title>`. Even money: no odds offer.
+- Response 200 `DanceTermsResponse` (= `TypedTermsResponse`): `proposed` (→ `TERMS_PROPOSED`, `terms.proposed`), or `draft` (e.g. over the stake cap). Then `POST …/terms/confirm` as for any bet.
+- Errors: `404 NOT_FOUND {routine_id, routines}` (a routine this server does not bundle), `422 VALIDATION_FAILED` (not a dollar amount), `403 NOT_A_PARTY` (B), `409 INVALID_STATE` (terms already frozen).
+- The voice agent does not propose dance offs in v1 (`propose_terms` does not list `dance_off`).
 
 Odds (unequal stakes) are agreed with the §2.19 offer routes; an accepted offer can recompose the card (a new version). There is no other REST endpoint for editing terms. Edits are spoken, and the judge calls `propose_terms` again. After `AWAITING_AUTHORIZATIONS` any change cancels the bet and continues on a new `bet_id` with `supersedes_bet_id` (SCHEMAS §9.2).
 
@@ -472,6 +489,19 @@ Server timers:
 - **`POST …/attempts/:n/clip-complete`** (S) takes `{clip_sha256, clip_bytes}`. The server re-hashes the stored object and returns 200 `{evidence_hash, matches: true}`. A mismatch returns `422 EVIDENCE_HASH_MISMATCH`, writes `audit_log 'evidence.mismatch'`, flags the bet, and makes the panel treat the clip as missing (DATA-MODEL §9). No `clip-complete` within 60 s of the 202 counts as missing too.
 - **Fallback (no frames).** `POST …/frames` with `evidence.frames=[]` returns a `PresignedUpload` only. Once the clip lands, the server runs static ffmpeg in one `select` pass (FINDINGS §3.13).
 
+**Dance Off attempts (DANCE-OFF §5, §6.2; built 2026-11-18).** A `dance_off` bet uses the same `POST …/attempts`, with these differences: both parties dance, so neither is neutral and the round is filmed from A's side only (DANCE-OFF §6.2: the room's judge cam, else A's phone; the recorder uploads the whole PoseSeries): `'judge_cam'` picks the room's judge cam of **A** (a second device of A; a judge cam B binds is ignored, so `409 no_judge_cam`), `'self'` is A's phone only (`403 NOT_A_PARTY {reason:'recorder_is_a'}` for B) and only when the room has no judge cam of A (`409 INVALID_STATE {reason:'judge_cam_present'}`), `max_ms` is `DANCE_MAX_MS` = 30000 (count-in + the 15 s routine), the response's and `attempt.started`'s `performer` is the yes party `A` (the field is a Party), and the `ATTEMPT_ARMED` cue names both dancers. A dance round never uploads to `/frames` (`409 INVALID_STATE {reason:'dance_upload'}`), and a non-dance bet never to `/dance` (`409 {reason:'not_dance'}`).
+
+**`POST /v1/bets/:bet_id/attempts/:n/dance`** (S, recorder device): `multipart/form-data`, body cap 2.5 MiB
+
+- Parts:
+  1. `upload`, `application/json`: `DanceUpload {routine_id, routine_sha256, series: PoseSeries, pose_sha256, client_scores: {a, b}, clip_sha256: Hex32|null, frames: [{index, t_ms, sha256, width, height, bytes}] (1..6)}` (`packages/shared/src/evidence.ts`).
+  2. `frame` × N (= `upload.frames.length`, the phone sends 4), `image/jpeg`, in `index` order, each ≤ 200 KB.
+- Server steps, in order: the recorder-device check (as `/frames`); the replay check (below); the bet is `ATTEMPT` and the attempt `recording`; the terms are a dance off and name a routine this server bundles (`409 INVALID_STATE {reason:'routine_unavailable'}` otherwise); `routine_id` and `routine_sha256` are that routine (`422 VALIDATION_FAILED {reason:'wrong_routine'}`); `pose_sha256 = hashJcs(series)` (`422 EVIDENCE_HASH_MISMATCH {what:'pose', expected, got}`); every JPEG's magic, size and sha256 (`FRAME_HASH_MISMATCH`, `PAYLOAD_TOO_LARGE`). Then it **re-scores the series with the shared scorer** (`buildDanceEvidence`, `dance-score@1`): `client_scores` are only compared (a mismatch is logged, never used). One transaction: attempt → `judging` with `evidence_canonical = jcs(DanceEvidence)`, `evidence_hash = hashJcs(DanceEvidence)`, `client_clip_hash = clip_sha256` (or, with no clip, the evidence hash as a deterministic stand-in), `frame_hashes`, the `attempt_frames` rows; bet → `JUDGING`; `bet.state`; an audit row `dance.uploaded`. **No `attempt.evidence`** (its payload is `CameraEvidence`); the record goes out with `dance.scored`. Then the ruling job starts.
+- Response 202 `DanceUploadResponse {judging: true, evidence_hash, pose_sha256, scores: {a, b} (server tenths), client_mismatch, frame_hashes}`.
+- Idem: `(bet_id, n)` + `pose_sha256` + the frame hashes. The same round replays the 202 (and restarts a lost job); another is `ATTEMPT_NOT_OPEN`.
+- **The ruling job** (same jobs map, keeper sweep and commit as the camera judge): the round check (§7.1 "Dance Off round check"), then the deterministic Ruling: `model 'rule/dance-off@1'`, `confidence 1.00`, `stage 'attempt'`, `frame_hashes` = the key frames, `evidence_hash = hashJcs(DanceEvidence)`, `reason` = the cleaned announcer line. A winner on a valid (or unchecked) round is decisive (`claim_result MET` ⇔ A wins); too close to call (within 2.0 points) or a failed round (a dancer seen < 60 % of the round, or no frames) is `VOID 'undecidable'` with a "Too close to call…" reason; an `INVALID` round is `VOID 'undecidable'` and the reason names the problem. Both VOIDs refund both stakes. Never a REDO: a failed, timed-out or lost check settles on the score (validation `skipped`). One commit: the `rulings` row (`evidence_kind 'camera'`, `evidence_canonical` = the DanceEvidence JCS, so the `sha256(evidence_canonical) = evidence_hash` CHECK holds), attempt `ruled`, **`dance.scored`, then `ruling.issued`, then `judge.cue`** (`RULING`, or `VOIDED {reason:'undecidable', why}`), an audit row; then `deps.onRuling` (resolve) as for any ruling.
+- No appeal, no review, no slow-mo replay for a dance off (§2.12, §2.12a, §2.14): the score is deterministic.
+
 ### 2.10 GG / concede
 
 - **`GET /v1/bets/:bet_id/concede`** (B, loser) returns `SignRequest` with `kind:'concede'`: `[ComputeBudget…, (ATA CreateIdempotent for the winner, funder = server), concede, close_bet]` on a recent blockhash. It is also pushed as `tx.sign_request` to the loser at `RULED` (rpc-confirmed). The server rebuilds on GET when the cached message is > 20 s old and unsigned. `valid_until` = min(blockhash expiry estimate, `appeal_deadline` + 1 s); after that the server's `finalize` pays anyway.
@@ -516,7 +546,11 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
   - `LOCK_SIGNER=server` (custodial demo): the signature may be omitted and the server signs as the appellant's demo key (as for concede). The operator's route is `POST /v1/demo/bets/:bet_id/appeal` (§2.17).
   - finalize (timer and `finalize-due`) skips a `RULED` bet whose appeal is signed / sent, and every `APPEALED` one. The keeper task `appeal-sweep` (also in the boot reconcile) settles 'sent' appeal / `resolve_appeal` txs whose confirm died and re-runs a lost panel (stored votes are reused); an undecided appeal past `appeal_resolve_deadline` is the timeout-refund keeper's (`EXPIRED`, both stakes back).
 
+**Dance Off (DANCE-OFF §5):** no appeal. `GET`/`POST …/appeal` answer `409 INVALID_STATE {reason:'dance_off'}`, and no appeal `tx.sign_request` is pushed at RULED (as for a Gemini bet). A bet is a dance off when its final terms say `type 'dance_off'` (or it has a `rule/dance-off@1` ruling).
+
 ### 2.12a Spoken review request ("check that again") and the GG moment
+
+**Dance Off:** `request_review` answers `FINAL` ("The ruling is final.") for a dance off.
 
 Built 2026-11-18 (`feat/gg-moment`, `apps/server/src/review`, `apps/server/src/gg`; types `packages/shared/src/gg.ts`).
 
@@ -748,7 +782,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 
 | `type` | Payload | Emitted when (state) |
 |---|---|---|
-| `bet.invited` | `{challenger: UserRef, room_id, rivalry?: StageRivalry}` (**NEW** `rivalry`, §2.18: the pair's record before this bet, A's view, every challenge method; optional, so older phones and stages drop it) | `POST /v1/bets` → B's user channel (→ DRAFTING); in the bet log, so a stage subscribing from `after_seq` 0 replays it |
+| `bet.invited` | `{challenger: UserRef, room_id, rivalry?: StageRivalry, rematch_of?: BetId, suggested_stake_usd?: number}` (**NEW** `rivalry`, §2.18: the pair's record before this bet, A's view, every challenge method; **NEW** `rematch_of` + `suggested_stake_usd` (dollars) on a §2.5 rematch; all optional, so older phones and stages drop them) | `POST /v1/bets` or `POST …/rematch` → B's user channel (→ DRAFTING); in the bet log, so a stage subscribing from `after_seq` 0 replays it |
 | `bet.invite_answered` **NEW** | `{party:'B', answer:'accepted'\|'declined'}` | §2.5 |
 | `bet.state` | `{state, prev, onchain_status, chain_ack, pending_tx, reason}` | every state entry, **and** every `pending_tx` / `chain_ack` change in place (prev = state) |
 | `terms.draft` | `{draft: TermsDraft}` | each `propose_terms` with issues or missing fields (DRAFTING) |
@@ -767,6 +801,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | `attempt.started` | `{attempt_no, performer, max_ms}` **+ NEW** `recorder_device_id`, `go_at` | → ATTEMPT |
 | `attempt.evidence` | `{evidence: CameraEvidence, frame_urls}` | frames stored (JUDGING) |
 | `ruling.issued` | `{ruling: Ruling\|HearingRuling, ruling_hash}` | ruling decided; also REDO and settlement. **Before** `resolve` lands, so the judge can speak. |
+| `dance.scored` **NEW** | `DanceScoredPayload {evidence: DanceEvidence, evidence_hash, validation: {verdict: 'valid'\|'invalid'\|'skipped', notes, skipped}, announcer_line}` | a Dance Off round's ruling (JUDGING): appended just **before** `ruling.issued` in the same commit (the `market.settled` precedent); `evidence_hash` = the ruling's |
 | `hearing.opened` | `{hearing_id, trigger, order:['A','B'], turn_ms}` | → HEARING |
 | `hearing.turn_open` **NEW** | `{hearing_id, turn_index, party, closes_at}` | each turn's clock starts (after `open_hearing`, or the 5 s fallback) |
 | `hearing.turn` | `{turn: HearingTurn}` | each turn stored |
@@ -791,7 +826,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | AWAITING_LOCK (transient: atomic tx in flight) | `tx.submitted`; `bet.state` again at processed | — | — |
 | LOCKED | `tx.confirmed`; later `chain.BetCreated`, `chain.BetAccepted` (`chain_ack` → stream) | `LOCKED` | `bet_locked` |
 | ATTEMPT | `attempt.started` | `ATTEMPT_ARMED` (speak=false) | — |
-| JUDGING | `attempt.evidence`, `ruling.issued` | `RULING` / `REDO` / `HEARING_REQUIRED` | — |
+| JUDGING | `attempt.evidence`, `ruling.issued` (a Dance Off: no `attempt.evidence`; `dance.scored` before `ruling.issued`) | `RULING` / `REDO` / `HEARING_REQUIRED` (a Dance Off: `RULING` or `VOIDED`) | — |
 | HEARING | `hearing.opened`, `hearing.turn_open` × 2, `hearing.turn` × 2, `ruling.issued` | `HEARING_REQUIRED`, `HEARING_TURN` (B), `HEARING_RULING` | — |
 | AWAITING_MARKET | `market.tick` | `MARKET_WAITING` (speak=false) | — |
 | RULED | `tx.confirmed(resolve)`, `tx.sign_request` (concede, appeal), `chain.BetResolved` | — (already voiced at `ruling.issued`) | `ruling` (A, B) |
@@ -1261,6 +1296,7 @@ Settings for every call:
 | Terms step (Speech Engine fallback only) | `claude-haiku-5-5`, as above, `max_tokens` 600 | SCHEMAS `TermsStepOutput` | 3 s | Used only if ElevenLabs post-tool latency misses (FINDINGS §3.10) |
 | First ruling | Candidate A: `claude-haiku-5-5`, thinking `disabled`, effort `low`, `max_tokens` 2048, streaming. Candidate B: `claude-opus-5-5`, effort `low` (thinking can't be disabled), as the only model. **Pick after the eval (PENDING-KEY).** | SCHEMAS `VisionVerdict` → `toOutcome` → `Ruling` (with `frame_hashes`, D7) | first-token deadline 2.5 s, total 6 s, no SDK retry | 12 frames + the landing crop (D10) as separate images labelled `Frame k/N at t=…s`, with `, LANDING` on the frames in the clip's last ~1.2 s and `LANDING CROP of frame k` on the crop, + terms; frames inline base64, never URLs (DATA-MODEL §9). Play the pre-generated outcome stinger as soon as `claim_result` streams. |
 | Re-check (parallel, from t=0) | `claude-sonnet-5-5` (adaptive, effort `low`) or `claude-opus-5-5` (effort `low`) | `VisionVerdict` | 6 s | Rule: take the primary if it is decisive at ≥ 0.8; else take the re-check if it is decisive at ≥ 0.8; else REDO. Timeouts and errors count as non-decisive REDO `unclear` and **count toward `MAX_REDOS`** (simplicity; §9 O4). |
+| Dance Off round check (`apps/server/src/judge/dance.ts`) | env `JUDGE_MODEL`, effort `low`, `max_tokens` 1024 (as the vision judge: adaptive thinking counts against it); a canned VALID check while `cached_ruling` is on (no call); judge stats source `'dance'` | `{verdict: VALID\|INVALID, danced_full_time, nobody_left, no_third_person, no_side_swap, notes, announcer_line}` (VALID first, so the mock's default is the happy path) | 8 s (`DANCE_TIMEOUT_MS`, under `STUCK_JUDGING_MS` 20 s), no retry; any failure → validation `skipped`, the round settles on the score with a canned line | Never picks the winner: the server's scores, the per-move breakdown, the deterministic checks (coverage, most people seen, side swaps) and the key frames labelled `Frame k/N at t=…s` go in; the line must name the winner and must not pair the loser with a win word (or, with no winner, start "Too close to call"), else the canned line is used |
 | Hearing | `claude-opus-5-5`, effort `medium`, streaming | SCHEMAS `HearingVerdict` → `toHearingOutcome` → `HearingRuling` | 15 s, then 1 retry on `claude-sonnet-5-5` (adaptive, low); both fail → `VOID / undecidable` (refund, appealable) | Inputs: terms, the same frames, both `HearingTurn` transcripts |
 
 Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side-fallback-2026-07-01` (claude-api skill default). `Ruling.model` records the model that actually served the response. Haiku 5.5 has no server-side fallback, so a Haiku refusal means REDO.
@@ -1523,4 +1559,5 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 - **2026-11-18, slow-mo replay (feat/slowmo-replay):** §2.0 / §2.14 gain `GET /v1/bets/:bet_id/replay` (`ReplayResponse`, SCHEMAS §4.1): the snapshot's readers, 404 for missing and not-yours, `no-store`, the `why` values, frames by the existing frame route, a foul only from a confirmed `replayFouls` source. Additive: no other route or event changes (no new realtime event).
 - **2026-11-18, live rivalry scan (feat/rivalry-scan; additive, old clients still parse):** §1.7 adds the `face-match/live` bucket (60/min per user, sharing the one-in-flight slot with `face-match`); the face-match body is now read before the token is taken, so an invalid body spends none. §2.4 `FaceMatchRequest` gains optional `mode: 'tap'|'live'` (absent = tap; it only picks the bucket). §2.18 `HeadToHead` gains optional `total`, `last_result`, `streak {holder:'me'|'them', length}` and `rival` (total ≥ `RIVAL_MIN_SETTLED` = 3), always sent by this server on every `headToHead()` reply (face-match, `GET /v1/users/:id/head-to-head`, `seed-h2h`); new `StageRivalry` and `rivalryOf()`. §3.4 `bet.invited` gains optional `rivalry: StageRivalry` (A's view, computed before the challenge transaction); the projector shows "Logan 4–7 Jake · Rivals" under VS for face challenges.
 - **2026-11-18, the GG moment + the spoken review (feat/gg-moment):** new §2.12a (the review request: loser-only confirm through the normal appeal, `confirm_by = appeal_deadline − 1 s`, never extended, once per ruling, lapse / decline, the race order; `bet.gg` with the record before / after). §2.17 adds `POST /v1/demo/bets/:bet_id/review`. §3.4 adds `bet.gg`, `review.requested`, `review.closed` (and `bet.gg` in the CONCEDED row). §4.3: `request_review` replaces `file_appeal` (no `party`: the mic can't tell who spoke) and the built-in `skip_turn`. §4.5: `RULING` tells the loser to tap GG or say "check it again"; `PAID` carries `via` / `loser` / `record` / `review` for a concede or a finalize (resolve_appeal unchanged); new `REVIEW_CLOSED` (speak:false); the stage says "Logan says GG." for `via=gg`.
+- **2026-11-18, Dance Off (feat/dance-off; additive):** §2.0 index. §2.5 `POST /v1/bets/:bet_id/rematch` (double or nothing for every bet type: either party of a PAID / VOIDED / FINALIZED / EXPIRED bet, same room, caller = A, `supersedes_bet_id`, `suggested_stake_usd` = 2 × the old per-side stake capped at max_stake, the shared challenge code). §2.7 `POST /v1/bets/:bet_id/terms/dance`. §2.9 dance attempts (A's judge cam, else A's phone records; never B's; `max_ms` 30000) and `POST …/attempts/:n/dance` (DanceUpload, server re-score, the deterministic `rule/dance-off@1` ruling, VOID `undecidable` for too close / failed / invalid, never REDO). §2.12 / §2.12a no appeal and no review for a dance off. §3.4 `dance.scored` (**NEW**) and `bet.invited.rematch_of` / `suggested_stake_usd`. §7.1 the round check.
 - **2026-11-18 (odds, feat/odds):** new §2.19 (offer / accept / withdraw / suggest routes, the protocol rules, the history-grounded suggestion), §2.0 index row. §2.7 note. §2.14 `their_stake`, seed titles. §2.17 `seed-h2h` `records` + `performer_stats`, seed rows carry terms rows. §3.4 `odds.offered`, `odds.answered`, `odds.agreed`. §4.3 `propose_terms` `stake_b_usd` (optional, additive), the odds read-back and `odds: 'tap_accept'`, `confirm_terms` `ODDS_PENDING`, the new `suggest_odds` webhook tool. §4.5 cues `ODDS_OFFERED`, `ODDS_COUNTERED`, `ODDS_AGREED`.

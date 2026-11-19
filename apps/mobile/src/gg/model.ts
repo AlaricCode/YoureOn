@@ -270,11 +270,18 @@ export function reviewLayer(
   return tag ? { kind: 'tag', tag } : null;
 }
 
-/** The voice host's mic opens in RULED only for a ruling that can be reviewed. */
+/**
+ * The voice host's mic opens in RULED only for a ruling that can be reviewed: a decisive camera
+ * ruling, never a Dance Off's (its score is deterministic: no "check it again", DANCE-OFF §5).
+ */
 export function reviewable(b: {
   ruling: { ruling: { outcome: string } } | null;
-  envelope: { terms: { evidence_source: string } } | null;
+  envelope: { terms: { evidence_source: string; type?: string } } | null;
 }): boolean {
   const o = b.ruling?.ruling.outcome;
-  return (o === 'A_WINS' || o === 'B_WINS') && b.envelope?.terms.evidence_source === 'camera';
+  return (
+    (o === 'A_WINS' || o === 'B_WINS') &&
+    b.envelope?.terms.evidence_source === 'camera' &&
+    b.envelope.terms.type !== 'dance_off'
+  );
 }

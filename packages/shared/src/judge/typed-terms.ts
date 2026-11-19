@@ -28,8 +28,12 @@ export const termsConfirmPath = (betId: string) =>
 export const TYPED_STAKES_USD = [1, 5, 10, 20] as const;
 export type TypedStakeUsd = (typeof TYPED_STAKES_USD)[number];
 
-/** The projection with only `claim` and `amount_usd` required (lenient on unknown keys). */
+/**
+ * The projection with only `claim` and `amount_usd` required (lenient on unknown keys). Not a
+ * dance off: those go through /terms/dance (./dance-terms), which binds a bundled routine.
+ */
 export const TypedTermsRequest = ProposeTermsProjection.partial().extend({
+  type: z.enum(['skill', 'real_world']).optional(),
   claim: z.string().min(1).max(400),
   amount_usd: z.string().min(1).max(16),
 });

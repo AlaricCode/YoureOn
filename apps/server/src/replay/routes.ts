@@ -8,7 +8,8 @@
 //   no-store  a confirmed foul (deps.replayFouls) can arrive after the ruling.
 //
 // why: not_ruled (no ruling yet, or a REDO) · no_winner (VOID, or an appeal upheld a VOID) ·
-// no_frames (a Gemini settlement, or nothing showable) · purged (the attempt's frames are gone).
+// no_frames (a Gemini settlement, a Dance Off, or nothing showable) · purged (the attempt's
+// frames are gone).
 import { and, desc, eq } from 'drizzle-orm';
 import { attempts, bets } from '@youre-on/db';
 import type { BetSnapshot } from '@youre-on/shared/api';
@@ -21,7 +22,7 @@ import {
   ReplayResponse,
   type ReplayWhy,
 } from '@youre-on/shared/replay';
-import { GEMINI_SETTLEMENT_MODEL } from '@youre-on/shared/ruling';
+import { DANCE_OFF_MODEL, GEMINI_SETTLEMENT_MODEL } from '@youre-on/shared/ruling';
 import type { AppDeps, RouteModule } from '../context';
 import { requireSession } from '../auth/middleware';
 import { HttpError, validationError } from '../errors';
@@ -50,7 +51,13 @@ export async function computeReplay(
   const appeal = snap.appeal?.original_ruling_hash === ruling_hash ? snap.appeal : null;
   const finalOutcome = appeal?.final_outcome ?? ruling.outcome;
   if (finalOutcome !== 'A_WINS' && finalOutcome !== 'B_WINS') return none('no_winner');
-  if (ruling.model === GEMINI_SETTLEMENT_MODEL || ruling.frame_hashes.length === 0)
+  // A Dance Off's key frames are stills of a 15 s round, not a landing: no slow-mo replay (its
+  // evidence_canonical is a DanceEvidence, which the landing-window builder can't read).
+  if (
+    ruling.model === GEMINI_SETTLEMENT_MODEL ||
+    ruling.model === DANCE_OFF_MODEL ||
+    ruling.frame_hashes.length === 0
+  )
     return none('no_frames');
 
   const cols = {

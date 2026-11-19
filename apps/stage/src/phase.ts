@@ -1,7 +1,9 @@
 // Where the focused bet is in the demo's arc, for the phase rail across the top of the stage and
-// for which "moment" the big panel shows: Challenge -> Terms -> Lock -> Attempt (or Market) ->
-// Ruling -> Paid. Derived from both the server state and the events folded so far, taking the
-// furthest of the two, so a lagging bet.state or a cold-start snapshot never moves it backwards.
+// for which "moment" the big panel shows: Challenge -> Terms -> Lock -> Attempt (or Market, or
+// Dance off) -> Ruling -> Paid. Derived from both the server state and the events folded so far,
+// taking the furthest of the two, so a lagging bet.state or a cold-start snapshot never moves it
+// backwards.
+import { isDanceBet } from './dance';
 import type { BetView } from './ticker';
 
 export const PHASES = ['challenge', 'terms', 'lock', 'play', 'ruling', 'paid'] as const;
@@ -66,6 +68,7 @@ export interface PhaseStep {
 
 export function phaseSteps(b: BetView | null): PhaseStep[] {
   const market = b ? isMarketBet(b) : false;
+  const dance = isDanceBet(b);
   const refund =
     (b?.appeal_result?.final_outcome ?? b?.ruling?.outcome) === 'VOID' ||
     b?.state === 'VOIDED' ||
@@ -76,7 +79,7 @@ export function phaseSteps(b: BetView | null): PhaseStep[] {
     challenge: 'Challenge',
     terms: 'Terms',
     lock: 'Lock',
-    play: market ? 'Market' : 'Attempt',
+    play: market ? 'Market' : dance ? 'Dance off' : 'Attempt',
     ruling: 'Ruling',
     paid: refund ? 'Refund' : 'Paid',
   };

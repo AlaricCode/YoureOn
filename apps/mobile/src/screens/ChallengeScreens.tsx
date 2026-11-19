@@ -10,6 +10,8 @@
 //                    the card still arrives by the terms.proposed push; "Lock it in" confirms.
 //                    "Bet on Bitcoin" (Beat 6, app/marketTerms) swaps in the market panel: Up or
 //                    Down, a stake, Gemini's live odds and the fair split, then the same card.
+//                    "Dance off" (app/danceTerms, DANCE-OFF §6.2) swaps in the dance panel: one of
+//                    the bundled routines and an even stake, then the same card.
 import { File } from 'expo-file-system';
 import {
   useEffect,
@@ -79,6 +81,7 @@ import {
 } from '../ui/parts';
 import { StakePicker } from '../ui/StakePicker';
 import { avatarSize, border, color, half, palette, radius, space, type } from '../ui/tokens';
+import { WAKE_COPY, wt } from '../wake/copy';
 import { COPY, fill, SCAN_MISS_COPY, t } from './copy';
 
 /**
@@ -307,12 +310,15 @@ function deletePhoto(url: string): void {
 export function IncomingScreen({
   challenger,
   roomName,
+  rematch = false,
   onAccept,
   onDecline,
   tag,
 }: {
   challenger: string;
   roomName: string;
+  /** The invite follows a finished bet (bet.invited rematch_of): "Double or nothing". */
+  rematch?: boolean;
   onAccept: () => void;
   onDecline: () => void;
   tag?: string | undefined;
@@ -338,6 +344,11 @@ export function IncomingScreen({
     >
       {/* An 88 pt disc so the headline leads; the headline at 44 in a column 32 pt in from each
           edge, so "challenged you" never runs edge to edge. */}
+      {rematch ? (
+        <View style={styles.rematchTag} testID="incoming-rematch">
+          <Chip label={t(COPY.rematch.incoming)} tone="accent" />
+        </View>
+      ) : null}
       <Avatar name={challenger} size={avatarSize.moment} />
       <MomentHeadline size="lg" lines={3} inset={space.x4} letterSpacing={-0.8}>
         {fill.challenged(challenger)}
@@ -393,6 +404,41 @@ export interface MarketTermsPanel {
   onConfirm: () => void;
 }
 
+/** A's "Dance off" panel (app/danceTerms DanceState, flattened for the screen). */
+export interface DanceTermsPanel {
+  open: boolean;
+  /** The bundled routines (app/danceTerms DANCE_ROUTINE_CHOICES). */
+  routines: readonly { id: string; title: string; song: string; bpm: number }[];
+  routineId: string;
+  stakeUsd: number;
+  stakes: readonly number[];
+  /** The claim the card will read (null while the pick is not a routine and an amount). */
+  preview: string | null;
+  sending: boolean;
+  confirming: boolean;
+  canSubmit: boolean;
+  canConfirm: boolean;
+  waitingFor: string | null;
+  note: string | null;
+  onOpen: () => void;
+  onClose: () => void;
+  onRoutine: (id: string) => void;
+  onStake: (usd: number) => void;
+  onSubmit: () => void;
+  onConfirm: () => void;
+}
+
+/**
+ * A's judge before it starts (app/wakeGate): it waits for "Jarvis" (../wake) or a tap. The line
+ * is the wake status (wake/copy STATUS_COPY: 'Say “Jarvis”', 'Go ahead', 'Mic access off', …).
+ */
+export interface NegotiateWake {
+  line: string | null;
+  onTapToTalk: () => void;
+  /** Only while the mic or speech permission is off: opens the Settings app. */
+  onOpenSettings?: (() => void) | undefined;
+}
+
 /** A's typed-terms form (app/typedTerms TypedState, flattened for the screen). */
 export interface TypedTermsPanel {
   mode: 'voice' | 'typed';
@@ -429,7 +475,9 @@ export function NegotiateScreen({
   draft,
   typed,
   market,
+  dance,
   odds,
+  wake,
   onBack,
   onDecline,
   tag,
@@ -451,8 +499,12 @@ export function NegotiateScreen({
   typed?: TypedTermsPanel | undefined;
   /** Only on A's phone, with the Gemini relay on: Beat 6. */
   market?: MarketTermsPanel | undefined;
+  /** Only on A's phone, with EXPO_PUBLIC_DANCE on: the Dance Off panel. */
+  dance?: DanceTermsPanel | undefined;
   /** Both phones: the odds offer / counter / judge's suggestion (odds/useOdds useOddsPanel). */
   odds?: OddsOfferPanel | undefined;
+  /** Only on A's phone, while its judge waits for "Jarvis" or "Tap to talk". */
+  wake?: NegotiateWake | undefined;
   onBack?: (() => void) | undefined;
   onDecline: () => void;
   tag?: string | undefined;
@@ -489,6 +541,11 @@ export function NegotiateScreen({
 
   if (market?.open)
     return <MarketPanel market={market} draftCard={draftCard} onDecline={onDecline} tag={tag} />;
+  if (dance?.open)
+    return <DancePanel dance={dance} draftCard={draftCard} onDecline={onDecline} tag={tag} />;
+  const danceOpen = dance ? (
+    <QuietButton testID="dance-open" label={t(COPY.dance.open)} onPress={dance.onOpen} />
+  ) : null;
 
   if (typed && typing)
     return (
@@ -535,6 +592,7 @@ export function NegotiateScreen({
                   onPress={market.onOpen}
                 />
               ) : null}
+              {danceOpen}
             </ScrollView>
             <View style={styles.actions}>
               {typed.canConfirm ? (
@@ -588,10 +646,14 @@ export function NegotiateScreen({
             />
           ) : speaking ? (
             <DotsLabel text={t(COPY.negotiate.speaking)} variant="value" />
+          ) : wake ? (
+            <Label testID="wake-line" variant="value">
+              {wake.line ?? wt(WAKE_COPY.hint)}
+            </Label>
           ) : (
             <DotsLabel text={t(COPY.negotiate.listening)} variant="value" />
           )}
-          {hasMic ? (
+          {hasMic && !wake ? (
             <Chip
               label={micMuted ? t(COPY.negotiate.micMuted) : t(COPY.negotiate.micOn)}
               tone={micMuted ? 'muted' : 'accent'}
@@ -621,6 +683,21 @@ export function NegotiateScreen({
         {offerCard}
         {draftCard}
         <View style={styles.actions}>
+          {wake ? (
+            <PrimaryButton
+              testID="wake-tap"
+              label={wt(WAKE_COPY.tapToTalk)}
+              onPress={wake.onTapToTalk}
+            />
+          ) : null}
+          {wake?.onOpenSettings ? (
+            <TextButton
+              small
+              testID="wake-settings"
+              label={wt(WAKE_COPY.openSettings)}
+              onPress={wake.onOpenSettings}
+            />
+          ) : null}
           {typed ? (
             <QuietButton
               testID="typed-open"
@@ -631,6 +708,7 @@ export function NegotiateScreen({
           {market ? (
             <QuietButton testID="market-open" label={t(COPY.market.open)} onPress={market.onOpen} />
           ) : null}
+          {danceOpen}
           <TextButton small tone="danger" label={t(COPY.negotiate.decline)} onPress={onDecline} />
         </View>
       </Page>
@@ -828,6 +906,135 @@ function MarketPanel({
 }
 
 /**
+ * Dance Off: one of the bundled routines (a card each: title, tempo; the chosen one is the
+ * #1C1C1F tile with its tempo in green, like the market's side), an even stake, and the claim
+ * the card will read. "Send terms" proposes; the card arrives by push; "Lock it in" confirms.
+ */
+function DancePanel({
+  dance,
+  draftCard,
+  onDecline,
+  tag,
+}: {
+  dance: DanceTermsPanel;
+  draftCard: ReactNode;
+  onDecline: () => void;
+  tag?: string | undefined;
+}) {
+  const frozen = dance.sending || dance.confirming;
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const hasCard = draftCard !== null;
+  return (
+    <Screen>
+      <TopBar onBack={dance.onClose} title={t(COPY.dance.panel)} tag={tag} />
+      <Page>
+        <ScrollView
+          ref={scroll}
+          style={styles.flex}
+          contentContainerStyle={styles.form}
+          onContentSizeChange={() => {
+            if (hasCard) scroll.current?.scrollToEnd({ animated: true });
+          }}
+        >
+          <Label variant="small" style={styles.fieldLabel}>
+            {t(COPY.dance.routine)}
+          </Label>
+          <View style={styles.routines} accessibilityRole="radiogroup">
+            {dance.routines.map((r) => {
+              const on = dance.routineId === r.id;
+              return (
+                <Pressable
+                  key={r.id}
+                  testID={`dance-routine-${r.id}`}
+                  accessibilityRole="radio"
+                  accessibilityLabel={r.title}
+                  accessibilityState={{ selected: on, disabled: frozen }}
+                  disabled={frozen}
+                  onPress={() => dance.onRoutine(r.id)}
+                  style={({ pressed }) => [
+                    styles.routineCard,
+                    on && styles.sideOn,
+                    frozen && styles.frozen,
+                    pressed && !frozen && styles.pressed,
+                  ]}
+                >
+                  {/* Title and tempo only: no subtitle under a label (ui/copyRule rule 2). */}
+                  <Text
+                    style={[type.labelMedium, styles.flex, !on && styles.offText]}
+                    numberOfLines={1}
+                  >
+                    {r.title}
+                  </Text>
+                  <Text style={[type.labelMedium, on ? styles.onPct : styles.offText]}>
+                    {fill.bpm(r.bpm)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Label variant="small" style={styles.fieldLabel}>
+            {t(COPY.dance.stake)}
+          </Label>
+          <StakePicker
+            options={dance.stakes}
+            value={dance.stakeUsd}
+            onChange={dance.onStake}
+            testIDPrefix="dance-stake-"
+            disabled={frozen}
+            // A double or nothing's suggestion can be cents ($4.96): "$4.96", never "$4.96000".
+            format={(usd) => (Number.isInteger(usd) ? `$${usd}` : `$${usd.toFixed(2)}`)}
+          />
+          {dance.preview && !hasCard ? (
+            <Card style={styles.marketCard}>
+              <Hairline />
+              <Label variant="small">{t(COPY.dance.theBet)}</Label>
+              <DataText variant="heading">{dance.preview}</DataText>
+            </Card>
+          ) : null}
+          {dance.note ? <DataText muted>{dance.note}</DataText> : null}
+          {draftCard}
+        </ScrollView>
+        <View style={styles.actions}>
+          {dance.canConfirm ? (
+            <PrimaryButton
+              testID="dance-confirm"
+              label={t(COPY.negotiate.lockItIn)}
+              busy={dance.confirming}
+              onPress={dance.onConfirm}
+            />
+          ) : dance.waitingFor !== null ? (
+            <PrimaryButton
+              testID="dance-waiting"
+              label={fill.waitingFor(dance.waitingFor)}
+              disabled
+              onPress={() => undefined}
+            />
+          ) : (
+            <PrimaryButton
+              testID="dance-send"
+              label={t(COPY.dance.propose)}
+              busy={dance.sending}
+              disabled={!dance.canSubmit}
+              onPress={dance.onSubmit}
+            />
+          )}
+          <View style={styles.exits}>
+            <TextButton dense tone="plain" label={t(COPY.dance.back)} onPress={dance.onClose} />
+            <TextButton
+              dense
+              small
+              tone="danger"
+              label={t(COPY.negotiate.decline)}
+              onPress={onDecline}
+            />
+          </View>
+        </View>
+      </Page>
+    </Screen>
+  );
+}
+
+/**
  * The claim well: a #0F0F11 fill, radius 14, no outline; focused, a 1 pt green border (the kit
  * TextField's treatment, multi-line). Return puts the keyboard away instead of adding a line.
  */
@@ -970,4 +1177,16 @@ const styles = StyleSheet.create({
   chipCentred: { alignSelf: 'center' },
   replay: { alignItems: 'flex-start', paddingVertical: half.x15 },
   marketCard: { marginTop: space.x3 },
+  // Dance Off: one row per routine, no outlines (the chosen one is the #1C1C1F tile).
+  routines: { gap: half.x15 },
+  routineCard: {
+    minHeight: space.control + space.x2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.x2,
+    paddingHorizontal: space.x2,
+    borderRadius: radius.lg,
+    backgroundColor: palette.background,
+  },
+  rematchTag: { alignSelf: 'stretch', flexDirection: 'row', justifyContent: 'center' },
 });

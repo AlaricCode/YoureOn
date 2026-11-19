@@ -21,6 +21,7 @@ import {
   UserRef,
   Uuid,
 } from './primitives';
+import { MAX_STAKE, MICRO_PER_USD } from './constants';
 import { OnchainOutcome, Ruling } from './ruling';
 import { StageVoiceName, VoicedEventType } from './stage-voice';
 import { TermsEnvelope } from './terms';
@@ -938,3 +939,63 @@ export const ChallengeReceivedPush = z.object({
   body: z.string(),
 });
 export type ChallengeReceivedPush = z.infer<typeof ChallengeReceivedPush>;
+
+// ---------------------------------------------------------------------------------------
+// Dance Off (docs/planning/DANCE-OFF.md §5, §7)
+// ---------------------------------------------------------------------------------------
+
+export {
+  DANCE_STAKES_USD,
+  DanceTermsRequest,
+  DanceTermsResponse,
+  danceTermsPath,
+} from './judge/dance-terms';
+
+/** POST /v1/bets/:bet_id/attempts/:n/dance (multipart: `upload` DanceUpload JSON + `frame` × 4). */
+export const danceUploadPath = (betId: string, attemptNo: number) =>
+  `/v1/bets/${encodeURIComponent(betId)}/attempts/${attemptNo}/dance`;
+
+/** 202 to a dance upload: the server's own scores and the record's hash; the ruling follows. */
+export const DanceUploadResponse = z.object({
+  judging: z.literal(true),
+  evidence_hash: Hex32,
+  pose_sha256: Hex32,
+  /** Server-recomputed tenths. */
+  scores: z.object({ a: z.number().int(), b: z.number().int() }),
+  /** The phone's scores differed from the server's (logged; the server's count). */
+  client_mismatch: z.boolean(),
+  frame_hashes: z.array(Hex32),
+});
+export type DanceUploadResponse = z.infer<typeof DanceUploadResponse>;
+
+/**
+ * §7 double or nothing, any bet type: POST /v1/bets/:bet_id/rematch (signed; either party; the
+ * bet is PAID, VOIDED, FINALIZED or EXPIRED). Creates a DRAFTING bet in the same room with the
+ * caller as A and `supersedes_bet_id` = this bet; B gets bet.invited {rematch_of,
+ * suggested_stake_usd}.
+ */
+export const rematchPath = (betId: string) => `/v1/bets/${encodeURIComponent(betId)}/rematch`;
+export const RematchRequest = z.object({});
+export type RematchRequest = z.infer<typeof RematchRequest>;
+export const RematchResponse = z.object({
+  bet_id: BetId,
+  /** Dollars per side for the stake chip default. */
+  suggested_stake_usd: z.number().positive(),
+});
+export type RematchResponse = z.infer<typeof RematchResponse>;
+
+/**
+ * §7: 2 × the old per-side stake (the larger side, for an odds bet), capped at max_stake, in
+ * dollars rounded down to whole cents.
+ */
+export function suggestedRematchStakeUsd(
+  stakes: { a: string; b: string },
+  maxStake: bigint = MAX_STAKE,
+): number {
+  const a = BigInt(stakes.a);
+  const b = BigInt(stakes.b);
+  let s = 2n * (a > b ? a : b);
+  if (s > maxStake) s = maxStake;
+  const cents = s / (MICRO_PER_USD / 100n);
+  return Number(cents) / 100;
+}

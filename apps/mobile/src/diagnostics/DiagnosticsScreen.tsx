@@ -35,6 +35,10 @@ const VisionCameraPanel = lazy(() => importSafely(() => import('./VisionCameraPa
 const ExpoCameraPanel = lazy(() => importSafely(() => import('./ExpoCameraPanel')));
 /** Every app screen on stand-in data, until auth (D0-M4), realtime and navigation exist. */
 const PreviewApp = lazy(() => importSafely(() => import('../preview/PreviewApp')));
+/** Dance Off calibration (DANCE-OFF §6.4): live pose readout, sessions, sync offset, self test. */
+const DanceCalibrationScreen = lazy(() =>
+  importSafely(() => import('../dance/DanceCalibrationScreen')),
+);
 
 /**
  * The model is 13.6 MB; over a Metro tunnel the first load can take a while. The Face ID check
@@ -60,6 +64,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
   const [running, setRunning] = useState(false);
   const [panel, setPanel] = useState<CameraPanel | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [danceOpen, setDanceOpen] = useState(false);
 
   const setResult = useCallback((id: CheckId, result: CheckResult) => {
     setResults((prev) => ({ ...prev, [id]: result }));
@@ -167,6 +172,14 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
               setPreviewOpen(true);
             }}
           />
+          <Button
+            color={BUTTON_TINT}
+            title="Dance calibration"
+            onPress={() => {
+              setPanel(null);
+              setDanceOpen(true);
+            }}
+          />
           {onClose ? (
             <Button
               color={BUTTON_TINT}
@@ -235,6 +248,20 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
           <PanelErrorBoundary name="App preview" onError={() => undefined}>
             <Suspense fallback={<ActivityIndicator color={palette.accent} />}>
               <PreviewApp onClose={() => setPreviewOpen(false)} />
+            </Suspense>
+          </PanelErrorBoundary>
+        ) : null}
+      </Modal>
+      <Modal
+        visible={danceOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setDanceOpen(false)}
+      >
+        {danceOpen ? (
+          <PanelErrorBoundary name="Dance calibration" onError={() => undefined}>
+            <Suspense fallback={<ActivityIndicator color={palette.accent} />}>
+              <DanceCalibrationScreen onClose={() => setDanceOpen(false)} />
             </Suspense>
           </PanelErrorBoundary>
         ) : null}

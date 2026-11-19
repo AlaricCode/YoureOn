@@ -101,7 +101,13 @@ export type SubmitMarketOutcome =
 
 export type MarketEvent =
   /** A new bet; with a card already shown (a restart), the panel reopens on it, ready to lock. */
-  | { type: 'init'; bet_id: string; shown?: ShownMarketCard | null }
+  | {
+      type: 'init';
+      bet_id: string;
+      shown?: ShownMarketCard | null;
+      /** A double or nothing (app/rematch chipAtMost): the chip the panel starts on. */
+      stakeUsd?: MarketStakeUsd | null;
+    }
   | { type: 'open' }
   | { type: 'close' }
   | { type: 'side'; side: MarketCall }
@@ -134,7 +140,7 @@ export function marketReducer(s: MarketState, e: MarketEvent): MarketState {
             stakeUsd: e.shown.stakeUsd,
             proposedHash: e.shown.terms_hash,
           }
-        : { ...initialMarket, bet_id: e.bet_id };
+        : { ...initialMarket, bet_id: e.bet_id, stakeUsd: e.stakeUsd ?? initialMarket.stakeUsd };
     case 'open':
       return s.bet_id === null || s.phase !== 'closed' ? s : { ...s, phase: 'browsing' };
     case 'close':

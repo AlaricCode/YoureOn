@@ -476,7 +476,7 @@ export function PhoneStage({
         stream={src.status === 'live' ? (panes.streams.get(src.req) ?? null) : null}
         name={slotName(bet, s)}
         cue={cues[s]}
-        cueLabel={cues[s] ? cueText(bet, cues[s]) : null}
+        cueLabel={cues[s] ? cueText(bet, cues[s], s) : null}
         onClick={() => panes.clickSlot(s)}
       />
     );

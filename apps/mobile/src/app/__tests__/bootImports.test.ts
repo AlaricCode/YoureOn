@@ -19,6 +19,15 @@ const FACE_NATIVE_PACKAGES = [
 ];
 /** App modules that pull those in. */
 const FACE_NATIVE_MODULES = ['src/face/native.ts', 'src/face/loadModel.ts'];
+/**
+ * The Dance Off pose camera, a local Expo module (DANCE-OFF §6.1): the app and the preview load
+ * the dance screens that use it through importSafely(() => import('../dance/index')) only, and
+ * the dance screens load the module itself through importSafely(() => import(...)) as well, so a
+ * binary without it (or one where it fails) loses the dance camera, not the app.
+ */
+const DANCE_NATIVE_DIR = 'modules/dance-pose/';
+/** The hidden dance calibration screen: diagnostics loads it lazily, nothing else reaches it. */
+const DANCE_LAZY_MODULES = ['src/dance/DanceCalibrationScreen.tsx'];
 
 // `import … from 'x'`, `import 'x'`, `export … from 'x'` at the start of a line (so comments
 // do not count). `import type` / `export type` are erased by the compiler and skipped below;
@@ -87,6 +96,11 @@ describe('app start', () => {
     expect(files.filter((f) => f.endsWith('.tflite'))).toEqual([]);
   });
 
+  it('loads none of the dance pose module (nor the dance calibration screen) at start', () => {
+    expect(files.filter((f) => f.startsWith(DANCE_NATIVE_DIR))).toEqual([]);
+    expect(DANCE_LAZY_MODULES.filter((m) => files.includes(m))).toEqual([]);
+  });
+
   // The design preview (diagnostics > App preview) loads lazily, but as one module graph: a face
   // native reached statically from it fails the whole preview, which is the only way to render
   // the terms card, ruling, appeal and market screens without a real bet. The simulator build
@@ -97,13 +111,15 @@ describe('app start', () => {
     expect(previewFiles).toContain('src/screens/PlayScreens.tsx');
     expect(FACE_NATIVE_PACKAGES.filter((p) => preview.packages.has(p))).toEqual([]);
     expect(FACE_NATIVE_MODULES.filter((m) => previewFiles.includes(m))).toEqual([]);
+    expect(previewFiles.filter((f) => f.startsWith(DANCE_NATIVE_DIR))).toEqual([]);
+    expect(DANCE_LAZY_MODULES.filter((m) => previewFiles.includes(m))).toEqual([]);
   });
 
   // A bare import() of a module that throws while it loads does not reject: Metro hands the
   // error to the fatal handler and a Release build aborts (app/importSafely). Seen on the
   // simulator: "Scan a face" warms the embedder up, which imported face/native bare; ML Kit is
   // not in that build, its module threw at load, and the app died instead of turning face off.
-  it('every import() of the face natives goes through importSafely', () => {
+  it('every import() of the face natives or the dance natives goes through importSafely', () => {
     const bare: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
@@ -117,9 +133,12 @@ describe('app start', () => {
         for (const m of src.matchAll(/import\(\s*['"]([^'"]+)['"]\s*\)/g)) {
           const spec = m[1] as string;
           const target = spec.startsWith('.') ? resolveRelative(p, spec) : null;
+          const rel = target !== null ? relative(APP_ROOT, target) : '';
           const face =
             FACE_NATIVE_PACKAGES.includes(spec) ||
-            (target !== null && FACE_NATIVE_MODULES.includes(relative(APP_ROOT, target)));
+            FACE_NATIVE_MODULES.includes(rel) ||
+            rel.startsWith(DANCE_NATIVE_DIR) ||
+            DANCE_LAZY_MODULES.includes(rel);
           if (!face) continue;
           const line = src.slice(0, m.index).split('\n').length;
           const before = src.slice(Math.max(0, (m.index ?? 0) - 40), m.index);

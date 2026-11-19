@@ -6,6 +6,11 @@
 //     lock/terms.ts persistEvaluation (the body of voice/tools.ts termsSink): terms.proposed +
 //     bet.state TERMS_PROPOSED, or terms.draft, or a refusal that cancels the bet (terms.refused,
 //     judge.cue REFUSED). Unlike the webhook, the persist is awaited: the phone gets the outcome.
+//   POST /v1/bets/:bet_id/terms/dance    (S, party A; DRAFTING | TERMS_PROPOSED)
+//     DanceTermsRequest {routine_id, amount_usd} -> danceTermsArgs (DANCE-OFF §1: the routine's
+//     id, version and sha256 prefix ride in success_criteria[0]; both perform, A is the yes party,
+//     one round, even money) -> the same evaluateProposeTerms + persistEvaluation (source
+//     'dance'). 404 NOT_FOUND for a routine this server doesn't bundle. No odds (even money).
 //   POST /v1/bets/:bet_id/terms/confirm  (S, party A; TERMS_PROPOSED)
 //     {terms_hash} must be the bet's current terms (409 TERMS_HASH_MISMATCH otherwise), then the
 //     confirm_terms step (voice/tools.ts confirmAndLock): freeze -> AWAITING_AUTHORIZATIONS ->
@@ -19,8 +24,19 @@
 import type { Context } from 'hono';
 import { isTerminalBetState } from '@youre-on/shared/bet-state';
 import { MAX_STAKE } from '@youre-on/shared/constants';
+import { ROUTINE_IDS } from '@youre-on/shared/dance/routine';
+import {
+  danceTermsArgs,
+  DanceTermsRequest,
+  type DanceTermsResponse,
+} from '@youre-on/shared/judge/dance-terms';
 import { newRoundLine } from '@youre-on/shared/judge/market-terms';
-import { evaluateProposeTerms, proposeTermsReply } from '@youre-on/shared/judge/reply';
+import {
+  evaluateProposeTerms,
+  proposeTermsReply,
+  type ProposeEvaluation,
+} from '@youre-on/shared/judge/reply';
+import { parseUsd } from '@youre-on/shared/money';
 import {
   TermsConfirmRequest,
   typedTermsArgs,
@@ -28,7 +44,7 @@ import {
   type TermsConfirmResponse,
   type TypedTermsResponse,
 } from '@youre-on/shared/judge/typed-terms';
-import type { AppEnv, RouteModule } from '../context';
+import type { AppDeps, AppEnv, RouteModule } from '../context';
 import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import type { BucketSpec } from '../http/rate-limit';
@@ -37,7 +53,7 @@ import type { BetRow } from '../bets/snapshot';
 import { readBet } from '../lock/common';
 import { priorAnswers } from '../bets/invite';
 import { betIdParam } from '../lock/routes';
-import { displayCode, loadEnvelope, persistEvaluation } from '../lock/terms';
+import { displayCode, loadEnvelope, persistEvaluation, type PersistResult } from '../lock/terms';
 import { marketMessage } from '../markets/routes';
 import { confirmAndLock, PROPOSABLE_STATES } from '../voice/tools';
 
@@ -63,6 +79,50 @@ export async function partyABet(c: Context<AppEnv>): Promise<{ bet: BetRow; user
       { bet_id: betId },
     );
   return { bet, userId: me.user_id };
+}
+
+/** A typed / dance proposal's outcome as the phone's TypedTermsResponse. */
+async function typedResponse(
+  deps: Pick<AppDeps, 'db'>,
+  betId: string,
+  evaluation: ProposeEvaluation,
+  reply: ReturnType<typeof proposeTermsReply>,
+  r: PersistResult,
+): Promise<TypedTermsResponse> {
+  const say = typeof reply.say === 'string' ? reply.say : '';
+  switch (r.kind) {
+    case 'skipped': {
+      // The bet moved on between the read and the row lock (a race with the voice judge).
+      const now = await readBet(deps.db, betId);
+      throw new HttpError('INVALID_STATE', 'These terms are already set.', {
+        state: now?.state ?? null,
+      });
+    }
+    case 'refused':
+      return {
+        ok: false,
+        kind: 'refused',
+        category: evaluation.kind === 'refused' ? evaluation.refusal.category : 'unknown',
+        say,
+      };
+    case 'draft':
+      return {
+        ok: false,
+        kind: 'draft',
+        fix: typeof reply.fix === 'string' ? reply.fix : null,
+        missing: evaluation.kind === 'proposal' ? evaluation.missing.map(String) : [],
+        say,
+      };
+    case 'proposed':
+      return {
+        ok: true,
+        kind: 'proposed',
+        state: 'TERMS_PROPOSED',
+        terms_hash: r.envelope.terms_hash,
+        code: displayCode(r.envelope.terms_hash),
+        say,
+      };
+  }
 }
 
 export const termsRoutes: RouteModule = {
@@ -93,44 +153,55 @@ export const termsRoutes: RouteModule = {
         draftedBy: 'party_a',
       });
       deps.log.info('terms.typed', { bet_id: bet.id, kind: evaluation.kind, result: r.kind });
-      const say = typeof reply.say === 'string' ? reply.say : '';
-      let res: TypedTermsResponse;
-      switch (r.kind) {
-        case 'skipped': {
-          // The bet moved on between the read and the row lock (a race with the voice judge).
-          const now = await readBet(deps.db, bet.id);
-          throw new HttpError('INVALID_STATE', 'These terms are already set.', {
-            state: now?.state ?? null,
-          });
-        }
-        case 'refused':
-          res = {
-            ok: false,
-            kind: 'refused',
-            category: evaluation.kind === 'refused' ? evaluation.refusal.category : 'unknown',
-            say,
-          };
-          break;
-        case 'draft':
-          res = {
-            ok: false,
-            kind: 'draft',
-            fix: typeof reply.fix === 'string' ? reply.fix : null,
-            missing: evaluation.kind === 'proposal' ? evaluation.missing.map(String) : [],
-            say,
-          };
-          break;
-        case 'proposed':
-          res = {
-            ok: true,
-            kind: 'proposed',
-            state: 'TERMS_PROPOSED',
-            terms_hash: r.envelope.terms_hash,
-            code: displayCode(r.envelope.terms_hash),
-            say,
-          };
-          break;
+      return c.json(await typedResponse(deps, bet.id, evaluation, reply, r), 200);
+    });
+
+    // DANCE-OFF §1: A picks a bundled routine and an even stake; the server writes the terms.
+    app.post('/v1/bets/:bet_id/terms/dance', requireSignedRequest, async (c) => {
+      const deps = c.get('deps');
+      const requestId = c.get('requestId');
+      const { bet } = await partyABet(c);
+      if (!isProposable(bet.state))
+        throw new HttpError('INVALID_STATE', 'These terms are already set.', { state: bet.state });
+      const body = await readBody(c, DanceTermsRequest);
+      try {
+        parseUsd(body.amount_usd.trim().replace(/^\$/, ''));
+      } catch {
+        throw new HttpError('VALIDATION_FAILED', "Dollars like '5' or '5.20'.", {
+          issues: [{ path: 'amount_usd', message: 'not a dollar amount' }],
+        });
       }
+      const args = danceTermsArgs(body);
+      if (!args)
+        throw new HttpError('NOT_FOUND', 'No such routine.', {
+          routine_id: body.routine_id,
+          routines: [...ROUTINE_IDS],
+        });
+
+      const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
+      const evaluation = evaluateProposeTerms(args, {
+        maxStake,
+        realWorldEnabled: false,
+        allowDanceOff: true,
+      });
+      const reply = proposeTermsReply(evaluation, { maxStake });
+      if (evaluation.kind === 'invalid')
+        throw new HttpError('VALIDATION_FAILED', undefined, {
+          issues: evaluation.issues.map((i) => ({ path: i.path, message: i.message })),
+        });
+
+      const r = await persistEvaluation(deps, bet.id, evaluation, {
+        requestId,
+        source: 'dance',
+        draftedBy: 'party_a',
+      });
+      deps.log.info('terms.dance', {
+        bet_id: bet.id,
+        routine_id: body.routine_id,
+        kind: evaluation.kind,
+        result: r.kind,
+      });
+      const res: DanceTermsResponse = await typedResponse(deps, bet.id, evaluation, reply, r);
       return c.json(res, 200);
     });
 

@@ -7,7 +7,7 @@ import { RealtimeEvent } from '@youre-on/shared/realtime';
 import { Ruling } from '@youre-on/shared/ruling';
 import { TermsEnvelope } from '@youre-on/shared/terms';
 
-import { bottleFlip } from '../../preview/data';
+import { bottleFlip, danceOff } from '../../preview/data';
 
 export const flip = bottleFlip('Logan', 'Jake');
 export const BET = flip.terms.bet_id;
@@ -34,6 +34,22 @@ export const envelope = () =>
     presentation: {
       title: 'Bottle flip',
       readback: 'One flip.',
+      stakes_display: '$5 each',
+      odds_display: null,
+      party_a_avatar_url: null,
+      party_b_avatar_url: null,
+    },
+  });
+
+/** A Dance Off (DANCE-OFF §1): real, hash-checked dance terms on the bundled Wave Pop routine. */
+export const dance = danceOff('Logan', 'Jake');
+export const danceEnvelope = () =>
+  TermsEnvelope.parse({
+    terms: dance.terms,
+    terms_hash: dance.termsHash,
+    presentation: {
+      title: 'Dance off',
+      readback: 'Wave Pop, 15 seconds.',
       stakes_display: '$5 each',
       odds_display: null,
       party_a_avatar_url: null,

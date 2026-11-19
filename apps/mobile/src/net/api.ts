@@ -10,8 +10,12 @@ import {
   BetSnapshot,
   CreateBetResponse,
   CreateRoomResponse,
+  DanceUploadResponse,
+  danceUploadPath,
   InviteAnswerResponse,
   JoinRoomResponse,
+  rematchPath,
+  RematchResponse,
   RoomPresenceResponse,
   SignRequest,
   type PartySignature,
@@ -21,8 +25,13 @@ import {
   type PartyAuthorization,
   type PartyDecline,
 } from '@youre-on/shared/authorization';
-import type { CameraEvidence } from '@youre-on/shared/evidence';
+import type { CameraEvidence, DanceUpload } from '@youre-on/shared/evidence';
 import { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
+import {
+  danceTermsPath,
+  DanceTermsResponse,
+  type DanceTermsRequest,
+} from '@youre-on/shared/judge/dance-terms';
 import {
   marketTermsPath,
   MarketTermsResponse,
@@ -269,6 +278,11 @@ export function createYoApi(c: ApiClient) {
     proposeMarketTerms: (betId: string, body: MarketTermsRequest) =>
       c.request('POST', marketTermsPath(betId), { json: body, schema: MarketTermsResponse }),
 
+    // Dance Off (DANCE-OFF §1, party A): one of the bundled routines and an even stake; the
+    // server builds the projection, then the same terms card and /terms/confirm.
+    proposeDanceTerms: (betId: string, body: DanceTermsRequest) =>
+      c.request('POST', danceTermsPath(betId), { json: body, schema: DanceTermsResponse }),
+
     // §2.8 lock
     getLock: (betId: string) =>
       c.request('GET', `${bet(betId)}/lock`, { schema: AuthorizeRequest }),
@@ -313,6 +327,48 @@ export function createYoApi(c: ApiClient) {
         idempotencyKey,
       });
     },
+
+    /**
+     * DANCE-OFF §5: the round's PoseSeries and key frames, multipart (`upload` JSON, then one
+     * `frame` JPEG per upload.frames entry, in that order), signed over the raw bytes. Pin
+     * `idempotencyKey` per (bet, attempt): a resend of the same build is the same bytes.
+     */
+    uploadDance: (
+      betId: string,
+      attemptNo: number,
+      upload: DanceUpload,
+      frames: readonly Uint8Array[],
+      idempotencyKey: string,
+    ) => {
+      const body = buildMultipart(
+        [
+          { name: 'upload', contentType: 'application/json', body: JSON.stringify(upload) },
+          ...frames.map((f, i) => ({
+            name: 'frame',
+            filename: `${String(i).padStart(2, '0')}.jpg`,
+            contentType: 'image/jpeg',
+            body: f,
+          })),
+        ],
+        boundaryFor(idempotencyKey),
+      );
+      return c.request('POST', danceUploadPath(betId, attemptNo), {
+        raw: { bytes: body.bytes, contentType: body.contentType },
+        schema: DanceUploadResponse,
+        idempotencyKey,
+      });
+    },
+
+    /**
+     * DANCE-OFF §7 double or nothing (either party, the bet is over): a new DRAFTING bet in the
+     * same room with this phone as A. Pinned key: a double tap is the same new bet.
+     */
+    rematch: (betId: string, idempotencyKey: string) =>
+      c.request('POST', rematchPath(betId), {
+        json: {},
+        schema: RematchResponse,
+        idempotencyKey,
+      }),
 
     // §2.10 GG
     getConcede: (betId: string) =>

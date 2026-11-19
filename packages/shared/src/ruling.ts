@@ -29,6 +29,13 @@ export const GEMINI_SETTLEMENT_MODEL = 'rule/gemini-settlement@1';
  */
 export const CACHED_RULING_MODEL = 'cache/demo-bottle@1';
 
+/**
+ * The model id of a deterministic Dance Off ruling (DANCE-OFF §5): the shared scorer decides,
+ * Claude only validates the round. The one Ruling that may carry void_reason 'undecidable'
+ * (too close to call, a failed round, or an invalid one: both refunded).
+ */
+export const DANCE_OFF_MODEL = 'rule/dance-off@1';
+
 /** True for a ruling served from a stored demo verdict (`model` starts with `cache/`). */
 export const isCachedRuling = (r: { model: string }): boolean => isCachedRulingModel(r.model);
 /** A ruling model served from a stored verdict (`cache/…`): the stage labels it "replay ruling". */
@@ -120,11 +127,13 @@ export const Ruling = z
       ctx.addIssue({ code: 'custom', path: ['redo_reason'], message: 'set iff outcome = REDO' });
     if ((r.outcome === 'VOID') !== (r.void_reason !== null))
       ctx.addIssue({ code: 'custom', path: ['void_reason'], message: 'set iff outcome = VOID' });
-    if (r.void_reason === 'undecidable')
+    // Widened in place (SCHEMAS §11): 'undecidable' was HearingRuling-only; a Dance Off ruling
+    // (model DANCE_OFF_MODEL) may use it too. Every Ruling that parsed before still parses.
+    if (r.void_reason === 'undecidable' && r.model !== DANCE_OFF_MODEL)
       ctx.addIssue({
         code: 'custom',
         path: ['void_reason'],
-        message: "'undecidable' is HearingRuling-only",
+        message: "'undecidable' is HearingRuling-only (or a dance-off ruling)",
       });
     if (isDecisive(r.outcome) && r.confidence < REDO_BELOW)
       ctx.addIssue({ code: 'custom', path: ['outcome'], message: 'confidence < 0.8 must be REDO' });

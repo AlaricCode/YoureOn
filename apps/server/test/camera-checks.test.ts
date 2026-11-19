@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { asc, eq } from 'drizzle-orm';
 import { attemptChecks, betChecks, betEvents, bets, devices, rulings } from '@youre-on/db';
-import { requestSigningString } from '@youre-on/shared/api';
+import { danceTermsPath, requestSigningString } from '@youre-on/shared/api';
 import { ESCROW_ID, USDC_MINT_DEVNET } from '@youre-on/shared/chain/constants';
 import { CheckReport, evaluateChecks } from '@youre-on/shared/checks/evaluate';
 import { ChecksCompiledPayload, ChecksReportPayload } from '@youre-on/shared/checks/events';
@@ -32,7 +32,9 @@ import { issueAppSession } from '../src/auth/sessions';
 import { DemoToggles, DemoTogglesRequest, togglesOf } from '../src/demo/toggles';
 import {
   applyCameraVeto,
+  checksEligible,
   checksIdle,
+  onTermsFrozen,
   reportPayload,
   scheduleCompile,
   scheduleCompileCurrent,
@@ -242,6 +244,14 @@ describe('SAM client (judge/sam.ts)', () => {
 });
 
 // ---- the runtime toggle (pure; demo-valves covers the HTTP route only with escrow.so) -------
+
+describe('checksEligible (pure)', () => {
+  it('camera skill bets only: never a market bet, never a dance off (camera evidence too)', () => {
+    expect(checksEligible({ evidence_source: 'camera', type: 'skill' })).toBe(true);
+    expect(checksEligible({ evidence_source: 'gemini', type: 'real_world' })).toBe(false);
+    expect(checksEligible({ evidence_source: 'camera', type: 'dance_off' })).toBe(false);
+  });
+});
 
 describe('checks toggle (DemoToggles, pure)', () => {
   it('defaults on; off/back on at runtime; the view carries checks, checks_source, checks_env', () => {
@@ -686,6 +696,27 @@ describeDb('camera checks: compile at terms time (DB)', () => {
     expect(await row(betId)).toBeNull();
     expect(await compiledEvents(betId)).toHaveLength(0);
     expect(llm.calls.filter(isCompile)).toHaveLength(0);
+  });
+
+  it('a dance off gets no camera checks: no compile at proposal or freeze, no row, no SAM warm', async () => {
+    const { A, B, betId } = await newBet();
+    const r = proposed(
+      (await post(A, danceTermsPath(betId), { routine_id: 'wave-pop', amount_usd: '5' })).json,
+    );
+    await checksIdle(ctx.deps);
+    const latest = (await loadEnvelope(ctx.deps.db, betId))!;
+    expect(latest.envelope.terms).toMatchObject({ type: 'dance_off', evidence_source: 'camera' });
+    // called directly too (the odds recompose / persistEvaluation path): refused up front
+    expect(await scheduleCompile(ctx.deps, betId, latest.envelope.terms, r.terms_hash)).toBeNull();
+    expect(await scheduleCompileCurrent(ctx.deps, betId)).toBeNull();
+    expect((await post(B, `/v1/bets/${betId}/invite/accept`, {})).status).toBe(200);
+    expect((await post(A, termsConfirmPath(betId), { terms_hash: r.terms_hash })).status).toBe(200);
+    await onTermsFrozen(ctx.deps, betId);
+    await checksIdle(ctx.deps);
+    expect(await row(betId)).toBeNull();
+    expect(await compiledEvents(betId)).toHaveLength(0);
+    expect(llm.calls.filter(isCompile)).toHaveLength(0);
+    expect(sam.calls).toHaveLength(0);
   });
 
   it('confirm without a stored row (compile never ran): compiled at the freeze', async () => {

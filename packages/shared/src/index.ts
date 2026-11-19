@@ -20,3 +20,4 @@ export * from './chain-events';
 export * from './gg';
 export * from './realtime';
 export * from './replay';
+export * from './dance/index';
