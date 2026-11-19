@@ -328,6 +328,7 @@ describe('launch params', () => {
     expect(roomLabelOf(' stg234 ')).toBe('STG234');
     expect(roomLabelOf('youreon://room/ABC234')).toBe('ABC234');
     expect(roomLabelOf(BET)).toBe('7f3c2a9e');
+    expect(roomLabelOf(' lobby ')).toBe('LOBBY');
     expect(roomLabelOf('whatever')).toBe('whatever');
   });
 

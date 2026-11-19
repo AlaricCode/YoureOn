@@ -28,12 +28,22 @@ export const COPY = {
     slowDown: ['Try again soon', 'error'],
     joinRoomFirst: ['Join room first', 'error'],
     judgeCamFailed: ['Camera not set', 'error'],
+    // The shared lobby (app/lobby): no code on screen, everyone with the app open is here.
+    everyone: ['Everyone here', 'label'],
+    lobbyEmpty: ['Nobody else online', 'label'],
+    joining: ['Joining', 'label'],
+    privateRoom: ['Private room', 'label'],
+    back: ['Back', 'label'],
   },
   scan: {
     title: ['Challenge', 'label'],
     point: ['Point at someone', 'label'],
     checking: ['Checking', 'label'],
     noMatch: ['No match', 'error'],
+    // Face matching only sees this room: nobody else in it means no scan can ever match.
+    emptyRoom: ['Nobody else here', 'error'],
+    // The lobby has no code to read out: the other phone only needs the app open.
+    openApp: ['Ask them to open the app', 'body'],
     notThem: ['Not them', 'label'],
     pickList: ['Pick from list', 'label'],
     allowCamera: ['Allow camera', 'label'],
@@ -285,6 +295,8 @@ export const SCAN_MISS_COPY: Readonly<Record<ScanMiss, Line>> = {
 export const fill = {
   challenged: (name: string) => `${name} challenged you`,
   challengeName: (name: string) => `Challenge ${name}?`,
+  /** The scan screen in an empty room: the other phone must join this room first. */
+  joinCode: (code: string) => `Have them join room ${code}`,
   holdToLock: (amount: string) => `Hold to lock in ${amount}`,
   swipeToLock: (amount: string) => `Swipe up to lock in ${amount}`,
   youreIn: (name: string) => `You're in. Waiting for ${name}…`,

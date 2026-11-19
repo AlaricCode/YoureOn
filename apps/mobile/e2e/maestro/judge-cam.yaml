@@ -18,18 +18,32 @@ name: judge-cam
     commands:
       - tapOn:
           id: room-leave
-- tapOn:
-    id: home-profile
-- extendedWaitUntil:
-    visible: Judge cam
-    timeout: 10000
-- takeScreenshot: 30-profile
-- tapOn: Judge cam
-# No room: a judge cam must be bound to one.
-- extendedWaitUntil:
-    visible: Join room first
-    timeout: 10000
-- takeScreenshot: 31-judge-cam-needs-room
+# No room: a judge cam must be bound to one. In the lobby the phone is always in a room (the
+# lobby), so this refusal only shows on an EXPO_PUBLIC_LOBBY=off build.
+- runFlow:
+    when:
+      notVisible:
+        id: lobby-title
+    commands:
+      - tapOn:
+          id: home-profile
+      - extendedWaitUntil:
+          visible: Judge cam
+          timeout: 10000
+      - takeScreenshot: 30-profile
+      - tapOn: Judge cam
+      - extendedWaitUntil:
+          visible: Join room first
+          timeout: 10000
+      - takeScreenshot: 31-judge-cam-needs-room
+# The lobby (on by default) hides the code entry and "New room" behind "Private room".
+- runFlow:
+    when:
+      visible:
+        id: home-private
+    commands:
+      - tapOn:
+          id: home-private
 - tapOn:
     id: room-create
 - extendedWaitUntil:

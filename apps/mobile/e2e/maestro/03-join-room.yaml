@@ -9,6 +9,14 @@ name: join-room
     visible:
       id: balance-header
     timeout: 30000
+# The lobby (on by default) hides the code entry and "New room" behind "Private room".
+- runFlow:
+    when:
+      visible:
+        id: home-private
+    commands:
+      - tapOn:
+          id: home-private
 - tapOn:
     id: room-code
 - inputText: ${ROOM_CODE}

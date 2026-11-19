@@ -40,7 +40,7 @@ import { appAuth, requireSignedRequest } from '../auth/middleware';
 import { demoRoomError, isDemoRoom, nonDemoPlayers } from '../demo/players';
 import { headToHead } from '../face/service';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
-import { assertRoomLive, getRoomOr404, isActiveMember } from '../rooms/service';
+import { assertRoomLive, getRoomOr404, isActiveMember, isLobbyRoom } from '../rooms/service';
 import { declinedCue, inviteAcceptedCue } from './cues';
 import { judgeAwaitsAccept, priorAnswers } from './invite';
 import { verifyMatchTicket } from './match-ticket';
@@ -419,6 +419,16 @@ export async function createChallenge(
     if (outsider)
       throw demoRoomError('Only the demo players bet in this room.', {
         party: outsider === aId ? 'A' : 'B',
+      });
+  }
+  // DEMO_MODE, the shared lobby: the demo phones auto-join it too, so a stranger there could
+  // challenge demo B (a tap or a face scan) and park B's phone on that bet mid-demo. No bet in
+  // the lobby between a demo player and anyone else; strangers still bet with each other.
+  if (deps.env.DEMO_MODE && isLobbyRoom(room)) {
+    const outsiders = await nonDemoPlayers(deps, [aId, bId]);
+    if (outsiders.length === 1)
+      throw demoRoomError('The demo players are busy right now.', {
+        party: outsiders[0] === aId ? 'A' : 'B',
       });
   }
 
