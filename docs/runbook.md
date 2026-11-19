@@ -305,6 +305,44 @@ live sync (after it, the eval would duplicate the tool name, which el-agent refu
 `el-agent --agent-name=<name>` makes a test agent from the shared tools instead (never PATCHing
 them; it stops if one differs from the checkout). Delete that agent in the dashboard when done.
 
+### Camera checks (SAM 3.1 ref cam; off by default)
+
+A second, non-binding opinion on camera bets: the server compiles the agreed terms into a small
+check spec (stored beside the bet, never in the signed terms), and at ruling time SAM 3.1 measures
+the attempt's 12 frames in parallel with the judge. The checks can only **refuse** a call: a
+decisive MET becomes "Run it back" with the check's own reason (for example "Couldn't confirm the
+bottle stands upright. Film from the side."). A NOT_MET always stands (a bottle out of shot is a
+miss, not a reason to rerun). They never pick or flip a winner, and a check REDO counts toward the
+3-attempt limit like any other. Only camera (skill) bets are compiled; market bets get no ref cam.
+
+Turn them on (Fly secrets restart the machine, so do it before the show, not during a beat):
+
+```sh
+fly secrets set -a youre-on SAM3_URL=https://<workspace>--youre-on-sam3.us-east.modal.run \
+  SAM3_API_TOKEN=<the Modal secret sam3-auth> CHECKS_ENABLED=true
+# optional: SAM_TIMEOUT_MS (default 10000, max 15000)
+```
+
+They also need `ANTHROPIC_API_KEY` with `LLM_PROVIDER=live` (the compile is one Opus call per new
+terms version, `CHECKS_MODEL`, cached per wording). Check `GET /v1/demo/health` `checks`:
+`enabled`, `sam_configured`, `toggle`, `active` must all be true; `last_ok_at` / `last_ok_ms` /
+`last_error` are the SAM calls since boot (`checks_sam_failing` warns when the last one failed).
+
+- **Timing.** SAM gets `SAM_TIMEOUT_MS` (10 s, the judge's own budget) per attempt, retry included,
+  so a ruling is never later than before. A late or failing SAM is recorded as `unavailable` and
+  the judge's call stands (no veto). SAM is ~3.5 s per prompt warm (a spec has 1-3) and 25-45 s
+  cold: the server wakes it (`GET /health`) when the terms are confirmed and again when recording
+  starts. It stays warm 5 minutes after the last request.
+- **Cost.** One Modal GPU (A10G or L4, about $0.80-1.10 per hour while a container is up), at most
+  one container. Each warm-up keeps it up ~5 minutes, so a bet costs roughly $0.10 of GPU, plus
+  the compile call. Nothing runs while `CHECKS_ENABLED` is false.
+- **Kill switch, no restart:** `demo -X POST "$SERVER/v1/demo/toggles" -d '{"checks": false}'`
+  (back on: `{"checks": null}`). The toggle can only switch checks off; `CHECKS_ENABLED=false`
+  (a `fly secrets set`, restarts) is the hard switch. `cached_ruling` rulings never run the checks.
+- What players see: the stage terms card shows the readback (`checks.compiled`; the phones
+  ignore `checks.*` for now), and the stage gets each attempt's measurements and boxes (`checks.report`) just before the ruling.
+  Stored per bet in `bet_checks` and per attempt in `attempt_checks`.
+
 ## 2. Opening the stage
 
 ```

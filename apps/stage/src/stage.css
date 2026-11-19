@@ -782,6 +782,105 @@ code,
   font-weight: 500;
   color: var(--muted);
 }
+
+/* ---- the ref cam (camera checks; checks-view.tsx) ------------------------------------------ */
+/* terms card: one quiet line under the stakes */
+.refcam-line {
+  margin: 0.45em 0 0;
+  font-size: 0.8em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.refcam-line .label {
+  font-size: 1em;
+  color: var(--text);
+  margin-right: 0.3em;
+}
+/* ruling panel: the checks as one hairline-topped line of marks, the veto under it */
+.refcam-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  padding-top: 0.35em;
+  border-top: 1px solid var(--line);
+  font-size: 0.85em;
+  min-width: 0;
+}
+.refcam-checks {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.refcam-checks .label {
+  font-size: 1em;
+  color: var(--text);
+}
+.refcam-check {
+  margin-left: 0.7em;
+  color: var(--text);
+}
+.refcam-check .mark {
+  font-weight: 600;
+  margin-right: 0.25em;
+}
+.refcam-check.yes .mark {
+  color: var(--good);
+}
+.refcam-check.no .mark {
+  color: var(--bad);
+}
+.refcam-check.unsure .mark,
+.refcam-check.skip .mark,
+.refcam-check.skip .what,
+.refcam-check .why {
+  color: var(--muted);
+}
+.refcam-checks .veto-title {
+  font-weight: 600;
+}
+.refcam-veto {
+  margin: 0;
+  color: var(--muted);
+}
+/* the boxed frame: the box keeps the frame's own aspect ratio and the SVG's viewBox is its pixel
+   size, so the boxes land where SAM drew them (no object-fit crop, unlike .cited img) */
+.refcam-frame {
+  /* width (inline) = min(30vh, 22vh * w / h); height follows from aspect-ratio, never fixed */
+  position: relative;
+  flex: none;
+  height: auto;
+  max-width: 100%;
+  border-radius: 0.5em;
+  overflow: hidden;
+  border: 0.1em solid var(--white);
+}
+.cited .refcam-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+  object-fit: fill;
+}
+.refcam-boxes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.refcam-boxes rect {
+  fill: none;
+  stroke: var(--green);
+  stroke-width: 2.5px;
+}
+.refcam-boxes .alt rect {
+  stroke: var(--white);
+  stroke-dasharray: 4 3;
+}
 .appeal {
   display: flex;
   flex-direction: column;

@@ -209,13 +209,13 @@ describe('spec rows pinned by this review', () => {
     expect(HearingTurn.safeParse({ ...turn, duration_ms: 12_001 }).success).toBe(false);
     expect(HearingTurn.safeParse({ ...turn, turn_index: 2 }).success).toBe(false);
   });
-  it('§10.1: the 32 spec types + 4 API-CONTRACT §3.4 extensions + market.settled (Beat 6) + the GG moment (bet.gg, review.requested, review.closed) + 3 odds events + dance.scored (Dance Off); source is chain iff type starts with chain.', () => {
+  it('§10.1: the 32 spec types + 4 API-CONTRACT §3.4 extensions + market.settled (Beat 6) + the GG moment (bet.gg, review.requested, review.closed) + 3 odds events + dance.scored (Dance Off) + the camera checks (checks.compiled, checks.report); source is chain iff type starts with chain.', () => {
     const opts = RealtimeEvent.options.map((o) => ({
       type: o.shape.type.value,
       source: o.shape.source.value,
     }));
-    expect(opts).toHaveLength(44);
-    expect(new Set(opts.map((o) => o.type)).size).toBe(44);
+    expect(opts).toHaveLength(46);
+    expect(new Set(opts.map((o) => o.type)).size).toBe(46);
     for (const t of [
       'odds.offered',
       'odds.answered',
@@ -229,6 +229,8 @@ describe('spec rows pinned by this review', () => {
       'review.requested',
       'review.closed',
       'dance.scored',
+      'checks.compiled',
+      'checks.report',
     ]) {
       expect(opts.map((o) => o.type)).toContain(t);
     }

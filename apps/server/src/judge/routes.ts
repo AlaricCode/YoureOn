@@ -89,6 +89,13 @@ import {
   type DanceVoidWhy,
 } from './cues';
 import { buildDanceRuling, callDanceValidator, type DanceCheck } from './dance';
+import {
+  applyCameraVeto,
+  runAttemptChecks,
+  storeAttemptChecks,
+  warmForAttempt,
+  type CheckRun,
+} from './camera-checks';
 import { buildRuling, judgeFrames, rulingCanonical, type Judged } from './ruling';
 import {
   DevicePatchRequest,
@@ -178,6 +185,11 @@ interface Produced {
   evidence_canonical: string | null;
   /** dance.scored, appended just before ruling.issued in the same commit. */
   scored: DanceScoredPayload | null;
+  /**
+   * The camera checks' run (camera-checks.ts): attempt_checks + checks.report in the same commit,
+   * before ruling.issued. Always null for a dance round.
+   */
+  checks: { run: CheckRun; veto: Parameters<typeof storeAttemptChecks>[1]['veto'] } | null;
   cue: JudgeCue;
   /** Extra audit details. */
   audit: Record<string, unknown>;
@@ -425,9 +437,26 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
     job: CameraJob,
     bet0: BetRow,
     names: { A: string; B: string },
+    /** Skip the vision call and commit this instead (the failure fallback of startJob). */
     forced: Judged | undefined,
   ): Promise<{ produced: Produced; now: number }> {
-    const judged =
+    // Camera checks (camera-checks.ts): SAM on the regular frames, in parallel with the vision
+    // call (never the landing crop). null = none for this bet / attempt: legacy behaviour.
+    // Only this camera judge runs them; a dance round (produceDance) never does.
+    const regular = job.frames.flatMap((f, i) =>
+      f.landing_crop ? [] : [{ t_ms: f.t_ms, bytes: f.bytes, hash: job.frame_hashes[i]! }],
+    );
+    const checksP: Promise<CheckRun | null> = forced
+      ? Promise.resolve(null)
+      : runAttemptChecks(deps, {
+          bet_id: job.bet_id,
+          attempt_no: job.attempt_no,
+          terms_hash: bet0.terms_hash!,
+          frames: regular,
+          frame_hashes: regular.map((f) => f.hash),
+          duration_ms: job.duration_ms,
+        });
+    let judged =
       forced ??
       (await judgeFrames(deps, {
         terms: job.terms,
@@ -435,6 +464,9 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         frames: job.frames,
         duration_ms: job.duration_ms,
       }));
+    const checks = await checksP;
+    let veto: Parameters<typeof storeAttemptChecks>[1]['veto'] = null;
+    if (checks) ({ judged, veto } = applyCameraVeto(judged, checks, job.terms.yes_party));
     const now = deps.now();
     const ruling = buildRuling(
       {
@@ -455,11 +487,24 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         ruling,
         evidence_canonical: null,
         scored: null,
+        checks: checks ? { run: checks, veto } : null,
         cue: rulingCue(ruling, names, deps.env.APPEAL_WINDOW_S ?? DEFAULT_GG_SECS),
         audit: {
           ...(judged.kind === 'failure' ? { llm_status: judged.status } : {}),
           ...(judged.kind === 'verdict' && judged.disagreement
             ? { checks_disagree: judged.disagreement }
+            : {}),
+          ...(checks
+            ? {
+                camera_checks: {
+                  status: checks.report.status,
+                  gate: checks.report.gate,
+                  need: checks.report.need,
+                  report_hash: checks.report_hash,
+                  veto: veto?.kind ?? null,
+                  sam_ms: checks.sam_ms,
+                },
+              }
             : {}),
         },
       },
@@ -523,6 +568,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           validation: d.validation,
           announcer_line: d.announcer_line,
         },
+        // DANCE-OFF: the score decides; the SAM camera checks never run on a dance round.
+        checks: null,
         cue: danceRulingCue(
           d.ruling,
           job.evidence.scores,
@@ -595,7 +642,19 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         await versionedState(tx, bet, { redo_count: Math.min(3, bet.redo_count + 1) });
       }
       const events: BetEventEnvelope[] = [];
-      // dance.scored first (the market.settled precedent): the scores are in before the ruling.
+      // checks.report first, so a client has the boxes when the ruling lands (camera judge only).
+      if (produced.checks) {
+        events.push(
+          ...(await storeAttemptChecks(tx, {
+            bet_id: bet.id,
+            attempt_no: job.attempt_no,
+            run: produced.checks.run,
+            veto: produced.checks.veto,
+            now,
+          })),
+        );
+      }
+      // dance.scored next (the market.settled precedent): the scores are in before the ruling.
       if (produced.scored) {
         events.push(
           await appendBetEvent(tx, {
@@ -1025,6 +1084,9 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         });
 
         for (const e of out.events) deps.hub.publishBetEvent(e, bet0.room_id);
+        // Recording starts: wake SAM for a bet with camera checks (fire-and-forget). A dance off
+        // never has camera checks (the score decides), so it never wakes SAM.
+        if (!dance) void warmForAttempt(deps, betId);
         // The judge cam may only be on its user channel; the hub dedupes by seq per socket.
         if (out.recorderUser) {
           for (const e of out.events) deps.hub.publishToUser(out.recorderUser, e);

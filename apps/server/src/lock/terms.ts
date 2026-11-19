@@ -56,6 +56,7 @@ import {
 import { priorAnswers, recordInvitePending } from '../bets/invite';
 import { loadUserRefs, type BetRow } from '../bets/snapshot';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
+import { scheduleCompile } from '../judge/camera-checks';
 import { autoOffer, oddsGate, recordOddsPending } from '../odds/service';
 import { fanout, iso, lockBet, statePayload, type LifecycleDeps, type Tx } from './common';
 
@@ -212,8 +213,11 @@ export type PersistResult =
   | { kind: 'refused' }
   | { kind: 'skipped'; reason: string };
 
-/** persistEvaluation's deps: the lifecycle bag, plus the Gemini relay for real_world terms. */
-export type TermsDeps = LifecycleDeps & Partial<Pick<AppDeps, 'markets'>>;
+/**
+ * persistEvaluation's deps: the lifecycle bag, plus the Gemini relay for real_world terms and
+ * (camera checks, judge/camera-checks.ts) the LLM + SAM; without them no checks are compiled.
+ */
+export type TermsDeps = LifecycleDeps & Partial<Pick<AppDeps, 'markets' | 'providers' | 'sam'>>;
 
 /**
  * The real ProposalSink body (voice/tools.ts `termsSink`, and POST /v1/demo/bets/:id/terms).
@@ -260,6 +264,9 @@ export async function persistEvaluation(
     persistInTx(deps, tx, betId, evaluation, { ...o, quote, refusal }),
   );
   if (out.bet) fanout(deps, out.bet, out.envs);
+  // Camera checks: compile this terms version in the background (never blocks or fails this).
+  if (out.res.kind === 'proposed')
+    void scheduleCompile(deps, betId, out.res.envelope.terms, out.res.envelope.terms_hash);
   return out.res;
 }
 

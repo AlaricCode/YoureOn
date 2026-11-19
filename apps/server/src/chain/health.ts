@@ -20,6 +20,7 @@ import { lifecycleOf } from '../lock/runtime';
 import { APPEAL_FAMILY, LOCKED_FAMILY, type OrphanSummary } from '../payout/refund';
 import { togglesOf, type DemoTogglesView } from '../demo/toggles';
 import { judgeHealth, type JudgeHealth } from '../judge/stats';
+import { checksHealth, type ChecksHealth } from '../judge/camera-checks';
 import { ataOf, rpcErrorText, tokenAmount, type ChainRuntime, type RpcStatsSnapshot } from './tx';
 
 export const HEALTH = {
@@ -117,6 +118,8 @@ export interface ChainHealthReport {
   judge_llm: JudgeHealth;
   /** = judge_llm.last_ok_at (API-CONTRACT §2.17 `llm_last_ok`). */
   llm_last_ok: string | null;
+  /** Camera checks (judge/camera-checks.ts): kill switch, SAM config, last SAM ok / fail + ms. */
+  checks: ChecksHealth;
   /** Which build answers (Fly sets these at runtime; null locally). */
   build: { image: string | null; machine: string | null; region: string | null };
 }
@@ -212,7 +215,7 @@ async function walletOf(rt: ChainRuntime, owner: Address): Promise<WalletHealth>
 /** The full report (see the header). Never throws for chain trouble: that becomes a warning. */
 export async function chainHealth(
   deps: Pick<AppDeps, 'db' | 'env' | 'now' | 'hub' | 'log' | 'keeper' | 'markets'> &
-    Partial<Pick<AppDeps, 'providers'>>,
+    Partial<Pick<AppDeps, 'providers' | 'sam'>>,
 ): Promise<ChainHealthReport> {
   const nowMs = deps.now();
   const warnings: HealthWarning[] = [];
@@ -550,6 +553,17 @@ export async function chainHealth(
       'warn',
       `The judge's last call failed (${judgeLlm.last_error}, ${judgeLlm.last_error_source}): ${warmupHint}, or POST /v1/demo/toggles {"cached_ruling": true}.`,
     );
+  const checks = checksHealth(deps);
+  if (
+    checks.active &&
+    checks.last_error_at &&
+    (!checks.last_ok_at || checks.last_error_at > checks.last_ok_at)
+  )
+    warn(
+      'checks_sam_failing',
+      'warn',
+      `The camera checks' last SAM call failed (${checks.last_error}): rulings stand on the judge alone (no veto). POST /v1/demo/toggles {"checks": false} to stop calling it.`,
+    );
   if (toggles.cached_ruling)
     warn(
       'cached_ruling_on',
@@ -624,6 +638,7 @@ export async function chainHealth(
     toggles,
     judge_llm: judgeLlm,
     llm_last_ok: judgeLlm.last_ok_at,
+    checks,
     build: {
       image: process.env['FLY_IMAGE_REF'] ?? null,
       machine: process.env['FLY_MACHINE_ID'] ?? null,
@@ -658,6 +673,7 @@ export const JUDGE_WARNING_CODES: ReadonlySet<string> = new Set([
   'judge_no_success',
   'judge_failing',
   'cached_ruling_on',
+  'checks_sam_failing',
 ]);
 
 /** Does the chain / money path need a human? Any warning but a warn-level judge one. */

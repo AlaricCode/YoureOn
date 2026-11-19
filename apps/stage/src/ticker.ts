@@ -35,6 +35,7 @@ import { payout as payoutOf, type OnchainOutcome } from '@youre-on/shared/ruling
 import { termsCode, type TermsEnvelope } from '@youre-on/shared/terms';
 import { danceViewOf, type DanceView } from './dance';
 import { foldGg, type GgView, type ReviewView } from './gg';
+import { foldChecks, type ChecksView } from './checks';
 import { foldOddsEvent, type OddsView } from './odds-state';
 
 export const MAX_EVENTS = 200;
@@ -192,6 +193,8 @@ export interface BetView {
   gg: GgView | null;
   /** A spoken review request (review.requested / review.closed; gg.ts). */
   review: ReviewView | null;
+  /** The ref cam: the terms' compiled checks and the latest attempt's report (checks.ts). */
+  checks: ChecksView | null;
   updated_at: number;
 }
 
@@ -359,6 +362,7 @@ export function emptyBet(bet_id: string, at = 0): BetView {
     txs: {},
     gg: null,
     review: null,
+    checks: null,
     updated_at: at,
   };
 }
@@ -512,9 +516,12 @@ function foldState(b: BetView, e: Extract<RealtimeEvent, { type: 'bet.state' }>)
   return v;
 }
 
-/** Folds one event into its bet's view (then the GG / review rules, gg.ts foldGg). */
+/**
+ * Folds one event into its bet's view (then the GG / review rules, gg.ts foldGg, and the ref
+ * cam's checks.*, checks.ts foldChecks).
+ */
 export function foldEvent(b: BetView, e: RealtimeEvent, at: number): BetView {
-  return foldGg(foldCard(b, e, at), e);
+  return foldChecks(foldGg(foldCard(b, e, at), e), e);
 }
 
 function foldCard(b: BetView, e: RealtimeEvent, at: number): BetView {
