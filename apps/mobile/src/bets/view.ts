@@ -211,6 +211,15 @@ export const appealVerdict = (
 export const canConcede = (result: MyResult, appealDeadlineMs: number, nowMs: number): boolean =>
   result === 'lost' && nowMs < appealDeadlineMs + 1000;
 
+/**
+ * The ruling screen's footer: GG for the loser while the window is open; once the bet is over (a
+ * VOID refunded, or any other terminal state) "Back home" with Double or nothing, never a GG or a
+ * "Waiting" that no event will ever end; else "Waiting" for the loser or the settlement.
+ */
+export type RulingFooter = 'gg' | 'home' | 'waiting';
+export const rulingFooter = (result: MyResult, over: boolean): RulingFooter =>
+  over ? 'home' : result === 'lost' ? 'gg' : 'waiting';
+
 /** "+$5.00", "−$7.00", "$0.00" from a signed micro-USDC string (ui/money: one result format). */
 export function signedUsd(signedMicro: string): string {
   return signedMicroToUsd(signedMicro);

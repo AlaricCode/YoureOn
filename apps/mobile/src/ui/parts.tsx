@@ -11,6 +11,7 @@ import {
   Animated,
   Easing,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -1078,19 +1079,23 @@ export function ReconnectBanner({ visible }: { visible: boolean }) {
 /**
  * A moment screen: black, safe-area padded, light status bar. Children are centred; `footer`
  * sits at the bottom (buttons); `top` above (e.g. a TopBar with the user tag). No colour field:
- * the colour lives in MomentMoney only.
+ * the colour lives in MomentMoney only. `scroll`: the body is a ScrollView (still centred while it
+ * fits), for content that can run taller than the screen (a dance off's ruling and breakdown):
+ * it never spills over the status bar, the top bar or the footer.
  */
 export function MomentScreen({
   children,
   footer,
   top,
   offline = false,
+  scroll = false,
   testID,
 }: {
   children: ReactNode;
   footer?: ReactNode;
   top?: ReactNode;
   offline?: boolean;
+  scroll?: boolean;
   testID?: string;
 }) {
   const i = useSafeAreaInsets();
@@ -1106,7 +1111,17 @@ export function MomentScreen({
       <StatusBar style="light" />
       <ReconnectBanner visible={offline || reconnecting} />
       {top}
-      <View style={styles.momentBody}>{children}</View>
+      {scroll ? (
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.momentScroll}
+          showsVerticalScrollIndicator={false}
+        >
+          {children}
+        </ScrollView>
+      ) : (
+        <View style={styles.momentBody}>{children}</View>
+      )}
       {footer ? <View style={styles.momentFooter}>{footer}</View> : null}
     </View>
   );
@@ -1364,6 +1379,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: space.page,
+    gap: space.x3,
+  },
+  /** The scrolling body: grows to fill (so short content still centres), padded off its edges. */
+  momentScroll: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.page,
+    paddingVertical: space.x2,
     gap: space.x3,
   },
   momentFooter: { paddingHorizontal: space.page, paddingBottom: space.x2, gap: half.x15 },

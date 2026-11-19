@@ -34,14 +34,18 @@ export function DanceResultBreakdown({
   scored,
   names,
   me,
+  omitLine,
 }: {
   scored: DanceScoredPayload;
   names: { a: string; b: string };
   me?: 'A' | 'B';
+  /** A line already on screen (the ruling's reason is the announcer's line): not drawn twice. */
+  omitLine?: string | null | undefined;
 }) {
   const data = resultFromScored(scored);
   const invalid = scored.validation.verdict === 'invalid';
-  const line = safeLine(scored.announcer_line);
+  const announced = safeLine(scored.announcer_line);
+  const line = announced !== null && announced === omitLine?.trim() ? null : announced;
   const notes = invalid ? safeLine(scored.validation.notes) : null;
   return (
     <View style={styles.wrap}>
