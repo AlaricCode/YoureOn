@@ -143,6 +143,7 @@ export const COPY = {
     paid: ['Paid', 'label'],
     paying: ['Paying', 'label'],
     payoutFailed: ['Payout failed', 'error'],
+    refund: ['Both stakes go back.', 'body'],
     retry: ['Try again', 'label'],
     backHome: ['Back home', 'label'],
   },

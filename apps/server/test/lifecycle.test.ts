@@ -43,6 +43,7 @@ import {
   getBetDecoder,
 } from '@youre-on/shared/escrow-client';
 import { hashJcs } from '@youre-on/shared/jcs';
+import { BetState, isTerminalBetState } from '@youre-on/shared/bet-state';
 import { betIdToBytes } from '@youre-on/shared/primitives';
 import type { Ruling } from '@youre-on/shared/ruling';
 import { renderSignCard } from '@youre-on/shared/sign-card';
@@ -58,6 +59,7 @@ import {
 } from '../../../packages/shared/test/escrow/harness';
 import { betsColumnLockSignatures } from '../src/chain/projector';
 import type { ChainClient, ChainRuntime } from '../src/chain/tx';
+import { casBetState } from '../src/lock/common';
 import { createLifecycle, installLifecycle, type Lifecycle } from '../src/lock/runtime';
 import { createPayoutService } from '../src/payout';
 import { createLogger } from '../src/log';
@@ -1079,6 +1081,177 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     expect(await lc.payout.finalizeDue(now())).toContain(betId);
     await lc.idle();
     expect(await betRow(betId)).toMatchObject({ state: 'PAID', payout_via: 'finalize' });
+  });
+
+  // ---- the settle race (prod bet 07c2b5a9…: a call-off VOID whose phones showed a loss) ---------
+
+  /** The bet.state frames of a bet, in seq order. */
+  const stateFrames = async (betId: string) =>
+    (
+      await ctx.deps.db
+        .select({ envelope: betEvents.envelope })
+        .from(betEvents)
+        .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'bet.state')))
+        .orderBy(betEvents.seq)
+    ).map((r) => (r.envelope as { payload: { state: BetState; reason: string | null } }).payload);
+  const finalizeConfirms = async (betId: string) =>
+    (
+      await ctx.deps.db
+        .select({ envelope: betEvents.envelope })
+        .from(betEvents)
+        .where(and(eq(betEvents.bet_id, betId), eq(betEvents.type, 'tx.confirmed')))
+    ).filter((r) => (r.envelope as { payload: { kind: string } }).payload.kind === 'finalize')
+      .length;
+
+  /** No frame goes back in the enum order, and nothing follows a terminal frame. */
+  const expectNoRegression = (frames: { state: BetState }[]) => {
+    const rank = (s: BetState) => BetState.options.indexOf(s);
+    for (let i = 1; i < frames.length; i++) {
+      const [prev, cur] = [frames[i - 1]!.state, frames[i]!.state];
+      expect(isTerminalBetState(prev), `${prev} -> ${cur} after a terminal frame`).toBe(false);
+      expect(rank(cur), `${prev} -> ${cur}`).toBeGreaterThanOrEqual(rank(prev));
+    }
+  };
+
+  /** A second server machine's keeper: the same DB, its own in-process confirm set. */
+  const otherMachine = () =>
+    createLifecycle(ctx.deps, {
+      runtime: async () => rt,
+      signer: 'phones',
+      send: { pollMs: 5, resendMs: 50, timeoutMs: 2_000 },
+      timers: false,
+    });
+
+  const waitFor = async (what: string, ok: () => Promise<boolean>) => {
+    for (let i = 0; i < 400; i++) {
+      if (await ok()) return;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  };
+
+  /** A locked bet ruled `outcome`, past its appeal window (finalize is due). */
+  async function ruledDue(outcome: 'A_WINS' | 'VOID') {
+    const { betId } = await lockedBetPhones();
+    const row = await betRow(betId);
+    await lc.payout.onRuling(betId, ruling(betId, row.terms_hash!, outcome));
+    expect((await betRow(betId)).state).toBe('RULED');
+    advance(12_000);
+    return betId;
+  }
+
+  it('a VOID finalize racing a second keeper and its own late confirm: VOIDED once, no FINALIZED after it', async () => {
+    // Machine 1 submits the finalize (RULED -> FINALIZED) and its confirm loop polls a status
+    // RPC that sees nothing yet. Machine 2's keeper finds the 'sent' row (not in ITS confirming
+    // set), sees it landed and settles it twice at once (two passes): FINALIZED -> VOIDED. Then
+    // machine 1's poll sees the tx processed + confirmed in one read: the processed frame
+    // (markProcessed) and its own settle both run on a VOIDED bet and must write nothing.
+    const betId = await ruledDue('VOID');
+    let hide = true;
+    const f = flaky({ hide: () => hide });
+    install('phones', { client: f.client, timeoutMs: 10_000 });
+    const lc1 = lc;
+    const lc2 = otherMachine();
+    try {
+      const first = lc1.payout.finalizeDue(now());
+      await waitFor('the finalize row sent', async () => {
+        const fin = await ctx.deps.db
+          .select({ status: chainTxs.status })
+          .from(chainTxs)
+          .where(and(eq(chainTxs.bet_id, betId), eq(chainTxs.kind, 'finalize')));
+        return fin.some((r) => r.status === 'sent');
+      });
+      expect((await betRow(betId)).state).toBe('FINALIZED');
+      await Promise.all([lc2.payout.finalizeDue(now()), lc2.payout.finalizeDue(now())]);
+      expect((await betRow(betId)).state).toBe('VOIDED');
+      hide = false; // machine 1's confirm loop now sees the landed tx
+      await first;
+      await lc1.idle();
+      await lc2.idle();
+      // ...and one more keeper pass on each machine changes nothing.
+      await lc1.payout.finalizeDue(now());
+      await lc2.payout.finalizeDue(now());
+      await lc1.idle();
+      await lc2.idle();
+    } finally {
+      lc2.stop();
+      install('phones');
+    }
+    expect(await betRow(betId)).toMatchObject({ state: 'VOIDED', payout_via: 'finalize' });
+    const frames = await stateFrames(betId);
+    expectNoRegression(frames);
+    const settled = frames.slice(frames.findIndex((p) => p.state === 'RULED') + 1);
+    expect(settled.map((p) => p.state)).toEqual(['FINALIZED', 'VOIDED']);
+    expect(await finalizeConfirms(betId)).toBe(1); // one settle wrote, the others no-oped
+    expect((await txRow(betId, 'finalize')).status).toBe('confirmed');
+  });
+
+  it('a VOID finalize whose processed frame and confirm race each other: the last bet.state is VOIDED', async () => {
+    // The prod interleaving: the processed callback (markProcessed, fire-and-forget) and the
+    // confirm (settle) come from one status read and race for the bet row lock, with a second
+    // machine's keeper settling at the same time. Whatever order they commit in, the frames
+    // only ever go FINALIZED... -> VOIDED.
+    const betId = await ruledDue('VOID');
+    const lc2 = otherMachine();
+    try {
+      await Promise.all([lc.payout.finalizeDue(now()), lc2.payout.finalizeDue(now())]);
+      await lc.payout.finalizeDue(now());
+      await lc2.payout.finalizeDue(now());
+      await lc.idle();
+      await lc2.idle();
+    } finally {
+      lc2.stop();
+    }
+    expect((await betRow(betId)).state).toBe('VOIDED');
+    const frames = await stateFrames(betId);
+    expectNoRegression(frames);
+    expect(frames.at(-1)!.state).toBe('VOIDED');
+    expect(frames.filter((p) => p.state === 'VOIDED')).toHaveLength(1);
+  });
+
+  it('a PAID or VOIDED bet ignores a late finalize: replayed confirm, revert, CAS, direct write', async () => {
+    const paid = await ruledDue('A_WINS');
+    expect(await lc.payout.finalizeDue(now())).toContain(paid);
+    const voided = await ruledDue('VOID');
+    await lc.payout.finalizeDue(now());
+    await lc.idle();
+    expect((await betRow(voided)).state).toBe('VOIDED');
+    for (const [betId, state] of [
+      [paid, 'PAID'],
+      [voided, 'VOIDED'],
+    ] as const) {
+      const before = await stateFrames(betId);
+      const fin = await txRow(betId, 'finalize');
+      // A confirm replayed by a keeper (the row back to 'sent', the tx landed): settle no-ops.
+      await ctx.deps.db.update(chainTxs).set({ status: 'sent' }).where(eq(chainTxs.id, fin.id));
+      await lc.payout.finalizeDue(now());
+      await lc.idle();
+      // A late "never landed" verdict on that row: revertPayout must not move it to RULED.
+      await ctx.deps.db.update(chainTxs).set({ status: 'sent' }).where(eq(chainTxs.id, fin.id));
+      const dead = flaky({ hide: () => true });
+      install('phones', {
+        client: { ...dead.client, blockHeight: async () => 10n ** 12n },
+        timeoutMs: 30,
+      });
+      try {
+        await lc.payout.finalizeDue(now());
+        await lc.idle();
+      } finally {
+        install('phones');
+      }
+      // The compare-and-set itself: FINALIZED / RULED are never re-entered from a settled bet.
+      const cas = await ctx.deps.db.transaction(async (tx) => ({
+        fin: await casBetState(tx, betId, ['RULED', 'CONCEDED'], { state: 'FINALIZED' }),
+        rev: await casBetState(tx, betId, ['CONCEDED', 'FINALIZED'], { state: 'RULED' }),
+      }));
+      expect(cas).toEqual({ fin: null, rev: null });
+      // And bets_guard refuses a direct write too.
+      await expect(
+        ctx.deps.db.update(bets).set({ state: 'FINALIZED' }).where(eq(bets.id, betId)),
+      ).rejects.toThrow();
+      expect((await betRow(betId)).state).toBe(state);
+      expect(await stateFrames(betId)).toEqual(before); // no bet.state frame at all
+    }
   });
 
   it('resolve confirm timeout: a landed resolve is adopted (onRuling, a retry, or reconcile)', async () => {
