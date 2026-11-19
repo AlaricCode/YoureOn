@@ -34,6 +34,8 @@ export const COPY = {
     point: ['Point at someone', 'label'],
     checking: ['Checking', 'label'],
     noMatch: ['No match', 'error'],
+    // Face matching only sees this room: nobody else in it means no scan can ever match.
+    emptyRoom: ['Nobody else here', 'error'],
     notThem: ['Not them', 'label'],
     pickList: ['Pick from list', 'label'],
     allowCamera: ['Allow camera', 'label'],
@@ -285,6 +287,8 @@ export const SCAN_MISS_COPY: Readonly<Record<ScanMiss, Line>> = {
 export const fill = {
   challenged: (name: string) => `${name} challenged you`,
   challengeName: (name: string) => `Challenge ${name}?`,
+  /** The scan screen in an empty room: the other phone must join this room first. */
+  joinCode: (code: string) => `Have them join room ${code}`,
   holdToLock: (amount: string) => `Hold to lock in ${amount}`,
   swipeToLock: (amount: string) => `Swipe up to lock in ${amount}`,
   youreIn: (name: string) => `You're in. Waiting for ${name}…`,
