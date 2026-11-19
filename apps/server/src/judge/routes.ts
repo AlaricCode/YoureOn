@@ -295,7 +295,7 @@ const nonPerformerId = (bet: BetRow, performer: Party) =>
  * (the mobile judge-cam poll follows A's bets), so only A's judge-cam devices count: a judge cam
  * B binds to the room never becomes a dance recorder (the recorder uploads the whole PoseSeries).
  */
-async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
+export async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
   // findJudgeCam takes the PERFORMER and returns the other party's cam: 'B' -> A's devices.
   return findJudgeCam(db, bet, 'B');
 }
@@ -341,7 +341,7 @@ function danceAccepted(e: DanceEvidence, client: { a: number; b: number }): Danc
  * Evidence provenance (ARCHITECTURE §6): only the attempt's recorder device may upload, and for a
  * judge_cam attempt only while it is still this room's judge cam.
  */
-async function assertRecorder(
+export async function assertRecorder(
   deps: AppDeps,
   att: AttemptRow,
   bet: BetRow,

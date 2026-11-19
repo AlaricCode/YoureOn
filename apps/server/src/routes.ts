@@ -21,6 +21,7 @@ import { reviewRoutes } from './review/routes';
 import { meRoutes } from './me/routes';
 import { demoRoutes } from './demo/routes';
 import { judgeRoutes } from './judge/routes';
+import { danceIdentifyRoutes } from './judge/dance-identify';
 import { stageRoutes } from './stage/routes';
 import { stageAudioRoutes } from './stage/audio';
 import { stageStaticRoutes } from './stage/static';
@@ -44,6 +45,8 @@ export const routeModules: RouteModule[] = [
   meRoutes,
   demoRoutes,
   judgeRoutes,
+  // POST /v1/bets/:bet_id/dance/identify (DANCE-OFF §3 face assignment)
+  danceIdentifyRoutes,
   appealRoutes,
   // the spoken review request ("check that again") -> the loser's appeal confirm
   reviewRoutes,

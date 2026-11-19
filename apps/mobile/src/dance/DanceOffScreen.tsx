@@ -1,16 +1,20 @@
 // The Dance Off on the judge-cam phone (DANCE-OFF §6.2, §6.3). It IS the display (HDMI shows it
 // through iOS mirroring):
-//   1. Framing: live skeletons, "A ← | → B", the framing check's reason; Start unlocks after
-//      framing has held for 1 s.
+//   1. Framing: live skeletons and the framing check's reason; Start unlocks after framing has
+//      held for 1 s. When framing passes, the phone tries the face assignment once (§3,
+//      ./faceIdentify, time-boxed, never blocking Start): with both players identified, each one's
+//      name tag sits over their skeleton (A may stand on the right); without, the "A ← | → B"
+//      hint as before (the left / right rule).
 //   2. Start → POST /attempts (onStartAttempt) → the attempt arrives. An attempt another phone
 //      started (A pressed Start; the server named this judge cam) counts in on its own.
 //   3. Count-in "3, 2, 1" on the routine's beat (numerals + haptic) from the attempt's go_at, then
 //      GO at go_at + 3 beats: the same server instant the display phone uses (./model/schedule).
-//   4. GO: startRound and the reference start in the same tick; duration_ms of dancing with live meters
-//      and PERFECT / GOOD / MISS popups. With a display phone (the other party's phone, online in
-//      the room when the count-in starts), this phone is silent and shows the camera panel only:
-//      the display plays the mirrored reference and the music. Without one, today's layout: the
-//      reference panel beside the camera, and the music from here.
+//   4. GO: startRound and the reference start in the same tick; duration_ms of dancing with a live
+//      name tag over each player ("Logan · 87") and PERFECT / GOOD / MISS popups. With a display
+//      phone (the other party's phone, online in the room when the count-in starts), this phone
+//      is silent and shows the camera panel only: the display plays the mirrored reference and
+//      the music. Without one, today's layout: the reference panel beside the camera, and the
+//      music from here.
 //   5. stopRound → the local final score → the result (no network so far).
 //   6. Upload (onUpload) → "Sending to judge" → the announcer line once the ruling lands (the bet
 //      flow then moves on to the ruling screen).
@@ -33,6 +37,7 @@ import type { LiveStore } from './model/liveStore';
 import { attemptCountIn, framingProgress, type RoundState } from './model/round';
 import { serverIsoToLocalMs } from './model/schedule';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
+import type { DanceFaceId } from './faceIdentify';
 import { ResultCard, type ResultData } from './ResultCard';
 import { DanceStage } from './Stage';
 import { PLAYER_TINT } from './theme';
@@ -51,6 +56,8 @@ export type DanceOffScreenProps = {
   clockOffsetMs: number;
   /** The other party's phone is the display (../app/danceFlow danceDisplayPresent). */
   displayPhone: boolean;
+  /** Face assignment (DANCE-OFF §3): the embedder and the identify call; null: left / right. */
+  faceId?: DanceFaceId | null;
   ruling: { outcome: string; reason: string } | null;
   onStartAttempt: () => Promise<{ ok: true } | { ok: false; message: string }>;
   onUpload: (
@@ -98,7 +105,8 @@ export function DanceOffScreen(props: DanceOffScreenProps) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Framing guide: "A ← | → B" over the camera panel, the reason under it.
+// Framing guide: "A ← | → B" over the camera panel, the reason under it. Once both players are
+// identified by face their name tags (Stage NameTags) say who is who, so the hint goes.
 // ---------------------------------------------------------------------------------------
 
 function FramingGuide({
@@ -111,7 +119,8 @@ function FramingGuide({
   visible: boolean;
 }) {
   const ok = useLive(store, (v) => v.framing?.ok === true);
-  if (!visible) return null;
+  const byFace = useLive(store, (v) => v.byFace);
+  if (!visible || byFace) return null;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={[styles.centerLine, ok && styles.centerLineOk]} />
@@ -247,6 +256,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     syncOffsetMs: settings.syncOffsetMs,
     snapshots: true,
     displayPhone: props.displayPhone,
+    faceId: props.faceId ?? null,
     onFinished,
   });
   engineRef.current = engine;
@@ -408,7 +418,6 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       <DanceStage
         routine={routine}
         names={names}
-        me={me}
         store={engine.store}
         round={state}
         beatMs={engine.cfg.beatMs}

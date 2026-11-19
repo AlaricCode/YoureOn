@@ -10,8 +10,11 @@ import {
   BetSnapshot,
   CreateBetResponse,
   CreateRoomResponse,
+  danceIdentifyPath,
+  DanceIdentifyResponse,
   DanceUploadResponse,
   danceUploadPath,
+  type DanceIdentifyRequest,
   InviteAnswerResponse,
   JoinRoomResponse,
   LOBBY_PATH,
@@ -201,6 +204,12 @@ export function createYoApi(c: ApiClient) {
     // §2.4 face match (Beat 1): the probe embedding only; a match addresses, never authorizes
     faceMatch: (roomId: string, req: FaceMatchRequest) =>
       c.request('POST', faceMatchPath(roomId), { json: req, schema: FaceMatchResponse }),
+    /**
+     * DANCE-OFF §3 face assignment: which of these faces (embeddings only) is which party. Only
+     * the dance off's filming device may ask; no scores come back, nothing is stored.
+     */
+    danceIdentify: (betId: string, req: DanceIdentifyRequest) =>
+      c.request('POST', danceIdentifyPath(betId), { json: req, schema: DanceIdentifyResponse }),
     /** §2.5 challenge addressed by a face match: the 60 s ticket from faceMatch(). */
     createFaceBet: (roomId: string, opponentUserId: string, matchTicket: string) =>
       c.request('POST', '/v1/bets', {

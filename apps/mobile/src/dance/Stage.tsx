@@ -1,9 +1,10 @@
 // The Dance Off display (DANCE-OFF §6.3). This is what the HDMI display shows (iOS mirroring),
-// so it is laid out like a broadcast: the two players' names and live match meters on top, the
-// beat bar, then two equal 9:16 panels side by side: the MIRRORED reference (the routine's video
-// when there is one, else its animated skeleton) and the live camera with A (green) and B (white)
-// drawn on the dancers, PERFECT / GOOD / MISS popups over each player's half, and the 3-2-1-GO
-// count-in over both. It fits portrait and landscape: the panels take the largest equal size the
+// so it is laid out like a broadcast: the beat bar on top, then two equal 9:16 panels side by
+// side: the MIRRORED reference (the routine's video when there is one, else its animated
+// skeleton) and the live camera with A (green) and B (white) drawn on the dancers, each with a
+// name tag pinned above their head carrying the live match score ("Logan · 87"; no separate
+// meters), PERFECT / GOOD / MISS popups over each player's half, and the 3-2-1-GO count-in over
+// both. It fits portrait and landscape: the panels take the largest equal size the
 // space allows. With a display phone in the room (DanceDisplayScreen plays the reference and the
 // music), `reference={false}` drops the reference panel and the camera panel takes the space.
 import type { RoutineData } from '@youre-on/shared/dance/routine';
@@ -14,7 +15,7 @@ import { importSafely } from '../app/importSafely';
 import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
 import { clockText, DANCE_COPY, dt } from './copy';
 import { useFrameClock } from './hooks';
-import { CameraSkeletons, DebugReadout, LiveMeters, PopupLayer } from './LiveParts';
+import { CameraSkeletons, DebugReadout, NameTags, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
 import type { LiveStore } from './model/liveStore';
 import { CAMERA_ASPECT, fitPanels, stagePanels, type Size } from './model/overlay';
@@ -184,7 +185,6 @@ export function CountInOverlay({
 export function DanceStage({
   routine,
   names,
-  me,
   store,
   round,
   beatMs,
@@ -198,7 +198,6 @@ export function DanceStage({
 }: {
   routine: RoutineData;
   names: { a: string; b: string };
-  me?: 'A' | 'B' | undefined;
   store: LiveStore;
   round: Pick<RoundState, 'phase' | 'countInAt' | 'goAt'>;
   beatMs: number;
@@ -224,7 +223,6 @@ export function DanceStage({
   const panel = reference ? stagePanels(box, PANEL_GAP) : fitPanels(box, CAMERA_ASPECT, 0, 1);
   return (
     <View style={styles.stage}>
-      <LiveMeters store={store} names={names} me={me} />
       <BeatBar routine={routine} startAt={startAt} />
       <View style={styles.panels} onLayout={onLayout}>
         {reference ? (
@@ -235,6 +233,7 @@ export function DanceStage({
         <View style={[styles.panel, panel]}>
           {camera}
           <CameraSkeletons store={store} size={panel} />
+          <NameTags store={store} size={panel} names={names} />
           <PopupLayer store={store} size={panel} />
           {cameraOverlay}
         </View>

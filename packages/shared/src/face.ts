@@ -11,7 +11,7 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import { z } from 'zod/v4';
-import { HeadToHead, SealedEmbedding } from './api';
+import { FaceModelRef, HeadToHead, SealedEmbedding } from './api';
 import { Hex32, IsoUtc, UserRef } from './primitives';
 
 // ---------------------------------------------------------------------------------------
@@ -59,13 +59,8 @@ export const FACE_RETENTION = {
 // Models (API-CONTRACT §2.2 `accepted_models`; DATA-MODEL §5.3)
 // ---------------------------------------------------------------------------------------
 
-export const FaceModelRef = z.object({
-  name: z.string().min(1).max(64),
-  version: z.string().min(1).max(64),
-  /** DATA-MODEL §5.3 `embedding_dim` CHECK 64..1024. */
-  dim: z.number().int().min(64).max(1024),
-});
-export type FaceModelRef = z.infer<typeof FaceModelRef>;
+/** A face embedding model (defined in ./api, next to SealedEmbedding). */
+export { FaceModelRef };
 
 /** The bundled on-device model (apps/mobile/assets/models; non-commercial weights). */
 export const FACE_MODEL_W600K = { name: 'w600k_mbf', version: 'buffalo_s-fp32', dim: 512 } as const;
@@ -131,6 +126,43 @@ export function decideMatch<Id>(
   if (best.score < rule.minCosine) return { kind: 'abstain', reason: 'below_threshold' };
   if (best.score - second < rule.minMargin) return { kind: 'abstain', reason: 'ambiguous' };
   return { kind: 'match', id: best.id };
+}
+
+/**
+ * DANCE-OFF §3 face assignment (POST /v1/bets/:bet_id/dance/identify): `scores[p][i]` is the
+ * cosine of probe face i with party p's enrollment (a party without a usable enrollment is
+ * absent). Face i becomes party p only when BOTH hold, each with the face-match rule above
+ * (threshold, and the margin over the runner-up when there is one):
+ *  - among the parties, p is face i's confident match (it is clearly not the other party), and
+ *  - among the faces, i is p's confident match (no other face in the still looks as much like p).
+ * So each party gets at most one face, each face at most one party, and an unsure case gets
+ * nothing (the phone then uses the left / right rule). Pure; the scores never leave the caller.
+ */
+export function decideDanceAssignments(
+  scores: Partial<Record<'A' | 'B', readonly number[]>>,
+  faceCount: number,
+  rule: { minCosine: number; minMargin: number } = {
+    minCosine: FACE_MATCH_MIN_COSINE,
+    minMargin: FACE_MATCH_MIN_MARGIN,
+  },
+): { face_index: number; party: 'A' | 'B' }[] {
+  const parties = (['A', 'B'] as const).filter((p) => scores[p] !== undefined);
+  const out: { face_index: number; party: 'A' | 'B' }[] = [];
+  for (const p of parties) {
+    const row = scores[p]!;
+    const byFace = decideMatch(
+      Array.from({ length: faceCount }, (_, i) => ({ id: i, score: row[i] ?? Number.NaN })),
+      rule,
+    );
+    if (byFace.kind !== 'match') continue;
+    const i = byFace.id;
+    const byParty = decideMatch(
+      parties.map((q) => ({ id: q, score: scores[q]![i] ?? Number.NaN })),
+      rule,
+    );
+    if (byParty.kind === 'match' && byParty.id === p) out.push({ face_index: i, party: p });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------

@@ -134,6 +134,54 @@ describe('createTracker (§3)', () => {
     expect(back.b).toBe(R);
   });
 
+  it('starts from an explicit assignment: A on the right, kept under jitter and reordering', () => {
+    const rng = lcg(4);
+    const L = person(0.3);
+    const R = person(0.7);
+    // A was identified standing on the right (face assignment), B on the left.
+    const tr = createTracker({ w: 720, h: 1280, start: { a: [0.69, 0.6], b: [0.31, 0.6] } });
+    expect(tr.aStartedRight()).toBeNull();
+    for (let t = 0; t < 4000; t += 50) {
+      const a = jittered(R, rng);
+      const b = jittered(L, rng);
+      const f = tr.push(t, rng() < 0.5 ? [a, b] : [b, a]);
+      expect(f.a).toBe(a);
+      expect(f.b).toBe(b);
+    }
+    expect(tr.aStartedRight()).toBe(true);
+    // Standing on their own starting sides the whole time is not a side swap.
+    expect(tr.stats().side_swaps).toBe(0);
+    const last = tr.last();
+    expect(last.a![0]).toBeGreaterThan(0.6);
+    expect(last.b![0]).toBeLessThan(0.4);
+  });
+
+  it('counts side swaps relative to the starting sides (A started right)', () => {
+    const rng = lcg(3);
+    const tr = createTracker({ w: 720, h: 1280, start: { a: [0.7, 0.6], b: [0.3, 0.6] } });
+    // A walks 0.7 -> 0.3 and B 0.3 -> 0.7 over 1 s, then they stay swapped for 2 s.
+    for (let t = 0; t <= 4000; t += 50) {
+      const u = Math.min(1, Math.max(0, (t - 1000) / 1000));
+      const a = jittered(person(0.7 - 0.4 * u), rng, 0.002);
+      const b = jittered(person(0.3 + 0.4 * u), rng, 0.002);
+      const f = tr.push(t, rng() < 0.5 ? [a, b] : [b, a]);
+      expect(f.a).toBe(a);
+      expect(f.b).toBe(b);
+    }
+    expect(tr.stats().side_swaps).toBe(1);
+  });
+
+  it('the start spots pick the nearest pair, wherever the players stood', () => {
+    // Identified left / right as the rule would: the same assignment as no start at all.
+    const L = person(0.3);
+    const R = person(0.7);
+    const seeded = createTracker({ w: 720, h: 1280, start: { a: [0.32, 0.6], b: [0.68, 0.6] } });
+    const plain = createTracker({ w: 720, h: 1280 });
+    expect(seeded.push(0, [R, L])).toEqual(plain.push(0, [R, L]));
+    expect(seeded.aStartedRight()).toBe(false);
+    expect(plain.aStartedRight()).toBe(false);
+  });
+
   it('hipCenter falls back to the root, then one hip', () => {
     const k = person(0.4);
     expect(hipCenter(k)![0]).toBeCloseTo(0.4, 6);
@@ -162,6 +210,37 @@ describe('seriesChecks', () => {
       sync_offset_ms: 0,
       frames,
     };
-    expect(seriesChecks(s)).toEqual({ max_people: 3, frames_over_two: 1, side_swaps: 1 });
+    expect(seriesChecks(s)).toEqual({
+      max_people: 3,
+      frames_over_two: 1,
+      side_swaps: 1,
+      a_start: 'left',
+    });
+  });
+
+  it('reads the starting sides from the first frame with both: A started right, swaps relative', () => {
+    const at = (t: number, aX: number, bX: number) => ({
+      t,
+      n: 2,
+      a: quantizePerson(person(aX)),
+      b: quantizePerson(person(bX)),
+    });
+    const base = { schema_version: 1 as const, w: 720, h: 1280, fps_cap: 10, sync_offset_ms: 0 };
+    const stay: PoseSeries = {
+      ...base,
+      frames: [{ t: 0, n: 1, a: quantizePerson(person(0.7)), b: null }],
+    };
+    for (let t = 100; t <= 4000; t += 100) stay.frames.push(at(t, 0.7, 0.3));
+    expect(seriesChecks(stay)).toEqual({
+      max_people: 2,
+      frames_over_two: 0,
+      side_swaps: 0,
+      a_start: 'right',
+    });
+    const swap: PoseSeries = { ...base, frames: [] };
+    for (let t = 0; t <= 4000; t += 100)
+      swap.frames.push(t < 2000 ? at(t, 0.7, 0.3) : at(t, 0.3, 0.7));
+    expect(seriesChecks(swap)).toMatchObject({ side_swaps: 1, a_start: 'right' });
+    expect(seriesChecks({ ...base, frames: [] }).a_start).toBeNull();
   });
 });

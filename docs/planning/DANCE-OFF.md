@@ -112,10 +112,41 @@ Everything timed on the round comes from the routine's `duration_ms`: the scorer
 - `framingCheck(people, w, h)` → `{ok, reason: 'ok'|'need_two'|'too_many'|'feet'|'head'|'same_side'|'too_close', a?: idx, b?: idx}`.
   It passes only when there are exactly 2 people, each full body (nose or neck, both ankles, both hips with
   c ≥ FRAMING_CONF), one hip-center left of image center and the other right of it, with a gap between them.
-- `createTracker()`. Players are assigned at round start by hip-center x: **A = left in the image** (the
-  challenger stands on the left of the display). From then on, each person is matched to the nearest previous
-  hip-center (greedy NN with a max jump). Extra people are counted (`n`) and never become A or B.
-  The tracker also counts side swaps (A's hip x > B's hip x for ≥ SWAP_MIN_MS) and frames with n > 2.
+- `createTracker({w, h, start?})`. Players are assigned at round start either from an explicit initial
+  assignment (`start = {a, b}`: where A and B stood, as hip centres, when the phone identified them by face;
+  the two people nearest those spots, so **A may stand on the right**), or, without one, by hip-center x:
+  **A = left in the image** (the challenger stands on the left of the display), exactly as before. From then
+  on, each person is matched to the nearest previous hip-center (greedy NN with a max jump). Extra people are
+  counted (`n`) and never become A or B. The tracker also counts side swaps RELATIVE to the starting sides
+  (A and B each on the other's starting side for ≥ SWAP_MIN_MS) and frames with n > 2. `seriesChecks` (server)
+  reads the starting sides from the series' first frame with both players and counts the same way; a round
+  whose A started on the right records `checks.a_start_side = 'right'` in DanceEvidence (absent otherwise, so
+  every left / right record and its evidence_hash are unchanged).
+
+**Face assignment** (who is A, who is B). The recording phone tries it once the framing check passes, and it
+never blocks or fails the round:
+1. `captureStill()` on the pose view (§6.1): one full-size JPEG of the next frame sent to Vision, with that
+   frame's `ts`.
+2. The existing face stack (`apps/mobile/src/face`, a small-face ML Kit detector, `minFaceSize` 0.04, and the
+   same w600k_mbf embedder as the scan) finds the faces; each face box goes to the nearest person's head
+   keypoints (nose / eyes / ears, else neck) in the same frame (`dance/model/faceId.ts`). Only the faces on the
+   two framed players are embedded, and the still is deleted.
+3. `POST /v1/bets/:bet_id/dance/identify` (signed; `DanceIdentifyRequest {model, faces: [{embedding}] (1..4)}`
+   → `{assignments: [{face_index, party}]}`). Only the dance off's filming device may call it: while LOCKED, A's
+   judge cam bound to the room if there is one, else A's own phone(s); in ATTEMPT, the attempt's recorder
+   device. The server compares the probes ONLY with the two parties' active enrollments (the caller's own
+   included) with the face-match threshold (0.30) and margin (0.05), both ways: a face is party p only when p
+   is clearly that face's best party and that face is clearly p's best face, so each party gets at most one
+   face (`decideDanceAssignments`). No scores or vectors in the answer, nothing stored (not even
+   last_used_at), bodies never logged, the same plain-v0 / sealed embedding forms; one call in flight per user
+   and 30/min in its own bucket `face-match/dance`.
+4. Both players identified, as two different people: the phone follows them through the rest of framing
+   (`dance/model/identity.ts`, the shared tracker seeded at the still's frame) and seeds the round's tracker
+   with where they stand at the count-in. Anything else (not enrolled, no or one face, masks, a timeout after
+   2.5 s, a simulator build without the ML Kit detector, a network error) is the left / right rule, silently.
+   At most 3 tries per framing session, 4 s apart.
+5. Framing copy: with faces, each player's name tag sits over their skeleton; without, the `A ← | → B` hint as
+   before.
 
 ## 4. Scorer (shared, `dance/score.ts`, scorer_version `dance-score@1`)
 
@@ -153,8 +184,8 @@ poses. The overlap multiplies the continuous score, and it gates key moves: a ke
 player's motion energy in the preceding `KEY_MOTION_WINDOW_MS` is at least `KEY_MOTION_MIN` × the reference's.
 
 4.6 **Two layers.**
-- Live meter (display only): an EMA (`LIVE_EMA_ALPHA`) of the per-frame best-lag similarity × a short-window
-  movement overlap.
+- Live meter (display only, the number on each player's name tag, §6.3): an EMA (`LIVE_EMA_ALPHA`) of the
+  per-frame best-lag similarity × a short-window movement overlap.
 - Key moves: for each key move at time t, take the best sim of the player frames in [t − 200, t + 500] against
   the reference pose at t. ≥ `PERFECT_AT` is PERFECT (100 pts), ≥ `GOOD_AT` is GOOD (60 pts), anything lower,
   or a failed motion gate, is a MISS (0).
@@ -180,7 +211,7 @@ DanceEvidence = strict {           // packages/shared/src/evidence.ts; evidence_
   scores: { a: int, b: int },       // tenths, SERVER-recomputed from PoseSeries
   winner: 'A' | 'B' | null, too_close: boolean, failed: string | null,
   key_moves: { id, a: 'PERFECT'|'GOOD'|'MISS', b: 'PERFECT'|'GOOD'|'MISS' }[],
-  checks: { coverage_a_pct, coverage_b_pct, max_people, side_swaps },
+  checks: { coverage_a_pct, coverage_b_pct, max_people, side_swaps, a_start_side?: 'right' },
   frames: EvidenceFrame[] (1..6, the key frames uploaded), clip_sha256: Hex32 | null }
 ```
 
@@ -192,7 +223,8 @@ DanceEvidence = strict {           // packages/shared/src/evidence.ts; evidence_
   routine, so the round window is that routine's `duration_ms`), builds
   DanceEvidence, and stores `attempts.evidence_canonical = jcs(DanceEvidence)`. The bet moves to JUDGING.
 - Validation job (Claude, `apps/server/src/judge/dance.ts`) gets the terms, both scores, the per-move breakdown,
-  the deterministic checks and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
+  the deterministic checks (including who started on which side: A left unless `checks.a_start_side` says
+  right) and the 4 frames. It returns `{verdict: 'valid'|'invalid', danced_full_time,
   nobody_left, no_third_person, no_side_swap, notes, announcer_line}`. `valid` comes first, so the mock LLM's
   default is the happy path. If the LLM fails or times out, the round settles on the score with a canned line,
   and the validation is recorded as skipped.
@@ -227,6 +259,9 @@ worklets package is not installed.
     and recording starts.
   - `stopRound()` → `{clipUri, clipSha256, snapshots: {t_ms, uri, width, height, bytes, sha256}[]}`. The
     snapshots are JPEGs, ≤ 512 px and ≤ 200 KB.
+  - `captureStill()` → `{ok: true, uri, width, height, ts} | {ok: false, message}`: one full-size upright JPEG
+    (720x1280) of the next frame sent to Vision, `ts` being that frame's `onPoses.ts` (the face assignment,
+    §3). The caller deletes it; a binary without it answers `{ok: false}`.
 - JS: `apps/mobile/modules/dance-pose/index.ts` exports the typed view plus `isDancePoseAvailable()`. The app
   loads it only through `importSafely`. The simulator has no camera, so it reports `no_camera`, and the app
   offers the debug replay.
@@ -235,7 +270,8 @@ worklets package is not installed.
 - The negotiate screen gets a "Dance off" panel: 3 routine cards and a stake → `POST /terms/dance` → the
   existing confirm → "You're on" + Face ID lock.
 - On LOCKED, the recording phone (the room's judge cam, or else A's phone) routes to `dance`:
-  1. Framing check (live skeletons, "A ← | → B"). Start is disabled until framing passes for 1 s.
+  1. Framing check (live skeletons, "A ← | → B", or the players' name tags once the face assignment (§3)
+     identified both). Start is disabled until framing passes for 1 s; the face assignment never holds it.
   2. `POST /attempts`.
   3. Count-in "3, 2, 1" on the routine's beat (visual + haptic), starting at the attempt's `go_at`
      (the server's instant, GO_DELAY_MS after POST /attempts).
@@ -259,9 +295,14 @@ worklets package is not installed.
 - A's phone, when a judge cam records, shows the "Dance off live" status screen.
 
 6.3 **Display layout** (it is what HDMI mirroring shows): the mirrored reference, the live camera view with
-skeleton overlays for A and B, two live match meters, PERFECT/GOOD/MISS popups at each key move, and the beat
-counter. With a display phone in the room the recording phone drops the reference panel (the display phone
-shows it) and the camera panel takes the space.
+skeleton overlays for A and B, a live name tag pinned above each player's head (a small pill in the player's
+colour: first name + live match score, `Logan · 87`, and a tiny face mark when that player was identified by
+face; placed from the live head keypoints with a short EMA, kept inside the panel and off the other tag,
+fading out when the player is lost and back in where they are found, never sliding onto the other player;
+`dance/model/nameTags.ts`), PERFECT/GOOD/MISS popups over each player's side at each key move, and the beat
+counter. The tags are the live score readout: there are no separate match meters. With a display phone in
+the room the recording phone drops the reference panel (the display phone shows it) and the camera panel takes
+the space.
 
 6.4 **Debug / calibration** (hidden; Diagnostics → "Dance calibration"):
 - Live readout of the raw scores, per-limb similarity, current lag and FPS.

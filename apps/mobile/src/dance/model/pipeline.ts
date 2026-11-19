@@ -1,5 +1,6 @@
 // The live round pipeline (DANCE-OFF §3, §4.6, §6.2): native onPoses frames → the shared
-// identity tracker (A = left at round start) → the shared live scorer (meters, key-move events)
+// identity tracker (A = left at round start, or where the face assignment found A: `start`) →
+// the shared live scorer (meters, key-move events)
 // → the quantized PoseSeries that gets hashed and uploaded. Pure: the screen feeds it frames and
 // reads what comes back; tests feed it synthetic frames.
 //
@@ -22,7 +23,12 @@ import {
   type LiveScorer,
   type LiveUpdate,
 } from '@youre-on/shared/dance/score';
-import { createTracker, type Tracker, type TrackerStats } from '@youre-on/shared/dance/track';
+import {
+  createTracker,
+  type Tracker,
+  type TrackerStart,
+  type TrackerStats,
+} from '@youre-on/shared/dance/track';
 
 /** One onPoses payload (modules/dance-pose PoseFrameEvent, already validated). */
 export interface PoseInput {
@@ -79,6 +85,8 @@ export function createRoundPipeline(opts: {
   routine: RoutineData;
   syncOffsetMs: number;
   fpsCap?: number;
+  /** Face-identified players (model/identity start()); absent: the left / right rule. */
+  start?: TrackerStart | null;
 }): RoundPipeline {
   const fpsCap = opts.fpsCap ?? POSE_MAX_FPS;
   const gap = minFrameGapMs(fpsCap);
@@ -94,7 +102,7 @@ export function createRoundPipeline(opts: {
   const ensure = (w: number, h: number) => {
     if (size) return;
     size = { w: Math.round(w), h: Math.round(h) };
-    tracker = createTracker(size);
+    tracker = createTracker({ ...size, start: opts.start ?? null });
     scorer = createLiveScorer(opts.routine, {
       syncOffsetMs: opts.syncOffsetMs,
       w: size.w,

@@ -19,10 +19,10 @@
 // a locked Gemini bet shows the market clock (live price by market.tick) until Gemini settles.
 // Dance Off (docs/planning/DANCE-OFF.md): "Dance off" on A's negotiate screen (app/danceTerms),
 // the same card and lock, then the round on the recording phone (../dance DanceOffScreen: the
-// judge cam, else A's phone), B's phone the display meanwhile (../dance DanceDisplayScreen: the
-// mirrored reference and the music, from the same server go_at), and "Dance off live" on a phone
-// that is neither and while the round is judged (app/danceFlow); the usual ruling,
-// GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
+// judge cam, else A's phone; it tells A from B by face when it can, DANCE-OFF §3), B's phone the
+// display meanwhile (../dance DanceDisplayScreen: the mirrored reference and the music, from the
+// same server go_at), and "Dance off live" on a phone that is neither and while the round is
+// judged (app/danceFlow); the usual ruling, GG and payout. Double or nothing (app/rematch) on every finished bet starts a new challenge.
 // "Jarvis" (../wake, ./wakeGate; EXPO_PUBLIC_WAKE): one recognizer, listening on Home (in a room)
 // and on A's negotiate screen until the judge starts. On Home "Jarvis, …" starts a challenge (the
 // person named, the face scan, or the one person online); on the negotiate screen A's judge waits
@@ -257,6 +257,13 @@ const FACE_ENABLED = process.env.EXPO_PUBLIC_FACE !== 'off';
  */
 const loadFaceEmbedder = () =>
   importSafely(() => import('../face/native')).then((m) => m.getNativeEmbedder());
+/**
+ * The Dance Off's face assignment (DANCE-OFF §3) uses the same face natives, loaded the same way
+ * (on first use, through importSafely): a simulator build without ML Kit just falls back to the
+ * left / right rule.
+ */
+const loadDanceFaceEmbedder = () =>
+  importSafely(() => import('../face/native')).then((m) => m.getDanceEmbedder());
 /** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
 const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
 /**
@@ -376,6 +383,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** The on-device embedder (its natives and the model load on first use; the scan screen
    *  warms it up). */
   const embedder = useMemo(() => (FACE_ENABLED ? createLazyEmbedder(loadFaceEmbedder) : null), []);
+  /** The dance face assignment's embedder (small faces), null with EXPO_PUBLIC_FACE=off. */
+  const danceEmbedder = useMemo(
+    () => (FACE_ENABLED ? createLazyEmbedder(loadDanceFaceEmbedder) : null),
+    [],
+  );
   /** A face screen crashed (e.g. a native module missing from the build): face is off until
    *  the app restarts, and challenges go through the room list. */
   const [faceBroken, setFaceBroken] = useState(false);
@@ -2252,6 +2264,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                   displayUserId: bet.party_b?.user_id ?? null,
                   myUserId: app.me?.user_id ?? null,
                 })}
+                // Face assignment (DANCE-OFF §3): who is who from one still when framing passes
+                // (time-boxed; any miss, a simulator without ML Kit, is the left / right rule).
+                faceId={
+                  danceEmbedder
+                    ? {
+                        open: (uri) => danceEmbedder.open(uri),
+                        identify: (req) => rt.api.danceIdentify(bet.bet_id, req),
+                      }
+                    : null
+                }
                 ruling={
                   bet.ruling
                     ? {

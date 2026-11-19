@@ -15,6 +15,7 @@ import {
   toKeypoints,
   toPoseFrame,
   toStatusEvent,
+  toStillResult,
   toStopRoundResult,
 } from '../src/frame';
 
@@ -101,9 +102,9 @@ describe('native contract (Swift <-> JS)', () => {
       expect(moduleSwift).toContain(`Prop("${prop}")`);
       expect(nativeTs).toMatch(new RegExp(`\\b${prop}: `));
     }
-    for (const fn of ['startRound', 'stopRound']) {
+    for (const fn of ['startRound', 'stopRound', 'captureStill']) {
       expect(moduleSwift).toContain(`AsyncFunction("${fn}") { (view: DancePoseView`);
-      expect(nativeTs).toContain(`${fn}(`);
+      expect(nativeTs).toMatch(new RegExp(`\\b${fn}\\??\\(`));
     }
     expect(moduleSwift).toContain('@Field var snapshotAtMs: [Double] = []');
   });
@@ -117,6 +118,20 @@ describe('native contract (Swift <-> JS)', () => {
     for (const key of ['"t_ms"', '"uri"', '"width"', '"height"', '"bytes"', '"sha256"']) {
       expect(files).toContain(key);
     }
+  });
+
+  it("captureStill: a full-size still of a pose frame, with that frame's ts", () => {
+    const engine = read('../ios/DancePoseEngine.swift');
+    expect(viewSwift).toContain('func captureStill(promise: Promise)');
+    for (const key of ['"ok"', '"uri"', '"width"', '"height"', '"ts": ts']) {
+      expect(engine).toContain(key);
+    }
+    // Served from the frame handed to Vision, so its ts is an onPoses ts.
+    const dispatch = engine.indexOf('enqueueStill(pixelBuffer, ts: frameTs');
+    expect(dispatch).toBeGreaterThan(engine.indexOf('visionBusy.set(true)'));
+    expect(read('../ios/DancePoseFiles.swift')).toContain(
+      'static let stillMaxLongSide: CGFloat = 1280',
+    );
   });
 
   it('does not touch native code at import time', () => {
@@ -286,5 +301,21 @@ describe('clampMaxFps', () => {
     expect(clampMaxFps(0)).toBe(1);
     expect(clampMaxFps(120)).toBe(60);
     expect(clampMaxFps(15)).toBe(15);
+  });
+});
+
+describe('toStillResult', () => {
+  it('passes a well-formed still and refuses anything else', () => {
+    const ok = { ok: true, uri: 'file:///c/still-1.jpg', width: 720, height: 1280, ts: 1234.5 };
+    expect(toStillResult(ok)).toEqual(ok);
+    expect(toStillResult({ ok: false, message: 'camera is not running' })).toEqual({
+      ok: false,
+      message: 'camera is not running',
+    });
+    expect(toStillResult(null)).toEqual({ ok: false });
+    expect(toStillResult({ ...ok, uri: 'https://x/y.jpg' })).toEqual({ ok: false });
+    expect(toStillResult({ ...ok, width: 0 })).toEqual({ ok: false });
+    expect(toStillResult({ ...ok, height: 4000 })).toEqual({ ok: false });
+    expect(toStillResult({ ...ok, ts: 'soon' })).toEqual({ ok: false });
   });
 });
