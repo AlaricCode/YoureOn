@@ -1689,6 +1689,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return (
           <PanelErrorBoundary name="Face scan" onError={faceCrashed('scan')}>
             <ScanScreen
+              roomCode={room.code}
               onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
               scan={(url) =>
                 runScan(

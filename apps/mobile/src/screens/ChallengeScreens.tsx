@@ -100,6 +100,7 @@ export function ScanScreen({
   onPickList,
   onOpen,
   tag,
+  roomCode,
 }: {
   onBack: () => void;
   /** Embeds the photo and runs the room-scoped match (app/scan runScan). */
@@ -115,6 +116,8 @@ export function ScanScreen({
   /** Called once when the screen opens (warm the model up). */
   onOpen?: (() => void) | undefined;
   tag?: string | undefined;
+  /** This room's code, shown when nobody else is here to scan. */
+  roomCode?: string | undefined;
 }) {
   const permission = useCameraPermission();
   // No camera (the simulator): <Camera> is never mounted (device/visionCamera).
@@ -177,7 +180,12 @@ export function ScanScreen({
 
   const found = state.phase === 'found' || state.phase === 'challenging' ? state.match : null;
   const checking = state.phase === 'checking';
-  const missLine = state.miss ? t(SCAN_MISS_COPY[state.miss]) : null;
+  // Matching is room-scoped: in an empty room every scan is "No match", so say why instead.
+  const alone = members.length === 0;
+  const missLine = state.miss
+    ? t(alone && state.miss === 'no_match' ? COPY.scan.emptyRoom : SCAN_MISS_COPY[state.miss])
+    : null;
+  const joinHint = alone && roomCode ? fill.joinCode(roomCode) : null;
   const fallback = showsFallbackList(state);
 
   return (
@@ -269,7 +277,7 @@ export function ScanScreen({
             </Label>
             <ScrollView style={styles.fallbackList}>
               {members.length === 0 ? (
-                <DataText muted>{t(COPY.home.empty)}</DataText>
+                <DataText muted>{joinHint ?? t(COPY.home.empty)}</DataText>
               ) : (
                 members.map((m, i) => (
                   <View
@@ -292,7 +300,10 @@ export function ScanScreen({
             </ScrollView>
           </View>
         ) : (
-          <QuietButton label={t(COPY.scan.pickList)} onPress={onPickList} />
+          <>
+            {joinHint ? <DataText muted>{joinHint}</DataText> : null}
+            <QuietButton label={t(COPY.scan.pickList)} onPress={onPickList} />
+          </>
         )}
       </Page>
     </Screen>
