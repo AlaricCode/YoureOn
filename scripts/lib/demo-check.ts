@@ -360,7 +360,11 @@ export function evaluateDemoHealth(
       ? {
           id: 'chain.configured',
           verdict: 'GO',
-          detail: `rpc ${h.rpc}, lock signer ${h.lock_signer}`,
+          detail: `rpc ${h.rpc}, lock signer ${h.lock_signer}${
+            h.lock_signer === 'server'
+              ? ' (custodial: the server signs with the demo keys, so no Face ID hold on the phones, and a pair that is not demo-a + demo-b fails at Lock it in)'
+              : ''
+          }`,
         }
       : {
           id: 'chain.configured',

@@ -8,6 +8,7 @@ import {
   judgeWaitsForWake,
   loopReducer,
   namedOpponent,
+  overheardChallenge,
   wakeListening,
   type LoopEvent,
   type LoopState,
@@ -110,6 +111,31 @@ describe('homeWakeAction: "Jarvis, …" on Home starts a challenge', () => {
     expect(at(false, [jake, sam])).toEqual({ kind: 'challenge', userId: 'u-jake' });
     expect(at(false)).toEqual({ kind: 'pick' });
     expect(at(false, [])).toEqual({ kind: 'pick' });
+  });
+
+  it("the opponent's phone overhears the challenge and does nothing (no crossed bet)", () => {
+    // Logan (A) and Jake (B) both on Home, B's phone a metre away.
+    const logan = { user_id: 'u-logan', display_name: 'Logan Staples', online: true };
+    const onB = (text: string, canScan = true) =>
+      homeWakeAction({ text, inRoom: true, canScan, opponents: [logan], meName: 'Jake' });
+    const onA = (text: string, canScan = true) =>
+      homeWakeAction({ text, inRoom: true, canScan, opponents: [jake], meName: 'Logan Staples' });
+    // "I bet Jake can't…": A challenges Jake; B's phone (face on or off) stays put.
+    expect(onA("I bet Jake can't land a bottle flip")).toEqual({
+      kind: 'challenge',
+      userId: 'u-jake',
+    });
+    expect(onB("I bet Jake can't land a bottle flip")).toEqual({ kind: 'none' });
+    expect(onB("I bet Jake can't land a bottle flip", false)).toEqual({ kind: 'none' });
+    // Both named: whoever is named first is the challenger.
+    expect(onA('Logan bets Jake five bucks')).toEqual({ kind: 'challenge', userId: 'u-jake' });
+    expect(onB('Logan bets Jake five bucks')).toEqual({ kind: 'none' });
+    expect(onB('Jake bets Logan five bucks')).toEqual({ kind: 'challenge', userId: 'u-logan' });
+    expect(onA('Jake bets Logan five bucks')).toEqual({ kind: 'none' });
+    // No name at all cannot be told apart: unchanged.
+    expect(onB('bet you cannot flip it')).toEqual({ kind: 'scan' });
+    expect(overheardChallenge('I bet Jake', null, null)).toBe(false);
+    expect(overheardChallenge('I bet Jakeline', 'Jake', null)).toBe(false);
   });
 
   it('nothing without a room', () => {

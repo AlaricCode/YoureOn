@@ -163,6 +163,34 @@ describe('demo-check: /v1/demo/health', () => {
     );
     expect(byId(cs)['chain.fee_payer_pinned']).toBe('NO-GO');
   });
+
+  it('LOCK_SIGNER=server says what it costs on stage (no Face ID, demo pair only)', () => {
+    const server = evaluateDemoHealth(ok(healthy), NOW).find((c) => c.id === 'chain.configured')!;
+    expect(server.verdict).toBe('GO');
+    expect(server.detail).toContain('no Face ID hold');
+    expect(server.detail).toContain('demo-a + demo-b');
+    const phones = evaluateDemoHealth(ok({ ...healthy, lock_signer: 'phones' }), NOW).find(
+      (c) => c.id === 'chain.configured',
+    )!;
+    expect(phones.detail).not.toContain('Face ID');
+  });
+
+  it('an appeal panel seat without its key surfaces as a WARN (Beat 5 can never flip)', () => {
+    const cs = evaluateDemoHealth(
+      ok({
+        ...healthy,
+        warnings: [
+          {
+            code: 'appeal_panel_keys_missing',
+            level: 'warn',
+            message: 'OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY are not set',
+          },
+        ],
+      }),
+      NOW,
+    );
+    expect(byId(cs)['server.appeal_panel_keys_missing']).toBe('WARN');
+  });
 });
 
 describe('demo-check: the judge (LLM) and cached_ruling', () => {
