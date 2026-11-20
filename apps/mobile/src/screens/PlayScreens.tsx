@@ -194,6 +194,9 @@ function failureNote(e: unknown): string {
   return [...new Set(parts)].join(' · ').slice(0, 160) || 'unknown error';
 }
 
+/** How long Stop waits for the camera to finalize the file before it counts as no clip. */
+const FINALIZE_WAIT_MS = 8000;
+
 /** How long a recording waits for a camera that is not up yet before it gives up. */
 const CAMERA_WAIT_MS = 10_000;
 
@@ -242,6 +245,8 @@ export function JudgeCamScreen({
   const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
+  /** stop() is waiting for the camera to finalize the file (the CameraView must stay mounted). */
+  const stopping = useRef(false);
   const startedAt = useRef(0);
   /** The camera's first progress event (when the file began) and when recordAsync resolved. */
   const firstProgress = useRef<{ atMs: number; durationS: number } | null>(null);
@@ -287,18 +292,33 @@ export function JudgeCamScreen({
   }, [phase, count, arm]);
 
   const stop = useCallback(async () => {
+    // One stop at a time: a second tap (or the timer) while the file is being finalized is a no-op.
+    if (stopping.current) return;
+    stopping.current = true;
     if (stopTimer.current) clearTimeout(stopTimer.current);
     stopTimer.current = null;
-    setPhase('sending');
     let clip: Clip | null = null;
+    let recordNote: string | null = null;
     try {
       const pending = recording.current;
-      recording.current = null;
       if (pending) {
         // The clip ends now, not when the file is finalized (../attempt/span).
         const stopAtMs = Date.now();
         cam.current?.stopRecording();
-        const out = await pending;
+        // The camera stays on screen until the file is finalized. The 'sending' phase takes the
+        // CameraView away, and expo-camera rejects a recording whose view went away before
+        // didFinishRecording ("unmounted"): every clip was lost that way, on every device.
+        let out: { uri: string } | undefined;
+        try {
+          // A camera that never answers must not leave the screen stuck on "recording".
+          out = await Promise.race([
+            pending,
+            new Promise<undefined>((resolve) => setTimeout(resolve, FINALIZE_WAIT_MS)),
+          ]);
+          if (!out?.uri) recordNote = 'record: the camera gave no file';
+        } catch (e) {
+          recordNote = `record: ${failureNote(e)}`;
+        }
         if (out?.uri)
           clip = {
             uri: out.uri,
@@ -311,14 +331,20 @@ export function JudgeCamScreen({
             }),
           };
       }
+      recording.current = null;
       lastClip.current = clip;
       setEmpty(clip === null);
+      setPhase('sending');
       await onSend(clip);
       setPhase('sent');
     } catch (e) {
-      setFailNote(failureNote(e));
+      // The camera's own reason, when it gave no clip, says more than the "no clip" that follows.
+      setFailNote(recordNote ?? failureNote(e));
       setFailed(true);
       setPhase('sent');
+    } finally {
+      recording.current = null;
+      stopping.current = false;
     }
   }, [onSend]);
 
@@ -365,7 +391,7 @@ export function JudgeCamScreen({
       }, CAMERA_WAIT_MS);
       return () => clearTimeout(giveUp);
     }
-    if (!recording.current) {
+    if (!recording.current && !stopping.current) {
       startedAt.current = Date.now();
       firstProgress.current = null;
       finishedAt.current = null;
@@ -376,17 +402,12 @@ export function JudgeCamScreen({
           // the first event (~100 ms in) dates the start of the file
           progressUpdateInterval: 0.1,
         })
-        .then(
-          (out) => {
-            finishedAt.current ??= Date.now();
-            return out;
-          },
-          (e: unknown) => {
-            // The camera refused to record: say why, and end as an empty attempt.
-            setFailNote(`record: ${failureNote(e)}`);
-            return undefined;
-          },
-        );
+        .then((out) => {
+          finishedAt.current ??= Date.now();
+          return out;
+        });
+      // stop() awaits it and reports a refusal; until then a rejection is not "unhandled".
+      recording.current.catch(() => undefined);
     }
     const limit = Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS);
     stopTimer.current = setTimeout(() => void stop(), limit);
