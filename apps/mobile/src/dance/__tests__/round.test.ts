@@ -11,6 +11,9 @@ import {
   countInSchedule,
   danceProgress,
   FRAMING_GRACE_MS,
+  AUTO_START_MS,
+  autoStartLeftMs,
+  autoStartNumeral,
   FRAMING_STABLE_MS,
   framingProgress,
   GO_LABEL_MS,
@@ -428,3 +431,42 @@ function okFramesFor(from: number, to: number, step = 33): RoundEvent[] {
     out.push({ type: 'framing', at: t, ok: true, reason: 'ok' });
   return out;
 }
+
+describe('the auto-start count (both dancers in position, then a countdown)', () => {
+  const readyAt = (okSince: number) => ({ phase: 'ready' as const, okSince });
+
+  it('does not count until the framing has held', () => {
+    expect(autoStartLeftMs({ phase: 'framing', okSince: 0 }, 500)).toBeNull();
+    expect(autoStartLeftMs({ phase: 'ready', okSince: null }, 500)).toBeNull();
+    expect(autoStartNumeral(null)).toBeNull();
+  });
+
+  it('counts the full time from when the framing held, never from the first good frame', () => {
+    const s = readyAt(1000);
+    // ready at okSince + FRAMING_STABLE_MS: the whole count is still ahead
+    expect(autoStartLeftMs(s, 1000 + FRAMING_STABLE_MS)).toBe(AUTO_START_MS);
+    expect(autoStartNumeral(AUTO_START_MS)).toBe(5);
+    expect(autoStartNumeral(4001)).toBe(5);
+    expect(autoStartNumeral(4000)).toBe(4);
+    expect(autoStartNumeral(1)).toBe(1);
+  });
+
+  it('is due at zero, and shows no numeral then', () => {
+    const s = readyAt(1000);
+    const due = 1000 + FRAMING_STABLE_MS + AUTO_START_MS;
+    expect(autoStartLeftMs(s, due - 1)).toBe(1);
+    expect(autoStartLeftMs(s, due)).toBe(0);
+    expect(autoStartLeftMs(s, due + 5000)).toBe(0);
+    expect(autoStartNumeral(0)).toBeNull();
+  });
+
+  it('starts over when someone leaves: the round is back to framing', () => {
+    expect(autoStartLeftMs({ phase: 'framing', okSince: null }, 9999)).toBeNull();
+    // back in place later: a new okSince, a whole new count
+    expect(autoStartLeftMs(readyAt(20_000), 20_000 + FRAMING_STABLE_MS)).toBe(AUTO_START_MS);
+  });
+
+  it('gives the faces time to say who is who (longer than the face attempt)', () => {
+    expect(AUTO_START_MS).toBeGreaterThanOrEqual(3000);
+  });
+});

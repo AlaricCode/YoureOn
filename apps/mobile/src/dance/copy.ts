@@ -21,6 +21,8 @@ export const DANCE_COPY = {
   tooClose: ['Spread out', 'label'],
   hold: ['Hold it', 'label'],
   ready: ['Ready', 'label'],
+  startingIn: ['Starting in', 'label'],
+  holdStill: ['Stay in place', 'label'],
   findingYou: ['Finding you', 'label'],
   start: ['Start', 'label'],
   // The round.

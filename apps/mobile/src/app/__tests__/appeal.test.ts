@@ -140,7 +140,7 @@ describe('appeal routing', () => {
     expect(appealSeats([], 'A_WINS')).toEqual([
       { name: 'Claude', vote: 'voting', reason: null },
       { name: 'GPT', vote: 'voting', reason: null },
-      { name: 'Gemini', vote: 'voting', reason: null },
+      { name: 'Google', vote: 'voting', reason: null },
     ]);
     const seats = appealSeats(
       [appealVote(0, 'A_WINS'), appealVote(1, 'B_WINS'), appealVote(2, 'ABSTAIN')],
