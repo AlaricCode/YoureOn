@@ -1062,7 +1062,7 @@ describeDb('dance judge pipeline (DB)', () => {
     expect(LONG.duration_ms).toBe(32_600);
     const betId = await lockedDance(LONG);
     const [bet] = await ctx.deps.db.select().from(bets).where(eq(bets.id, betId));
-    expect(termsByBet.get(betId)!.claim).toMatch(/^Dance Off: Bye Bye Shuffle, 33 seconds,/);
+    expect(termsByBet.get(betId)!.claim).toMatch(/^Dance Off: Bye Bye Bye, 33 seconds,/);
     expect(bet!.state).toBe('LOCKED');
     const started = await post(A, `/v1/bets/${betId}/attempts`, {
       attempt_no: 1,

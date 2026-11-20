@@ -848,7 +848,7 @@ README paragraph:
 | Speech-to-Text (batch) | B's hearing turn | Server |
 | Text-to-Speech (`eleven_v4_turbo`, A/B `eleven_flash_v2`) | The projector speaks the ruling and payout of a bet no voice judge hosts in the judge's voice, and the three appeal-panel votes in distinct voices (API-CONTRACT §4.5; the browser's voice when no clip comes; one judge at a time, so a voice-judged bet's ruling is A's phone's) | Server → stage |
 | Voice Design | The judge's voice | Agent config |
-| Sound Effects | The gavel, drumroll, buzzer and cheer cues, generated once at server boot (`SFX_PROVIDER=auto` with the key) and played by the stage | Server → stage |
+| Sound Effects | The gavel, drumroll, buzzer and cheer cues, generated on first use (`SFX_PROVIDER=auto` with the key; at server boot only with `STAGE_SFX_PREWARM=true`) and played by the stage | Server → stage |
 | Post-call webhooks | Transcripts archived and hashed as evidence | `apps/server` |
 
 README paragraph:

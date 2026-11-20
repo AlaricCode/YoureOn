@@ -426,11 +426,27 @@ async function cleanup(call: ReturnType<typeof http>, statePath: string, st: Sta
   return leftAgents.length + leftTests.length + (tool ? 1 : 0);
 }
 
+/**
+ * This script runs REAL ElevenLabs agent tests and spends the account's credits. It only runs
+ * when that is asked for on purpose (EL_TEST_SPEND=yes): the credits ran out on 2026-11-19 with
+ * the voice judge down for the rest of the day.
+ */
+function requireSpendOptIn(name: string): void {
+  if (process.env['EL_TEST_SPEND'] === 'yes') return;
+  console.error(
+    `${name}: refusing to run. It runs real ElevenLabs agent tests and spends credits. ` +
+      'Set EL_TEST_SPEND=yes to run it on purpose.',
+  );
+  process.exit(2);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const flag = (n: string) => argv.find((a) => a === `--${n}` || a.startsWith(`--${n}=`));
   const value = (n: string) => flag(n)?.split('=').slice(1).join('=') || undefined;
   const dryRun = !!flag('dry-run');
+  // A dry run only checks the request bodies against the schema: nothing is sent.
+  if (!dryRun) requireSpendOptIn('el-review-eval');
   const repeat = Number(value('repeat') ?? 2);
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 5) fail('--repeat: 1..5');
   const only = value('only')?.split(',');

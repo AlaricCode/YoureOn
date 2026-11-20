@@ -193,9 +193,7 @@ describe('per-routine round length (§2)', () => {
 
   it('Terms text says the routine length, parses back and hashes', () => {
     const t = Terms.parse(danceTerms(BYE_BYE, '10000000'));
-    expect(t.claim).toBe(
-      'Dance Off: Bye Bye Shuffle, 33 seconds, higher match score wins, $10 each',
-    );
+    expect(t.claim).toBe('Dance Off: Bye Bye Bye, 33 seconds, higher match score wins, $10 each');
     expect(t.success_criteria[0]).toBe(
       `Routine bye-bye-shuffle v1 sha256:${routineSha256(BYE_BYE).slice(0, 16)}`,
     );

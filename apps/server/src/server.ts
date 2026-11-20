@@ -151,7 +151,11 @@ export async function startServer(
   deps.hub.start();
   deps.keeper?.start();
   deps.markets?.start();
-  deps.stageVoice?.prewarm(); // the cue clips, when ElevenLabs Sound Effects are live
+  // The cue clips ahead of the first gavel, when ElevenLabs Sound Effects are live. Opt-in
+  // (STAGE_SFX_PREWARM=true): at every start it cost four generations, and the clip cache does
+  // not outlive a deploy, so each deploy and restart spent credits nobody heard. Without it a
+  // cue is generated the first time a stage plays it.
+  if (deps.env.STAGE_SFX_PREWARM) deps.stageVoice?.prewarm();
   const port = (server.address() as AddressInfo).port;
 
   let closing: Promise<void> | null = null;
