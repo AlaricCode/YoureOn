@@ -1,11 +1,5 @@
-// Zod-validated server environment. Names are exactly SETUP-CHECKLIST §7 ("BUILD" section,
-// plus DATABASE_URL_DIRECT from "L's LAPTOP ONLY", which only migrations read).
-//
-// Rules:
-//  - An empty string counts as unset (the .env.example template has blank values).
-//  - Only what the running code needs is required. Everything else is optional here and
-//    becomes required (move it into REQUIRED_IN_PRODUCTION or make it non-optional) in the
-//    PR that lands the feature that reads it.
+// Zod-validated server environment. An empty string counts as unset (the .env.example template
+// has blank values). Only what the running code needs is required; everything else is optional.
 import { z } from 'zod/v4';
 import { isAddress } from '@solana/kit';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
@@ -26,7 +20,7 @@ export const EnvSchema = z.object({
   ),
   PORT: z.preprocess(unset, z.coerce.number().int().min(1).max(65535).default(8080)),
   PUBLIC_BASE_URL: opt(z.url()),
-  /** Must equal the phones' pinned ESCROW_ID (packages/shared/src/chain/constants.ts), or every lock is refused on device. */
+  /** Must equal the phones' pinned ESCROW_ID, or every lock is refused on device. */
   PROGRAM_ID: opt(
     pubkey.refine((s) => s === ESCROW_ID, `must equal the pinned ESCROW_ID ${ESCROW_ID}`),
   ),
@@ -35,9 +29,9 @@ export const EnvSchema = z.object({
   APPEAL_WINDOW_S: opt(intStr),
   LOCK_MODE: z.preprocess(unset, z.enum(['atomic', 'sequential']).default('atomic')),
   /**
-   * Who signs the atomic lock (src/lock). 'phones' = API-CONTRACT §2.8 (each phone signs the stored
-   * message after hold + Face ID). 'server' = custodial demo path: the server signs create_bet /
-   * accept_bet as demo-a / demo-b (DEMO_A/B_SECRET_KEY) right after confirm_terms (D-A).
+   * Who signs for the parties: 'phones' (each phone, after Face ID) or 'server' (the custodial
+   * demo-a / demo-b keys sign the lock, and any GG or appeal sent unsigned; the demo appeal route
+   * POST /v1/demo/bets/:bet_id/appeal needs it).
    */
   LOCK_SIGNER: z.preprocess(unset, z.enum(['phones', 'server']).default('phones')),
   /**
@@ -49,115 +43,93 @@ export const EnvSchema = z.object({
   /** Terms.escrow.cluster; 'localnet' only for a local validator (scripts/e2e-local.sh). */
   SOLANA_CLUSTER: z.preprocess(unset, z.enum(['devnet', 'localnet']).default('devnet')),
   DEMO_MODE: z.preprocess(unset, boolStr.default(false)),
-  /**
-   * Under DEMO_MODE, the voice judge (ElevenLabs, billed per conversation) is for the demo players
-   * only. false = every signed-in party gets it (Jarvis and the judge for lobby players too).
-   */
+  /** Under DEMO_MODE, the billed voice judge (and Jarvis) is for demo players only; false = all. */
   VOICE_DEMO_ONLY: z.preprocess(unset, boolStr.default(true)),
-  /**
-   * SCHEMAS §2.2: real_world (Gemini BTC 5-minute) bets on our escrow are a devnet demo
-   * exception. Unset = follow DEMO_MODE. They also need the market relay (MARKETS_FEED).
-   */
+  /** real_world bets on our escrow (devnet demo exception, needs the relay); unset = DEMO_MODE. */
   ALLOW_P2P_REAL_WORLD: opt(boolStr),
   ELEVENLABS_AGENT_ID: opt(str),
   ELEVENLABS_JUDGE_VOICE_ID: opt(str),
   /**
-   * The agent LLM scripts/el-agent.ts set (its --llm / ELEVENLABS_AGENT_LLM; unset = the shared
-   * DEFAULT_AGENT_LLM). The post-call webhook warns `voice.llm_mismatch` when another model billed.
+   * The agent's LLM: scripts/el-agent.ts sets it on the agent unless --llm is given (unset =
+   * DEFAULT_AGENT_LLM); the post-call webhook warns `voice.llm_mismatch` when another model billed.
    */
   ELEVENLABS_AGENT_LLM: opt(str),
   /**
-   * The stage's voice (src/voice/tts.ts): ElevenLabs TTS of the rulings, payouts and appeal votes
-   * on the projector, and (SFX_PROVIDER=auto) its Sound Effects cues. On whenever
-   * ELEVENLABS_API_KEY is set and ALLOW_SPEND=true; 'off' is the kill switch (the stage then speaks
-   * with the browser's voice and synthesizes its cues).
+   * The projector's ElevenLabs voice (and, with SFX_PROVIDER=auto, its cues): on whenever
+   * ELEVENLABS_API_KEY is set and ALLOW_SPEND=true. 'off' is the kill switch (browser voice).
    */
   STAGE_TTS: opt(z.enum(['on', 'off'])),
-  /** The stage TTS model (API-CONTRACT §4.1: eleven_v4_turbo; A/B eleven_flash_v2). */
+  /** The stage TTS model (default eleven_v4_turbo). */
   STAGE_TTS_MODEL: opt(str),
-  /**
-   * Three comma-separated ElevenLabs voice ids, appeal panel seats 1-3 (API-CONTRACT §4.5: three
-   * distinct voices). Unset = three premade voices (voice/tts.ts DEFAULT_STAGE_VOICES).
-   */
+  /** Three distinct comma-separated voice ids, appeal panel seats 1-3; unset = premade voices. */
   ELEVENLABS_PANEL_VOICE_IDS: opt(
     z.string().refine((s) => {
       const ids = s.split(',').map((x) => x.trim());
       return ids.length === 3 && ids.every(Boolean) && new Set(ids).size === 3;
     }, 'three distinct comma-separated voice ids'),
   ),
-  // --- paid-provider switches (src/providers; SETUP-CHECKLIST §7, planning D14)
-  /** Spend guard: any `*_PROVIDER=live` refuses to start unless this is true. Never set in tests/CI. */
+  // --- paid-provider switches
+  /** Spend guard: any `*_PROVIDER=live` refuses to start unless true. Never set in tests or CI. */
   ALLOW_SPEND: z.preprocess(unset, boolStr.default(false)),
   /** mock = deterministic offline LLM; live = Anthropic / OpenAI / Google (needs ALLOW_SPEND). */
   LLM_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
   /** mock = echo transcript; live = ElevenLabs Scribe (needs ALLOW_SPEND + ELEVENLABS_API_KEY). */
   STT_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live']).default('mock')),
   /**
-   * mock = generated beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY);
-   * auto (default) = live exactly when the stage's voice is on (the key, ALLOW_SPEND=true, and
-   * not STAGE_TTS=off), else mock. So the cues go live with the key and need no other switch.
+   * mock = beeps; live = ElevenLabs Sound Effects (needs ALLOW_SPEND + ELEVENLABS_API_KEY);
+   * auto (default) = live exactly when the stage voice is on (STAGE_TTS), else mock.
    */
   SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live', 'auto']).default('auto')),
-  // --- judge pipeline (src/judge, Beat 4)
+  // --- judge pipeline
   /** Anthropic model for the attempt ruling (12 frames; Opus is too slow for the 10 s cap). */
   JUDGE_MODEL: z.preprocess(unset, str.default('claude-sonnet-5-5')),
   /**
-   * Odds (src/odds/suggest.ts): the Anthropic model that words the judge's odds suggestion
-   * (default DEFAULT_CHAT_MODELS.anthropic, Opus 5.5 at effort low). claude-haiku-5-5 if the p50
-   * is too slow for the 3 s deadline. Only used with LLM_PROVIDER=live (ALLOW_SPEND).
+   * Anthropic model that words the judge's odds suggestion (default claude-opus-5-5 at effort low,
+   * 3 s deadline; claude-haiku-5-5 if that is too slow). Only used with LLM_PROVIDER=live.
    */
   ODDS_LLM_MODEL: opt(str),
-  /**
-   * Anthropic model for compile_checks (judge/compile-checks.ts: terms -> SAM CheckSpec). Off the
-   * webhook's critical path, so the stronger model.
-   */
+  /** Anthropic model for the SAM camera-check specs; off the critical path, so the stronger one. */
   CHECKS_MODEL: z.preprocess(unset, str.default('claude-opus-5-5')),
   /**
-   * Camera checks (SAM 3.1, judge/sam.ts + judge/camera-checks.ts): the kill switch. Off by
-   * default. Checks run only when this is true, SAM3_URL and SAM3_API_TOKEN are set, and the
-   * runtime toggle POST /v1/demo/toggles {"checks": false} has not turned them off. Non-binding:
+   * Camera checks (SAM 3.1) kill switch; they also need SAM3_URL + SAM3_API_TOKEN. Non-binding:
    * the spec is never in the hashed Terms, and a check can only turn a decisive verdict into REDO.
    */
   CHECKS_ENABLED: z.preprocess(unset, boolStr.default(false)),
-  /**
-   * The shared lobby (POST /v1/rooms/lobby, rooms/lobby.ts; the stage's ?room=LOBBY): on by
-   * default. false = the route and the stage alias answer 404, and phones fall back to codes.
-   */
+  /** The shared lobby (POST /v1/rooms/lobby, the stage's ?room=LOBBY); false = both answer 404. */
   LOBBY_ENABLED: z.preprocess(unset, boolStr.default(true)),
-  /** The deployed SAM 3.1 service (services/sam3/modal_app.py), e.g. https://<ws>--sam3-…modal.run. */
+  /** The deployed SAM 3.1 service, e.g. https://<ws>--sam3-…modal.run. */
   SAM3_URL: opt(z.url()),
   /** Bearer token for POST /segment (secret; never logged). */
   SAM3_API_TOKEN: opt(str),
   /**
-   * The SAM deadline per attempt, retry included, from the start of the ruling job. SAM runs in
-   * parallel with the vision call (JUDGE_TIMEOUT_MS 10 s), so the default 10 s never makes a
-   * ruling wait longer than the judge's own budget; a late SAM is 'unavailable' (no veto). Capped
-   * at 15 s, under STUCK_JUDGING_MS (20 s).
+   * SAM deadline per attempt (retry included) from the start of the ruling job. SAM runs beside
+   * the vision call (10 s cap) and the ruling waits for both, so the 10 s default never makes a
+   * ruling wait past the judge's own budget; a late SAM is 'unavailable' (no veto). Capped at
+   * 15 s, under STUCK_JUDGING_MS (20 s).
    */
   SAM_TIMEOUT_MS: z.preprocess(
     unset,
     z.coerce.number().int().min(1000).max(15_000).default(10_000),
   ),
-  /** Demo fallback (ARCHITECTURE §7.2 cached_ruling): rule from a stored verdict, no LLM call. */
+  /** Demo fallback: rule from a stored verdict, no LLM call. A runtime toggle can override it. */
   CACHED_RULING: z.preprocess(unset, boolStr.default(false)),
   // --- Solana / QuickNode (secret)
   SOLANA_DEVNET_RPC: opt(z.url()),
   SOLANA_DEVNET_WS: opt(z.url()),
   QN_STREAM_SECURITY_TOKEN: opt(str),
-  /**
-   * How long after a server tx's send the Stream-gap reconciler waits for the Stream before it
-   * polls getTransaction (src/chain/reconciler.ts rpcPollFallbackMs). Unset: 30 s when
-   * QN_STREAM_SECURITY_TOKEN is set (a Stream is expected), else 5 s (SCHEMAS STREAM_FALLBACK_MS).
-   */
+  /** Stream wait before RPC-polling a server tx; unset = 30 s with a Stream token, else 5 s. */
   RPC_POLL_FALLBACK_MS: opt(intStr),
   // --- server keypairs (secret; base58 or solana-keygen JSON)
   FEE_PAYER_SECRET_KEY: opt(str),
   JUDGE_AUTHORITY_SECRET_KEY: opt(str),
   APPEAL_AUTHORITY_SECRET_KEY: opt(str),
   TREASURY_SECRET_KEY: opt(str),
-  /** The treasury's address, for the read-only USDC check in /v1/demo/health when its secret is not on the server. */
+  /** Treasury address, for the /v1/demo/health USDC check when its secret is not on the server. */
   TREASURY_PUBKEY: opt(pubkey),
-  /** Custodial demo party keys (scripts/keys.ts demo-a / demo-b), used when LOCK_SIGNER=server. */
+  /**
+   * Custodial demo-a/b keys (scripts/keys.ts): demo claim, rebalance, seed-h2h and
+   * LOCK_SIGNER=server; their wallets also mark who counts as a demo player (demo/players.ts).
+   */
   DEMO_A_SECRET_KEY: opt(str),
   DEMO_B_SECRET_KEY: opt(str),
   // --- AI providers (secret)
@@ -188,16 +160,15 @@ export const EnvSchema = z.object({
   /** Comma-separated origins allowed to call the stage routes (CORS); unset = Vite dev origins. */
   STAGE_ORIGIN: opt(str),
   /**
-   * Gemini BTC 5-min relay (src/markets; public REST, no key). Unset = on, except NODE_ENV=test.
-   * 'replay' = on, serving the recorded round (markets/replay.ts, labelled REPLAY everywhere);
-   * POST /v1/demo/gemini switches live <-> replay at runtime.
+   * The Gemini BTC 5-minute relay. Unset = on, except NODE_ENV=test; 'replay' serves the recorded
+   * round, labelled REPLAY (POST /v1/demo/gemini switches live <-> replay at runtime).
    */
   MARKETS_FEED: opt(z.enum(['on', 'off', 'replay'])),
   DEMO_ADMIN_TOKEN: opt(str),
   FACE_SEAL_SECRET_KEY: opt(str),
-  /** HMAC key for face match tickets (src/face/config.ts); falls back to SESSION_SECRET. */
+  /** HMAC key for face match tickets; falls back to SESSION_SECRET. */
   FACE_TICKET_SECRET: opt(str),
-  /** API-CONTRACT §2.2: when true, `plain-v0` embeddings are refused (sealing is not built yet). */
+  /** When true, `plain-v0` embeddings are refused (sealing is not built). */
   FACE_SEAL_REQUIRED: z.preprocess(unset, boolStr.default(false)),
   // --- optional
   EXPO_ACCESS_TOKEN: opt(str),
@@ -205,18 +176,18 @@ export const EnvSchema = z.object({
 export type Env = z.infer<typeof EnvSchema>;
 
 /**
- * Keys the production deploy must have *today*. Grows as features land; keep it honest so a
- * Fly deploy with a missing secret fails at boot instead of mid-demo.
+ * Keys a production deploy must have. Grows as features land; keep it honest so a Fly deploy with
+ * a missing secret fails at boot instead of mid-demo.
  */
 export const REQUIRED_IN_PRODUCTION = [
   'PUBLIC_BASE_URL',
-  // chain lifecycle (src/chain/tx.ts, src/lock, src/payout)
+  // the chain lifecycle (locks, payouts)
   'SOLANA_DEVNET_RPC',
   'FEE_PAYER_SECRET_KEY',
   'JUDGE_AUTHORITY_SECRET_KEY',
   // the judge's tools (ANTHROPIC_API_KEY is required only with LLM_PROVIDER=live, below)
   'ELEVENLABS_TOOL_SECRET',
-  // /v1/demo/* (src/demo)
+  // /v1/demo/*
   'DEMO_ADMIN_TOKEN',
 ] as const satisfies readonly (keyof Env)[];
 
@@ -227,7 +198,7 @@ export class EnvError extends Error {
   }
 }
 
-/** Parses and validates `source` (default `process.env`). Throws EnvError listing every problem; never echoes values. */
+/** Parses `source` (default `process.env`); throws EnvError listing every problem, never values. */
 export function loadEnv(source: Record<string, string | undefined> = process.env): Env {
   const r = EnvSchema.safeParse(source);
   if (!r.success) {

@@ -1,32 +1,13 @@
-// POST /v1/demo/seed-h2h {a_wins?, b_wins?} (default 4-7): the head-to-head history between the
-// two demo players, so the face-match reply says "You're 4-7 against Jake" (API-CONTRACT §2.4,
-// BRIEF Extra beat). This is the DATA-MODEL §11 SQL fallback, as a route the operator can run
-// against the live database (no psql to Neon on pitch day).
-//
-// The rows are labelled the only way the server knows: `is_seed = true`, the marker demo reset
-// (demo/reset.ts) keeps (it deletes `NOT is_seed` bets and never voids a seed bet's escrow) and
-// head-to-head flags (`includes_seed`, face/service.ts). Titles start with "Demo history:".
-// Each row is a terminal, settled bet with no chain footprint: state PAID, onchain_status
-// 'settled', outcome party_a / party_b with the winner paid both stakes (bets_payout_rule),
-// terms_hash / stakes / evidence_source set (bets_binding_set), no signatures and no
-// authorizations (bets_terminal_sig and bets_locked_authorized exempt seeds), no chain_txs, no
-// events, no room (the projector never shows them), one a day in the past, challenger
-// alternating. Inserts only, so bets_guard (BEFORE UPDATE) never runs; bets_parties_attested
-// exempts seeds.
-//
-// Category records (odds, API-CONTRACT §2.4 `records`): {player, category, made, missed} rows make
-// that player the performer of `made + missed` bets of that kind (a bottle flip, a paper-ball
-// throw), so the judge's suggested odds can quote "Jake is 10 for 12 on bottle flips". Every seed
-// row now carries a real composed Terms row (bet_terms_versions, is_final, drafted_by 'judge',
-// source_tool 'seed'; bets.terms_hash = its hash), which is where the stats read the claim,
-// performer and yes_party from. Record rows count toward the head-to-head: a's made + b's missed
-// <= a_wins, b's made + a's missed <= b_wins (422 otherwise); the remaining wins are the rotating
-// titles (their performer is the row's party B, the yes party). Still "Demo history: …", is_seed.
-//
-// Idempotent: each seeding first deletes every is_seed bet between the pair (either direction),
-// in the same transaction, so re-seeding replaces the old rows (and {0, 0} just clears them).
-// demo-a / demo-b are the users holding the demo wallets (demo/players.ts demoPartyWallets):
-// claim the phones (or sign the wallets up with cp1-drive) first.
+// POST /v1/demo/seed-h2h {a_wins?, b_wins?, records?}: the head-to-head history between the two
+// demo players (default 4-7), so the face-match reply says "You're 4-7 against Jake", as a route
+// the operator can run against the live database (no psql to Neon on pitch day). Category
+// `records` make a player the performer of `made + missed` bets of one kind, so the judge's odds
+// can quote "Jake is 10 for 12 on bottle flips"; they count toward the head-to-head (422 when
+// they don't fit). Idempotent: each seeding first deletes every is_seed bet between the pair
+// (either direction) in the same transaction, so re-seeding replaces the old rows ({0, 0} just
+// clears them). demo-a / demo-b are the users holding the demo wallets: claim the phones (or sign
+// the wallets up with cp1-drive) first.
+// Spec: docs/planning/DATA-MODEL.md §11.
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
@@ -64,7 +45,7 @@ export const SeedH2hRequest = z.object({
 });
 export type SeedRecord = NonNullable<z.infer<typeof SeedH2hRequest>['records']>[number];
 
-/** Stakes in USD, cycled (DATA-MODEL §11). */
+/** Stakes in USD, cycled. */
 const STAKES_USD = [1, 2, 5, 3, 5, 1, 2, 5, 4, 5, 2] as const;
 const TITLES = ['Bottle flip', 'Free throw', 'Coin catch', 'Paper ball in the bin'] as const;
 type Title = (typeof TITLES)[number];
@@ -85,7 +66,7 @@ const CLAIMS: Record<Title, { claim: (p: string) => string; category: string }> 
   },
 };
 const RECORD_TITLE = { bottle_flip: 'Bottle flip', throw: 'Paper ball in the bin' } as const;
-/** DATA-MODEL §11: in the default 4-7, demo-a wins bets 2, 5, 7 and 10 (net −$7.00). */
+/** In the default 4-7, demo-a wins bets 2, 5, 7 and 10 (net −$7.00 with STAKES_USD). */
 const DEFAULT_A_WINS_AT = new Set([2, 5, 7, 10]);
 const DAY_MS = 86_400_000;
 
@@ -111,7 +92,7 @@ export interface SeedH2hResult {
 /** One seeded bet, before it becomes rows: who challenged, who performed, who won. */
 interface SeedBet {
   challenger: 'a' | 'b';
-  /** The performer is the row's party B; it is also the yes party. */
+  /** The challenge; its performer is the row's party B, also the yes party. */
   title: Title;
   /** The performer (party B) won. */
   made: boolean;
@@ -181,7 +162,7 @@ export function seedPlan(
   return { ok: true, bets: out };
 }
 
-/** Which of bets 1..n demo-a wins: the §11 pattern for 4-7, else spread evenly. */
+/** Which of bets 1..n demo-a wins: DEFAULT_A_WINS_AT for 4-7, else spread evenly. */
 export function seedWinners(aWins: number, bWins: number): boolean[] {
   const n = aWins + bWins;
   if (aWins === SEED_H2H_DEFAULT.a_wins && bWins === SEED_H2H_DEFAULT.b_wins)
@@ -267,6 +248,14 @@ export async function seedHeadToHead(
       cluster: deps.env.SOLANA_CLUSTER,
       nowMs: t0,
     });
+    // Labelled the only way the server knows: `is_seed`, the marker that demo reset keeps (it
+    // deletes `NOT is_seed` bets and never voids a seed bet's escrow) and head-to-head flags
+    // (`includes_seed`). A terminal, settled bet with no chain footprint: PAID / 'settled', the
+    // winner paid both stakes (bets_payout_rule), terms_hash / stakes / evidence_source set
+    // (bets_binding_set), no signatures or authorizations (bets_terminal_sig and
+    // bets_locked_authorized exempt seeds), no chain_txs, no events, no room (the projector never
+    // shows them). Inserts only, so bets_guard (BEFORE UPDATE) never runs; bets_parties_attested
+    // exempts seeds.
     const bet = {
       id,
       room_id: null,

@@ -1,8 +1,7 @@
-// The projector page (apps/stage, ARCHITECTURE §2 "served by the server"; API-CONTRACT §1.1
-// "It also serves /stage"). Vite builds it with base /stage/ into apps/stage/dist (the Docker
-// image builds it too), and this module serves that directory from the API's own origin: any
-// laptop opens https://<app>.fly.dev/stage with nothing installed, and the page's REST calls and
-// /v1/ws WebSocket are same-origin (no CORS, no server URL to type).
+// The projector page (apps/stage), served by the API itself. Vite builds it with base /stage/
+// into apps/stage/dist (the Docker image builds it too), and this module serves that directory
+// from the API's own origin: any laptop opens https://<app>.fly.dev/stage with nothing installed,
+// and the page's REST calls and /v1/ws WebSocket are same-origin (no CORS, no server URL to type).
 //
 //   GET /                    302 -> /stage/
 //   GET /stage               308 -> /stage/ (query kept: /stage?preview works)
@@ -98,7 +97,7 @@ function finish(res: Response, cacheControl: string): Response {
 }
 
 export interface StageStaticOptions {
-  /** The built stage (default: apps/stage/dist). Read per request, so a rebuild needs no restart. */
+  /** The built stage (default apps/stage/dist). Read per request, so a rebuild needs no restart. */
   dir?: string;
 }
 

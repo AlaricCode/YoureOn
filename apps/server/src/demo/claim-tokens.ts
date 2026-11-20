@@ -1,12 +1,13 @@
-// Demo claim tokens (API-CONTRACT §1.3, §2.17): the stage QR that lets a phone take over one of
-// the two custodial demo parties (decision D-A: phones A / B import the demo-a / demo-b seeds, so
-// phone-signed and custodial locks use the same party keys).
+// Demo claim tokens: the stage QR that lets a phone take over one of the two custodial demo
+// parties. Phones A / B import the demo-a / demo-b seeds, so phone-signed and custodial locks use
+// the same party keys.
 //
 //   token  `yo_dc_<base64url 32 B>`, single use, 10 min, stored as sha256(token) only
 //   qr     `youreon://<word>/<token>` (the word only helps the operator tell two QRs apart)
 //
-// In-process like the auth challenges (one Fly machine, ARCHITECTURE §1.3): a restart costs the
-// operator one re-issue. Found through `claimTokensOf(deps)`, so no AppDeps field is needed.
+// In-process like the auth challenges (one Fly machine): a restart costs the operator one
+// re-issue. Found through `claimTokensOf(deps)`, so no AppDeps field is needed.
+// Spec: docs/planning/API-CONTRACT.md §1.3.
 import { randomInt } from 'node:crypto';
 import * as ed from '@noble/ed25519';
 import { getAddressDecoder, getBase58Encoder, type Address } from '@solana/kit';

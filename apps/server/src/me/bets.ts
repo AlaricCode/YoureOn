@@ -1,16 +1,14 @@
-// GET /v1/me/bets?status=active|settled|all&cursor&limit (B) — API-CONTRACT §2.14.
-//   200 {items: MeBetItem[], next_cursor}  (packages/shared api.ts MeBetsResponse)
-// Each item is the same BetSnapshot GET /v1/bets/:bet_id returns (stage loadBetSnapshot) plus the
-// BetSummary list fields, so the judge-cam phone (apps/mobile DemoApp, which polls
-// `?status=active&limit=5` and reads `items[].bet_id`) can adopt it directly.
+// GET /v1/me/bets?status=active|settled|all&cursor&limit: the caller's bets, newest first
+// (created_at, id); the cursor is the last item's bet_id. Each item is the BetSnapshot
+// GET /v1/bets/:bet_id returns plus the list fields, so the judge-cam phone can adopt it directly.
 //
 // Who sees what: only bets the caller is a party of, from any of the caller's devices. The demo
-// judge cam is a second device of party A (API-CONTRACT §2.9 "Judge-cam identity"), so it finds
-// A's bets here as a party. A judge-cam device's room bets of OTHER pairs are deliberately not
-// listed: GET /v1/bets/:id (stage/routes canRead) and the WS bet subscription
-// (realtime/access canSeeBet) are party-or-stage only, so the phone could not open them, and a
-// newer foreign bet sorting first would starve its own. Every item is GETtable by the caller.
-// Newest first (created_at, id); the cursor is the last item's bet_id.
+// judge cam is a second device of party A, so it finds A's bets here as a party. A judge-cam
+// device's room bets of OTHER pairs are deliberately not listed: GET /v1/bets/:id (stage/routes
+// canRead) and the WS bet subscription (realtime/access canSeeBet) are party-or-stage only, so
+// the phone could not open them, and a newer foreign bet sorting first would starve its own.
+// Every item is GETtable by the caller.
+// Spec: docs/planning/API-CONTRACT.md §2.14.
 import { and, desc, eq, inArray, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { bets } from '@youre-on/db';
 import { MeBetsStatus, type MeBetItem, type MeBetsResponse } from '@youre-on/shared/api';
@@ -111,8 +109,8 @@ async function toItem(
   const paid = mine === 'A' ? row.payout_a : row.payout_b;
   return {
     ...snap,
-    // The terms' title; else the row's own (a seed-h2h row has no terms: "Demo history: ...").
-    // Seed rows keep their labelled title ("Demo history: ..."), even with a terms row.
+    // A seed row keeps its labelled title ("Demo history: ..."); else the terms' title, else the
+    // row's own.
     title:
       (row.is_seed ? row.title : null) ??
       snap.envelope?.presentation.title ??

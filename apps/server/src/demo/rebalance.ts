@@ -112,7 +112,10 @@ async function assertNoneInFlight(deps: Deps, rt: ChainRuntime) {
 /** Rebalances of one chain client run one at a time (the check above is check-then-set). */
 const queues = new WeakMap<object, Promise<unknown>>();
 
-/** Moves USDC between demo-a and demo-b until they hold the same amount (± 1 micro-unit). */
+/**
+ * Moves USDC between demo-a and demo-b so they hold the same amount (± 1 micro-unit); within
+ * REBALANCE_TOLERANCE_MICRO of that, it sends nothing.
+ */
 export function rebalanceDemoWallets(
   deps: Deps,
   rt: ChainRuntime,

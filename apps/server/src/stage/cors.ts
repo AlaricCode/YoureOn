@@ -1,6 +1,6 @@
-// CORS for the stage laptop's routes (API-CONTRACT §1.2: phones need none; the stage is served
-// by Vite on another origin in development). STAGE_ORIGIN is a comma-separated allow-list;
-// unset -> the Vite dev origins. Bearer tokens only (no cookies), so no credentials mode.
+// CORS for the stage laptop's routes (phones need none; in development the stage is served by
+// Vite on another origin). STAGE_ORIGIN is a comma-separated allow-list; unset -> the Vite dev
+// origins. Bearer tokens only (no cookies), so no credentials mode.
 import { cors } from 'hono/cors';
 import type { MiddlewareHandler } from 'hono';
 import { HDR } from '@youre-on/shared/api';

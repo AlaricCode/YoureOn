@@ -1,5 +1,5 @@
 // Process entry: `npm run dev -w apps/server` (tsx watch, reads apps/server/.env) or
-// `npm start -w apps/server` (Fly). Env names: SETUP-CHECKLIST §7 (see env.ts).
+// `npm start -w apps/server` (Fly). The env vars are documented in env.ts.
 import { EnvError, loadEnv } from './env';
 import { providerModes } from './providers/registry';
 import { SpendDisabledError } from './providers/spend';

@@ -1,17 +1,10 @@
-// Stage laptop routes (API-CONTRACT §1.3 "Stage and demo", §2.14, §2.17):
-//   POST /v1/stage/session {stage_key, room_id | room_code} -> 201 StageSessionResponse (scope
-//        `stage`, plus `demo` when DEMO_MODE=true). room_code: the 6-char code phone A shows (or
-//        its QR payload), or LOBBY_STAGE_ALIAS ('LOBBY', any case) for the shared lobby (opened
-//        if there is none yet; 404 when LOBBY_ENABLED=false). 404 unless STAGE_KEY is configured. The key is compared in constant
-//        time; 10/min per client IP. Also says who signs the lock (LOCK_SIGNER), so the
-//        projector words the signature slots truthfully ('server': custodial demo keys).
-//   GET  /v1/bets/:bet_id -> BetSnapshot, for a party of the bet or a stage session of its room
-//        (cold start / resync).
-//   GET  /v1/bets/:bet_id/attempts/:n/frames/:idx -> the evidence JPEG the judge was sent (the
-//        frames live in Postgres until object storage lands, so attempt.evidence carries no
-//        frame_urls); same readers as the snapshot. Immutable (content-addressed by sha256).
-// Also fans the Gemini relay's snapshots out as `stage.market` to every room that has a live
-// stage session (§3.1; ≤ 2/s: the relay polls every 2 s).
+// Stage laptop routes. POST /v1/stage/session trades the stage key for a token scoped to one
+// room (plus scope `demo` under DEMO_MODE). The bet reads are shared by the bet's parties and its
+// room's stage: the BetSnapshot (cold start / resync) and the evidence JPEGs the judge was sent
+// (they live in Postgres, so attempt.evidence's frame_urls is always empty). Also fans the Gemini
+// relay's snapshots out as `stage.market` to every room with a live stage session (one per relay
+// refresh: the 2 s poll, plus any on-demand refresh).
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 import { timingSafeEqual } from 'node:crypto';
 import type { Context } from 'hono';
 import type { HttpBindings } from '@hono/node-server';
@@ -81,7 +74,10 @@ export const StageSessionResponse = z.object({
   room_id: Uuid,
   scopes: z.array(z.enum(['stage', 'demo'])),
   expires_at: z.string(),
-  /** Additive: 'server' = the server signs the lock as demo-a / demo-b (lock/service.ts). */
+  /**
+   * Who signs the lock ('server': the server, as demo-a / demo-b), so the projector words the
+   * signature slots truthfully.
+   */
   lock_signer: z.enum(['phones', 'server']),
 });
 export type StageSessionResponse = z.infer<typeof StageSessionResponse>;
@@ -168,9 +164,9 @@ async function latestPayloads(
 }
 
 /**
- * The §2.18 snapshot with what the event log knows (the terms / ruling / appeal owners have no
- * tables yet): the latest terms envelope, ruling, appeal result, attempt number and prev state.
- * Anything that fails its shared schema is left null rather than failing the read.
+ * The BetSnapshot, with what the bet's event log knows: the latest terms envelope, ruling, appeal
+ * result, attempt number and prev state. Anything that fails its shared schema is left null
+ * rather than failing the read.
  */
 export async function loadBetSnapshot(
   deps: Pick<AppDeps, 'db'>,

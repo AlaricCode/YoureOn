@@ -1,5 +1,5 @@
-// GET /health — liveness for Fly and the cellular smoke check (TASKS D0-L3). No DB call
-// (API-CONTRACT §2.0), so a cold Neon never fails the Fly health check.
+// GET /health: liveness for Fly and the cellular smoke check. No DB call, so a cold Neon never
+// fails the Fly health check.
 import type { RouteModule } from '../context';
 
 export const healthRoutes: RouteModule = {

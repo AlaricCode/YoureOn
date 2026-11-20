@@ -1,20 +1,10 @@
-// Live multimodal chat across the three panel vendors (paid; spend-guarded in fromEnv).
-//
-// Ported from Verdict packages/backend/src/providers/real/boothLlm.ts (`chat()`: one system +
-// multimodal user turn -> model text, per vendor). Differences, all from OUR contracts:
-//  - Official SDKs, not raw fetch: @anthropic-ai/sdk 1.6.0, openai 7.53.0, @google/genai 2.32.0
-//    (API-CONTRACT §7.1-7.2, pinned by spike 02). Each SDK takes an injectable `fetch`, so tests
-//    exercise the real request shapes offline.
-//  - Request shapes from spike 02 (youre-on-spikes/02-vision-judge/src/judges/*):
-//      anthropic  messages with output_config {effort, format: json_schema (hand-written, enum kept)};
-//                 Opus/Sonnet 5.5 add fallbacks:"default" (beta server-side-fallback-2026-07-01).
-//      openai     Responses API with zodTextFormat's strict json_schema (sent via responses.create,
-//                 same wire body as responses.parse; see callOpenAI), reasoning.effort, detail "high".
-//      google     ai.interactions.create, generation_config.thinking_level, response_format
-//                 {type:"text", mime_type:"application/json", schema}.
-//  - 8 s per-call deadline (API-CONTRACT §7.2) instead of Verdict's 120 s, SDK retries off.
-//  - Output is validated with the caller's zod schema; failures return {ok:false}, never throw.
-//  - No xai vendor, no video parts (judging is on 8-16 JPEG frames).
+// Live multimodal chat across the three panel vendors (paid; spend-guarded in fromEnv): one
+// system + multimodal user turn -> a validated structured value, through each vendor's official
+// SDK. Each SDK takes an injectable `fetch`, so tests exercise the real request shapes offline.
+// SDK retries are off and every call has a hard deadline (8 s by default); output is validated
+// with the caller's zod schema, and failures return {ok:false}, never throw.
+// Spec: docs/planning/API-CONTRACT.md §7.2.
+// Adapted from Verdict's packages/backend/src/providers/real/boothLlm.ts (docs/MERGE-PLAN.md).
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { zodTextFormat } from 'openai/helpers/zod';
@@ -230,9 +220,9 @@ export class LiveLlm implements LlmProvider {
           }
         : { type: 'input_text' as const, text: p.text },
     );
-    // The wire format is exactly zodTextFormat's (strict json_schema, API-CONTRACT §7.2), sent with
-    // responses.create rather than responses.parse: parse runs zod inside the SDK and throws before
-    // enum upper-casing, so every vendor is validated by the same resultFromText path instead.
+    // The wire format is exactly zodTextFormat's (strict json_schema), sent with responses.create
+    // rather than responses.parse: parse runs zod inside the SDK and throws before enum
+    // upper-casing, so every vendor is validated by the same resultFromText path instead.
     const zf = zodTextFormat(req.output.schema, req.output.name);
     const res = await this.openaiClient().responses.create(
       {
@@ -266,7 +256,7 @@ export class LiveLlm implements LlmProvider {
 
   private googleClient(timeoutMs: number): GoogleGenAI {
     // Always pass the key explicitly: the SDK would otherwise read GEMINI_API_KEY / GOOGLE_API_KEY,
-    // names reserved for other uses (SETUP-CHECKLIST K5).
+    // names reserved for other uses.
     this.google ??= new GoogleGenAI({
       apiKey: this.o.keys.google,
       httpOptions: { timeout: timeoutMs, ...(this.o.fetch ? { fetch: this.o.fetch } : {}) },
@@ -292,7 +282,7 @@ export class LiveLlm implements LlmProvider {
         system_instruction: req.system,
         input,
         generation_config: {
-          // gemini-3.8-flash errors on "minimal" (spike 02).
+          // gemini-3.8-flash errors on "minimal".
           thinking_level: req.effort ?? 'low',
           max_output_tokens: req.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         },

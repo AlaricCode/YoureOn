@@ -1,6 +1,6 @@
-// Process wiring: deps from env, the Node HTTP server with WebSocket support, keepalive,
-// heartbeat and graceful shutdown. `main.ts` calls startServer(); tests call it too with
-// injected deps (port 0).
+// Process wiring: the deps bag from the env (createDeps), and the Node HTTP server with
+// WebSocket support, the background services and graceful shutdown (startServer). main.ts calls
+// both; tests call them too with injected deps (port 0).
 import type { AddressInfo } from 'node:net';
 import { serve, type ServerType } from '@hono/node-server';
 import { WebSocketServer } from 'ws';
@@ -34,7 +34,7 @@ export interface CreateDepsOptions {
   rateLimit?: boolean;
   heartbeatMs?: number;
   helloTimeoutMs?: number;
-  /** Replace specific providers (tests, demo); the rest come from the env (src/providers/registry). */
+  /** Replace specific providers (tests); the rest come from the env. */
   providers?: Partial<Providers>;
   /** Build the periodic sweeper (src/keeper). Default: on, except NODE_ENV=test. */
   keeper?: boolean;
@@ -42,8 +42,8 @@ export interface CreateDepsOptions {
    *  MARKETS_FEED (unset: on, except NODE_ENV=test). */
   markets?: MarketService | boolean;
   /**
-   * The stage TTS (src/voice/tts.ts): a ready service (tests: a fake ElevenLabs client), null for
-   * off, or default from the env (on with ELEVENLABS_API_KEY + ALLOW_SPEND, not STAGE_TTS=off).
+   * The stage TTS: a ready service (tests: a fake ElevenLabs client), null for off, or default:
+   * from the env (stageAudioGate).
    */
   stageTts?: StageTts | null;
   /** Where stage clips are cached on disk; null = memory only. Default: the OS tmp dir, except

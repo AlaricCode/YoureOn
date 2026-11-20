@@ -1,10 +1,9 @@
-// Deterministic offline LLM (LLM_PROVIDER=mock, the default). Never touches the network.
-//
-// Ported in spirit from Verdict packages/backend/src/providers/mock/booth.ts (deterministic votes)
-// but schema-generic: by default it answers with a value sampled from the request's JSON schema
-// (first enum value, 0.9 for 0..1 numbers, "mock <field>" strings, [] arrays, false booleans).
-// Tests and the demo pass `respond` to script answers per request. The reply goes through the same
-// parse + zod path as the live vendors, so a scripted bad answer yields the same `invalid_output`.
+// Deterministic offline LLM (LLM_PROVIDER=mock, the default). Never touches the network. By
+// default it answers with a value sampled from the request's JSON schema (first enum value, 0.9
+// for 0..1 numbers, "mock <field>" strings, [] arrays, false booleans); tests pass `respond` to
+// script answers per request. The reply goes through the same parse + zod path as the live
+// vendors, so a scripted bad answer yields the same `invalid_output`.
+// Adapted from Verdict's packages/backend/src/providers/mock/booth.ts (docs/MERGE-PLAN.md).
 import { CHAT_TIMEOUT_MS, DEFAULT_CHAT_MODELS, resultFromText } from '../structured';
 import type { ChatRequest, ChatResult, LlmProvider } from '../types';
 

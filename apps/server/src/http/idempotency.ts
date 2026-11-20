@@ -1,5 +1,6 @@
-// In-process idempotency cache, API-CONTRACT §1.6 / DATA-MODEL §8.6 (P0: one Fly machine;
-// P1 moves this to the api_idempotency table). Key = (device_id, Idempotency-Key).
+// In-process idempotency cache, keyed by (device_id, Idempotency-Key). In memory is enough on
+// one Fly machine; a restart forgets the keys.
+// Spec: docs/planning/API-CONTRACT.md §1.6.
 import { IDEMPOTENCY_TTL_MS } from '@youre-on/shared/api';
 
 export interface StoredResponse {

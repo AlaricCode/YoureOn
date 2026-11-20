@@ -1,5 +1,6 @@
 // Request-body helpers. Bodies are parsed with tolerant z.object schemas (unknown keys
-// stripped, API-CONTRACT §1.4); failures become 422 VALIDATION_FAILED with details.issues[].
+// stripped); failures become 422 VALIDATION_FAILED with details.issues[].
+// Spec: docs/planning/API-CONTRACT.md §1.4.
 import type { Context } from 'hono';
 import type { z } from 'zod/v4';
 import { HttpError, validationError } from '../errors';

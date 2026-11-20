@@ -1,8 +1,7 @@
-// Mock voice providers (STT_PROVIDER=mock, SFX_PROVIDER=mock; the defaults). Offline, free.
-//
-// Ported from Verdict packages/backend/src/providers/mock/voice.ts (MockStt, MockSfx). Our STT
-// mock returns only the caller's `mockTranscript` (Verdict's challenge-phrase fallback is gone:
-// we have no spoken "I accept"); our SFX mock returns one distinct beep per stage cue.
+// Mock voice providers: STT_PROVIDER=mock (the default) and SFX_PROVIDER=mock (or 'auto' while
+// the stage's voice is off). Offline, free. The STT mock returns only the caller's
+// `mockTranscript`; the SFX mock returns one distinct beep per stage cue.
+// Adapted from Verdict's packages/backend/src/providers/mock/voice.ts (docs/MERGE-PLAN.md).
 import { toneWav } from './wav';
 import type { AudioBlob, SfxCue, SfxProvider, SttOptions, SttProvider, Transcript } from '../types';
 

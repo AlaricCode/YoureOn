@@ -1,22 +1,12 @@
-// POST /v1/demo/warmup (API-CONTRACT §2.17; FINDINGS §3.8 "a Claude warm-up call 10 minutes
-// before the pitch"): touch every external dependency of the demo once, without a bet and
-// without moving money, and say how each answered.
-//
-//   judge    one live vision call through deps.providers.llm with the real prompt and the real
-//            output schema (judge/ruling.ts callJudge) on a 16x16 stored JPEG
-//            (judge/fixtures/warmup-16px.jpg). It ignores cached_ruling (the point is to test the
-//            live judge) and records into the judge stats (GET /v1/demo/health `judge_llm`).
-//   rpc      getLatestBlockhash on the server's RPC (the chain runtime's client).
-//   gemini   one poll of the BTC 5-minute relay (MarketService.refresh, shared with its own
-//            loop) and its current contract.
-//   voice    voice readiness (voice/readiness.ts): config only. A conversation token would open a
-//            billed ElevenLabs session, so none is minted.
-//
-// Each check reports {ok, ms, error} plus what it saw; the checks run in parallel and each is
-// time-boxed. `notes` says when a check did not exercise the real thing (LLM_PROVIDER=mock, the
-// cached ruling, the REPLAY feed, no chain). One warm-up per 10 s (WARMUP_BUCKET, on even when
-// deps.rateLimit is off), so a stuck key or a loop cannot burn the API budget: each one is a
-// paid Claude call (~1 image, ≤ 1024 output tokens).
+// POST /v1/demo/warmup: touch every external dependency of the demo once (run it ~10 minutes
+// before the pitch), without a bet and without moving money, and say how each answered. The
+// checks run in parallel, each time-boxed: one live judge call (the real prompt and output
+// schema on a stored 16x16 JPEG; it ignores cached_ruling and counts in the judge stats),
+// getLatestBlockhash, one Gemini relay poll, and voice readiness (config only: a conversation
+// token would open a billed ElevenLabs session). `notes` says when a check did not exercise the
+// real thing. One warm-up per 10 s (WARMUP_BUCKET, on even when deps.rateLimit is off), so a
+// stuck key or a loop cannot burn the API budget: each one is a paid Claude call.
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 import { readFileSync } from 'node:fs';
 import { auditLog } from '@youre-on/db';
 import type { AppDeps } from '../context';
@@ -42,7 +32,7 @@ export function warmupFrame(): Uint8Array {
   return frame;
 }
 
-/** The Beat 2 bottle flip (demo/routes.ts DEMO_TERMS_ARGS), as the prompt reads it. */
+/** The demo's bottle flip (DEMO_TERMS_ARGS in demo/routes.ts), as the prompt reads it. */
 export const WARMUP_TERMS: JudgeTerms = {
   claim: 'Party B lands a water bottle flip upright on the table.',
   attempts: { count: 1, rule: 'single' },

@@ -106,10 +106,10 @@ export async function nonDemoPlayers(
 
 /**
  * DEMO_MODE: is this the demo room, i.e. one a demo player created or one the projector shows (a
- * live stage session)? Only demo players may join it or bet in it (rooms/routes.ts, bets/routes.ts).
- * The projector shows every bet of its room and plays its cues, and the room code is on screen:
- * otherwise anyone at the venue could put their own bet, "judge" captions and sounds on it, or
- * challenge demo B and park B's phone on that bet.
+ * live stage session)? Only demo players may join it or bet in it (rooms/routes.ts,
+ * bets/routes.ts). The projector shows every bet of its room and plays its cues, and the room code
+ * is on screen: otherwise anyone at the venue could put their own bet, "judge" captions and
+ * sounds on it, or challenge demo B and park B's phone on that bet.
  */
 export async function isDemoRoom(
   deps: LifecycleDeps,

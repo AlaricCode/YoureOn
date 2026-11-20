@@ -1,15 +1,10 @@
-// The projector's audio routes (API-CONTRACT §2.17, §4.5), for a stage session's bearer only
-// (scope 'stage'; anything else, a phone session included, gets 404). The ElevenLabs key stays
-// here; the stage fetches the bytes with its bearer and plays them through its AudioContext.
-//
-//   GET /v1/stage/audio           StageAudioResponse: is TTS on (and why not), the model, the cue
-//                                 clip URLs when the Sound Effects are live
-//   GET /v1/stage/tts/:clip_id    one stage line's MP3 (voice/tts.ts), content-addressed, so
-//                                 immutable; waits for a generation in flight. 404 when the TTS is
-//                                 off or the id unknown; 502 / 504 when ElevenLabs fails
-//   GET /v1/stage/sfx/:kind       one cue's ElevenLabs Sound Effects clip; 404 unless it is live
-//                                 (the stage then synthesizes the cue)
-// CORS: stageRoutes' '/v1/stage/*' middleware (mounted first, routes.ts).
+// The projector's audio routes: is the stage voiced (GET /v1/stage/audio), each spoken line's
+// MP3 (GET /v1/stage/tts/:clip_id, which waits for a generation in flight) and the cue clips
+// (GET /v1/stage/sfx/:kind). For a stage session's bearer only: anything else, a phone session
+// included, gets 404. The ElevenLabs key stays here; the stage fetches the bytes with its bearer
+// and plays them through its AudioContext. CORS comes from stageRoutes' '/v1/stage/*' middleware
+// (mounted first, routes.ts).
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 import type { Context, MiddlewareHandler } from 'hono';
 import { StageCueKind } from '@youre-on/shared/api';
 import { CLIP_ID_RE } from '@youre-on/shared/stage-voice';

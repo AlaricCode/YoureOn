@@ -1,29 +1,19 @@
-// Demo runtime toggles (API-CONTRACT §2.17 GET / POST /v1/demo/toggles, ARCHITECTURE §7.2): flags
-// the server reads at call time, so a fallback goes on mid-demo with no restart (a `fly secrets
-// set` or `fly deploy` restarts the machine). The env value is the boot default; a runtime value
-// set here wins until it is cleared (`null`) or the process restarts. In-process, like the claim
-// tokens (one Fly machine), and found through `togglesOf(deps)`, so no AppDeps field is needed.
-//
-//   cached_ruling   judge/ruling.ts judgeFrames rules from the stored demo verdict instead of
-//                   calling the model (env CACHED_RULING is the default). Each such ruling has
-//                   `model` CACHED_RULING_MODEL ('cache/demo-bottle@1', shared isCachedRuling), so
-//                   the stage can label it.
-//   checks          camera checks (judge/camera-checks.ts) on/off at runtime. Default on; it can
-//                   only switch OFF what env allows: checks run only with CHECKS_ENABLED=true and
-//                   SAM3_URL + SAM3_API_TOKEN set (the env kill switch always wins).
-//
-// Every change is audited ('demo.toggle'); the current values are in GET /v1/demo/health
-// `toggles`. The other §2.17 toggles are not here: the Gemini fallback is POST /v1/demo/gemini
-// {feed}, the voice fallback is the phone's "Type it instead", the face pick list is the phone's
-// room list.
+// Demo runtime toggles, read at call time so a fallback goes on mid-demo with no restart (a
+// `fly secrets set` or `fly deploy` restarts the machine): cached_ruling (the judge rules from
+// the stored demo verdict; env CACHED_RULING is the boot default) and checks (the camera checks,
+// on by default; it can only switch off what env CHECKS_ENABLED allows). A runtime value wins
+// until it is cleared (`null`) or the process restarts. In-process, like the claim tokens (one
+// Fly machine), and found through `togglesOf(deps)`, so no AppDeps field is needed.
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 import { z } from 'zod/v4';
 import type { Env } from '../env';
 
 type ToggleEnv = Pick<Env, 'CACHED_RULING' | 'CHECKS_ENABLED'>;
 
 /**
- * Strict on purpose (unlike the tolerant §1.4 bodies): a typo such as {"cached": true} must be a
- * 422, not a 200 that leaves the fallback off while the operator thinks it is on.
+ * Strict on purpose (unlike the tolerant request bodies elsewhere): a typo such as
+ * {"cached": true} must be a 422, not a 200 that leaves the fallback off while the operator
+ * thinks it is on.
  */
 export const DemoTogglesRequest = z.strictObject({
   /** true / false = runtime value; null = back to env CACHED_RULING. */

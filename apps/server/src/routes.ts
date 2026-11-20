@@ -1,7 +1,5 @@
-// The route modules the server mounts, in order. Other streams register here:
-//   1. create apps/server/src/<area>/routes.ts exporting `export const <area>Routes: RouteModule`
-//   2. import it below and append it to `routeModules`.
-// That is the only core edit a new route module needs (buildApp, middleware, errors, the WS hub
+// The route modules the server mounts, in order. A new module exports a RouteModule and is
+// appended here; that is the only core edit it needs (buildApp, middleware, errors, the WS hub
 // and the deps bag are shared).
 import type { RouteModule } from './context';
 import { authRoutes } from './auth/routes';
@@ -48,12 +46,11 @@ export const routeModules: RouteModule[] = [
   judgeRoutes,
   // POST /v1/bets/:bet_id/call-off + POST /v1/demo/bets/:bet_id/void (a stuck locked bet -> VOID)
   callOffRoutes,
-  // POST /v1/bets/:bet_id/dance/identify (DANCE-OFF §3 face assignment)
+  // POST /v1/bets/:bet_id/dance/identify (the Dance Off face assignment)
   danceIdentifyRoutes,
   appealRoutes,
   // the spoken review request ("check that again") -> the loser's appeal confirm
   reviewRoutes,
-  // hearingRoutes (Beat 5's hearing is cut, D-C)
   stageRoutes,
   // after stageRoutes: its '/v1/stage/*' CORS middleware covers these
   stageAudioRoutes,

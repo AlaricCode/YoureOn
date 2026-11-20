@@ -1,14 +1,9 @@
-// GET /v1/me/bets (B) — API-CONTRACT §2.14: see ./bets.ts.
-// GET /v1/me/balance (B) — API-CONTRACT §2.14:
-//   {wallet_pubkey, usdc, usdc_display, in_escrow, in_escrow_display, as_of, source: 'rpc'}
-// `usdc` = the sum of getTokenAccountsByOwner(mint) (payouts may land in a fallback account,
-// ESCROW §5.2). `in_escrow` = my stake in every bet between LOCKED and APPEAL_RESOLVED (deposited,
-// not yet paid out), from Postgres. Cached 2 s per user. The phone already renders this shape
-// (apps/mobile/src/preview/data.ts BALANCE).
-// GET /v1/users/:user_id/head-to-head (B, a phone session) — API-CONTRACT §2.14: the caller's
-// record against that user (HeadToHead, DATA-MODEL §7.1 with the caller as user_a: settled bets
-// plus labelled is_seed history), the same face/service.ts headToHead the face-match reply
-// carries. Only ever the caller's own record. 404 for a malformed or unknown user id; no row = 0-0-0.
+// The caller's own data, for a phone session: GET /v1/me/bets (./bets.ts), GET /v1/me/balance
+// (USDC from RPC plus the stakes in escrow, ./balance.ts; cached 2 s per user) and
+// GET /v1/users/:user_id/head-to-head: the caller's record against that user (settled bets plus
+// labelled seed history), the same headToHead the face-match reply carries. Only ever the
+// caller's own record; 404 for a malformed or unknown user id, no row = 0-0-0.
+// Spec: docs/planning/API-CONTRACT.md §2.14.
 import { eq } from 'drizzle-orm';
 import { users } from '@youre-on/db';
 import { formatUsd } from '@youre-on/shared/money';

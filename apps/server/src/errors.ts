@@ -1,5 +1,6 @@
-// The error envelope, API-CONTRACT §1.5. Throw `new HttpError('CODE', …)` from any handler;
-// the app's onError turns it into `{error: {code, message, retryable, details?, request_id}}`.
+// The error envelope. Throw `new HttpError('CODE', …)` from any handler; the app's onError turns
+// it into `{error: {code, message, retryable, details?, request_id}}`.
+// Spec: docs/planning/API-CONTRACT.md §1.5.
 import type { ZodError } from 'zod/v4';
 import {
   API_ERROR_HTTP,

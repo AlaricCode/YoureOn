@@ -1,19 +1,14 @@
 // Provider registry: builds deps.providers from the env. The spend guard runs first, so a paid
 // mode without ALLOW_SPEND=true fails at boot with SPEND_DISABLED before anything is built.
-// Defaults (LLM_PROVIDER / STT_PROVIDER unset) are the offline mocks. SFX_PROVIDER defaults to
-// 'auto': ElevenLabs Sound Effects exactly when the stage's voice is on (ELEVENLABS_API_KEY,
-// ALLOW_SPEND=true, not STAGE_TTS=off: voice/tts.ts stageAudioGate), else the mock.
+// Unset LLM_PROVIDER / STT_PROVIDER mean the offline mocks; SFX_PROVIDER 'auto' (the default)
+// follows the stage's voice (stageAudioGate).
 //
 // Production fail-closed: with NODE_ENV=production the mock LLM (first enum value, confidence
 // 0.9) and the mock STT (echoes a caller-supplied transcript) would issue fake rulings that move
-// escrow. So in production they are built as refusing stand-ins: boot still works (nothing may
-// need them yet), but any call throws MockProviderInProductionError. Set LLM_PROVIDER=live /
-// STT_PROVIDER=live (with ALLOW_SPEND=true), or inject an override. The SFX mock (beeps) is
-// harmless and stays.
-//
-// Ported from Verdict packages/backend/src/providers/registry.ts (createProviders + overrides).
-// `overrides` lets tests and the demo inject specific instances; an overridden capability is not
-// spend-checked, because the caller built it.
+// escrow. So in production they are built as refusing stand-ins: boot still works, but any call
+// throws MockProviderInProductionError. Set LLM_PROVIDER=live / STT_PROVIDER=live (with
+// ALLOW_SPEND=true), or inject an override. The SFX mock (beeps) is harmless and stays.
+// Adapted from Verdict's packages/backend/src/providers/registry.ts (docs/MERGE-PLAN.md).
 import type { Env } from '../env';
 import { LiveLlm, type FetchLike } from './live/llm';
 import { LiveSfx, LiveStt } from './live/voice';
@@ -46,6 +41,10 @@ const refusingStt: SttProvider = {
 };
 
 export interface CreateProvidersOptions {
+  /**
+   * Specific instances (tests, the eval scripts). An overridden capability is not spend-checked,
+   * because the caller built it.
+   */
   overrides?: Partial<Providers>;
   /** Injected into every live client (tests only; live modes still need ALLOW_SPEND). */
   fetch?: FetchLike;
@@ -83,7 +82,7 @@ export function createProviders(env: Env, o: CreateProvidersOptions = {}): Provi
   };
 }
 
-/** SFX_PROVIDER=live, or 'auto' with the stage's voice on (the key is set and spend allowed). */
+/** SFX_PROVIDER=live, or 'auto' while the stage's voice is on (stageAudioGate). */
 export const sfxLive = (env: Env): boolean =>
   env.SFX_PROVIDER === 'live' || (env.SFX_PROVIDER === 'auto' && stageAudioGate(env).on);
 

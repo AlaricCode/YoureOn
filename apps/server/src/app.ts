@@ -1,6 +1,6 @@
 // Builds the Hono app from route modules (routes.ts). Cross-cutting behaviour lives here:
 // X-Request-Id (echo or mint), deps injection, body-size caps (64 KB JSON default, per-path
-// overrides from RouteModule.bodyLimits), the §1.5 error envelope, and 404 NOT_FOUND.
+// overrides from RouteModule.bodyLimits), the error envelope (errors.ts), and 404 NOT_FOUND.
 import { randomBytes } from 'node:crypto';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -31,9 +31,9 @@ function bodyLimits(modules: readonly RouteModule[]): MiddlewareHandler<AppEnv> 
     const path = c.req.path;
     const hit = overrides.find((o) => o.path.test(path));
     // Hono's bodyLimit reads a body without Content-Length (chunked) into memory before the
-    // route runs. Fine for 64 KB; on a large-limit path (frames 3 MiB, the QuickNode webhook)
-    // it let anyone pin megabytes per request before any auth. Those bodies are capped as the
-    // route reads them instead, i.e. only after its own checks (bearer, webhook headers).
+    // route runs. Fine for 64 KB, but on a large-limit path (frames 3 MiB, the QuickNode webhook)
+    // it would let anyone pin megabytes per request before any auth. So those bodies are capped
+    // as the route reads them, i.e. only after its own checks (bearer, webhook headers).
     if (hit && hit.maxBytes > JSON_BODY_LIMIT && !declaresLength(c.req.raw)) {
       capWhileRead(c, hit.maxBytes);
       return next();

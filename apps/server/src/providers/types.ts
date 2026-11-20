@@ -1,38 +1,37 @@
 // Provider interfaces for the paid external capabilities the server calls: a multi-vendor
-// multimodal LLM (judge, hearing, appeals panel), ElevenLabs Scribe speech-to-text (B's hearing
-// turn, API-CONTRACT §2.11) and ElevenLabs Sound Effects (stage cues, API-CONTRACT §2.6).
-//
-// Ported from Verdict packages/backend/src/providers/types.ts: one interface per capability, a
+// multimodal LLM (the judge, the camera-check compiler, the appeals panel, the odds suggestion),
+// ElevenLabs Scribe speech-to-text (built, but nothing calls it: the hearing it was for is not
+// built) and ElevenLabs Sound Effects (the stage cues). One interface per capability, a
 // deterministic mock selected by default, and a paid "live" implementation that refuses to run
-// without ALLOW_SPEND=true (./spend.ts). Re-shaped for You're On: LLM output is a caller-supplied
-// structured schema (SCHEMAS VisionVerdict, HearingVerdict, ...), never Verdict's booth votes.
+// without ALLOW_SPEND=true (./spend.ts). LLM output is a caller-supplied structured schema.
+// Adapted from Verdict's packages/backend/src/providers/types.ts (docs/MERGE-PLAN.md).
 import type { z } from 'zod/v4';
 import type { StageCueKind } from '@youre-on/shared/api';
 import type { PanelProvider } from '@youre-on/shared/appeal';
 
 // ---- LLM (LLM_PROVIDER) -----------------------------------------------------------------------
 
-/** 'google' = Google's Gemini LLM (SCHEMAS §7 PanelProvider), unrelated to Gemini the exchange. */
+/** 'google' = Google's Gemini LLM, unrelated to Gemini the exchange. */
 export type ChatVendor = PanelProvider;
 export type ChatEffort = 'low' | 'medium' | 'high';
 
 export type ChatPart =
-  /** `cache` puts an Anthropic `cache_control` breakpoint after this block (the terms prefix, API-CONTRACT §7.1). */
+  /** `cache` puts an Anthropic `cache_control` breakpoint after this block (the terms prefix). */
   | { kind: 'text'; text: string; cache?: boolean }
-  /** Frames are sent inline as base64, never as URLs (DATA-MODEL §9). */
+  /** Frames are sent inline as base64, never as URLs. */
   | { kind: 'image'; mime: 'image/jpeg' | 'image/png'; data: Uint8Array };
 
 /**
  * The structured output a call must return. `jsonSchema` is hand-written and sent to Anthropic and
- * Google as-is (the Anthropic zod helper drops `enum`, API-CONTRACT §7.1); OpenAI gets
- * `zodTextFormat(schema)` (§7.2). Whatever the vendor, the text is validated with `schema`.
+ * Google as-is (the Anthropic zod helper drops `enum`); OpenAI gets `zodTextFormat(schema)`.
+ * Whatever the vendor, the text is validated with `schema`.
  */
 export interface StructuredOutput<T> {
   /** Schema name, [a-zA-Z0-9_-]{1,64} (OpenAI requires one). */
   name: string;
   jsonSchema: { type: 'object'; [key: string]: unknown };
   schema: z.ZodType<T>;
-  /** Top-level string fields upper-cased before validation: enum casing isn't guaranteed (§7.1). */
+  /** Top-level string fields upper-cased before validation: enum casing isn't guaranteed. */
   upperCase?: readonly string[];
 }
 
@@ -43,18 +42,23 @@ export interface ChatRequest<T> {
   system: string;
   parts: ChatPart[];
   output: StructuredOutput<T>;
-  /** Anthropic output_config.effort, OpenAI reasoning.effort, Google thinking_level. Default 'low'. */
+  /**
+   * Anthropic output_config.effort, OpenAI reasoning.effort, Google thinking_level. Default 'low'.
+   */
   effort?: ChatEffort;
   /** Anthropic Haiku only (thinking can't be disabled on Opus 5.5; Sonnet 5.5 400s on it). */
   thinking?: 'adaptive' | 'disabled';
   /** Default 2048. */
   maxOutputTokens?: number;
-  /** Whole-call deadline. Default CHAT_TIMEOUT_MS (the panel's per-vote cap, API-CONTRACT §7.2). */
+  /** Whole-call deadline. Default CHAT_TIMEOUT_MS (the panel's per-vote cap). */
   timeoutMs?: number;
   signal?: AbortSignal;
 }
 
-/** Why a call produced no value. `timeout`/`error` map to AppealVote.status; all of them mean REDO/ABSTAIN. */
+/**
+ * Why a call produced no value. `timeout`/`error` map to AppealVote.status; all of them mean
+ * REDO/ABSTAIN.
+ */
 export type ChatFailure = 'timeout' | 'error' | 'refusal' | 'invalid_output' | 'not_configured';
 
 interface ChatResultBase {
@@ -96,10 +100,10 @@ export interface Transcript {
 }
 
 export interface SttOptions {
-  /** B's turn is `audio/mp4` AAC (API-CONTRACT §2.11). */
+  /** The audio's MIME type, e.g. `audio/mp4` (AAC). */
   mime: string;
   filename?: string;
-  /** Mock only: the transcript to return (e.g. from a demo header). Ignored by the live provider. */
+  /** Mock only: the transcript to return (e.g. from a demo header). Live ignores it. */
   mockTranscript?: string | null;
   signal?: AbortSignal;
 }
@@ -112,7 +116,7 @@ export interface SttProvider {
 
 // ---- sound effects (SFX_PROVIDER) ---------------------------------------------------------------
 
-/** API-CONTRACT §2.6 `cue` kinds: gavel, drumroll, buzzer, cheer. */
+/** The stage's `cue` kinds: gavel, drumroll, buzzer, cheer. */
 export type SfxCue = z.infer<typeof StageCueKind>;
 
 export interface AudioBlob {

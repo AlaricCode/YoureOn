@@ -1,4 +1,4 @@
-// Public surface of @youre-on/server for other streams and tests.
+// Public surface of @youre-on/server (the stage app's tests import it).
 export { buildApp, JSON_BODY_LIMIT } from './app';
 export { createDeps, startServer, type RunningServer, type CreateDepsOptions } from './server';
 export { loadEnv, EnvSchema, EnvError, REQUIRED_IN_PRODUCTION, type Env } from './env';

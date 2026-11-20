@@ -1,4 +1,5 @@
-// In-process token buckets, API-CONTRACT §1.7 (one machine). 429 RATE_LIMITED + Retry-After.
+// In-process token buckets (the server runs on one machine). 429 RATE_LIMITED + Retry-After.
+// Spec: docs/planning/API-CONTRACT.md §1.7.
 import { HttpError } from '../errors';
 
 export interface BucketSpec {
@@ -7,7 +8,7 @@ export interface BucketSpec {
   windowMs: number;
 }
 
-/** §1.7 buckets this module knows; other streams add theirs by name. */
+/** Shared buckets; other modules pass their own BucketSpec to take(), under their own name. */
 export const BUCKETS = {
   auth: { limit: 10, windowMs: 60_000 },
   default: { limit: 120, windowMs: 60_000 },

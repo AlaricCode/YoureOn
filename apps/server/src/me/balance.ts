@@ -1,6 +1,7 @@
 // A user's USDC balance (RPC) and what is theirs in escrow (Postgres): the body of
-// GET /v1/me/balance (./routes.ts), and the odds soft-check (odds/service.ts: can the side that
-// puts in more cover it?). The lock preflight stays the hard check.
+// GET /v1/me/balance (./routes.ts), and the odds soft check (odds/flow.ts softBalanceCheck: can
+// each side cover its stake?). The lock preflight stays the hard check. `usdc` sums every token
+// account of the mint the wallet owns, since a payout may land in a fallback account.
 import { and, eq, gte, lt, or, sql } from 'drizzle-orm';
 import { address } from '@solana/kit';
 import { bets, users } from '@youre-on/db';
@@ -11,7 +12,10 @@ export type WalletBalance =
   | { ok: true; wallet: string; usdc: bigint; in_escrow: bigint }
   | { ok: false; reason: 'no_wallet' | 'rpc_unavailable' };
 
-/** My stake in every bet between LOCKED and APPEAL_RESOLVED (deposited, not yet paid out). */
+/**
+ * My stake in every non-seed bet from LOCKED through APPEAL_RESOLVED in bet_state enum order
+ * (deposited, not yet paid out).
+ */
 export async function inEscrowMicro(db: AppDeps['db'], userId: string): Promise<bigint> {
   const [esc] = await db
     .select({

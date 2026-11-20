@@ -1,19 +1,10 @@
-// POST /v1/demo/reset (API-CONTRACT §2.17, DATA-MODEL §11 db:demo-reset): back to a clean demo
-// pair between rehearsals, without stranding a cent.
-//
-//   1. The keeper pauses (no sweep races the deletes) and resumes at the end.
-//   2. Every leased nonce is advanced first (a lock still in flight can no longer land), then
-//      escrow: every live Bet our fee payer created whose row is non-seed (or already gone)
-//      gets its money back (RefundService.voidForReset): a Locked one gets resolve(Refund) by the
-//      judge key, a due one its exit now, an Open one cancel_open_bet. A Resolved / Refund one is
-//      finalized by the orphan sweep right after its appeal window (armOrphanSweep), or by the
-//      keeper's 60 s orphan sweep; a decisive ruling stands (the winner is paid).
-//   3. The pool is re-synced from chain: every account that exists is free again.
-//   4. Non-seed bets are deleted (chain_txs, terms versions, events, voice sessions cascade), which
-//      frees pair_busy and the 3-open-bets cap. Users, devices, api_sessions (the phones stay
-//      signed in), rooms, face_enrollments and seed bets are untouched.
-//   5. `{rebalance: true}`: the demo wallets are evened out (src/demo/rebalance.ts), right away,
-//      or after the escrow comes back when some is still pending.
+// POST /v1/demo/reset: back to a clean demo pair between rehearsals, without stranding a cent.
+// The escrow of every non-seed bet comes back (a decisive ruling stands: its winner is paid), the
+// non-seed bets are deleted, which frees pair_busy and the 3-open-bets cap, and the nonce pool is
+// re-synced from chain. Users, devices, api_sessions (the phones stay signed in), rooms,
+// face_enrollments and seed bets are untouched. The keeper pauses meanwhile, so no sweep races
+// the deletes. `{rebalance: true}` then evens out the demo wallets, right away or once the
+// escrow is back.
 import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { auditLog, bets, noncePool } from '@youre-on/db';
@@ -68,7 +59,7 @@ async function liveBetsToVoid(
   );
   const listed = await listOurBets(rt);
   if (listed) return listed.filter((l) => !seed.has(l.betId));
-  // No getProgramAccounts: read the PDA of every non-seed post-lock bet.
+  // No getProgramAccounts: read the PDA of every non-seed bet from AWAITING_LOCK on.
   const rows = await deps.db
     .select({ id: bets.id })
     .from(bets)
@@ -100,9 +91,9 @@ export async function resetDemo(
   try {
     const rt = await lc.runtime();
 
-    // 2a. revoke every leased nonce first (best effort): stored lock signatures become useless,
-    //     and once these advances and every in-flight confirm settle, no lock can land
-    //     anymore, so the escrow scan below sees every Bet there will ever be.
+    // 1. Revoke every leased nonce first (best effort): stored lock signatures become useless,
+    //    and once these advances and every in-flight confirm settle, no lock can land anymore,
+    //    so the escrow scan below sees every Bet there will ever be.
     if (rt) {
       const leased = await deps.db
         .select()
@@ -120,7 +111,11 @@ export async function resetDemo(
     }
     await lc.idle();
 
-    // 2b. escrow
+    // 2. Escrow: every live Bet our fee payer created whose row is non-seed (or already gone)
+    //    gets its money back (RefundService.voidForReset): a Locked one gets resolve(Refund) by
+    //    the judge key, a due one its exit now, an Open one cancel_open_bet. A Resolved one is
+    //    finalized by the orphan sweep after its appeal window (step 6, or the keeper's 60 s
+    //    sweep); a decisive ruling stands.
     let settleAtMs: number | null = null;
     if (rt) {
       const live = await liveBetsToVoid(deps, rt).catch((err: unknown) => {
@@ -157,7 +152,7 @@ export async function resetDemo(
       }
     }
 
-    // 3. drop the pool's references to bets / txs about to be deleted.
+    // 3. Drop the pool's references to bets / txs about to be deleted.
     await deps.db
       .update(noncePool)
       .set({
@@ -170,7 +165,7 @@ export async function resetDemo(
       })
       .where(inArray(noncePool.status, ['leased', 'advancing']));
 
-    // 4. non-seed bets (chain_txs, bet_terms_versions, bet_events, voice_sessions, outbox cascade).
+    // 4. Non-seed bets (chain_txs, bet_terms_versions, bet_events, voice_sessions, outbox cascade).
     const deleted = await deps.db
       .delete(bets)
       .where(sql`NOT ${bets.is_seed}`)
@@ -179,7 +174,7 @@ export async function resetDemo(
     lc.payout.forget(deleted.map((d) => d.id));
     lc.review.forget(deleted.map((d) => d.id));
 
-    // 5. re-read the pool from chain: every account that is fine is free again.
+    // 5. Re-read the pool from chain: every account that is fine is free again.
     if (rt) {
       await deps.db
         .update(noncePool)
@@ -189,7 +184,7 @@ export async function resetDemo(
       result.nonces_synced = await syncNoncePool(deps, rt);
     }
 
-    // 6. the follow-up orphan sweep, then the rebalance.
+    // 6. The follow-up orphan sweep, then the rebalance.
     const rebalance = async () => {
       if (!rt) return null;
       return rebalanceDemoWallets(deps, rt, {

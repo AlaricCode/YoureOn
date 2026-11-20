@@ -1,24 +1,17 @@
-// The projector's voice, server side (API-CONTRACT §3.1 stage.voice, §4.5 "appeal votes are
-// voiced on the stage"). After each bet event goes out (hub.onBetEvent), the line the stage
-// speaks for it (packages/shared stage-voice.ts: ruling.issued, the payout's judge.cue PAID /
-// VOIDED, appeal.vote in one voice per seat) becomes an ElevenLabs clip (voice/tts.ts), and a
-// stage.voice frame tells the room's stage sessions where it is. The frame goes out at once,
-// before the clip exists: GET /v1/stage/tts/:clip_id waits for the generation it started.
-//
-// Nothing is generated unless the stage TTS is on (ELEVENLABS_API_KEY + ALLOW_SPEND=true, not
-// STAGE_TTS=off), a stage of the bet's room is connected (no clip nobody hears), and the event is
-// fresh (a re-published old event is not news). Without a frame the stage speaks the same line
-// with the browser's voice after ~800 ms, so the judge is heard either way.
+// The projector's voice, server side. After each bet event goes out (hub.onBetEvent), the line
+// the stage speaks for it (shared stage-voice.ts: the ruling, the payout, each appeal vote in its
+// seat's voice) becomes an ElevenLabs clip (voice/tts.ts), and a stage.voice frame tells the
+// room's stage sessions where it is. The frame goes out at once, before the clip exists:
+// GET /v1/stage/tts/:clip_id waits for the generation it started. Only while the stage TTS is
+// on, and only a fresh event in a room whose stage is connected (no clip nobody hears); without a
+// frame the stage speaks the same line with the browser's voice, so the judge is heard either way.
 //
 // One judge at a time: in a bet a voice judge hosts (A's phone relayed a judge.line for it), the
 // ruling and the payout are the phone's to say (their judge.cue lines are speak:true), so no clip
 // and no frame for them (leftToPhoneJudge); the stage applies the same rule to its own history
-// and stays quiet too. Appeal votes are still voiced here. The judge.line events seen go into a
-// set; after a restart bet_events answers.
-//
-// Also the stage cues' Sound Effects (providers.sfx when it is live: SFX_PROVIDER=live, or the
-// default 'auto' with the key), cached like the clips and generated once at boot so the first
-// gavel does not wait on ElevenLabs.
+// and stays quiet too. Appeal votes are still voiced here. Also provides the stage cues' Sound
+// Effects clips, cached like the voice clips.
+// Spec: docs/planning/API-CONTRACT.md §4.5.
 import { createHash } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 import { betEvents, bets, users } from '@youre-on/db';
@@ -196,7 +189,10 @@ export class StageVoice {
     return blob;
   }
 
-  /** Generates the four cue clips in the background (startServer), when they are live. */
+  /**
+   * Generates the four cue clips in the background (startServer), when they are live, so the
+   * first gavel does not wait on ElevenLabs.
+   */
   prewarm(): void {
     if (!this.sfxLive) return;
     for (const kind of StageCueKind.options)

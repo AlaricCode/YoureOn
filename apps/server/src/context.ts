@@ -49,31 +49,32 @@ export interface AppDeps {
   idempotency: IdempotencyCache;
   /** null disables rate limiting (tests). */
   rateLimit: RateLimiter | null;
-  /** Paid external capabilities (LLM, STT, SFX); mocks unless *_PROVIDER=live + ALLOW_SPEND (src/providers). */
+  /** Paid external capabilities (LLM, STT, SFX), built from the env by providers/registry.ts. */
   providers: Providers;
-  /** Periodic Postgres sweeps (src/keeper); started/stopped by startServer. Absent in tests by default. */
+  /** Periodic Postgres sweeps; started/stopped by startServer. Absent in tests by default. */
   keeper?: Keeper;
   /**
    * Called by the judge pipeline (src/judge) after every persisted attempt ruling has been
-   * committed and pushed, REDO included. The payout stream (src/payout) sends `resolve` for
-   * decisive / VOID rulings. Unset = no-op. Errors are logged, never surfaced to the uploader.
+   * committed and pushed, REDO included. createDeps points it at the payout service, which sends
+   * `resolve` for decisive / VOID rulings. Unset = no-op. Errors are logged, never surfaced to
+   * the uploader.
    */
   onRuling?: (betId: string, ruling: Ruling) => Promise<void> | void;
-  /** Gemini BTC 5-min relay (src/markets); started/stopped by startServer. Absent in tests by default. */
+  /** Gemini BTC 5-min relay; started/stopped by startServer. Absent in tests by default. */
   markets?: MarketService;
   /**
-   * The projector's ElevenLabs voice (src/stage/voice.ts): stage.voice clips for the judge's
-   * spoken moments and the cues' Sound Effects. createDeps builds it; absent = off.
+   * The projector's ElevenLabs voice: stage.voice clips for the judge's spoken moments and the
+   * cues' Sound Effects. createDeps builds it; absent = off.
    */
   stageVoice?: StageVoice;
   /**
-   * The slow-mo replay's confirmed-foul source (src/replay/fouls.ts; the SAM tracking stream).
-   * Absent = no foul replay is ever shown (GET /v1/bets/:bet_id/replay serves the win).
+   * The slow-mo replay's confirmed-foul source (replay/fouls.ts). Absent = no foul replay is ever
+   * shown (GET /v1/bets/:bet_id/replay serves the win).
    */
   replayFouls?: ReplayFoulSource;
   /**
-   * The SAM 3.1 service (src/judge/sam.ts) for the camera checks: built by createDeps when
-   * SAM3_URL and SAM3_API_TOKEN are set. Absent = no camera checks (judge/camera-checks.ts).
+   * The SAM 3.1 service for the camera checks: built by createDeps when SAM3_URL and
+   * SAM3_API_TOKEN are set. Absent = no camera checks.
    */
   sam?: SamClient;
 }
@@ -88,15 +89,15 @@ export type AppEnv = { Variables: AppVariables };
 export type App = Hono<AppEnv>;
 
 /**
- * A route module. Each stream adds one file under apps/server/src/<area>/routes.ts exporting
- * a RouteModule and appends it to `routeModules` in src/routes.ts — no other core edits.
+ * A route module: a named set of routes. buildApp registers every module listed in
+ * `routeModules` (routes.ts), in order.
  */
 export interface RouteModule {
   name: string;
   register(app: App, deps: AppDeps): void;
   /**
-   * Per-path request-body caps that override the 64 KB JSON default (API-CONTRACT §1.4),
-   * e.g. `{ path: /^\/v1\/bets\/[^/]+\/attempts\/\d+\/frames$/, maxBytes: 2 * 1024 * 1024 }`.
+   * Per-path request-body caps that override the 64 KB JSON default, e.g. the judge's 3 MiB
+   * frames upload.
    */
   bodyLimits?: ReadonlyArray<{ path: RegExp; maxBytes: number }>;
 }

@@ -1,5 +1,5 @@
 // Tiny PCM WAV writer for the mock voice providers (deterministic bytes, no assets).
-// Ported from the role of Verdict packages/backend/src/util/wav.ts (silentWav / beepWav).
+// Adapted from Verdict's packages/backend/src/util/wav.ts (docs/MERGE-PLAN.md).
 
 export const MOCK_SAMPLE_RATE = 16_000;
 

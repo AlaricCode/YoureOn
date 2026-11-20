@@ -1,11 +1,7 @@
 // Live ElevenLabs voice providers (paid; spend-guarded in fromEnv), on top of the shared client
-// in src/voice/elevenlabs.ts.
-//
-// Ported from Verdict packages/backend/src/providers/real/elevenlabs.ts lines ~100-202:
-//  - scribeToTranscript: Scribe words -> contiguous per-speaker segments (ms) + audio events.
-//    Scribe only diarizes; we never verify speakers (no voiceprints, ARCHITECTURE §6).
-//  - ElevenLabsSfx's once-per-process cached generation, here one clip per stage cue
-//    (API-CONTRACT §2.6 cue kinds) instead of Verdict's single start whistle.
+// in src/voice/elevenlabs.ts: Scribe speech-to-text, and Sound Effects generated once per stage
+// cue per process. Scribe only diarizes; we never verify speakers (no voiceprints).
+// Adapted from Verdict's packages/backend/src/providers/real/elevenlabs.ts (docs/MERGE-PLAN.md).
 import type { Env } from '../../env';
 import {
   createElevenLabsClient,
@@ -68,7 +64,7 @@ export class LiveStt implements SttProvider {
     return new LiveStt(createElevenLabsClient({ apiKey: env.ELEVENLABS_API_KEY, fetch: o.fetch }));
   }
 
-  /** `mockTranscript` is ignored. Throws UpstreamError (timeout after 6 s, HTTP error, bad shape). */
+  /** Ignores `mockTranscript`. Throws UpstreamError (timeout after 6 s, HTTP error, bad shape). */
   async transcribe(audio: Uint8Array, opts: SttOptions): Promise<Transcript> {
     const r = await this.client.speechToText({
       audio,
@@ -80,7 +76,7 @@ export class LiveStt implements SttProvider {
   }
 }
 
-/** Sound Effects prompts per stage cue. Short clips; the stage plays them (API-CONTRACT §2.6). */
+/** Sound Effects prompts per stage cue. Short clips; the stage plays them. */
 export const CUE_PROMPTS: Record<SfxCue, { text: string; durationSeconds: number }> = {
   gavel: { text: 'single wooden judge gavel strike, close, dry, no echo', durationSeconds: 1 },
   drumroll: { text: 'short snare drum roll building tension, ends abruptly', durationSeconds: 2.5 },
@@ -103,7 +99,7 @@ export class LiveSfx implements SfxProvider {
     return new LiveSfx(createElevenLabsClient({ apiKey: env.ELEVENLABS_API_KEY, fetch: o.fetch }));
   }
 
-  /** Generated once per cue per process; a failed generation is not cached (the next call retries). */
+  /** Generated once per cue per process; a failure is not cached (the next call retries). */
   cue(kind: SfxCue): Promise<AudioBlob> {
     let p = this.cache.get(kind);
     if (!p) {

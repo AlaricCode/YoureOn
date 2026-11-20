@@ -1,49 +1,10 @@
-// Demo ops (API-CONTRACT §2.17), all behind DEMO_MODE=true + `X-YO-Demo-Key: <DEMO_ADMIN_TOKEN>`
-// (404 otherwise, so the surface does not exist outside the demo). The stage-token requirement
-// of §2.17 is not enforced yet (no stage session issuer); the admin key alone gates these.
-//
-//   GET  /v1/demo/health                 chain health + warnings (src/chain/health.ts): balances, nonce
-//                                        pool, RPC p50/p95, keeper, stuck txs/bets, orphan escrow.
-//                                        Also open to a stage session (scope 'demo', DEMO_MODE only),
-//                                        so the projector needs no admin key for its health strip.
-//   POST /v1/demo/reset {rebalance?}     escrow of rehearsal bets returned (resolve(Refund) / exits),
-//                                        leased nonces revoked, non-seed bets deleted (cascade), the
-//                                        nonce pool re-synced (src/demo/reset.ts). Sessions, users,
-//                                        rooms and face_enrollments are untouched.
-//   POST /v1/demo/rebalance              demo-a / demo-b USDC evened out, fee payer pays (rebalance.ts).
-//   POST /v1/demo/sweep                  every money sweep now (lock / payout / resolve-due / refund
-//                                        / orphan escrow, chain/reconcile.ts) + the health report.
-//   POST /v1/demo/bets/:bet_id/terms     inject fixture terms through the SAME sink as propose_terms
-//                                        (no voice_conversation_id needed). Body: optional
-//                                        propose_terms args (the LLM projection) overriding the fixture.
-//   POST /v1/demo/bets/:bet_id/confirm   the confirm_terms step (freeze + LockService.start).
-//   POST /v1/demo/bets/:bet_id/appeal    {party?} LOCK_SIGNER=server only: the losing demo party's
-//                                        appeal, signed custodially by the server (the same path as a
-//                                        signature-less GG tap; src/appeal). `party` only for a VOID
-//                                        ruling (either party may appeal; default A). 202
-//                                        {status, signature, appeal_id}; no 3/h bucket (admin key).
-//   GET  /v1/demo/bets/:bet_id           state + chain_txs summary (scripts/cp1-drive.ts polls it).
-//   POST /v1/demo/claim-tokens           {party: 'a'|'b', display_name?} -> one-time QR for
-//                                        POST /v1/auth/demo-claim (claim-tokens.ts; 10 min, single
-//                                        use). scripts/demo-claim-qr.ts prints it.
-//   POST /v1/demo/users/:user_id/devices {device_pubkey} registers a further device key of a user:
-//                                        the judge-cam iPhone is a device of A (API-CONTRACT §2.9,
-//                                        ARCHITECTURE C5) and there is no other way to add one yet
-//                                        (the judge-cam phone can also use demo-claim for party a). The device then signs in with
-//                                        POST /v1/auth/session and binds itself with PATCH
-//                                        /v1/devices/current. 201 {device_id, user_id}; a repeat for
-//                                        the same user answers 200 with the same device. Demo
-//                                        accounts only (demo/players.ts): 409 not_demo_user otherwise.
-//   GET  /v1/demo/toggles                the runtime toggles (toggles.ts): cached_ruling, its source
-//   POST /v1/demo/toggles {cached_ruling?: boolean | null}
-//                                        set at runtime, read by the judge at call time (no restart);
-//                                        null = back to env CACHED_RULING. Audited 'demo.toggle'.
-//   POST /v1/demo/warmup                 one live judge call on a stored JPEG, getLatestBlockhash,
-//                                        one Gemini relay poll, voice readiness; per check
-//                                        {ok, ms, error} (warmup.ts). No bet, no money. 1 per 10 s.
-//   POST /v1/demo/seed-h2h {a_wins?, b_wins?}
-//                                        replaces the is_seed head-to-head history of demo-a vs
-//                                        demo-b (default 4-7, seed-h2h.ts); reset keeps it.
+// Demo ops for rehearsals and the pitch: health, reset, rebalance, sweeps, warm-up, runtime
+// toggles, seeded head-to-head history, claim QRs, extra device keys for a demo account and
+// fixture shortcuts for a bet. All sit behind DEMO_MODE=true + `X-YO-Demo-Key: <DEMO_ADMIN_TOKEN>`
+// and answer 404 otherwise, so the surface does not exist outside the demo. The admin key alone
+// gates them (no stage token needed); the read-only GET /v1/demo/health also takes the
+// projector's stage session instead.
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import type { Context, MiddlewareHandler } from 'hono';
@@ -81,7 +42,7 @@ import { settlementOf } from '../markets/settlement';
 
 export const DEMO_KEY_HEADER = 'X-YO-Demo-Key';
 
-/** A $1-each bottle flip, B performs (the Beat 2 bet, small enough for the demo wallets). */
+/** A $1-each bottle flip, B performs (the demo's bet, small enough for the demo wallets). */
 export const DEMO_TERMS_ARGS = {
   type: 'skill',
   claim: 'Party B lands a water bottle flip upright on the table.',
@@ -135,7 +96,7 @@ const requireDemoOrStage: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-/** Beat 6: the Gemini relay and the settlement keeper, for the pre-show check. */
+/** Bet on Bitcoin: the Gemini relay and its settlement keeper, for the pre-show check. */
 function geminiHealth(deps: AppDeps) {
   const m = deps.markets;
   const cur = m?.current(deps.now());
@@ -166,9 +127,8 @@ export const demoRoutes: RouteModule = {
   name: 'demo',
   register(app) {
     app.get('/v1/demo/health', requireDemoOrStage, async (c) => {
-      // src/chain/health.ts: balances, nonce pool, RPC p50 / p95, keeper, stuck txs / bets,
-      // orphan escrow, Stream, and `warnings` (+ `ok`: no critical warning); plus the Beat 6
-      // Gemini relay and settlement keeper.
+      // chain/health.ts: balances, nonce pool, RPC p50 / p95, keeper, stuck txs / bets, orphan
+      // escrow, Stream, and `warnings` (+ `ok`: no critical warning); plus the Gemini relay.
       const deps = c.get('deps');
       c.header('Cache-Control', 'no-store');
       return c.json({ ...(await chainHealth(deps)), gemini: geminiHealth(deps) }, 200);
@@ -190,8 +150,8 @@ export const demoRoutes: RouteModule = {
       return c.json(togglesOf(deps).view(deps.env), 200);
     });
 
-    // Runtime toggles (toggles.ts): the judge reads cached_ruling at call time, so this takes
-    // effect on the next ruling, no restart. Every toggle the body names is audited.
+    // Runtime toggles (toggles.ts): the judge reads them at call time, so a change takes effect
+    // on the next ruling, no restart. Every toggle the body names is audited.
     app.post('/v1/demo/toggles', requireDemo, async (c) => {
       const deps = c.get('deps');
       const body = await readBody(c, DemoTogglesRequest);
@@ -229,8 +189,8 @@ export const demoRoutes: RouteModule = {
       return c.json({ ok: true, ...r }, 200);
     });
 
-    // Every money sweep, now (before a beat, or to see the orphan refunds go out): the same
-    // idempotent passes the keeper runs, plus the orphan scan, then the health report.
+    // Every money sweep, now (before going on stage, or to see the orphan refunds go out): the
+    // same idempotent passes the keeper runs, plus the orphan scan, then the health report.
     app.post('/v1/demo/sweep', requireDemo, async (c) => {
       const deps = c.get('deps');
       const report = await bootReconcile(deps, deps.now());
@@ -251,6 +211,8 @@ export const demoRoutes: RouteModule = {
       return c.json({ ok: true, ...r }, 200);
     });
 
+    // Fixture terms through the same sink as the propose_terms tool, so a bet reaches
+    // TERMS_PROPOSED without a voice session. The body may override any propose_terms arg.
     app.post('/v1/demo/bets/:bet_id/terms', requireDemo, async (c) => {
       const deps = c.get('deps');
       const betId = betIdParam(c.req.param('bet_id'));
@@ -293,6 +255,7 @@ export const demoRoutes: RouteModule = {
       );
     });
 
+    // State + chain_txs summary (scripts/cp1-drive.ts polls it).
     app.get('/v1/demo/bets/:bet_id', requireDemo, async (c) => {
       const deps = c.get('deps');
       const betId = betIdParam(c.req.param('bet_id'));
@@ -329,6 +292,8 @@ export const demoRoutes: RouteModule = {
       );
     });
 
+    // A one-time QR for POST /v1/auth/demo-claim (10 min, single use); scripts/demo-claim-qr.ts
+    // prints it.
     app.post('/v1/demo/claim-tokens', requireDemo, async (c) => {
       const deps = c.get('deps');
       const body = await readBody(c, DemoClaimTokenRequest);
@@ -369,6 +334,8 @@ export const demoRoutes: RouteModule = {
       return c.json(res, 201);
     });
 
+    // A further device key of a demo account: the judge-cam iPhone is a device of A. The device
+    // then signs in with POST /v1/auth/session and binds itself with PATCH /v1/devices/current.
     app.post('/v1/demo/users/:user_id/devices', requireDemo, async (c) => {
       const deps = c.get('deps');
       const userId = c.req.param('user_id');
@@ -416,6 +383,8 @@ export const demoRoutes: RouteModule = {
       return c.json({ device_id: d!.id, user_id: user.id }, 201);
     });
 
+    // LOCK_SIGNER=server only: the losing demo party's appeal, signed custodially. The admin key
+    // gates it, so it takes no token from the 3/h appeal bucket.
     app.post('/v1/demo/bets/:bet_id/appeal', requireDemo, async (c) => {
       const deps = c.get('deps');
       const betId = betIdParam(c.req.param('bet_id'));

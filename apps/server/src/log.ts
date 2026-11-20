@@ -1,5 +1,5 @@
 // Minimal structured logger (one JSON line per entry). Never pass tokens, signatures, seeds
-// or face data as fields (DATA-MODEL §10).
+// or face data as fields.
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export type Logger = Record<LogLevel, (msg: string, fields?: Record<string, unknown>) => void>;
 

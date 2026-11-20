@@ -1,17 +1,17 @@
 // Shared by the mock and live LLM providers so both produce identical ChatResults: JSON
 // extraction from model text, enum upper-casing, zod validation, and a hard per-call deadline.
-//
-// firstJson is ported from Verdict packages/backend/src/providers/real/boothLlm.ts.
+// firstJson: adapted from Verdict's packages/backend/src/providers/real/boothLlm.ts
+// (docs/MERGE-PLAN.md).
 import type { ChatResult, ChatVendor, StructuredOutput } from './types';
 
-/** Panel seats (API-CONTRACT §7.2); also the default model per vendor. */
+/** The appeals panel's seat models; also the default model per vendor. */
 export const DEFAULT_CHAT_MODELS: Record<ChatVendor, string> = {
   anthropic: 'claude-opus-5-5',
   openai: 'gpt-6.1-terra',
   google: 'gemini-3.8-flash',
 };
 
-/** Per-call deadline: the appeals panel's per-vote cap (API-CONTRACT §7.2: 8 s). */
+/** Per-call deadline: the appeals panel's per-vote cap. */
 export const CHAT_TIMEOUT_MS = 8_000;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
 
@@ -78,7 +78,7 @@ export class DeadlineError extends Error {
 /**
  * Runs `fn` with an AbortSignal that fires at `ms` (or when `outer` aborts), and rejects with
  * DeadlineError at `ms` even if `fn` ignores the signal. SDK retries are off (maxRetries 0),
- * so this bounds the wall time (API-CONTRACT §7.1).
+ * so this bounds the wall time.
  */
 export async function withDeadline<R>(
   ms: number,
