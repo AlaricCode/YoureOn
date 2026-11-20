@@ -245,7 +245,7 @@ export const COPY = {
     demo: ['Demo account', 'label'],
   },
   app: {
-    // The wordmark at the top of Home, beside the switch.
+    // The wordmark at the top of Home, beside the logo.
     name: ["You're On", 'label'],
     loading: ['Loading', 'label'],
     offline: ["Can't connect", 'error'],
