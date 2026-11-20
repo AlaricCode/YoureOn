@@ -44,6 +44,7 @@ import { identifyPlayers, isFaceIdResult, mayTryFaces, type DanceFaceId } from '
 import { deleteCacheFile } from './fs';
 import { nowMs, type DancePoseModule } from './hooks';
 import { routineMedia } from './media';
+import { facePlayers } from './model/faceId';
 import { createPlayerIdentity, type PlayerIdentity } from './model/identity';
 import { createLiveStore, type LiveStore } from './model/liveStore';
 import { createRoundPipeline, type RoundPipeline } from './model/pipeline';
@@ -402,6 +403,10 @@ export function useDanceRound(opts: {
         log: debugLog,
       }).then((r) => {
         debugLog(`faces result ${isFaceIdResult(r) ? JSON.stringify(r) : r} try=${ft.tries}`);
+        // Only an attempt that asked the server uses up a try: no faces in the still yet (the
+        // dancers are still walking in, or looking away) is just "look again in a moment".
+        if (r === 'no_still' || r === 'no_frame' || r === 'framing' || r === 'faces')
+          ft.tries = Math.max(0, ft.tries - 1);
         if (stateRef.current.run !== run) return;
         faceTry.current.inFlight = false;
         // An attempt that ran out of time is not counted against the tries: the next one starts
@@ -452,7 +457,8 @@ export function useDanceRound(opts: {
           s.phase !== 'starting' &&
           mayTryFaces({
             enabled: optsRef.current.faceId != null,
-            framingOk: fr.ok,
+            // two people the camera can tell apart are enough: they need not be in position
+            framingOk: facePlayers(people, fr) !== null,
             identified: byFace,
             inFlight: ft.inFlight,
             tries: ft.tries,

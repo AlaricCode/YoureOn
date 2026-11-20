@@ -16,6 +16,7 @@ import {
 } from '../faceIdentify';
 import {
   associateFaces,
+  facePlayers,
   facesToSend,
   headPoint,
   normalizeBox,
@@ -317,5 +318,24 @@ describe('identifyPlayers (../faceIdentify)', () => {
       false,
     );
     expect(mayTryFaces({ ...base, tries: 1, lastTryAt: 10_000 - FACE_ID_RETRY.GAP_MS })).toBe(true);
+  });
+});
+
+describe('facePlayers: who a face attempt looks at, in position or not', () => {
+  it("in position: the framing check's players", () => {
+    expect(facePlayers([L, R], { a: 1, b: 0 })).toEqual({ a: 1, b: 0 });
+  });
+
+  it('not in position yet: any two people with heads and hips, the left one first', () => {
+    // feet out of the picture, both on one side, walking in: the framing check names nobody
+    expect(facePlayers([L, R])).toEqual({ a: 0, b: 1 });
+    expect(facePlayers([R, L])).toEqual({ a: 1, b: 0 });
+    expect(facePlayers([L, R], { a: undefined, b: undefined })).toEqual({ a: 0, b: 1 });
+  });
+
+  it('nobody to look at: one person, a crowd, or a body the follow could not track', () => {
+    expect(facePlayers([L])).toBeNull();
+    expect(facePlayers([L, R, L])).toBeNull();
+    expect(facePlayers([L, new Array<number>(L.length).fill(0)])).toBeNull();
   });
 });
