@@ -131,6 +131,9 @@ export function stageRoomsCache(db: Db, now: () => number) {
     async list(): Promise<string[]> {
       const t = now();
       if (!cached || t - cached.at > STAGE_ROOMS_TTL_MS) {
+        // Only rooms added before the query are sure to be in its answer; one added while it
+        // runs stays in `extra` until the next refresh.
+        const covered = [...extra];
         const rows = await db
           .selectDistinct({ room_id: apiSessions.room_id })
           .from(apiSessions)
@@ -142,7 +145,7 @@ export function stageRoomsCache(db: Db, now: () => number) {
             ),
           );
         cached = { at: t, rooms: rows.flatMap((r) => (r.room_id ? [r.room_id] : [])) };
-        extra.clear();
+        for (const id of covered) extra.delete(id);
       }
       return [...new Set([...cached.rooms, ...extra])];
     },
