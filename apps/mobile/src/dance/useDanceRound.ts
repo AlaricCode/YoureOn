@@ -37,6 +37,7 @@ import type {
   StatusEvent,
   StopRoundResult,
 } from '../../modules/dance-pose';
+import { debugLog } from '../../modules/dance-pose/src/native';
 import { importSafely } from '../app/importSafely';
 import { feel } from '../device/feedback';
 import { identifyPlayers, isFaceIdResult, mayTryFaces, type DanceFaceId } from './faceIdentify';
@@ -185,7 +186,12 @@ export function useDanceRound(opts: {
   const faceTry = useRef({ inFlight: false, tries: 0, lastTryAt: null as number | null });
   // The face model loads while the dancers walk into place, not inside the first attempt.
   useEffect(() => {
-    void Promise.resolve(optsRef.current.faceId?.prewarm?.()).catch(() => undefined);
+    const t0 = Date.now();
+    debugLog(`dance screen: faceId=${optsRef.current.faceId ? 'on' : 'OFF'}`);
+    void Promise.resolve(optsRef.current.faceId?.prewarm?.()).then(
+      () => debugLog(`face model warm after ${Date.now() - t0}ms`),
+      (e: unknown) => debugLog(`face model FAILED to load: ${String(e).slice(0, 200)}`),
+    );
   }, []);
 
   const stopAudio = () => {
@@ -392,7 +398,9 @@ export function useDanceRound(opts: {
         frameAt: (ts) => id.frameAt(ts),
         deleteFile: deleteCacheFile,
         size,
+        log: debugLog,
       }).then((r) => {
+        debugLog(`faces result ${isFaceIdResult(r) ? JSON.stringify(r) : r} try=${ft.tries}`);
         if (stateRef.current.run !== run) return;
         faceTry.current.inFlight = false;
         // An attempt that ran out of time is not counted against the tries: the next one starts

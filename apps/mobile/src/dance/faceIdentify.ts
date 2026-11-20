@@ -51,6 +51,8 @@ export interface FaceIdDeps extends DanceFaceId {
   deleteFile(uri: string): void;
   /** Image size of the pose frames (the framing check takes it). */
   size: { w: number; h: number };
+  /** Diagnostics: one line per step of an attempt (the device console). */
+  log?: ((line: string) => void) | undefined;
 }
 
 export interface FaceIdResult {
@@ -82,31 +84,54 @@ export function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: T): Promise
 }
 
 async function attempt(deps: FaceIdDeps): Promise<FaceIdResult | FaceIdMiss> {
+  const t0 = Date.now();
+  const log = (line: string) => deps.log?.(`faces +${Date.now() - t0}ms ${line}`);
+  log('start');
   const shot = await deps.captureStill();
-  if (!shot.ok) return 'no_still';
+  if (!shot.ok) {
+    log(`no_still ${JSON.stringify(shot).slice(0, 160)}`);
+    return 'no_still';
+  }
+  log(`still ts=${shot.ts}`);
   let still: FaceStill | null = null;
   const vectors: Float32Array[] = [];
   try {
     const frame = deps.frameAt(shot.ts);
-    if (!frame) return 'no_frame';
+    if (!frame) {
+      log('no_frame: no kept pose frame near the still');
+      return 'no_frame';
+    }
     const fr = framingCheck(frame.people, deps.size.w, deps.size.h);
-    if (!fr.ok || fr.a === undefined || fr.b === undefined) return 'framing';
+    if (!fr.ok || fr.a === undefined || fr.b === undefined) {
+      log(`framing ${fr.reason} people=${frame.people.length}`);
+      return 'framing';
+    }
     still = await deps.open(shot.uri);
+    log(`opened ${still.width}x${still.height} faces=${still.faces.length}`);
     const boxes = still.faces.map((f) => normalizeBox(f.bounds, still!));
     const owners = associateFaces(boxes, frame.people, still.width / still.height);
     const send = facesToSend(owners, { a: fr.a, b: fr.b });
+    log(
+      `boxes=${JSON.stringify(boxes.map((b) => [b.x, b.y, b.width, b.height].map((v) => +v.toFixed(3))))} ` +
+        `owners=${JSON.stringify(owners)} players=${fr.a},${fr.b} send=${send.length}`,
+    );
     // Both players must be identified; one face cannot tell A from B on its own.
     if (send.length < 2) return 'faces';
     for (const s of send) vectors.push(await still.embed(still.faces[s.face]!));
+    log('embedded');
     const res = await deps.identify({
       model: FACE_MODEL,
       faces: vectors.map((v) => ({ embedding: plainEmbedding(v) })),
     });
+    log(`server ${JSON.stringify(res.assignments)}`);
     const who = resolveIdentity(res.assignments as IdentifyAssignment[], send, {
       a: fr.a,
       b: fr.b,
     });
     return who ? { ts: frame.ts, ...who } : 'unknown';
+  } catch (e) {
+    log(`error ${String(e instanceof Error ? e.message : e).slice(0, 200)}`);
+    throw e;
   } finally {
     for (const v of vectors) v.fill(0);
     still?.close();
