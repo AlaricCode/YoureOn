@@ -146,7 +146,7 @@ function harness(opts: Parameters<typeof startTestServer>[0]) {
       });
     },
     start: async () => {
-      h.ctx = await startTestServer({ env: { STAGE_KEY }, ...opts });
+      h.ctx = await startTestServer({ ...opts, env: { STAGE_KEY, ...opts?.env } });
     },
     stop: async () => {
       for (const s of h.sockets) s.close();
@@ -414,7 +414,9 @@ describeDb('stage voice off (no ELEVENLABS_API_KEY): the stage speaks for itself
   });
 });
 
-describeDb('stage cues: ElevenLabs Sound Effects when SFX is live', () => {
+// Every start used to generate the four cues, and the clip cache does not outlive a deploy: each
+// deploy and restart paid ElevenLabs for clips nobody heard.
+describeDb('stage cues: nothing is generated at boot by default', () => {
   const made: SfxCue[] = [];
   const liveSfx: SfxProvider = {
     name: 'live',
@@ -427,7 +429,35 @@ describeDb('stage cues: ElevenLabs Sound Effects when SFX is live', () => {
   beforeAll(h.start);
   afterAll(h.stop);
 
-  it('the four cues are generated at boot; GET /v1/stage/sfx/:kind serves them; stage.cue says where', async () => {
+  it('a start spends nothing; a cue is generated the first time a stage asks for it, once', async () => {
+    await new Promise((r) => setTimeout(r, 80));
+    expect(made).toEqual([]);
+    const s = await h.setup();
+    const st = (await (await h.get('/v1/stage/audio', s.stageToken)).json()) as any;
+    expect(made).toEqual([]);
+    const first = await h.get(st.sfx.gavel, s.stageToken);
+    expect(first.status).toBe(200);
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(SFX_MP3);
+    expect((await h.get(st.sfx.gavel, s.stageToken)).status).toBe(200);
+    expect(made).toEqual(['gavel']);
+  });
+});
+
+describeDb('stage cues: ElevenLabs Sound Effects when SFX is live', () => {
+  const made: SfxCue[] = [];
+  const liveSfx: SfxProvider = {
+    name: 'live',
+    async cue(kind): Promise<AudioBlob> {
+      made.push(kind);
+      return { mime: 'audio/mpeg', bytes: SFX_MP3 };
+    },
+  };
+  // STAGE_SFX_PREWARM=true: the opt-in that generates the four cues at boot.
+  const h = harness({ providers: { sfx: liveSfx }, env: { STAGE_SFX_PREWARM: 'true' } });
+  beforeAll(h.start);
+  afterAll(h.stop);
+
+  it('with STAGE_SFX_PREWARM the four cues are generated at boot; GET /v1/stage/sfx/:kind serves them; stage.cue says where', async () => {
     await new Promise((r) => setTimeout(r, 50));
     expect([...made].sort()).toEqual(['buzzer', 'cheer', 'drumroll', 'gavel']);
     const s = await h.setup();
