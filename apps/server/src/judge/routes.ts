@@ -1,52 +1,15 @@
-// Judge pipeline, Beat 4 (API-CONTRACT §2.9, §2.15, §7.1; SCHEMAS §4, §5):
-//   PATCH /v1/devices/current                    (S)        -> 204   role phone | judge_cam (bound to a room)
-//   POST  /v1/bets/:bet_id/attempts              (S, party) -> 201   LOCKED (or JUDGING after a REDO) -> ATTEMPT
-//   POST  /v1/bets/:bet_id/attempts/:n/frames    (S, recorder device; multipart) -> 202   ATTEMPT -> JUDGING
+// The judge pipeline's routes. A party starts an attempt (POST …/attempts: LOCKED, or JUDGING
+// after a REDO, -> ATTEMPT); the recorder device uploads its frames (…/frames), or a Dance Off's
+// pose series and key frames (…/dance), -> JUDGING; PATCH /v1/devices/current binds a judge cam
+// to a room. A background ruling job then commits the Ruling and its events in one transaction
+// and calls deps.onRuling: the payout stream sends `resolve` and moves the bet to RULED once it
+// confirms. A REDO leaves the bet in JUDGING with the attempt 'redo', which is what lets
+// POST …/attempts open attempt_no + 1.
 //
-// After the 202 the ruling job runs in the background: one structured vision call through
-// deps.providers.llm (or, while cached_ruling is on, the stored verdict: env CACHED_RULING or the
-// runtime toggle POST /v1/demo/toggles, read per call), the deterministic bottle checks, the
-// SCHEMAS §5.1 mapping (toOutcome, REDO_BELOW, MAX_REDOS -> VOID), the Ruling record and its
-// ruling_hash (committing to the frame hashes, D7), one DB transaction (rulings row, attempt
-// status, redo_count, ruling.issued + judge.cue), fan-out to the bet channel and the room's
-// stage, then deps.onRuling(bet_id, ruling) (the payout stream sends `resolve`).
+// There is no object storage: frames are kept in Postgres (attempt_frames), `clip_upload` is null
+// and attempt.evidence's frame_urls is always empty.
 //
-// The bet stays JUDGING after the ruling: RULED is entered by the payout stream once `resolve`
-// confirms (API-CONTRACT §3.4). A REDO keeps it in JUDGING with the attempt in status 'redo',
-// which is what lets POST …/attempts open attempt_no + 1.
-//
-// The performer never records: the judge cam must be the non-performer's device and
-// recorder:'self' is refused to the performer (§2.9). With two phones (no judge cam in the room)
-// the non-performer's phone asks for 'judge_cam', gets 409 no_judge_cam, and records itself with
-// 'self' (apps/mobile src/attempt/recorder.ts); that refusal gives its rate-limit token back, so
-// the fallback spends no more of the bet's 6/min than the judge-cam path.
-//
-// Frames (planning D10, packages/shared/src/judge/frames): 8..12 frames plus at most one landing
-// crop, last, each ≤ 200 KB. The job hands the model duration_ms and the crop flag, so the prompt
-// labels the landing frames and the crop, also when it is re-run from the DB.
-//
-// A lost ruling job (crash before its commit, restart mid-call) never strands the bet in
-// JUDGING: a throwing job commits REDO 'unclear'; a replayed frames upload re-runs it from
-// attempt_frames; the keeper task 'judge-stuck' gives one older than STUCK_JUDGING_MS a REDO
-// 'unclear' (no new model call).
-//
-// Not here yet (no object storage): clip PresignedUpload (`clip_upload` is null), clip-upload /
-// clip-complete, signed frame_urls in attempt.evidence (empty). Frames are kept in Postgres.
-//
-// Dance Off (docs/planning/DANCE-OFF.md §5; Terms.type 'dance_off'): both parties dance, so the
-// attempt names no single performer (attempt.started says the yes party, A), and the round is
-// filmed from A's side only (§6.2): A's judge cam in the room, else A's own phone ('self'); B's
-// phone or B's judge cam never records (the recorder uploads the whole PoseSeries). It goes to
-//   POST  /v1/bets/:bet_id/attempts/:n/dance     (S, recorder device; multipart) -> 202
-//         parts `upload` (DanceUpload JSON) + `frame` × 1..6 JPEG key frames. The server checks
-//         the routine against the terms, pose_sha256 = hashJcs(series) and each frame's sha256,
-//         RE-SCORES the series with the shared scorer (client_scores are only compared), stores
-//         evidence_canonical = jcs(DanceEvidence) and moves the bet to JUDGING.
-// Its ruling job (same jobs map, keeper sweep and commit as the camera judge) runs the round
-// check (./dance.ts: Claude only validates and writes the announcer line), builds the
-// deterministic ruling (model rule/dance-off@1, evidence_hash = hashJcs(DanceEvidence)) and
-// appends dance.scored + ruling.issued + judge.cue in one commit. A failed or lost check settles
-// on the score (validation skipped), never a REDO.
+// Spec: docs/planning/API-CONTRACT.md §2.9.
 import { randomUUID } from 'node:crypto';
 import type { Context } from 'hono';
 import { and, asc, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
@@ -106,35 +69,35 @@ import {
 } from './schemas';
 import { loadFinalTerms, termsMatchBet, type TermsLoader } from './terms';
 
-/** §1.7: attempts + frames, 6/min per bet. */
+/** Shared by POST …/attempts, …/frames and …/dance: 6/min per bet. */
 export const ATTEMPTS_BUCKET = { limit: 6, windowMs: 60_000 } as const;
 /** The judge cam's 3-2-1 before GO. */
 export const GO_DELAY_MS = 3_000;
-/** §2.9: per attempt try. */
+/** Recording time per try: max_ms = MS_PER_TRY × attempts.count. */
 export const MS_PER_TRY = 6_000;
 /**
- * Frames per upload, the landing crop not counted (planning D10: 12–16 clustered at the end,
- * capped at 12 for latency; 8 still accepted from older phones and scripts/cp1-drive).
+ * Frames per upload, the landing crop not counted: the phone sends 12, clustered at the end (more
+ * would slow the ruling); 8 is still accepted from older phones and scripts/cp1-drive.
  */
 export const MIN_FRAMES = MIN_JUDGE_FRAMES;
 export const MAX_FRAMES = MAX_JUDGE_FRAMES;
-/** §2.9: each JPEG ≤ 200 KB, the landing crop included (= the attempt_frames_size CHECK). */
+/** Each JPEG ≤ 200 KB, the landing crop included (= the attempt_frames_size CHECK). */
 export const MAX_FRAME_BYTES = SHARED_MAX_FRAME_BYTES;
 /** The frames multipart body: 13 × 200 KB (12 frames + the crop) + the evidence JSON + overhead. */
 export const FRAMES_BODY_LIMIT = 3 * 1024 * 1024;
 /**
- * A ruling job this much past its upload, with no job running for it in this process, is
- * presumed lost (a restart mid vision call, or a crash before its commit) and is re-run by the
- * keeper sweep. Above JUDGE_TIMEOUT_MS (10 s) and the dance check's DANCE_TIMEOUT_MS (8 s) +
- * the commit, so a live job is never doubled.
+ * How old a 'judging' upload must be before resumeStuck presumes its job lost (a restart
+ * mid-call, or a crash before its commit). Longer than any call a live job waits on
+ * (JUDGE_TIMEOUT_MS 10 s, SAM_TIMEOUT_MS ≤ 15 s in parallel, DANCE_TIMEOUT_MS 8 s) plus the
+ * commit, so a live job is never doubled.
  */
 export const STUCK_JUDGING_MS = 20_000;
 /** gg_secs in the RULING cue when APPEAL_WINDOW_S is unset. */
 const DEFAULT_GG_SECS = 10;
 /**
- * DANCE-OFF §6.2: a dance attempt's recording window, instead of MS_PER_TRY × count. Each routine
- * has its own length (5..40 s); this fits the longest (40 s) + the count-in (3 beats, ≤ 4.5 s at
- * 40 bpm) + the recording tail, with slack. Informational: the phone stops on the routine's end.
+ * A dance attempt's recording window, instead of MS_PER_TRY × count. Each routine has its own
+ * length (5..40 s); this fits the longest (40 s) + the count-in (3 beats, ≤ 4.5 s at 40 bpm) +
+ * the recording tail, with slack. Informational: the phone stops on the routine's end.
  */
 export const DANCE_MAX_MS = 50_000;
 /**
@@ -202,17 +165,17 @@ interface Produced {
 }
 
 export interface JudgeRoutesOptions {
-  /** Where the frozen Terms come from (default: bet_terms_versions, when that table exists). */
+  /** Where the frozen Terms come from (default: loadFinalTerms, from bet_terms_versions). */
   loadTerms?: TermsLoader;
 }
 
 export interface JudgeRouteModule extends RouteModule {
-  /** Resolves when every ruling job started so far has finished (tests, graceful shutdown). */
+  /** Resolves when every ruling job started so far has finished (the tests await it). */
   idle(): Promise<void>;
   /**
-   * Re-runs every ruling job that is lost: attempt 'judging' on a JUDGING bet, uploaded more
-   * than `olderThanMs` ago, with no job for it in this process. Registered as the keeper task
-   * 'judge-stuck'; returns how many it restarted.
+   * Re-runs the ruling jobs that are lost (up to 20 per call): attempt 'judging' on a JUDGING
+   * bet, uploaded more than `olderThanMs` ago, with no job for it in this process. Registered as
+   * the keeper task 'judge-stuck'; returns how many it restarted.
    */
   resumeStuck(deps: AppDeps, nowMs: number, olderThanMs?: number): Promise<number>;
 }
@@ -266,8 +229,7 @@ async function versionedState(tx: Tx, bet: BetRow, set: Partial<typeof bets.$inf
 
 /**
  * The room's judge-cam device of the NON-performer (most recently seen first). The performer can
- * never be their own recorder (API-CONTRACT §2.9, ARCHITECTURE §6): a judge cam the performer
- * binds to the room is ignored.
+ * never be their own recorder: a judge cam the performer binds to the room is ignored.
  */
 async function findJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow, performer: Party) {
   if (!bet.room_id) return null;
@@ -291,10 +253,10 @@ const nonPerformerId = (bet: BetRow, performer: Party) =>
   performer === 'A' ? bet.party_b_id : bet.party_a_id;
 
 /**
- * Dance Off: both parties dance, so neither is neutral, and the round is filmed by A's side only
- * (DANCE-OFF §6.2: the room's judge cam, else A's phone). The judge cam is a second device of A
- * (the mobile judge-cam poll follows A's bets), so only A's judge-cam devices count: a judge cam
- * B binds to the room never becomes a dance recorder (the recorder uploads the whole PoseSeries).
+ * Dance Off: both parties dance, so neither is neutral, and the round is filmed by A's side only:
+ * the room's judge cam, else A's phone. The judge cam is a second device of A (the mobile
+ * judge-cam poll follows A's bets), so only A's judge-cam devices count: a judge cam B binds to
+ * the room never becomes a dance recorder (the recorder uploads the whole PoseSeries).
  */
 export async function findDanceJudgeCam(db: Pick<AppDeps['db'], 'select'>, bet: BetRow) {
   // findJudgeCam takes the PERFORMER and returns the other party's cam: 'B' -> A's devices.
@@ -339,8 +301,8 @@ function danceAccepted(e: DanceEvidence, client: { a: number; b: number }): Danc
 }
 
 /**
- * Evidence provenance (ARCHITECTURE §6): only the attempt's recorder device may upload, and for a
- * judge_cam attempt only while it is still this room's judge cam.
+ * Evidence provenance: only the attempt's recorder device may upload, and for a judge_cam
+ * attempt only while it is still this room's judge cam.
  */
 export async function assertRecorder(
   deps: AppDeps,
@@ -437,18 +399,18 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
 
   // ---- the ruling job --------------------------------------------------------------------
 
-  /** The camera judge: the vision verdict (or `forced`) -> the SCHEMAS §5.1 Ruling. */
+  /** The camera judge: the vision verdict (or `forced`) -> the Ruling (buildRuling). */
   async function produceCamera(
     deps: AppDeps,
     job: CameraJob,
     bet0: BetRow,
     names: { A: string; B: string },
-    /** Skip the vision call and commit this instead (the failure fallback of startJob). */
+    /** Skip the vision call and commit this instead (see runRuling). */
     forced: Judged | undefined,
   ): Promise<{ produced: Produced; now: number }> {
-    // Camera checks (camera-checks.ts): SAM on the regular frames, in parallel with the vision
-    // call (never the landing crop). null = none for this bet / attempt: legacy behaviour.
-    // Only this camera judge runs them; a dance round (produceDance) never does.
+    // Camera checks (camera-checks.ts): SAM on the regular frames (never the landing crop), in
+    // parallel with the vision call. null = no camera checks for this attempt: the bottle checks
+    // (checks.ts) alone apply.
     const regular = job.frames.flatMap((f, i) =>
       f.landing_crop ? [] : [{ t_ms: f.t_ms, bytes: f.bytes, hash: job.frame_hashes[i]! }],
     );
@@ -518,8 +480,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
   }
 
   /**
-   * A dance round (DANCE-OFF §5): the round check (or, when `forced`, a skipped check: no model
-   * call, the round settles on the score) -> the deterministic ruling + dance.scored.
+   * A dance round: the round check (or, when `forced`, a skipped check: no model call, the round
+   * settles on the score) -> the deterministic ruling + dance.scored.
    */
   async function produceDance(
     deps: AppDeps,
@@ -566,7 +528,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
       now,
       produced: {
         ruling: d.ruling,
-        // = the attempt's evidence_canonical; sha256 of it = evidence_hash (rulings CHECK)
+        // = the attempt's evidence_canonical
         evidence_canonical: jcs(job.evidence),
         scored: {
           evidence: job.evidence,
@@ -574,7 +536,6 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           validation: d.validation,
           announcer_line: d.announcer_line,
         },
-        // DANCE-OFF: the score decides; the SAM camera checks never run on a dance round.
         checks: null,
         cue: danceRulingCue(
           d.ruling,
@@ -721,9 +682,9 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
   /**
    * Runs the ruling job in the background, at most one per attempt in this process. If it
    * throws (a DB error, a bug), it commits a REDO 'unclear' through the same path, as for a
-   * model failure (API-CONTRACT §7.1), so the bet never sits in JUDGING (a dance round instead
-   * settles on its score, the check skipped). If even that fails, the keeper sweep (resumeStuck)
-   * or a replayed upload re-runs it.
+   * model failure, so the bet never sits in JUDGING (a dance round instead settles on its score,
+   * the check skipped). If even that fails, the keeper sweep (resumeStuck) or a replayed upload
+   * re-runs it.
    */
   function startJob(deps: AppDeps, job: Job, forced?: Judged): boolean {
     if (jobs.has(job.attempt_id)) return false;
@@ -887,13 +848,12 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
     resumeStuck,
 
     register(app, deps) {
-      // Lost ruling jobs (restart mid-call, crash before commit) are re-run from the DB.
       deps.keeper?.register({
         name: 'judge-stuck',
         run: (nowMs) => resumeStuck(deps, nowMs),
       });
 
-      // ---- PATCH /v1/devices/current (§2.15) ---------------------------------------------
+      // ---- PATCH /v1/devices/current -----------------------------------------------------
       app.patch('/v1/devices/current', requireSignedRequest, async (c) => {
         const me = appAuth(c);
         const body = await readBody(c, DevicePatchRequest);
@@ -936,7 +896,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         return c.body(null, 204);
       });
 
-      // ---- POST /v1/bets/:bet_id/attempts (§2.9) ------------------------------------------
+      // ---- POST /v1/bets/:bet_id/attempts ------------------------------------------------
       app.post('/v1/bets/:bet_id/attempts', requireSignedRequest, async (c) => {
         const me = appAuth(c);
         const betId = uuidOr404(c.req.param('bet_id'), 'bet');
@@ -954,9 +914,8 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           throw new HttpError('INVALID_STATE', undefined, { state: bet0.state });
         }
         const terms = await termsFor(deps, bet0);
-        // Dance Off: both dance, so the round is filmed by A's side only (DANCE-OFF §6.2: the
-        // room's judge cam, which is A's, else A's own phone with 'self'), and the attempt names
-        // the yes party (A) as `performer` (the event's field is a Party).
+        // Dance Off: both dance, so the attempt names the yes party (A) as `performer` (the
+        // event's field is a Party), and only A's side films it (findDanceJudgeCam).
         const dance = isDanceOff(terms);
         const performer: Party = terms.performer ?? terms.yes_party;
         if (dance) {
@@ -967,7 +926,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             });
           }
         } else if (body.recorder === 'self' && partyOf(bet0, me.user_id) === performer) {
-          // 'self' = the caller's phone records, so only the non-performer may ask for it (§2.9).
+          // 'self' = the caller's phone records, so only the non-performer may ask for it.
           throw new HttpError('NOT_A_PARTY', "You can't record your own attempt.", {
             reason: 'performer_cannot_record',
           });
@@ -985,7 +944,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           const same = prior.find((a) => a.attempt_no === body.attempt_no);
           // Idem (bet_id, attempt_no): the same attempt, still current and still live
           // (recording, or its evidence in with the judge), replays its 201. One that is over
-          // (ruled, including a called-off one from ./call-off.ts; redo; failed) is not.
+          // (ruled, including a called-off one from ./call-off.ts, or redo) does not.
           if (
             same &&
             same === prior[0] &&
@@ -1086,16 +1045,17 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
           });
           return { res, events, recorderUser: recorder.user_id, room_id: bet.room_id };
         });
-        // No judge cam: nothing was written, and the phone asks again with 'self' (two phones).
-        // The refusal gives its token back, so the fallback is free.
+        // No judge cam (409 no_judge_cam): nothing was written, and the phone asks again with
+        // 'self' (two phones, apps/mobile/src/attempt/recorder.ts). The refusal gives its token
+        // back, so the fallback spends no more of the bet's 6/min than the judge-cam path.
         const out = await started.catch((e: unknown) => {
           if (isNoJudgeCam(e)) deps.rateLimit?.refund('attempts', betId, ATTEMPTS_BUCKET);
           throw e;
         });
 
         for (const e of out.events) deps.hub.publishBetEvent(e, bet0.room_id);
-        // Recording starts: wake SAM for a bet with camera checks (fire-and-forget). A dance off
-        // never has camera checks (the score decides), so it never wakes SAM.
+        // Recording starts: wake SAM if this bet has camera checks (fire-and-forget; a dance off
+        // never has any).
         if (!dance) void warmForAttempt(deps, betId);
         // The judge cam may only be on its user channel; the hub dedupes by seq per socket.
         if (out.recorderUser) {
@@ -1104,7 +1064,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         return c.json(out.res, 201);
       });
 
-      // ---- POST /v1/bets/:bet_id/attempts/:n/frames (§2.9) --------------------------------
+      // ---- POST /v1/bets/:bet_id/attempts/:n/frames --------------------------------------
       app.post('/v1/bets/:bet_id/attempts/:n/frames', requireSignedRequest, async (c) => {
         const me = appAuth(c);
         const betId = uuidOr404(c.req.param('bet_id'), 'bet');
@@ -1167,7 +1127,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
             `lists ${evidence.frames.length} frames, body has ${parts.length}`,
           );
         }
-        // D10: MIN_FRAMES..MAX_FRAMES frames, plus at most one landing crop, sent last.
+        // MIN_JUDGE_FRAMES..MAX_JUDGE_FRAMES frames, plus at most one landing crop, sent last.
         const problem = judgeFramesProblem(evidence.frames);
         if (problem) bad(problem.path, problem.message);
         const frames: {
@@ -1288,7 +1248,7 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         return c.json(res, 202);
       });
 
-      // ---- POST /v1/bets/:bet_id/attempts/:n/dance (DANCE-OFF §5) --------------------------
+      // ---- POST /v1/bets/:bet_id/attempts/:n/dance ---------------------------------------
       app.post('/v1/bets/:bet_id/attempts/:n/dance', requireSignedRequest, async (c) => {
         const me = appAuth(c);
         const betId = uuidOr404(c.req.param('bet_id'), 'bet');
@@ -1515,5 +1475,5 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
   };
 }
 
-/** The module routes.ts mounts. deps.onRuling (AppDeps) is the payout hook. */
+/** The module src/routes.ts mounts. deps.onRuling (AppDeps) is the payout hook. */
 export const judgeRoutes: JudgeRouteModule = createJudgeRoutes();

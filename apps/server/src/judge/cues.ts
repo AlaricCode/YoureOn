@@ -1,4 +1,6 @@
-// judge.cue lines for Beat 4 (API-CONTRACT §4.5).
+// judge.cue lines for an attempt and its ruling: the camera judge's and the Dance Off's.
+//
+// Spec: docs/planning/API-CONTRACT.md §4.5.
 import type { Ruling } from '@youre-on/shared/ruling';
 import { MAX_REDOS } from '@youre-on/shared/constants';
 import { asciiFold, judgeCue, type JudgeCue } from '../bets/cues';
@@ -53,10 +55,7 @@ export function rulingCue(r: Ruling, names: CueNames, ggSecs: number): JudgeCue 
   );
 }
 
-/**
- * Dance Off (DANCE-OFF §6.2): both players dance, so the cue names both. Silent, like the camera
- * countdown cue.
- */
+/** Dance Off: both players dance, so the cue names both. Silent, like the camera countdown cue. */
 export function danceArmedCue(attemptNo: number, names: CueNames): JudgeCue {
   return judgeCue(
     'ATTEMPT_ARMED',

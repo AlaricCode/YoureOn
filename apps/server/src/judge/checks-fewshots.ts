@@ -1,7 +1,6 @@
-// Few-shot examples for the compile_checks call (design final.md §1 "Compilation", §9 "Compiler
-// guidance"). They are DATA, kept apart from the prompt code so they can be tuned without touching
-// it: compile-checks-prompt.ts renders every selected example as an INPUT / OUTPUT pair plus its
-// note, after the system prompt, inside the cached prefix.
+// Few-shot examples for the compile_checks call. They are DATA, kept apart from the prompt code so
+// they can be tuned without touching it: compile-checks-prompt.ts renders every selected example
+// as an INPUT / OUTPUT pair plus its note, after the system prompt, inside the cached prefix.
 //
 // HOW TO TUNE
 //  - Edit an example: change its input, output or note. The output must stay CORRECT under p1
@@ -22,11 +21,9 @@
 //    (live, held-out bets) and compare against the previous PROMPT_VERSION.
 //
 // TAGS AND SELECTION
-//  Each example carries ChallengeTags. Today selectFewShots() returns every example in array
-//  order. When the set grows past what is worth sending per call, switch on per-tag selection by
-//  passing `tags` (classify the bet first, e.g. from keywords or a cheap model call) and `max`:
-//  examples sharing a tag come first, and `alwaysTags` (judge_only by default) keep the
-//  "don't over-check" counterweight in every prompt.
+//  Each example carries ChallengeTags, and every call sends every example. When the set grows
+//  past what is worth sending per call, switch on per-tag selection by passing `tags` (classify
+//  the bet first, e.g. from keywords or a cheap model call) and `max` to selectFewShots().
 import type { CompileInput, CompiledChecksValid } from '@youre-on/shared/checks/compile';
 
 export const CHALLENGE_TAGS = [

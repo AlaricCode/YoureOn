@@ -1,21 +1,23 @@
-// The attempt-ruling vision call (API-CONTRACT §7.1 "First ruling"; planning D10): system prompt,
-// the multimodal user turn (terms prefix with a cache breakpoint, then labelled frames inline as
-// base64, DATA-MODEL §9), and the structured output (VisionVerdict + the bottle checks).
+// The attempt-ruling vision call: system prompt, the multimodal user turn (terms prefix with a
+// cache breakpoint, then labelled frames inline as base64), and the structured output
+// (VisionVerdict + the bottle checks).
 //
-// D10 labels (packages/shared/src/judge/frames): every frame inside the clip's landing window (its
-// last ~1.2 s) is marked LANDING, and the landing crop (the last image, CameraEvidence
+// Frame labels (packages/shared/src/judge/frames): every frame inside the clip's landing window
+// (its last ~1.2 s) is marked LANDING, and the landing crop (the last image, CameraEvidence
 // `landing_crop`) is labelled as the full-resolution middle of the frame it was cut from, so the
 // model knows which images show the landing and which one carries the detail.
 //
-// The wire JSON schema is hand-written (enum kept, API-CONTRACT §7.1) and leaves out the numeric
-// and length constraints the structured-outputs grammar does not take; zod (JudgeVerdict)
-// enforces them on the way back, so an out-of-range answer is `invalid_output` -> REDO.
+// The wire JSON schema is hand-written (so `enum` survives) and leaves out the numeric and length
+// constraints the structured-outputs grammar does not take; zod (JudgeVerdict) enforces them on
+// the way back, so an out-of-range answer is `invalid_output` -> REDO.
+//
+// Spec: docs/planning/API-CONTRACT.md §7.1.
 import { FRAME_END_GUARD_MS, isLandingFrame, landingWindowMs } from '@youre-on/shared/judge/frames';
 import type { Terms } from '@youre-on/shared/terms';
 import type { ChatPart, StructuredOutput } from '../providers/types';
 import { JudgeVerdict } from './checks';
 
-/** The vision call's own deadline (13 images; the shared 8 s panel cap is too tight here). */
+/** The vision call's own deadline (13 images: the shared 8 s CHAT_TIMEOUT_MS is too tight). */
 export const JUDGE_TIMEOUT_MS = 10_000;
 export const JUDGE_MAX_OUTPUT_TOKENS = 1024;
 

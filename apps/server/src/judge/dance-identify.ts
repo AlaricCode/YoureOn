@@ -1,4 +1,4 @@
-// Dance Off face assignment (docs/planning/DANCE-OFF.md §3):
+// Dance Off face assignment:
 //   POST /v1/bets/:bet_id/dance/identify   (S, the bet's recorder device) -> DanceIdentifyResponse
 //
 // The recording phone takes one still when the framing check passes, embeds the faces it found on
@@ -11,17 +11,20 @@
 // …/attempts can name) or in ATTEMPT (the attempt's recorder device, and for a judge cam only
 // while it is still bound to the room). B's devices never film a dance off, so they are refused.
 //
-// Privacy, as face-match (API-CONTRACT §2.4) and stricter: the probes are compared ONLY with the
-// two parties' active enrollments (the caller's own included, since both dance), with the
-// face-match threshold and margin (shared decideDanceAssignments); nothing about the faces is
-// stored, not even last_used_at (only, in memory, that this bet had both players identified:
-// ./dance-faces, so the upload may start A on the right); the answer carries face indices and parties, never a score or a vector; bodies are
-// never logged (nothing in this server logs bodies; the face service strips DB error messages).
+// Privacy, as face-match and stricter: the probes are compared ONLY with the two parties' active
+// enrollments (the caller's own included, since both dance), with the face-match threshold and
+// margin (shared decideDanceAssignments); nothing about the faces is stored, not even
+// last_used_at (only, in memory, that this bet had both players identified: ./dance-faces, so
+// the upload may start A on the right); the answer carries face indices and parties, never a
+// score or a vector; bodies are never logged (nothing in this server logs bodies; the face
+// service strips DB error messages).
 //
-// Rate limits, as face-match (§1.7): one call in flight per user, then 30/min per user in its own
+// Rate limits, as face-match: one call in flight per user, then 30/min per user in its own
 // bucket `face-match/dance` (so it never uses up the scan or Challenge path). The body is read
 // inside the in-flight guard and before the token: a concurrent call and an invalid body spend
 // none.
+//
+// Spec: docs/planning/DANCE-OFF.md §3.
 import { desc, eq } from 'drizzle-orm';
 import { attempts, bets } from '@youre-on/db';
 import { DanceIdentifyRequest } from '@youre-on/shared/api';

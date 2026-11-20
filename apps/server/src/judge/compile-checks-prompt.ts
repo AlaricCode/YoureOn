@@ -1,8 +1,8 @@
-// The compile_checks prompt (design final.md §1 "Compilation", §9 "Compiler guidance"): one
-// structured-output call that turns a bet's terms into a CheckSpec, or judge_only.
+// The compile_checks prompt: one structured-output call that turns a bet's terms into a
+// CheckSpec, or judge_only.
 //
 // Layout (prefix-stable for prompt caching):
-//   system   role + §9 rules + the predicate catalogue + the output contract
+//   system   role + the compiler rules + the predicate catalogue + the output contract
 //   part 1   the few-shot examples (checks-fewshots.ts), cache: true
 //   part 2   the bet's terms (CompileInput as JSON), last
 // The predicate catalogue is GENERATED from the zod schemas and constants in
@@ -42,7 +42,7 @@ import {
 
 // ---------------- predicate catalogue (generated) ---------------------------------------------
 
-/** What TRUE and FALSE mean, in plain words. TRUE never proves success (§0.2). */
+/** What TRUE and FALSE mean, in plain words. TRUE never proves success. */
 export const PREDICATE_MEANINGS: Record<PredicateName, { true: string; false: string }> = {
   visible: {
     true: 'all `count` instances of e are clearly detected in every frame of the window (a subject must also be fully in shot)',

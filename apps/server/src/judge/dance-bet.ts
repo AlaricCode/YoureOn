@@ -1,7 +1,7 @@
-// Is this bet a Dance Off (Terms.type 'dance_off', DANCE-OFF §1)? The bets row has no type column
+// Is this bet a Dance Off (Terms.type 'dance_off')? The bets row has no type column
 // (evidence_source is 'camera' like a skill bet), so the frozen terms say, or, failing that, a
 // dance-off ruling (model rule/dance-off@1) on the bet. Appeals and the spoken review are gated
-// on it (§5: the score is deterministic, so there is nothing to appeal), as Gemini bets are.
+// on it (the score is deterministic, so there is nothing to appeal), as Gemini bets are.
 import { and, desc, eq } from 'drizzle-orm';
 import { betTermsVersions, rulings } from '@youre-on/db';
 import { DANCE_TERMS_TYPE } from '@youre-on/shared/dance/terms';

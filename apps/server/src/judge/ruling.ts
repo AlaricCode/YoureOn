@@ -1,15 +1,17 @@
-// VisionVerdict -> Ruling (SCHEMAS §5.1, §5.2), as pure functions, plus the one vision call.
+// VisionVerdict -> Ruling, as pure functions, plus the one vision call.
 //
 // Rules, in order:
 //   1. confidence rounded to 2 dp; outcome = toOutcome(verdict, yes_party) (REDO_BELOW = 0.8)
 //   2. a decisive verdict whose deterministic checks disagree -> REDO 'unclear' (checks.ts; for a
 //      bet with camera checks, camera-checks.ts: the veto's own template reason is the reason)
 //   3. redo_reason: 'contested' if contested, else 'unclear' if UNCLEAR, else 'low_confidence'
-//   4. a model failure (timeout, error, refusal, bad JSON) -> REDO 'unclear' (API-CONTRACT §7.1);
-//      it counts toward MAX_REDOS
-//   5. a REDO on attempt_no > MAX_REDOS -> VOID 'max_redos' (hearings are cut, D-C), i.e. Refund
+//   4. a model failure (timeout, error, refusal, bad JSON) -> REDO 'unclear'; it counts toward
+//      MAX_REDOS
+//   5. a REDO on attempt_no > MAX_REDOS -> VOID 'max_redos', i.e. Refund (there is no hearing)
 //   6. reason normText'd and cut to 280; cited_frames deduped, in range, at most 8
-// ruling_hash = hashJcs(ruling) and commits to frame_hashes (SCHEMAS O3, D7).
+// ruling_hash = hashJcs(ruling) and commits to frame_hashes.
+//
+// Spec: docs/planning/SCHEMAS.md §5.1.
 import { MAX_REDOS } from '@youre-on/shared/constants';
 import { hashJcs, jcs } from '@youre-on/shared/jcs';
 import { normText, type Party } from '@youre-on/shared/primitives';
@@ -86,7 +88,7 @@ function cleanCited(cited: number[], n: number): number[] {
   return out;
 }
 
-/** Builds and validates the SCHEMAS Ruling (throws only on a bug: the record must parse). */
+/** Builds and validates the Ruling record (throws only on a bug: the record must parse). */
 export function buildRuling(ctx: RulingContext, judged: Judged): Ruling {
   let claim: ClaimResult;
   let confidence: number;
@@ -175,7 +177,7 @@ export function cachedVerdict(frameCount: number): JudgeVerdict {
 export interface JudgeInput {
   terms: JudgeTerms;
   performer_name: string;
-  /** In send order; the landing crop (if any) last (planning D10). */
+  /** In send order; the landing crop (if any) last. */
   frames: PromptFrame[];
   /** CameraEvidence.duration_ms: where the landing window sits (the prompt's LANDING labels). */
   duration_ms?: number | undefined;

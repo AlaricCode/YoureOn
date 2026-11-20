@@ -1,6 +1,6 @@
-// "Call it off" (API-CONTRACT §2.9a, packages/shared/src/call-off.ts): a mutual stop of a locked
-// bet whose round can't happen, so neither phone sits on the attempt screens until
-// resolve_deadline (lock + 3600 s, then the keeper's timeout_refund).
+// "Call it off" (packages/shared/src/call-off.ts): a mutual stop of a locked bet whose round
+// can't happen, so neither phone sits on the attempt screens until resolve_deadline (lock +
+// 3600 s, then the keeper's timeout_refund).
 //
 //   POST /v1/bets/:bet_id/call-off {agree, answer?}   (S, party) -> 200 CallOffResponse
 //     agree:true, nothing open        opens a request (bet.call_off requested, expires in 60 s)
@@ -20,16 +20,13 @@
 // decisive ruling or one being made. The check and the write happen under the bet's row lock,
 // as every attempt / upload transaction takes it, so whichever commits first wins.
 //
-// The VOID goes through the existing ruling machinery: one commit with the `rulings` row
-// (stage 'attempt', model CALLED_OFF_MODEL, VOID 'safety_stop', no frames, evidence_hash =
-// hashJcs(CallOffRecord) with the record in evidence_canonical), the attempt 'ruled' (the
-// recording one, or, from LOCKED / after a REDO, a new attempt row that never recorded: the
-// rulings_attempt_stage CHECK wants one), bet -> JUDGING, bet.call_off agreed + ruling.issued +
-// judge.cue VOIDED, an audit row; then deps.onRuling (resolve(Refund)), and the keeper's
-// resolve-due retries it if that fails. RULED, the appeal window, finalize and VOIDED follow as
-// for any VOID. A repeat after the VOID answers 'agreed' with the same ruling_hash.
+// The VOID is an ordinary ruling (commitVoid, then deps.onRuling sends resolve(Refund)), so RULED,
+// the appeal window, finalize and VOIDED follow as for any VOID. A repeat after the VOID answers
+// 'agreed' with the same ruling_hash.
 //
 // The request is not a table: it is the latest 'bet.call_off' row of bet_events (append-only).
+//
+// Spec: docs/planning/API-CONTRACT.md §2.9a.
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { attempts, auditLog, betEvents, bets, rulings } from '@youre-on/db';
@@ -63,7 +60,7 @@ export const CALL_OFF_BUCKET = { limit: 6, windowMs: 60_000 } as const;
 type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
 type AttemptRow = typeof attempts.$inferSelect;
 
-/** Where the bet's current attempt stands, for a call-off: one to rule, or the number of a new one. */
+/** Where the bet's current attempt stands for a call-off: one to rule, or a new one's number. */
 type Callable = { kind: 'open'; attempt: AttemptRow } | { kind: 'new'; attempt_no: number };
 
 /** The VOIDED cue a call-off sends (A's phone hands it to the voice judge; the stage reads it). */
@@ -112,7 +109,8 @@ async function latestCallOff(
 
 /**
  * Is the bet in a state a call-off may stop (under the row lock)? Throws 409 otherwise:
- * `ruling_in_flight` while frames / a round are being judged, `too_late` once a ruling is out.
+ * `ruling_in_flight` in ATTEMPT / JUDGING / HEARING (an upload being judged, or a ruling not
+ * yet settled), `too_late` in any other state.
  */
 async function callableAttempt(tx: Tx, bet: BetRow): Promise<Callable> {
   const [latest] = await tx
@@ -142,7 +140,8 @@ interface Voided {
 
 /**
  * The VOID ruling of a call-off, in the caller's transaction (the bet row already locked and
- * checked callable). `requested` is who asked first (and when); `agreedBy` completes it now.
+ * checked callable). `o.requested_by` asked first (at `o.requested_at`); `o.agreed_by` completes
+ * it now.
  */
 async function commitVoid(
   deps: AppDeps,
@@ -242,8 +241,8 @@ async function commitVoid(
     latency_ms: 0,
     created_at: new Date(ruling.created_at),
   });
-  // JUDGING, as after any upload: the payout stream resolves from there (and the keeper's
-  // resolve-due finds a JUDGING bet whose latest ruling is VOID if that send fails).
+  // JUDGING, as after any upload: the payout stream resolves from there, and the keeper's
+  // resolve-due finds a JUDGING bet whose latest ruling is VOID if deps.onRuling's send fails.
   const prev = bet.state;
   if (prev !== 'JUDGING') {
     const updated = await tx
@@ -450,7 +449,7 @@ async function openRequest(
   return { payload: { ...p, by: p.by }, at: expires - CALL_OFF_TTL_MS };
 }
 
-/** The operator's demo void: the same VOID ruling at once, for a LOCKED / ATTEMPT bet. */
+/** The operator's demo void: the same VOID ruling at once, whenever a call-off is allowed. */
 export async function operatorVoid(
   deps: AppDeps,
   betId: string,

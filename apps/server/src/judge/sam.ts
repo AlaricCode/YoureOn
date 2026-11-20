@@ -1,6 +1,6 @@
-// The SAM 3.1 client (services/sam3/modal_app.py; design final.md §2): POST /segment over an
-// attempt's regular frames, GET /health to wake a container. Used only by the camera checks
-// (judge/camera-checks.ts), and only while they are active.
+// The SAM 3.1 client (services/sam3/modal_app.py): POST /segment over an attempt's regular
+// frames, GET /health to wake a container. Used only by the camera checks (camera-checks.ts),
+// and only while they are active.
 //
 //   segment()  one deadline for the whole call, retry included: the first try may use all of it;
 //              ONE retry follows a fast failure (network error, 5xx, 429, an unreadable reply)
@@ -15,7 +15,7 @@ import type { Logger } from '../log';
 
 /** Below this, a retry cannot finish (≈ one prompt warm is 3.5 s). */
 export const MIN_RETRY_MS = 3_500;
-/** GET /health never waits longer (cold start can be 45 s; the warm-up still happens server-side). */
+/** GET /health gives up after this (a cold start can take 45 s; the container warms anyway). */
 export const WARM_TIMEOUT_MS = 60_000;
 
 export type SamFailure = 'timeout' | 'http' | 'network' | 'invalid_reply';

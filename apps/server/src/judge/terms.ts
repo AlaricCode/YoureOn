@@ -1,8 +1,8 @@
-// The frozen Terms of a bet, for the judge. The terms stream owns bet_terms_versions
-// (DATA-MODEL §5.7) and it may not exist yet: until it does, the default loader finds nothing
-// and POST …/attempts answers TERMS_NOT_FINAL. Once the table exists this picks it up without
-// a code change (same to_regclass probe as rooms/service.ts faceEnrolledIds). A different
-// source can be injected with createJudgeRoutes({ loadTerms }).
+// The frozen Terms of a bet, for the judge: the is_final row of bet_terms_versions, which the
+// terms flow (lock/terms.ts) writes. The default loader probes for that table (to_regclass, as
+// rooms/service.ts faceEnrolledIds does) until it has seen it once; while the table is missing it
+// finds nothing and POST …/attempts answers TERMS_NOT_FINAL. A different source can be injected
+// with createJudgeRoutes({ loadTerms }).
 import { sql } from 'drizzle-orm';
 import type { Db } from '@youre-on/db';
 import { hashJcs } from '@youre-on/shared/jcs';

@@ -1,11 +1,11 @@
-// compile_checks (design final.md §1 "Compilation"): the agreed terms -> a canonical CheckSpec, or
-// judge_only. One Claude structured-output call (prompt: compile-checks-prompt.ts, examples:
-// checks-fewshots.ts); the spec is canonicalized and CheckSpec-parsed in code, with ONE retry that
-// shows the model the zod issues. Never throws: any failure is judge_only with status 'fallback'
-// (the readback then says "Judge only, no ref cam"), so a compiler outage can never block a bet.
+// compile_checks: the agreed terms -> a canonical CheckSpec, or judge_only. One Claude
+// structured-output call (prompt: compile-checks-prompt.ts, examples: checks-fewshots.ts); the
+// spec is canonicalized and CheckSpec-parsed in code, with ONE retry that shows the model the zod
+// issues. Never throws: any failure is judge_only with status 'fallback' (the readback then says
+// "Judge only, no ref cam"), so a compiler outage can never block a bet.
 //
-// No call at all for real_world bets or multi-attempt rules (§1 V2 rules: checks need type 'skill'
-// and attempts.rule 'single'). Results are cached in memory by
+// No call at all for real_world bets or multi-attempt rules (checks need type 'skill' and
+// attempts.rule 'single'). Results are cached in memory by
 // sha256(JCS(input) + prompt version + model); fallbacks are not cached, so a transient outage
 // does not stick.
 import { jcs } from '@youre-on/shared/jcs';
@@ -24,7 +24,7 @@ import type { ChatFailure, ChatPart } from '../providers/types';
 import type { SelectFewShotsOptions } from './checks-fewshots';
 import { buildCompilePrompt, COMPILE_CHECKS_OUTPUT } from './compile-checks-prompt';
 
-/** Off the voice webhook's critical path, so longer than the design's 6 s (Opus thinks first). */
+/** Generous: the compile is off the voice webhook's critical path, and Opus thinks first. */
 export const COMPILE_CHECKS_TIMEOUT_MS = 20_000;
 /** Thinking counts against it (Opus 5.5 thinking cannot be disabled). */
 export const COMPILE_CHECKS_MAX_OUTPUT_TOKENS = 8_000;
@@ -149,7 +149,7 @@ export async function compileChecks(
   const prompt = buildCompilePrompt(parsed.data, opts.fewShots);
   const pv = prompt.prompt_version;
 
-  // §1 V2 rules: checks only for single-attempt skill bets. No model call otherwise.
+  // Checks only for single-attempt skill bets. No model call otherwise.
   if (parsed.data.type !== 'skill' || parsed.data.attempts.rule !== 'single') {
     return {
       decision: 'judge_only',

@@ -1,11 +1,11 @@
-// Camera checks, option B (non-binding): SAM 3.1 measurements that can only refuse a verdict.
+// Camera checks (non-binding): SAM 3.1 measurements that can only refuse a verdict.
 //
 // The CheckSpec is NOT in the hashed Terms. It is compiled server-side from the bet's terms
 // (compile-checks.ts) and stored in bet_checks, keyed by the terms_hash it was compiled from; at
 // ruling time SAM runs on the attempt's regular frames in parallel with the vision call, the pure
 // shared evaluator scores it, and checksVeto may turn a decisive MET into REDO 'unclear' with
-// its own template reason (buildRuling, through Judged.disagreement + veto). For a bet with a
-// spec this replaces the legacy bottle checks (checks.ts); bets without one keep them.
+// its own template reason (buildRuling, through Judged.disagreement + veto). When these checks
+// run they replace the bottle checks (checks.ts), which apply otherwise.
 //
 //   compile   scheduleCompile(): after each proposed terms version (lock/terms.ts
 //             persistEvaluation) and the odds recompose (odds/flow.ts), fire-and-forget; and
@@ -13,18 +13,15 @@
 //             frozen terms_hash has a row, then warms SAM. Never blocks or fails the terms flow;
 //             a row is written only while its terms_hash is still the bet's.
 //   warm      warmForAttempt() at POST …/attempts (recording starts), fire-and-forget.
-//   rule      runAttemptChecks() (judge/routes.ts runRuling) -> applyCameraVeto(); the report is
-//             stored (attempt_checks) and pushed (checks.report) in the ruling's own commit.
+//   rule      runAttemptChecks() (judge/routes.ts produceCamera) -> applyCameraVeto(); the report
+//             is stored (attempt_checks) and pushed (checks.report) in the ruling's own commit.
 //
 // Active only when env CHECKS_ENABLED=true, SAM3_URL + SAM3_API_TOKEN are set (deps.sam), and the
 // runtime toggle 'checks' is on (POST /v1/demo/toggles). A ruling under cached_ruling skips them
 // (the stored verdict is a replay; vetoing it would make the demo fallback unreliable).
 //
-// Never for a Dance Off (DANCE-OFF.md): its terms are evidence_source 'camera', but the pose score
-// decides. checksEligible() refuses dance terms, so scheduleCompile never writes a bet_checks row
-// for one; onTermsFrozen / warmForAttempt / runAttemptChecks act only on a row whose terms_hash is
-// the bet's current one, so they are no-ops too (and the judge routes skip them for dance anyway:
-// produceDance never calls runAttemptChecks, POST …/attempts never warms for a dance off).
+// Never for a Dance Off: checksEligible() refuses dance terms, so no bet_checks row is ever
+// written for one, and every later step (which needs that row) does nothing.
 import { eq } from 'drizzle-orm';
 import { attemptChecks, betChecks, bets } from '@youre-on/db';
 import { checksVeto, evaluateChecks, P1, type CheckReport } from '@youre-on/shared/checks/evaluate';
@@ -79,7 +76,7 @@ function track<T>(deps: object, key: string, start: () => Promise<T>): Promise<T
   return done;
 }
 
-/** Resolves when every compile / warm started so far has finished (tests, shutdown). */
+/** Resolves when every compile / warm started so far has finished (the tests await it). */
 export async function checksIdle(deps: object): Promise<void> {
   for (;;) {
     const m = pending.get(deps);
@@ -221,8 +218,6 @@ export function scheduleCompile(
   terms: Terms,
   termsHash: string,
 ): Promise<StoredChecks | null> {
-  // Only camera (skill) bets have a ref cam; a market bet or a dance off gets no row and no
-  // checks.compiled.
   if (!canCompile(deps) || !checksEligible(terms)) return Promise.resolve(null);
   return track(deps, `compile:${betId}:${termsHash}`, () =>
     compileAndStore(deps, betId, terms, termsHash),
@@ -317,8 +312,8 @@ export interface CheckRun {
 
 /**
  * The SAM side of one attempt ruling, started next to the vision call. null = no checks for
- * this attempt (inactive, cached_ruling, no 'checks' row for the locked terms): the legacy
- * behaviour applies. Never throws; SAM failures give an 'unavailable' report (no veto).
+ * this attempt (inactive, cached_ruling, no 'checks' row for the locked terms): the bottle
+ * checks alone apply. Never throws; SAM failures give an 'unavailable' report (no veto).
  */
 export async function runAttemptChecks(
   deps: Pick<AppDeps, 'db' | 'env' | 'log' | 'now'> & Partial<Pick<AppDeps, 'sam'>>,
@@ -393,10 +388,7 @@ export function replyGap(reply: SamSegmentReply, spec: CheckSpec, n: number): st
   return null;
 }
 
-/**
- * §7 for option B: the camera veto replaces the legacy bottle-check disagreement on a bet with a
- * spec. `applied` = the veto is what makes this ruling REDO (the verdict was otherwise decisive).
- */
+/** The camera veto replaces the bottle-check disagreement on a bet with a spec. */
 export function applyCameraVeto(
   judged: Judged,
   run: CheckRun,

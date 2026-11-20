@@ -1,11 +1,11 @@
-// Dance Off validation + ruling (docs/planning/DANCE-OFF.md §5). The shared scorer has already
-// decided the round from the uploaded PoseSeries (the server re-scored it: DanceEvidence). Claude
-// never picks the winner: one structured call checks the round was fair (both danced the whole
-// time, nobody left, no third person, no side swap) and writes the announcer's line.
+// Dance Off validation + ruling. The shared scorer has already decided the round from the
+// uploaded PoseSeries (the server re-scored it: DanceEvidence). Claude never picks the winner:
+// one structured call checks the round was fair (both danced the whole time, nobody left, no
+// third person, no side swap) and writes the announcer's line.
 //
 //   callDanceValidator  the call (or, while cached_ruling is on, a canned "valid" check). Never
 //                       throws: a timeout / error / bad JSON is a SKIPPED check, and the round then
-//                       settles on the score with a canned line (§5).
+//                       settles on the score with a canned line.
 //   buildDanceRuling    DanceEvidence + the check -> the strict Ruling (model DANCE_OFF_MODEL,
 //                       confidence 1, frame_hashes = the uploaded key frames, evidence_hash =
 //                       hashJcs(DanceEvidence)):
@@ -18,6 +18,8 @@
 // close to call" when there is none); otherwise the canned line is. The wire JSON schema is
 // hand-written like judge/prompt.ts; its first enum value is VALID so the offline MockLlm's
 // default answer is the happy path.
+//
+// Spec: docs/planning/DANCE-OFF.md §5.
 import { z } from 'zod/v4';
 import { danceRulingOutcome } from '@youre-on/shared/dance/evidence';
 import { getRoutine } from '@youre-on/shared/dance/routine';
@@ -35,7 +37,7 @@ import { judgeStatsOf } from './stats';
 export const DANCE_TIMEOUT_MS = 8_000;
 /**
  * As JUDGE_MAX_OUTPUT_TOKENS (1024): the default JUDGE_MODEL thinks adaptively and its thinking
- * counts against max_tokens, so 512 cut the JSON short (invalid_output -> a skipped check).
+ * counts against max_tokens, so 512 cuts the JSON short (invalid_output -> a skipped check).
  */
 export const DANCE_MAX_OUTPUT_TOKENS = 1024;
 /** DanceCheck.model of the canned check served while cached_ruling is on (audit only). */
@@ -232,9 +234,9 @@ export function danceTermsBlock(input: Pick<DanceValidatorInput, 'terms' | 'name
 }
 
 /**
- * Where the players started (DANCE-OFF §3): A on the left, unless this server identified both by
- * face for the bet (judge/dance-faces) and A started on the right (DanceEvidence.checks
- * .a_start_side, written only then).
+ * Where the players started: A on the left, unless this server identified both by face for the
+ * bet (judge/dance-faces) and A started on the right (DanceEvidence.checks.a_start_side, written
+ * only then).
  */
 export function startingPlaces(e: DanceEvidence, names: DanceNames): string {
   const aRight = e.checks.a_start_side === 'right';
@@ -389,7 +391,7 @@ export interface DanceRuled {
 const CITED_MAX = 4;
 
 /**
- * §5: the deterministic ruling of a dance round. Throws only on a bug (the record must parse).
+ * The deterministic ruling of a dance round. Throws only on a bug (the record must parse).
  * A skipped check settles on the score; an INVALID one is VOID with the problem as the reason.
  */
 export function buildDanceRuling(

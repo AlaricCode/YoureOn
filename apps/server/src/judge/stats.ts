@@ -1,8 +1,9 @@
-// Judge health, in memory (since boot): every vision call through deps.providers.llm (an attempt
-// ruling, or POST /v1/demo/warmup) records its outcome and wall time here. GET /v1/demo/health
-// (chain/health.ts `judge_llm`, `llm_last_ok`) and scripts/demo-check.ts read it: the last success,
-// the last failure, p50 / p95 over the recent calls, and a WARN when nothing succeeded since boot.
-// A cached ruling makes no call and records nothing. Found through `judgeStatsOf(deps)`.
+// Judge health, in memory (since boot): every judge call through deps.providers.llm (an attempt
+// ruling, a dance round check, or POST /v1/demo/warmup) records its outcome and wall time here.
+// GET /v1/demo/health (chain/health.ts `judge_llm`, `llm_last_ok`) and scripts/demo-check.ts read
+// it: the last success, the last failure, p50 / p95 over the recent calls, and a WARN when nothing
+// succeeded since boot. A cached ruling makes no call and records nothing. Found through
+// `judgeStatsOf(deps)`.
 import type { AppDeps } from '../context';
 import { percentile } from '../chain/tx';
 import { cachedRulingOn } from '../demo/toggles';

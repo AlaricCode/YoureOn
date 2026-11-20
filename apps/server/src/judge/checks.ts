@@ -1,7 +1,6 @@
-// Deterministic bottle-flip checks (planning README D10, MERGE-PLAN #4): the vision call returns
-// two narrow yes/no observations next to its verdict, and this file compares them with the
-// verdict by a fixed rule. If they disagree, the ruling is REDO. The rule never picks a winner;
-// it can only refuse to accept one.
+// Deterministic bottle-flip checks: the vision call returns two narrow yes/no observations next
+// to its verdict, and this file compares them with the verdict by a fixed rule. If they
+// disagree, the ruling is REDO. The rule never picks a winner; it can only refuse to accept one.
 //
 //   cap_tape_visible        the taped cap is visible at the TOP of the resting bottle (it landed
 //                           base-down, not on its cap)
@@ -12,7 +11,7 @@
 //   NOT_MET and landed      -> REDO (the observations say it landed, the model says it didn't)
 //   UNCLEAR                 -> already REDO
 // A null (unknown) observation counts as "not confirmed". The checks apply only to bottle-flip
-// terms; any other bet is judged on the verdict alone.
+// terms, and the camera checks (camera-checks.ts) replace them whenever those run.
 import { z } from 'zod/v4';
 import { VisionVerdict, type ClaimResult } from '@youre-on/shared/ruling';
 import type { Terms } from '@youre-on/shared/terms';
@@ -23,7 +22,7 @@ export const BottleChecks = z.object({
 });
 export type BottleChecks = z.infer<typeof BottleChecks>;
 
-/** The judge call's structured output: SCHEMAS VisionVerdict plus the deterministic checks. */
+/** The judge call's structured output: VisionVerdict plus the deterministic checks. */
 export const JudgeVerdict = VisionVerdict.extend({ checks: BottleChecks });
 export type JudgeVerdict = z.infer<typeof JudgeVerdict>;
 

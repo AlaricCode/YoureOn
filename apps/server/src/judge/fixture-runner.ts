@@ -1,8 +1,11 @@
-// Spoken-bet fixture runner (TASKS D0-J3 DoD: "a valid TermsProposal for 8/8 benign bets and a
-// PG-13 quip refusal with the right RefusalCategory for 4/4 unsafe ones, with ≤ 2 clarifying
-// questions each"). PENDING-KEY: the live run needs ANTHROPIC_API_KEY.
+// Spoken-bet fixture runner: plays each fixture conversation against the live model and grades
+// it. The run passes ("DoD MET") when every non-refusal fixture ends in a valid TermsProposal
+// with the fields the fixture expects, and every refusal fixture in a refusal with the right
+// RefusalCategory, each within its fixture's clarifying-question limits. The live run needs
+// ANTHROPIC_API_KEY.
 //
-//   ALLOW_SPEND=true ANTHROPIC_API_KEY=… npx tsx apps/server/src/judge/fixture-runner.ts [--only=01-bottle-flip] [--model=claude-haiku-5-5]
+//   ALLOW_SPEND=true ANTHROPIC_API_KEY=… npx tsx apps/server/src/judge/fixture-runner.ts \
+//     [--only=01-bottle-flip] [--model=claude-haiku-5-5]
 //
 // Every fixture makes paid Anthropic calls, so it refuses to run (SPEND_DISABLED, exit 2) unless
 // ALLOW_SPEND=true, like every other paid mode (src/providers/spend.ts).
@@ -14,10 +17,9 @@
 // (evaluateProposeTerms + proposeTermsReply). Party lines come from the fixture; each clarifying
 // question (a judge turn ending in "?" without a tool call) gets the next scripted answer.
 //
-// The LLM settings mirror the agent (FINDINGS §3.8): claude-haiku-5-5, AGENT_MAX_TOKENS, no
-// temperature (Claude 5.x rejects non-default sampling), thinking disabled at effort low. This is
-// the Anthropic API, not ElevenLabs' serving of the model, so latency numbers from it are not the
-// voice latency (D1-J2 measures that).
+// The LLM settings mirror the agent: claude-haiku-5-5, AGENT_MAX_TOKENS, no temperature (Claude
+// 5.x rejects non-default sampling), thinking disabled at effort low. This is the Anthropic API,
+// not ElevenLabs' serving of the model, so latency numbers from it are not the voice latency.
 //
 // Deterministic parts (schema conversion, grading, the conversation loop against a scripted
 // client) are unit-tested in apps/server/test/judge-fixture-runner.test.ts.
@@ -57,7 +59,10 @@ export function loadFixtures(dir = FIXTURE_DIR): SpokenBetFixture[] {
     .map((f) => SpokenBetFixture.parse(JSON.parse(readFileSync(join(dir, f), 'utf8'))));
 }
 
-/** ElevenLabs schema subset -> JSON Schema for the Messages API; dynamic-variable fields are dropped (the platform fills them). */
+/**
+ * ElevenLabs schema subset -> JSON Schema for the Messages API; dynamic-variable fields are
+ * dropped (the platform fills them).
+ */
 export function elToJsonSchema(p: ElProperty): Record<string, unknown> {
   switch (p.type) {
     case 'object': {
@@ -242,7 +247,7 @@ export interface Grade {
   reasons: string[];
 }
 
-/** Pure grading of one run against its fixture (the DoD criteria). */
+/** Pure grading of one run against its fixture (the pass criteria in the header). */
 export function gradeFixture(f: SpokenBetFixture, run: FixtureRun): Grade {
   const reasons: string[] = [];
   const q = run.questions.length;

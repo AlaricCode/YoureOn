@@ -1,4 +1,4 @@
-// Which dance offs had BOTH players identified by face (docs/planning/DANCE-OFF.md §3, §5).
+// Which dance offs had BOTH players identified by face.
 //
 // The upload's starting sides come from the series the recording phone sends, so the server
 // cannot tell, from the series alone, a face-identified A standing on the right from a recorder
@@ -13,7 +13,9 @@
 // What it keeps: per bet, the instant of the last both-identified answer. No faces, scores or
 // vectors. In memory (the server is one always-on machine, like the rate limits and the WS
 // fan-out): a restart forgets it, which is the left / right rule, the fail-safe side. A note
-// lives NOTE_TTL_MS, more than a round's framing + attempt + upload.
+// lives DANCE_FACES_NOTE_TTL_MS, more than a round's framing + attempt + upload.
+//
+// Spec: docs/planning/DANCE-OFF.md §3.
 import type { AppDeps } from '../context';
 
 export const DANCE_FACES_NOTE_TTL_MS = 30 * 60_000;
