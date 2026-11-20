@@ -8,7 +8,7 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { declineEnabled, END_COPY, holdEnabled, type LockState } from '../bets/lock';
 import { clockLabel, countdownLabel, type BetView } from '../bets/view';
-import { SwitchOn } from '../ui/brand';
+import { MarkOn } from '../ui/brand';
 import { AlertLine, CheckBadge, Label, PrimaryButton, TextButton } from '../ui/kit';
 import {
   Appear,
@@ -60,8 +60,8 @@ export function TermsCardScreen({
   const mine = lock.phase === 'signed' || lock.phase === 'locking';
 
   if (lock.phase === 'locked') {
-    // The moment: the bet is on, so the switch flips on. Black under a green aurora, the mark
-    // turning on, the word in bold, the pot in bold white (a pot is not money moving up, so
+    // The moment: the bet is on, so the mark comes on. Black under a green aurora, the mark
+    // coming up, the word in bold, the pot in bold white (a pot is not money moving up, so
     // it is not green), "pot" in grey. Headline and pot rise together (the one reveal).
     return (
       <MomentScreen
@@ -69,7 +69,7 @@ export function TermsCardScreen({
         footer={<PrimaryButton label={t(COPY.terms.continue)} onPress={onContinue} />}
       >
         <MomentGroup glow="in" style={styles.moment}>
-          <SwitchOn width={SWITCH} delayMs={SWITCH_DELAY_MS} />
+          <MarkOn width={MARK} delayMs={MARK_DELAY_MS} />
           <MomentHeadline>{t(COPY.terms.locked)}</MomentHeadline>
           <Reveal style={styles.momentMoney}>
             <Text
@@ -325,9 +325,9 @@ const TICK = dp(18);
 const FADE = space.x4;
 /** The cut-out between the signed tick and the avatar (the slip's own colour). */
 const TICK_RING = 2;
-/** The switch on the lock moment, and how long it waits before it flips on. */
-const SWITCH = dp(84);
-const SWITCH_DELAY_MS = 200;
+/** The logo on the lock moment, and how long it waits before it comes on. */
+const MARK = dp(132);
+const MARK_DELAY_MS = 200;
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },

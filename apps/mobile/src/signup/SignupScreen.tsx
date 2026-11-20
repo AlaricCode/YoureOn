@@ -81,7 +81,7 @@ export function SignupScreen({
           {preview ? <Label variant="small">{SIGNUP_COPY.previewTag}</Label> : null}
         </View>
         <View style={styles.body}>
-          {/* The brand switch above the name, decorative only: the title already says it. */}
+          {/* The logo above the name, decorative only: the title already says it. */}
           <View
             style={styles.mark}
             accessibilityElementsHidden
@@ -140,8 +140,8 @@ export function SignupScreen({
   );
 }
 
-/** The switch mark at the top of the first screen: small, so the title stays the hero. */
-const MARK_WIDTH = space.x7;
+/** The logo at the top of the first screen: smaller than the title, which stays the hero. */
+const MARK_WIDTH = space.x7 * 2;
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
