@@ -1004,7 +1004,10 @@ export class LockService {
       const bet = await lockBet(tx, betId);
       if (!bet) throw new HttpError('NOT_FOUND');
       if (bet.state === 'CANCELLED' && bet.end_reason === 'declined') return null; // idempotent
-      if (!['TERMS_PROPOSED', 'AWAITING_AUTHORIZATIONS'].includes(bet.state))
+      // DRAFTING too: the challenger's "Back out" before any terms exist. Without it A's phone
+      // could only leave the screen, and the bet stayed open on B's phone and refused a new
+      // challenge between the two (pair_busy) until the draft idled out. B has invite/decline.
+      if (!['DRAFTING', 'TERMS_PROPOSED', 'AWAITING_AUTHORIZATIONS'].includes(bet.state))
         throw new HttpError('INVALID_STATE', undefined, { state: bet.state });
       const row = await this.currentLock(tx, betId, true);
       if (row && !['built', 'signed', 'failed', 'revoked'].includes(row.status))

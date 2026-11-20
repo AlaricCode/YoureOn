@@ -419,6 +419,67 @@ run('chain lifecycle over LiteSVM (lock -> resolve -> payout)', () => {
     expect(await onchainBet(betId)).toBeNull(); // nothing ever went onchain
   });
 
+  it('either party backs out of a draft: the bet ends for both and the pair is free again', async () => {
+    const room = await signed(A, 'POST', '/v1/rooms', { name: 'Back out', kind: 'session' });
+    expect((await signed(B, 'POST', '/v1/rooms/join', { code: room.json!.code })).status).toBe(200);
+    const challenge = () =>
+      signed(A, 'POST', '/v1/bets', {
+        room_id: room.json!.room_id,
+        opponent_user_id: B.session.user.user_id,
+        challenge_method: 'list',
+      });
+    const first = await challenge();
+    expect(first.status).toBe(201);
+    const betId = first.json!.bet.bet_id as string;
+    expect(await betRow(betId)).toMatchObject({ state: 'DRAFTING' });
+    // While it is open the pair cannot start another.
+    const busy = await challenge();
+    expect(busy.status).toBe(409);
+    // A, the challenger, backs out before any terms exist (B's own way out is invite/decline).
+    const notMine = await signed(A, 'POST', `/v1/bets/${betId}/lock/decline`, {
+      bet_id: betId,
+      party: 'B',
+      lock_request_id: null,
+      declined_at: new Date(now()).toISOString(),
+    });
+    expect(notMine.json!.error.code).toBe('NOT_A_PARTY');
+    const out = await signed(A, 'POST', `/v1/bets/${betId}/lock/decline`, {
+      bet_id: betId,
+      party: 'A',
+      lock_request_id: null,
+      declined_at: new Date(now()).toISOString(),
+    });
+    expect(out.status).toBe(200);
+    await lc.idle();
+    expect(await betRow(betId)).toMatchObject({ state: 'CANCELLED', end_reason: 'declined' });
+    // Both phones are told who backed out, and nothing was ever on chain.
+    const log = await get(B, `/v1/bets/${betId}/events`);
+    const types = (log.json!.events as { type: string; payload: Record<string, unknown> }[]).map(
+      (e) => e.type,
+    );
+    expect(types).toContain('terms.declined');
+    expect(
+      (log.json!.events as { type: string; payload: Record<string, unknown> }[]).find(
+        (e) => e.type === 'terms.declined',
+      )!.payload,
+    ).toMatchObject({ party: 'A' });
+    expect(await onchainBet(betId)).toBeNull();
+    // A second back-out is a no-op, and the two can bet again straight away.
+    const again = await signed(A, 'POST', `/v1/bets/${betId}/lock/decline`, {
+      bet_id: betId,
+      party: 'A',
+      lock_request_id: null,
+      declined_at: new Date(now()).toISOString(),
+    });
+    expect(again.status).toBe(200);
+    const next = await challenge();
+    expect(next.status).toBe(201);
+    // tidy: B backs out of that one their own way
+    const nextId = next.json!.bet.bet_id as string;
+    expect((await signed(B, 'POST', `/v1/bets/${nextId}/invite/decline`, {})).status).toBe(200);
+    expect(await betRow(nextId)).toMatchObject({ state: 'CANCELLED', end_reason: 'declined' });
+  });
+
   it('resolve (judge + fee payer) -> RULED; the loser GGs on the phone -> concede+close -> PAID', async () => {
     const { betId } = await lockedBetPhones();
     const row = await betRow(betId);
