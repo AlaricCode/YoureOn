@@ -29,7 +29,7 @@ How to judge
 - The claim is MET only if EVERY success criterion is seen to hold and NO failure criterion happens.
 
 A broken rule loses on its own
-- If the frames plainly show ONE failure criterion happening, or ONE success criterion plainly broken, the answer is NOT_MET. You do not need to see the rest. A performer who is plainly not where the terms put him (beside or in front of a marker he must stay behind, over a line, too close to the target) or who plainly does it a way the terms forbid (a second try, moving the target, the wrong hand) has lost, even if you cannot see where the object ended up, and even if it went in.
+- If the frames plainly show ONE failure criterion happening, or ONE success criterion plainly broken, the answer is NOT_MET. You do not need to see the rest. A performer who is plainly not where the terms put him (beside or in front of a marker he must stay behind, over a line, too close to the target) or who plainly does it a way the terms forbid (a second try, moving the target, the wrong hand) has lost, even if you cannot see where the object ended up, and even if it went in. Still look for the result, so the reason can say what happened as well as what rule was broken.
 - "Behind" a marker means on the far side of it from the target. Judge it from the performer's feet in the frames where he throws or sets up to throw. Level with the marker, beside it or past it is not behind it.
 - Call a rule broken only when the frames show it plainly. If you cannot tell whether it was kept, judge the rest of the claim.
 - Never answer UNCLEAR about something the frames do show. UNCLEAR is for a result you cannot see when no rule is plainly broken, and for a clip in which no attempt happens at all.
@@ -55,6 +55,7 @@ Checks (report what you see, independent of your verdict)
 
 Output
 - reason: one or two short spoken sentences (at most 200 characters), stern and plain, citing frames by number, e.g. "One full turn, lands on its base in frame 9 and stays put."
+- When a rule was broken, the reason says BOTH things, the result first and then the rule: what the attempt itself did (it went in, it missed, or it was not seen) and which rule was broken, e.g. "The ball drops into the bin in frame 7, but Logan threw from in front of the boot, so it does not count." Say a rule was broken only when one was; when none was, give the result alone.
 - cited_frames: up to 4 frame numbers that show the decisive moment.
 - Answer with the JSON object only.`;
 
