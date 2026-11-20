@@ -97,13 +97,7 @@ import {
   warmForAttempt,
   type CheckRun,
 } from './camera-checks';
-import {
-  applyThrowOutcome,
-  buildRuling,
-  judgeFrames,
-  rulingCanonical,
-  type Judged,
-} from './ruling';
+import { buildRuling, decideThrow, judgeFrames, rulingCanonical, type Judged } from './ruling';
 import {
   DevicePatchRequest,
   StartAttemptRequest,
@@ -479,17 +473,14 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
     const checks = await checksP;
     let veto: Parameters<typeof storeAttemptChecks>[1]['veto'] = null;
     // A throw at a target: the object tracker decides whether it went in, and the vision judge
-    // is the cheat detector (ruling.ts applyThrowOutcome). When the track cannot say, the vision
-    // verdict stands. The frame-by-frame veto is not applied to a throw: it does not use the
-    // tracks, so it cannot tell the ball from anything else small and white in the room.
+    // is the cheat detector (ruling.ts decideThrow). The vision judge NEVER decides whether it
+    // went in: when the track cannot say, it is a retake (or a loss, if a rule was seen broken).
+    // The frame-by-frame veto is not applied to a throw: it does not use the tracks, so it
+    // cannot tell the ball from anything else small and white in the room.
     const thrown = checks?.thrown;
-    if (thrown && thrown.outcome.call !== 'unknown') {
-      judged = applyThrowOutcome(
-        judged,
-        { ...thrown.outcome, call: thrown.outcome.call },
-        thrown.labels,
-      );
-    } else if (checks && !thrown) {
+    if (thrown) {
+      judged = decideThrow(judged, thrown.outcome, thrown.labels);
+    } else if (checks) {
       ({ judged, veto } = applyCameraVeto(judged, checks, job.terms.yes_party));
     }
     const now = deps.now();

@@ -62,7 +62,7 @@ Output
 - reason: one or two short spoken sentences (at most 200 characters), stern and plain, citing frames by number, e.g. "One full turn, lands on its base in frame 9 and stays put."
 - When a rule was broken, the reason says BOTH things, the result first and then the rule: what the attempt itself did (it went in, it missed, or it was not seen) and which rule was broken, e.g. "The ball drops into the bin in frame 7, but Logan threw from in front of the boot, so it does not count." Say a rule was broken only when one was; when none was, give the result alone.
 - cited_frames: up to 4 frame numbers that show the decisive moment.
-- rule_broken: true only when the frames plainly show a rule of the terms being broken (where the performer stands, how he does it). False otherwise, and false when you cannot tell. It is about the rules alone, whatever the result was.
+- rule_broken: true when the frames show a rule of the terms being broken (where the performer stands, how he does it); false when it was kept or cannot be checked. It is about the rules alone, whatever the result was. For a marker he must stay behind: look at his feet in the frame where the object leaves his hand. A foot level with the marker, beside it on the target's side, or nearer the target than the marker is a broken rule: say true. "Close to the line" is not an answer; it is either behind it (false) or not (true).
 - rule_note: when rule_broken is true, one short plain sentence naming the rule and what he did, e.g. "Logan stepped past the boot before he threw." Otherwise an empty string.
 - Answer with the JSON object only.`;
 
