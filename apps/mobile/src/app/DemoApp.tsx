@@ -210,6 +210,7 @@ import {
   canConfirm,
   canSubmit,
   confirmTypedTerms,
+  DEFAULT_STAKE_USD,
   initialTyped,
   submitTypedTerms,
   TYPED_STAKES_USD,
@@ -234,7 +235,7 @@ import {
   type HeldUtterance,
   type LoopState,
 } from './wakeGate';
-import { danceEventsFor, danceRequest, type DanceRequest } from './wakeDance';
+import { danceEventsFor, danceRequest, saidStakeUsd, type DanceRequest } from './wakeDance';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 import { CallOffLayer } from '../screens/CallOff';
 import { callOffOnRoute, callOffWithdrawDue, type CallOffGuard } from './callOff';
@@ -246,8 +247,14 @@ const LAST_ROOM_KEY = 'youreon.room.v1';
  * back after a restart, or re-sends a turn-off the server never confirmed.
  */
 const JUDGE_CAM_KEY = 'youreon.judgecam.v1';
-/** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
-const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
+/**
+ * The live voice judge is OFF unless a build asks for it (EXPO_PUBLIC_VOICE=on; the EAS profiles
+ * say which they want). Logan had it disabled on 2026-11-20: no AI voice, and "Jarvis, …" should
+ * just start the bet instead of answering "Objection noted." Without it nothing is spoken and no
+ * ElevenLabs session is ever opened: what is said after "Jarvis" is sent as the bet's terms
+ * (sayBet below), and the server writes them out (terms/structure).
+ */
+const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE === 'on';
 /**
  * EXPO_PUBLIC_LOBBY=off: no shared lobby (./lobby); home opens on the room-code entry, as before.
  * On, every phone joins the one live lobby room by itself and a code is the "Private room" option.
@@ -278,10 +285,11 @@ const loadDanceFaceEmbedder = () =>
 /** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
 const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
 /**
- * EXPO_PUBLIC_WAKE=off turns "Jarvis" off (./wakeGate): A's judge then starts on the negotiate
- * screen by itself, as before. It needs the voice judge (EXPO_PUBLIC_VOICE) to have anyone to hear.
+ * EXPO_PUBLIC_WAKE=off turns "Jarvis" off (./wakeGate). With the voice judge on, what is said
+ * goes to the judge (who then waits for "Jarvis" or a tap instead of starting by itself); with
+ * it off, what is said becomes the bet's terms directly.
  */
-const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
+const WAKE_ENABLED = process.env.EXPO_PUBLIC_WAKE !== 'off';
 /**
  * The Dance Off screens (../dance) pull the pose camera's native view: loaded on first use and
  * through importSafely, like the voice SDK, so a build without it never fails at launch.
@@ -459,6 +467,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
    * panel, applied once that bet's panel exists (the init effect below).
    */
   const saidDance = useRef<{ betId: string; req: DanceRequest } | null>(null);
+  /**
+   * "Jarvis, <the bet>" on Home with no voice judge: the challenge it started gets the sentence
+   * as its terms, sent once that bet's form exists (the typed init effect below).
+   */
+  const saidBet = useRef<{ betId: string; text: string } | null>(null);
   /** The rainbow loop. */
   const [loop, loopDispatch] = useReducer(loopReducer, 'off' as LoopState);
 
@@ -844,6 +857,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       shown: typedCardOf(bet.envelope),
       stakeUsd: rematchStake,
     });
+    // Said on Home: this bet starts with it.
+    const said = saidBet.current;
+    if (said?.betId === bet.bet_id) {
+      saidBet.current = null;
+      void sayBet(bet.bet_id, said.text);
+    }
   }, [negotiating, bet?.bet_id, opponentName, typedForced, rematchStake]);
   // ---- odds (both phones): offers, counters, the judge's suggestion (../odds/useOdds) --------
   const oddsTheirName =
@@ -1144,6 +1163,34 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }, [homeNote]);
 
   // ---- actions -----------------------------------------------------------------------------
+  /**
+   * "Jarvis, <the bet>" with no voice judge: the sentence goes out as the bet's terms at once,
+   * with the stake that was said (else the form's). The server writes the claim, who performs
+   * and what the camera must see (terms/structure); the card comes back like any typed one, and
+   * a refusal or an error lands in the form as its note, the sentence still there to edit.
+   */
+  const sayBet = async (betId: string, text: string) => {
+    const claim = text.replace(/\s+/g, ' ').trim();
+    if (claim === '') return;
+    const stakeUsd =
+      saidStakeUsd(text, TYPED_STAKES_USD) ?? typedStakeFor(rematchStake) ?? DEFAULT_STAKE_USD;
+    typedDispatch({ type: 'open' });
+    typedDispatch({ type: 'claim', text: claim });
+    typedDispatch({ type: 'stake', usd: stakeUsd });
+    typedDispatch({ type: 'submit' });
+    const outcome = await submitTypedTerms(
+      { api: rt.api },
+      {
+        betId,
+        claim,
+        stakeUsd,
+        bName: rt.hub.get(betId)?.party_b?.display_name ?? opponentName,
+      },
+    );
+    typedDispatch({ type: 'submitted', outcome });
+    if (outcome.kind !== 'proposed') feel('failed');
+  };
+
   /** The Dance Off a sentence asked for (./wakeDance), or null: then it is the judge's to hear. */
   const danceAsked = (text: string): DanceRequest | null =>
     DANCE_ENABLED ? danceRequest(text, DANCE_ROUTINE_CHOICES, DANCE_STAKES_USD) : null;
@@ -1170,7 +1217,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     heldWake.current = null;
     const saidDanceOff = held !== null ? danceAsked(held) : null;
     if (saidDanceOff) saidDance.current = { betId: r.bet.bet_id, req: saidDanceOff };
-    else if (held !== null && WAKE_ENABLED) armJudge(r.bet.bet_id, held);
+    else if (held !== null && WAKE_ENABLED) {
+      if (VOICE_ENABLED) armJudge(r.bet.bet_id, held);
+      // No voice judge: the sentence is the bet. Nothing said ("Jarvis" alone): the form waits.
+      else if (held.trim() !== '') saidBet.current = { betId: r.bet.bet_id, text: held };
+    }
     rt.hub.adopt(r.bet);
     rt.ws.subscribe(r.bet.bet_id);
     dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
@@ -1755,10 +1806,24 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         ? null
         : bet.bet_id
       : null;
+  // No voice judge: A's form, nothing sent yet and no panel over it, takes a spoken sentence.
+  const sayPendingBet =
+    !VOICE_ENABLED &&
+    negotiating &&
+    bet !== null &&
+    typed.bet_id === bet.bet_id &&
+    typed.mode === 'typed' &&
+    typed.phase === 'editing' &&
+    !(market.bet_id === bet.bet_id && market.phase !== 'closed') &&
+    !(dance.bet_id === bet.bet_id && danceOpen(dance))
+      ? bet.bet_id
+      : null;
   const routeRef = useRef(route);
   routeRef.current = route;
   const pendingRef = useRef(judgePendingBet);
   pendingRef.current = judgePendingBet;
+  const sayPendingRef = useRef(sayPendingBet);
+  sayPendingRef.current = sayPendingBet;
 
   const wake = useWakeWord({
     enabled: wakeListening({
@@ -1767,7 +1832,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       judgeCam: app.judgeCam,
       route,
       inRoom: app.room !== null,
-      judgePending: judgePendingBet !== null,
+      judgePending: judgePendingBet !== null || sayPendingBet !== null,
       judgeBusy: judgeUp || !judgeReleased,
     }),
     onWake: () => {
@@ -1791,6 +1856,14 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         return;
       }
       loopDispatch({ type: 'utterance', toJudge: false });
+      // No voice judge, on A's form: a dance off opens its panel, anything else is the bet.
+      const sayPending = sayPendingRef.current;
+      if (routeRef.current === 'negotiate' && sayPending) {
+        const asked = danceAsked(text);
+        if (asked) for (const e of danceEventsFor(asked)) danceDispatch(e);
+        else void sayBet(sayPending, text);
+        return;
+      }
       if (routeRef.current !== 'home') return;
       const a = appRef.current;
       const opponents = a.members
