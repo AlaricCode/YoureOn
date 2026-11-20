@@ -337,10 +337,11 @@ export interface CheckRun {
    */
   spec: CheckSpec;
   /**
-   * A throw at a target: what the object's track says (shared checks/throw), with the compiler's
-   * own names for the two things. undefined: not a throw, or no usable SAM reply.
+   * A throw at a target: what the object's track says (shared checks/throw; null when there was
+   * no usable SAM reply), with the compiler's own names for the two things. undefined: not a
+   * throw.
    */
-  thrown?: { outcome: ThrowOutcome; labels: { object: string; target: string } } | undefined;
+  thrown?: { outcome: ThrowOutcome | null; labels: { object: string; target: string } } | undefined;
   report: CheckReport;
   report_hash: string;
   /** null when no SAM call was made. */
@@ -416,28 +417,27 @@ export async function runAttemptChecks(
       sam_ms: samMs,
     });
     let thrown: CheckRun['thrown'];
-    if (asked && reply) {
+    if (asked) {
+      const nameOf = (key: string) => compiled.entities.find((e) => e.key === key)?.prompt ?? key;
+      const labels = { object: nameOf(asked.object), target: nameOf(asked.target) };
       const promptOf = (key: string) => spec.entities.find((e) => e.key === key)?.prompt;
       const framesOf = (key: string) =>
         reply?.results.find((r) => r.prompt === promptOf(key))?.frames;
       const object = framesOf(asked.object);
       const target = framesOf(asked.target);
-      if (object && target) {
-        const outcome = throwOutcome({ object, target, n: input.frames.length });
-        const nameOf = (key: string) => compiled.entities.find((e) => e.key === key)?.prompt ?? key;
-        thrown = {
-          outcome,
-          labels: { object: nameOf(asked.object), target: nameOf(asked.target) },
-        };
-        deps.log.info('checks.throw', {
-          bet_id: input.bet_id,
-          attempt_no: input.attempt_no,
-          call: outcome.call,
-          why: outcome.why,
-          last_seen: outcome.last_seen,
-          frames: outcome.frames,
-        });
-      }
+      // No usable reply (SAM late or down): outcome null, and the vision judge's own reading of
+      // the throw is the result (ruling.ts decideThrow).
+      const outcome =
+        object && target ? throwOutcome({ object, target, n: input.frames.length }) : null;
+      thrown = { outcome, labels };
+      deps.log.info('checks.throw', {
+        bet_id: input.bet_id,
+        attempt_no: input.attempt_no,
+        call: outcome?.call ?? 'no_reply',
+        why: outcome?.why ?? null,
+        last_seen: outcome?.last_seen ?? null,
+        frames: outcome?.frames ?? [],
+      });
     }
     return { spec, report, report_hash: hashJcs(report), sam_ms: samMs, reply, thrown };
   } catch (e) {
