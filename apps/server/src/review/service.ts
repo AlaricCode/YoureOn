@@ -175,6 +175,10 @@ export class ReviewService {
     if (b.state === 'CONCEDED' || (b.state === 'PAID' && b.payout_via === 'concede'))
       return 'GG_CALLED';
     if (b.state === 'APPEALED' || b.state === 'APPEAL_RESOLVED') return 'WITH_PANEL';
+    // Cancelled or expired: the bet ended with no winner (nothing moved, or both stakes came
+    // back), so there is nobody to review for. Both sort after RULED in the enum, so the order
+    // check above misses them.
+    if (b.state === 'CANCELLED' || b.state === 'EXPIRED') return 'NO_LOSER';
     return 'FINAL';
   }
 

@@ -263,6 +263,17 @@ run('review requests + the GG record (Postgres)', () => {
       ['panel decided', { state: 'APPEAL_RESOLVED' }, 'WITH_PANEL'],
       ['a void ruling', { outcome: 'refund' }, 'NO_LOSER'],
       ['a split', { outcome: 'split' }, 'NO_LOSER'],
+      // Ended with no ruling: never "The ruling is final." (both states sort after RULED).
+      [
+        'cancelled before any ruling',
+        { state: 'CANCELLED', outcome: null, extra: { end_reason: 'declined' } },
+        'NO_LOSER',
+      ],
+      [
+        'expired without a ruling',
+        { state: 'EXPIRED', outcome: null, extra: { end_reason: 'resolve_timeout' } },
+        'NO_LOSER',
+      ],
     ];
     for (const [why, o, fix] of cases) {
       const id = await bet(o);
