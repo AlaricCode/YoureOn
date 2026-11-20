@@ -27,7 +27,15 @@
 // and when the text gets long, and a task ended that way reports its text as final while the user
 // may still be mid-sentence. A final that arrives after a pause (finalQuietMs) is the recognizer
 // endpointing the sentence itself, and ends the capture without waiting for endSilenceMs.
-import { cleanTail, isStubTail, normalizeTranscript, splitAfterWake } from './phrase';
+import { cleanTail, isStubTail, normalizeTranscript, splitAfterWake, tokenize } from './phrase';
+
+/** `text` from its (n+1)th word on ('' when it has no more than n words). */
+function afterWords(text: string, n: number): string {
+  if (n <= 0) return text;
+  const words = tokenize(text).filter((t) => t.key !== '');
+  const next = words[n];
+  return next ? text.slice(next.start) : '';
+}
 
 export interface WakeTiming {
   /** The tail is complete once it has not changed for this long. */
@@ -73,6 +81,12 @@ export interface ResetOptions {
 }
 
 export interface WakeDetector {
+  /**
+   * "Tap to talk": start a capture now, without the wake word. What is said from here on is the
+   * challenge (the words the running task had already heard are skipped). Reports {type:'wake'}
+   * like the wake word does; a no-op unless idle.
+   */
+  arm(nowMs: number): WakeEvent[];
   feed(t: TranscriptInput, nowMs: number): WakeEvent[];
   tick(nowMs: number): WakeEvent[];
   reset(opts?: ResetOptions): void;
@@ -114,6 +128,10 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
   let lastChangeAt = 0;
   let lastKey = ''; // normalized committed + current, for change detection
   let lastSeenKey = ''; // normalized raw text of the latest transcript (wake revised away)
+  // arm(): the task that was running at the tap, and how many of its words came before it.
+  let idleKey = ''; // normalized text of the latest transcript seen while idle
+  let idleSegment = -Infinity;
+  let armed: { segment: number; skipWords: number } | null = null;
 
   const combined = () => join(committed, current);
 
@@ -179,6 +197,8 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
       const out: WakeEvent[] = [];
 
       if (phase === 'idle') {
+        idleKey = normalizeTranscript(text);
+        idleSegment = segment;
         if (!split.found) return [];
         startCapture(segment, split.tail, nowMs);
         lastSeenKey = normalizeTranscript(text);
@@ -198,6 +218,11 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
           committed = '';
           current = split.tail;
           wakeSegment = segment;
+          armed = null;
+        } else if (armed && segment === armed.segment) {
+          // Tap to talk: this task was already running, so its text starts with what it heard
+          // before the tap. The challenge is what follows those words.
+          current = cleanTail(afterWords(text, armed.skipWords));
         } else if (segment !== wakeSegment) {
           // A later task: its whole text continues the challenge.
           current = cleanTail(text);
@@ -228,12 +253,27 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
       return evaluate(nowMs);
     },
 
+    arm(nowMs) {
+      if (phase !== 'idle') return [];
+      const segment = Number.isFinite(lastSegment) ? lastSegment : 0;
+      startCapture(segment, '', nowMs);
+      armed = {
+        segment,
+        skipWords: idleSegment === segment && idleKey !== '' ? idleKey.split(' ').length : 0,
+      };
+      lastSeenKey = idleKey;
+      return [{ type: 'wake' }];
+    },
+
     reset(opts = {}) {
       phase = 'idle';
       committed = '';
       current = '';
       lastKey = '';
       lastSeenKey = '';
+      idleKey = '';
+      idleSegment = -Infinity;
+      armed = null;
       if (opts.skipThroughSegment !== undefined) {
         skipThrough = opts.skipThroughSegment;
       } else {

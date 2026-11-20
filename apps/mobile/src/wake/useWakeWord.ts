@@ -50,6 +50,8 @@ export interface WakeWordState {
   available: boolean;
   /** Listen again after 'heard' or 'error'. */
   resume(): void;
+  /** "Tap to talk": capture a sentence now, without the wake word. */
+  capture(): void;
 }
 
 /**
@@ -121,6 +123,7 @@ export function useWakeWord(options: UseWakeWordOptions): WakeWordState {
   }, [enabled]);
 
   const resume = useCallback(() => controller.current?.resume(), []);
+  const capture = useCallback(() => controller.current?.captureNow(), []);
 
-  return { status, available, resume };
+  return { status, available, resume, capture };
 }

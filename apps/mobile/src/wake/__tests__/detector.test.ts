@@ -293,4 +293,56 @@ describe('wake detector', () => {
       }
     });
   });
+
+  // "Tap to talk" with no voice judge: the tap starts the capture, no wake word needed.
+  describe('arm (tap to talk)', () => {
+    it('captures what is said after the tap, skipping what the task had heard before it', () => {
+      const d = createWakeDetector();
+      expect(d.feed(T('so anyway we were talking'), 0)).toEqual([]);
+      expect(d.arm(1000)).toEqual([{ type: 'wake' }]);
+      expect(d.phase).toBe('capturing');
+      expect(d.partial).toBe('');
+      // the running task's text still starts with the old words
+      expect(d.feed(T('so anyway we were talking I bet'), 1400)).toEqual([]);
+      expect(d.feed(T('so anyway we were talking I bet Mo misses'), 1800)).toEqual([]);
+      expect(d.partial).toBe('I bet Mo misses');
+      expect(d.tick(3000)).toEqual([]);
+      expect(d.tick(3200)).toEqual(utterance('I bet Mo misses', 'silence'));
+    });
+
+    it('works before anything was heard, and across a new recognition task', () => {
+      const d = createWakeDetector();
+      expect(d.arm(0)).toEqual([{ type: 'wake' }]);
+      expect(d.feed(T('I bet Mo'), 300)).toEqual([]);
+      expect(d.feed(T("can't do ten", 1), 800)).toEqual([]);
+      expect(d.tick(2200)).toEqual(utterance("I bet Mo can't do ten", 'silence'));
+    });
+
+    it('is nothing said when nobody speaks after the tap', () => {
+      const d = createWakeDetector();
+      d.feed(T('background chatter'), 0);
+      d.arm(500);
+      expect(d.feed(T('background chatter'), 900)).toEqual([]);
+      expect(d.tick(4400)).toEqual([]);
+      expect(d.tick(4600)).toEqual(utterance('', 'no_tail'));
+    });
+
+    it('still takes "Jarvis, ..." said after the tap as the start of the challenge', () => {
+      const d = createWakeDetector();
+      d.feed(T('hello there'), 0);
+      d.arm(500);
+      expect(d.feed(T('hello there Jarvis I bet Mo misses'), 1200)).toEqual([]);
+      expect(d.partial).toBe('I bet Mo misses');
+    });
+
+    it('does nothing while a capture is already running or after it is done', () => {
+      const d = createWakeDetector();
+      d.feed(T('Jarvis go'), 0);
+      expect(d.arm(100)).toEqual([]);
+      expect(d.partial).toBe('go');
+      d.tick(5000);
+      expect(d.phase).toBe('done');
+      expect(d.arm(6000)).toEqual([]);
+    });
+  });
 });
