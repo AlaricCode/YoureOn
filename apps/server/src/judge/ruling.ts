@@ -57,8 +57,8 @@ export type Judged =
       veto?: { kind: VetoKind; why: string } | null;
       /** The vision judge's rule finding (JudgeVerdict.rule_broken / rule_note), when it gave one. */
       rule?: { broken: boolean; note: string } | null;
-      /** The object tracker decided the result (applyThrowOutcome): how, for the audit. */
-      thrown?: { call: 'in' | 'out'; why: string } | null;
+      /** A throw ruled by the tracker (decideThrow): what its track said, and why. */
+      thrown?: { call: 'in' | 'out' | 'unknown'; why: string } | null;
     }
   | { kind: 'failure'; model: string; status: string; message: string };
 
@@ -204,56 +204,97 @@ function withChecks(terms: JudgeTerms, model: string, v: JudgeVerdict): Judged {
 export const THROW_MODEL = 'sam3.1/throw-track@1';
 
 /**
- * A throw at a target, decided by the object tracker (SAM 3.1 followed the object: shared
- * checks/throw). The tracker says whether it went in; the vision judge is the cheat detector.
+ * A throw at a target is ruled from two indicators, and the reason is written from them here
+ * (never free text from a model):
  *
- *   in  + no rule broken -> MET        "It went in."
- *   in  + a rule broken  -> NOT_MET    "It went in, but <the rule>, so it does not count."
- *   out                  -> NOT_MET    "It missed." (and the rule too, when one was broken)
+ *   did it go in?        ONLY the object tracker (SAM 3.1 followed the object: shared
+ *                        checks/throw). The vision judge is never asked and never decides this.
+ *   was a rule broken?   the vision judge's `rule_broken` (+ `rule_note`, the one sentence)
  *
- * `unknown` never comes here: the vision judge's own verdict stands then. A vision call that
- * failed has no rule finding, so the track alone decides (nothing was seen broken).
+ *   in  + no rule broken -> MET        "The paper ball went in. No rule was broken."
+ *   in  + a rule broken  -> NOT_MET    "The paper ball went in, but <the rule>, so it does not count."
+ *   out                  -> NOT_MET    "The paper ball missed the bin." (+ the rule, when broken)
+ *
+ * The tracker cannot say (it lost the object, or there was no reply):
+ *   a rule broken        -> NOT_MET    "<the rule>, so it does not count." (a broken rule loses
+ *                                      on its own, wherever the object went)
+ *   otherwise            -> UNCLEAR    a retake: "The tracker could not follow the paper ball to
+ *                                      the bin. Run it back."
  */
-export function applyThrowOutcome(
+export function decideThrow(
   judged: Judged,
-  t: { call: 'in' | 'out'; why: string; frames: number[]; last_seen: number | null },
+  track: {
+    call: 'in' | 'out' | 'unknown';
+    why: string;
+    frames: number[];
+    last_seen: number | null;
+  } | null,
   labels: { object: string; target: string },
 ): Judged {
   const rule = judged.kind === 'verdict' ? (judged.rule ?? null) : null;
   const broken = rule?.broken === true;
   const note = (rule?.note || 'a rule of the bet was broken').replace(/[.!\s]+$/, '');
-  const at = t.last_seen === null ? '' : ` in frame ${t.last_seen}`;
   const obj = labels.object;
   const tgt = labels.target;
+  const model = judged.kind === 'verdict' ? judged.model : THROW_MODEL;
+  const base = { kind: 'verdict' as const, model, disagreement: null, veto: null, rule };
+
+  if (track === null || track.call === 'unknown') {
+    const why = track?.why ?? 'no_reply';
+    if (broken) {
+      return {
+        ...base,
+        verdict: {
+          claim_result: 'NOT_MET',
+          confidence: 0.85,
+          reason: `${upperFirst(note)}, so it does not count.`.slice(0, 280),
+          cited_frames: judged.kind === 'verdict' ? judged.verdict.cited_frames.slice(0, 4) : [],
+          contested: false,
+        },
+        thrown: { call: 'unknown', why },
+      };
+    }
+    return {
+      ...base,
+      verdict: {
+        claim_result: 'UNCLEAR',
+        confidence: 0.5,
+        reason: `The tracker could not follow the ${obj} to the ${tgt}. Run it back.`,
+        cited_frames: [],
+        contested: false,
+      },
+      thrown: { call: 'unknown', why },
+    };
+  }
+
+  const how = track.last_seen !== null ? ` (tracked to frame ${track.last_seen})` : '';
   let reason: string;
   let claim: 'MET' | 'NOT_MET';
-  if (t.call === 'in') {
+  if (track.call === 'in') {
     claim = broken ? 'NOT_MET' : 'MET';
     reason = broken
-      ? `The ${obj} went in, tracked to the ${tgt}'s rim${at}. But ${lowerFirst(note)}, so it does not count.`
-      : `The ${obj} went in: tracked from the throw to the ${tgt}'s rim${at}, and it is in no frame after.`;
+      ? `The ${obj} went in${how}, but ${lowerFirst(note)}, so it does not count.`
+      : `The ${obj} went in${how}. No rule was broken.`;
   } else {
     claim = 'NOT_MET';
     reason = broken
-      ? `The ${obj} missed: tracked to the floor outside the ${tgt}${at}. Also, ${lowerFirst(note)}.`
-      : `The ${obj} missed: tracked to the floor outside the ${tgt}, still there${at}.`;
+      ? `The ${obj} missed the ${tgt}${how}. Also, ${lowerFirst(note)}.`
+      : `The ${obj} missed the ${tgt}${how}. No rule was broken.`;
   }
   return {
-    kind: 'verdict',
-    model: judged.kind === 'verdict' ? judged.model : THROW_MODEL,
+    ...base,
     verdict: {
       claim_result: claim,
       confidence: 0.92,
       reason: reason.slice(0, 280),
-      cited_frames: t.frames.slice(-4),
+      cited_frames: track.frames.slice(-4),
       contested: false,
     },
-    disagreement: null,
-    veto: null,
-    rule,
-    thrown: { call: t.call, why: t.why },
+    thrown: { call: track.call, why: track.why },
   };
 }
+
+const upperFirst = (s: string): string => (s ? s[0]!.toUpperCase() + s.slice(1) : s);
 
 /** "Logan stepped…" stays (a name); "He stepped…" becomes "he stepped…" after "But". */
 function lowerFirst(s: string): string {
