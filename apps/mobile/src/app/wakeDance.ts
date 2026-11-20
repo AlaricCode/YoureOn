@@ -111,13 +111,42 @@ export function danceRequest(
   stakes: readonly number[],
 ): DanceRequest | null {
   const normal = normalizeTranscript(text);
-  if (!ASKS.some((re) => re.test(normal))) return null;
   const words = normal.split(' ');
+  const routineId = saidRoutine(words, routines);
+  if (!ASKS.some((re) => re.test(normal)) && !looseAsk(words, routineId !== null)) return null;
   const dollars = saidDollars(text, words);
   return {
-    routineId: saidRoutine(words, routines),
+    routineId,
     stakeUsd: dollars !== null && stakes.includes(dollars) ? dollars : null,
   };
+}
+
+/** "dance", "dances", "dancing": the word, in any form. */
+const DANCE_WORD = /^danc(?:e|es|ed|ing|er|ers)$/;
+/** A contest named anywhere in the sentence ("challenge" and "off" are too common to count). */
+const CONTEST_WORDS: ReadonlySet<string> = new Set([
+  'battle',
+  'battles',
+  'competition',
+  'contest',
+  'duel',
+  'showdown',
+]);
+
+/**
+ * The same request said loosely, as speech recognition hands it over. Seen on an iPad: "a dance
+ * to bye bye bye for one dollar" and "a battle to bye bye bye for one dollar" both became
+ * ordinary camera bets, because "dance" and "battle" were not side by side. A Dance Off is asked
+ * for when the sentence
+ *   - says dance and names a routine ("do a dance to bye bye bye"), or
+ *   - says dance and names a contest anywhere ("a battle, a dance one"), or
+ *   - names a contest and a routine ("a battle to bye bye bye").
+ * "Bet you can't dance on the table" still is not one: no routine, no contest.
+ */
+function looseAsk(words: readonly string[], routineSaid: boolean): boolean {
+  const dance = words.some((w) => DANCE_WORD.test(w));
+  const contest = words.some((w) => CONTEST_WORDS.has(w));
+  return (dance && (routineSaid || contest)) || (contest && routineSaid);
 }
 
 /** The Dance off panel's events for a request: open it, then pick what was said. */
