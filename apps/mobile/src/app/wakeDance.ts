@@ -48,6 +48,15 @@ const NUMBER_WORDS: Readonly<Record<string, number>> = {
 };
 const MONEY_UNITS: ReadonlySet<string> = new Set(['dollar', 'dollars', 'buck', 'bucks']);
 
+/**
+ * The stake said in a sentence, when it is one the form offers ("for five bucks" with chips
+ * 1 / 5 / 10 / 20 is 5), else null: then the form's own stake stands.
+ */
+export function saidStakeUsd(text: string, stakes: readonly number[]): number | null {
+  const dollars = saidDollars(text, normalizeTranscript(text).split(' '));
+  return dollars !== null && stakes.includes(dollars) ? dollars : null;
+}
+
 /** The dollars said in the sentence ("$5", "five bucks", "10 dollars each"), or null. */
 function saidDollars(text: string, words: readonly string[]): number | null {
   const sign = /\$\s?(\d{1,3})(?![\d.])/.exec(text);
