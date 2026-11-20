@@ -24,7 +24,7 @@ export type JudgeDynamicVariables = Record<keyof typeof DYNAMIC_VARIABLE_PLACEHO
 export const FIRST_MESSAGE =
   "Order. Court is in session. {{party_a_name}}, {{party_b_name}}: what's the bet?";
 
-/** Soft-timeout fillers (FINDINGS §3.10: 1.0–1.2 s, 2–3 per generation; in character). */
+/** Soft-timeout fillers (1.0–1.2 s, 2–3 per generation; in character). */
 export const SOFT_TIMEOUT_FILLERS = ['Hmm.', 'Noted.', 'The clerk is writing that down.'] as const;
 
 /**

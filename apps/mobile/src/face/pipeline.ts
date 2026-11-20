@@ -1,4 +1,4 @@
-// The pure half of the on-device face embedder (TASKS D1-M3 / D4-M1; FINDINGS §3.2): from a
+// The pure half of the on-device face embedder (TASKS D1-M3 / D4-M1): from a
 // detected face in an upright still to the model's input tensor, and from the model's outputs to
 // the final embedding. No native modules, so vitest runs all of it in Node.
 //

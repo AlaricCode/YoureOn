@@ -1,10 +1,10 @@
-// Face enrollment logic (TASKS D3-M3; API-CONTRACT §2.2), ported from Verdict's enroll redesign
-// (branch enroll-redesign: consent first, a series of photos with head-turn prompts, a specific
-// fix-it line for a bad photo). Pure TS, so vitest runs it in Node; the screens are in ./screens.
+// Face enrollment logic (TASKS D3-M3; API-CONTRACT §2.2): consent first, a series of photos with
+// head-turn prompts, a specific fix-it line for a bad photo. Pure TS, so vitest runs it in Node;
+// the screens are in ./screens.
 //
-// What changed from Verdict: no voice step (no voiceprints here, MERGE-PLAN #3), the embedding is
-// computed on the phone, and the liveness check runs here before anything is sent (the server only
-// sees one averaged, sealed embedding: never an image).
+// There is no voice step (no voiceprints), the embedding is computed on the phone, and the
+// liveness check runs here before anything is sent (the server only sees one averaged, sealed
+// embedding: never an image).
 import { FACE_MODEL, l2NormalizeInPlace } from '../face/model';
 import type { Landmarks } from '../face/pipeline';
 
@@ -61,7 +61,7 @@ export interface DetectedFace {
   readonly landmarks?: Landmarks | undefined;
 }
 
-/** A head turn must reach this yaw (degrees). Verdict's on-device threshold. */
+/** A head turn must reach this yaw (degrees). */
 export const MIN_TURN_YAW_DEG = 12;
 /** "Straight ahead" allows this much yaw / pitch (degrees). */
 export const MAX_AHEAD_YAW_DEG = 12;
@@ -150,7 +150,7 @@ export function cosine(a: Float32Array, b: Float32Array): number {
 }
 
 /**
- * Same-person check across the series (Verdict did this on the server as `identity_changed`):
+ * Same-person check across the series, on the phone:
  * each turned photo must match the straight-ahead one at least this well. Lower than the match
  * threshold (0.30) because turned faces score lower against a frontal one.
  */

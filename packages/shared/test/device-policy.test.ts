@@ -401,7 +401,7 @@ describe('atomic_lock (DP1-DP16)', () => {
     expectBothReject(lock(standardLock(p), p.deadline + 1), 'L3');
   });
 
-  it('DP13: the four cases the spike harness accepted, on both phones', () => {
+  it('DP13: four cases that must be rejected, on both phones', () => {
     // 1. mint != pinned USDC (both escrow ixs).
     const mint = lockParts(W, W.skill, {
       create: { mint: W.other.address },

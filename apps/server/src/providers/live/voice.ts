@@ -1,11 +1,11 @@
 // Live ElevenLabs voice providers (paid; spend-guarded in fromEnv), on top of the shared client
 // in src/voice/elevenlabs.ts.
 //
-// Ported from Verdict packages/backend/src/providers/real/elevenlabs.ts lines ~100-202:
+// Two pieces:
 //  - scribeToTranscript: Scribe words -> contiguous per-speaker segments (ms) + audio events.
 //    Scribe only diarizes; we never verify speakers (no voiceprints, ARCHITECTURE §6).
-//  - ElevenLabsSfx's once-per-process cached generation, here one clip per stage cue
-//    (API-CONTRACT §2.6 cue kinds) instead of Verdict's single start whistle.
+//  - ElevenLabsSfx: once-per-process cached generation, one clip per stage cue
+//    (API-CONTRACT §2.6 cue kinds).
 import type { Env } from '../../env';
 import {
   createElevenLabsClient,

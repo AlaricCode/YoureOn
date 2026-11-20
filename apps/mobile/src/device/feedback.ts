@@ -1,5 +1,5 @@
 // Plays the named haptic moments from ui/tokens (challenge arrived, hold, authorized, locked,
-// payout, failed). Haptics go silent while a camera or the voice mic runs (FINDINGS §4 Beat 3),
+// payout, failed). Haptics go silent while a camera or the voice mic runs,
 // so screens also show every moment on screen.
 import * as Haptics from 'expo-haptics';
 

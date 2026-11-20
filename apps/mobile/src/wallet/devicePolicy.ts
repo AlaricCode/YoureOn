@@ -1,7 +1,7 @@
 // Phone-side wiring of the device signing policy (packages/shared/src/device-policy.ts; ESCROW
 // §5.0.2, API-CONTRACT §6.3). The shared module is pure and takes its PDA / ATA derivations by
 // injection; this file supplies them from noble (./pda), because Kit's getProgramDerivedAddress
-// throws on Hermes (FINDINGS §7). The wallet runs the policy with its OWN stored public key and
+// throws on Hermes. The wallet runs the policy with its OWN stored public key and
 // clock, so a screen can never make it check one key and sign with another.
 //
 // Screens call runDevicePolicy at card mount to enable the hold button (and report a rejection's

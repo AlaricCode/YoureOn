@@ -1,7 +1,6 @@
 // The keeper: one in-process scheduler for the server's periodic sweeps (ARCHITECTURE §1
 // "every timer is a DB row first"; SCHEMAS §9.2 "Deadline sweep: this happens server-side").
-// Ported from Verdict packages/backend/src/keeper/keeper.ts (the scheduler idea only: tasks
-// register, a pass runs them serially, overlapping passes coalesce). Re-done for this server:
+// Tasks register, a pass runs them serially, overlapping passes coalesce. Rules:
 //
 //  - Tasks read and write Postgres, never in-memory state, so a restart loses nothing: the
 //    first pass after boot catches up on every deadline that passed while the machine was down.

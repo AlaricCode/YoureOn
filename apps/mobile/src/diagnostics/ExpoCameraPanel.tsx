@@ -1,4 +1,4 @@
-// expo-camera panel: records 2 s with the judge-cam settings from FINDINGS §3.3 (avc1, 720p,
+// expo-camera panel: records 2 s with the judge-cam settings (avc1, 720p,
 // ~5 Mbps), checks the file, then (extra check) pulls 2 frames with expo-video and hashes the clip
 // with expo-crypto, the same path the judge cam uses for client_clip_hash. Loaded lazily, and
 // never mounted together with the VisionCamera panel (two camera stacks are not opened at once).

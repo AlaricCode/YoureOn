@@ -503,7 +503,7 @@ describeDb('POST /webhooks/elevenlabs over Postgres', () => {
     expect(r.json!.transcript_sha256).toBe(d.transcript_sha256);
     expect(d.redactions).toBe(1);
     expect(JSON.stringify(row!.details)).not.toContain(TOOL_SECRET);
-    // which LLM served (FINDINGS §6 step 1), and the analysis as evidence
+    // which LLM served, and the analysis as evidence
     expect(d.metadata.charging.llm_usage.irreversible_generation.model_usage).toHaveProperty(
       'claude-haiku-5-5',
     );

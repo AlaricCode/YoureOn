@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Re-make the on-device face-embedding model (TASKS D0-M2, FINDINGS §3.2) from the official
-# InsightFace release, so the committed .tflite has a reproducible, in-window provenance
-# (TASKS §3.2 rules 7 and 9: never copy the spike's file).
+# Re-make the on-device face-embedding model (TASKS D0-M2) from the official
+# InsightFace release, so the committed .tflite has a reproducible provenance
+# (TASKS §3.2 rules 7 and 9).
 #
 #   1. download InsightFace `buffalo_s` from the official model zoo (GitHub release v0.7),
 #   2. extract `w600k_mbf.onnx`,
@@ -10,7 +10,7 @@
 #      react-native-fast-tflite cannot feed from JS),
 #   4. print the sha256 and compare it with the known-good hash.
 #
-# The conversion is deterministic: spike 01's file hashed to ca17b05a…, so a match proves the
+# The conversion is deterministic: the known-good file hashes to ca17b05a…, so a match proves the
 # pipeline. The weights are licensed for NON-COMMERCIAL RESEARCH ONLY (InsightFace model_zoo
 # README); see apps/mobile/assets/models/NOTICE-w600k_mbf.txt.
 #
@@ -28,8 +28,8 @@ ONNX_NAME="w600k_mbf.onnx"
 TFLITE_NAME="w600k_mbf_float32.tflite"
 ONNX2TF_VERSION="2.6.9"
 PYTHON_VERSION="3.12"
-# Known-good output. Spike 01's file hashed to ca17b05a… (FINDINGS §3.2 / TASKS D0-M2); this script
-# reproduced it in full on 2026-11-08 (13,635,536 bytes), with and without onnx-simplifier.
+# Known-good output (TASKS D0-M2): this script reproduces it in full (13,635,536 bytes), with and
+# without onnx-simplifier.
 EXPECTED_SHA256="${EXPECTED_SHA256:-ca17b05ac6e92ff819d81191d865e3864f4e6779df60468f0db547c982091033}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

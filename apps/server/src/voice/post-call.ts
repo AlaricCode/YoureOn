@@ -22,7 +22,7 @@
 // voice_sessions.transcript_sha256 = sha256(UTF-8(it)), checkable in SQL:
 //   encode(sha256(convert_to(details->>'transcript_json', 'UTF8')), 'hex')
 // voice_sessions.transcript_key = `audit_log:<id>` points at that row. details also keeps
-// data.metadata (charging / llm_usage: which LLM really served, FINDINGS §6 step 1), data.analysis
+// data.metadata (charging / llm_usage: which LLM really served), data.analysis
 // and the conversation_initiation_client_data (dynamic variables and the requested overrides).
 // The dedupe is an advisory transaction lock on (conversation_id, type) plus a lookup of that row.
 //

@@ -10,7 +10,7 @@
 //                                     client differ (CI escrow job, after `anchor build`)
 //
 // Versions are pinned exactly in the root package.json (codama 1.11.0, @codama/nodes-from-anchor
-// 1.5.6, @codama/renderers-js 2.8.0: spike 07). The output is prettier-ignored and eslint-ignored;
+// 1.5.6, @codama/renderers-js 2.8.0). The output is prettier-ignored and eslint-ignored;
 // it is formatted by the renderer with the repo's .prettierrc.json, so a rerun is byte-identical.
 import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';

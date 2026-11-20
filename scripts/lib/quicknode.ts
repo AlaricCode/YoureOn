@@ -7,8 +7,8 @@
 // with Streams enabled). Endpoints (openapi.json, checked 2026-11-18): POST /streams (create),
 // GET /streams?limit&offset (list), GET|PATCH|DELETE /streams/{id}, POST /streams/{id}/pause,
 // POST /streams/{id}/activate, POST /streams/test_filter. start_range / end_range are slots on
-// Solana; -1 is documented as "from the tip" / "open-ended" (docs/reference/verdict/README.md
-// §QuickNode, not checked against the live API). create omits both (unverified: we assume that
+// Solana; -1 is believed to mean "from the tip" / "open-ended" (not checked against the live
+// API). create omits both (unverified: we assume that
 // means the same as -1). reset-start PATCHes start_range to the devnet tip slot read from the RPC
 // (explicit, checkable; `--slot -1` sends the sentinel instead), because `activate` resumes where
 // the Stream paused and replays the backlog (API-CONTRACT §5.1, SETUP-CHECKLIST). The webhook destination's
@@ -696,7 +696,7 @@ export async function resetStartRange(
   slot: number,
   o: { explicit?: boolean } = {},
 ): Promise<Record<string, unknown>> {
-  // -1 = "from the tip" (Verdict reference, unverified), only when asked for with --slot -1
+  // -1 = "from the tip" (unverified), only when asked for with --slot -1
   if (!Number.isSafeInteger(slot) || (slot <= 0 && !(slot === -1 && o.explicit)))
     throw new Error(`not a slot: ${slot}`);
   const call = (r: QnRequest) => qnCall(io.fetch, io.apiKey, r);

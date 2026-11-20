@@ -3,14 +3,13 @@
 // at terms-card (or GG / appeal) mount and again inside wallet.authorize(); the hold button stays
 // disabled until it passes. It signs nothing that is not exactly one of the server-built kinds.
 //
-// Verdict's app/lib/wallet/wallet.dart:97-151 (checkTxMessage) was the reference for the message
-// shape checks (header sanity, the signer among the signing keys). Its rules are folded into G3/G5
-// below; everything else follows OUR spec.
+// The message shape checks (header sanity, the signer among the signing keys) are G3/G5 below;
+// everything follows OUR spec.
 //
 // Hermes: pure and synchronous. Kit is used for codecs only (message, base58, base64, borsh-style
 // args). PDAs / ATAs need an Ed25519 on-curve check, so they are INJECTED (`derive`): apps/mobile
 // passes its noble helper (src/wallet/pda.ts), because Kit's getProgramDerivedAddress throws on
-// Hermes (FINDINGS §7). createWithSeed (the nonce pool) is plain sha256 and runs here.
+// Hermes. createWithSeed (the nonce pool) is plain sha256 and runs here.
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import {
@@ -377,7 +376,7 @@ function decodeMessage(message: Uint8Array): Decoded {
   const { numSignerAccounts: ns, numReadonlySignerAccounts: nrs } = m.header;
   const nru = m.header.numReadonlyNonSignerAccounts;
   const keys = m.staticAccounts.map(String);
-  // Header sanity (Verdict checkTxMessage): signers fit, fee payer writable, counts consistent.
+  // Header sanity: signers fit, fee payer writable, counts consistent.
   need(ns >= 1 && ns <= keys.length, 'G3', 'bad signer count');
   need(nrs < ns, 'G3', 'fee payer must be a writable signer');
   need(nru <= keys.length - ns, 'G3', 'bad readonly count');

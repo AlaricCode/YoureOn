@@ -1,4 +1,4 @@
-// Turns a photo into face embeddings (TASKS D1-M3 / D3-M3 / D4-M1; FINDINGS §3.2).
+// Turns a photo into face embeddings (TASKS D1-M3 / D3-M3 / D4-M1).
 //
 // The real embedder (`createDeviceEmbedder`) runs, per photo:
 //   1. an upright copy: the photo is redrawn with its EXIF orientation applied and the long side
@@ -101,7 +101,7 @@ export function createDeviceEmbedder(
   natives: EmbedderNatives,
   opts: { maxSide?: number } = {},
 ): FaceEmbedder {
-  // fast-tflite must never run one model concurrently (FINDINGS §7): one run at a time.
+  // fast-tflite must never run one model concurrently: one run at a time.
   let chain: Promise<unknown> = Promise.resolve();
   const serial = <T>(f: () => Promise<T>): Promise<T> => {
     const p = chain.then(f, f);

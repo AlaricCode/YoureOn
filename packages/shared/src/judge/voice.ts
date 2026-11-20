@@ -18,7 +18,7 @@ export const VoiceTokenResponse = z.object({
   conversation_id: z.string().min(1),
   agent_id: z.string().min(1),
   voice_session_id: Uuid,
-  /** Token lifetime is undocumented (FINDINGS §7): null. Treat each token as single-use. */
+  /** Token lifetime is undocumented: null. Treat each token as single-use. */
   expires_at: IsoUtc.nullable(),
 });
 export type VoiceTokenResponse = z.infer<typeof VoiceTokenResponse>;

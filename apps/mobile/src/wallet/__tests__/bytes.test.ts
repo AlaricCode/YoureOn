@@ -50,7 +50,7 @@ describe('misc', () => {
   });
 });
 
-describe('source guards (FINDINGS §3.4, §7)', () => {
+describe('source guards', () => {
   // Every app source under src/ (not just the wallet: any screen could reach for getRandomBytes),
   // plus App.tsx. Test files are excluded.
   const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..');

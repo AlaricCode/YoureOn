@@ -1,18 +1,18 @@
 // Live multimodal chat across the three panel vendors (paid; spend-guarded in fromEnv).
 //
-// Ported from Verdict packages/backend/src/providers/real/boothLlm.ts (`chat()`: one system +
-// multimodal user turn -> model text, per vendor). Differences, all from OUR contracts:
+// `chat()`: one system + multimodal user turn -> model text, per vendor. Details, all from OUR
+// contracts:
 //  - Official SDKs, not raw fetch: @anthropic-ai/sdk 1.6.0, openai 7.53.0, @google/genai 2.32.0
-//    (API-CONTRACT §7.1-7.2, pinned by spike 02). Each SDK takes an injectable `fetch`, so tests
+//    (API-CONTRACT §7.1-7.2). Each SDK takes an injectable `fetch`, so tests
 //    exercise the real request shapes offline.
-//  - Request shapes from spike 02 (youre-on-spikes/02-vision-judge/src/judges/*):
+//  - Request shapes:
 //      anthropic  messages with output_config {effort, format: json_schema (hand-written, enum kept)};
 //                 Opus/Sonnet 5.5 add fallbacks:"default" (beta server-side-fallback-2026-07-01).
 //      openai     Responses API with zodTextFormat's strict json_schema (sent via responses.create,
 //                 same wire body as responses.parse; see callOpenAI), reasoning.effort, detail "high".
 //      google     ai.interactions.create, generation_config.thinking_level, response_format
 //                 {type:"text", mime_type:"application/json", schema}.
-//  - 8 s per-call deadline (API-CONTRACT §7.2) instead of Verdict's 120 s, SDK retries off.
+//  - 8 s per-call deadline (API-CONTRACT §7.2), SDK retries off.
 //  - Output is validated with the caller's zod schema; failures return {ok:false}, never throw.
 //  - No xai vendor, no video parts (judging is on 8-16 JPEG frames).
 import Anthropic from '@anthropic-ai/sdk';
@@ -292,7 +292,7 @@ export class LiveLlm implements LlmProvider {
         system_instruction: req.system,
         input,
         generation_config: {
-          // gemini-3.8-flash errors on "minimal" (spike 02).
+          // gemini-3.8-flash errors on "minimal".
           thinking_level: req.effort ?? 'low',
           max_output_tokens: req.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         },

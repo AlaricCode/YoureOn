@@ -1,5 +1,5 @@
-// Face ID with the passcode as fallback, recording which one succeeded (ARCHITECTURE §3.3,
-// FINDINGS §7): try Face ID alone first; if the person taps "Use Passcode", ask again with the
+// Face ID with the passcode as fallback, recording which one succeeded (ARCHITECTURE §3.3):
+// try Face ID alone first; if the person taps "Use Passcode", ask again with the
 // passcode allowed and record `passcode_hold`. Signing itself is the wallet module (D0-M3,
 // D2-M2); this only answers "did the owner approve".
 import * as LocalAuthentication from 'expo-local-authentication';

@@ -4,8 +4,8 @@
 //
 //   classifyContract()  what a Gemini event body says about one contract: still pending, settled
 //                       (yes / no), or voided. Tolerant of Gemini's casing and of status names we
-//                       have not seen yet (an `invalid` contract is still unseen: 0 of 173 in
-//                       spike 05, so cancelled / canceled / voided / void count as invalid too).
+//                       have not seen yet (an `invalid` contract is still unseen: 0 of 173
+//                       sampled, so cancelled / canceled / voided / void count as invalid too).
 //   settlementOutcome() the record + the binding Terms.market -> MET / NOT_MET, or VOID
 //                       'market_invalid' when Gemini voided the contract or settled it against a
 //                       different line than the one bound into the terms (ambiguous).

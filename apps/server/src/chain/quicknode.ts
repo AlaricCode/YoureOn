@@ -1,10 +1,9 @@
-// QuickNode Streams webhook authentication (API-CONTRACT §5.3, FINDINGS §3.12, spike 06).
+// QuickNode Streams webhook authentication (API-CONTRACT §5.3).
 //
-// Ported from Verdict packages/backend/src/chain/quicknode.ts (HMAC over the raw body,
-// timing-safe compare, timestamp skew window). Our contract differs in two places, and ours wins:
+// HMAC over the body, timing-safe compare, timestamp skew window. Two details:
 //   - the HMAC covers the **decompressed** body; we gunzip only when the bytes start with 1f 8b
 //     (whatever Content-Encoding says);
-//   - X-QN-Timestamp is unix seconds per the spike simulator, but values with > 11 digits are
+//   - X-QN-Timestamp is unix seconds per QuickNode's simulator, but values with > 11 digits are
 //     read as milliseconds (PENDING-KEY: confirm with `test_filter --probe`).
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
@@ -15,7 +14,7 @@ const gunzipAsync = promisify(gunzip);
 export const QN_HEADER_NONCE = 'x-qn-nonce';
 export const QN_HEADER_TIMESTAMP = 'x-qn-timestamp';
 export const QN_HEADER_SIGNATURE = 'x-qn-signature';
-/** Batch headers (spike simulator names; PENDING-KEY). Logged into chain_events.delivery_id. */
+/** Batch headers (simulator names; PENDING-KEY). Logged into chain_events.delivery_id. */
 export const QN_HEADER_BATCH_START = 'batch-start-range';
 export const QN_HEADER_BATCH_END = 'batch-end-range';
 export const QN_HEADER_DATASET = 'stream-dataset';

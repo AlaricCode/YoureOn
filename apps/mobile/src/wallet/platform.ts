@@ -34,7 +34,7 @@ export type WalletPlatform = {
   readonly localAuth: LocalAuthLike;
   /**
    * Fills `array` in place with CSPRNG bytes: expo-crypto `getRandomValues` (native SecRandomCopyBytes).
-   * Never `getRandomBytes`, which falls back to Math.random in __DEV__ (FINDINGS §3.4, §7).
+   * Never `getRandomBytes`, which falls back to Math.random in __DEV__.
    */
   getRandomValues(array: Uint8Array): Uint8Array;
   /** Wall clock in ms (defaults to Date.now). Injected so tests control timestamps. */

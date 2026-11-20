@@ -72,7 +72,7 @@ export default function DiagnosticsScreen({ onClose }: { onClose?: () => void } 
 
   const runAuto = useCallback(async () => {
     setRunning(true);
-    // Haptics do nothing while a camera is active (FINDINGS §7), so close any camera panel first.
+    // Haptics do nothing while a camera is active, so close any camera panel first.
     setPanel(null);
     // One at a time: the mic prompt and the haptics need the person's attention.
     for (const check of CHECKS) {

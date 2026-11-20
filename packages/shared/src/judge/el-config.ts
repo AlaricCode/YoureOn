@@ -1,6 +1,6 @@
-// ElevenLabs agent-as-code (TASKS D0-J2 "agent settings"; API-CONTRACT §4.1–§4.4; FINDINGS §3.8,
-// §3.10). Pure builders of the JSON bodies scripts/el-agent.ts sends. Field names follow the live
-// ElevenLabs OpenAPI (https://api.elevenlabs.io/openapi.json, read 2026-11-08):
+// ElevenLabs agent-as-code (TASKS D0-J2 "agent settings"; API-CONTRACT §4.1–§4.4).
+// Pure builders of the JSON bodies scripts/el-agent.ts sends. Field names follow the live
+// ElevenLabs OpenAPI (https://api.elevenlabs.io/openapi.json):
 //   POST /v1/convai/secrets        PostWorkspaceSecretRequest {type:'new', name, value}
 //   POST /v1/convai/tools          ToolRequestModel {tool_config: WebhookToolConfig | ClientToolConfig}
 //   POST /v1/convai/agents/create  {name, tags, conversation_config, platform_settings}
@@ -26,7 +26,7 @@ import {
 
 export const TOOL_SECRET_HEADER = 'X-YO-Tool-Secret';
 /**
- * FINDINGS §3.8. In ElevenLabs' `LLM` enum (./el-enums, read 2026-11-18), so the Agents platform
+ * In ElevenLabs' `LLM` enum (./el-enums, read 2026-11-18), so the Agents platform
  * serves it; whether it is really Haiku 5.5 that answers shows in post-call
  * metadata.charging.llm_usage (API-CONTRACT §4.6). el-agent --llm / ELEVENLABS_AGENT_LLM overrides.
  */
@@ -63,7 +63,7 @@ export type ClientToolName = 'request_attempt' | 'show_terms_card' | 'cue';
  * route table). propose_terms (D0-J2), confirm_terms (D1-J1), get_market_odds (Beat 6,
  * apps/server/src/markets/voice-tool.ts) and request_review (the spoken "check that again",
  * apps/server/src/review/tool.ts) and suggest_odds (odds, apps/server/src/odds/voice-tool.ts) are
- * live; open_hearing later (FINDINGS §3.10). There is no
+ * live; open_hearing later. There is no
  * file_appeal tool: the mic can't tell who spoke, so the judge only asks the loser's phone
  * (request_review) and the loser files the appeal there (tap + Face ID).
  */
@@ -260,8 +260,8 @@ export const CLIENT_EVENTS = [
   'client_tool_call',
   'interruption',
   'vad_score',
-  // Listing client_events replaces the default set (FINDINGS §7: "client_events must be listed
-  // explicitly to arrive"), so the session plumbing is kept explicitly too.
+  // Listing client_events replaces the default set (client_events must be listed
+  // explicitly to arrive), so the session plumbing is kept explicitly too.
   'conversation_initiation_metadata',
   'ping',
   'audio',
@@ -272,7 +272,7 @@ export interface AgentOptions {
   toolIds: string[];
   /** ELEVENLABS_JUDGE_VOICE_ID (Voice Design voice). Omitted -> the ElevenLabs default voice. */
   voiceId?: string;
-  /** Default DEFAULT_AGENT_LLM (FINDINGS §3.8) unless FINDINGS §6 step 1 picks another. */
+  /** Default DEFAULT_AGENT_LLM unless the caller picks another. */
   llm?: string;
   /** Default DEFAULT_REASONING_EFFORT; null omits the field (the model's own default). */
   reasoningEffort?: ElReasoningEffort | null;
@@ -296,7 +296,7 @@ export function agentBody(o: AgentOptions) {
     prompt: buildJudgePrompt(o.promptTools),
     llm: o.llm ?? DEFAULT_AGENT_LLM,
     // Explicit null: the schema default is 0.0, and "null omits the parameter from the LLM
-    // request entirely". Claude 5.x rejects non-default sampling values (FINDINGS §7), which
+    // request entirely". Claude 5.x rejects non-default sampling values, which
     // would otherwise silently cascade to a backup model.
     temperature: null,
     max_tokens: AGENT_MAX_TOKENS,

@@ -44,7 +44,7 @@ export default function VisionCameraPanel({ onResult }: PanelProps) {
   /** The previous capture's embedding, for the same-person cosine (TASKS D1-M3). */
   const prevEmbedding = useRef<Float32Array | null>(null);
 
-  // The face detector's hooks re-create the detector on every render (FINDINGS §7), so create
+  // The face detector's hooks re-create the detector on every render, so create
   // one ourselves, lazily, and keep it for the panel's lifetime.
   const detectorRef = useRef<ImageFaceDetector | null>(null);
   const getDetector = useCallback(() => {

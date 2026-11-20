@@ -2,9 +2,8 @@
 // Tests and CI never set it, so they can only reach the mocks (or live adapters handed a fake
 // transport explicitly).
 //
-// Ported from Verdict packages/backend/src/config/spend.ts (SPEND_DISABLED, spendingModes,
-// assertSpendAllowed, enforceSpendGuard). Our env names: LLM_PROVIDER, STT_PROVIDER, SFX_PROVIDER
-// (mock | live), and ALLOW_SPEND (true | false, default false).
+// SPEND_DISABLED, spendingModes, assertSpendAllowed, enforceSpendGuard. Env names: LLM_PROVIDER,
+// STT_PROVIDER, SFX_PROVIDER (mock | live), and ALLOW_SPEND (true | false, default false).
 import type { Env } from '../env';
 
 export type ProviderMode = 'mock' | 'live';

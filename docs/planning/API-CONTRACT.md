@@ -1,10 +1,8 @@
-Status: DRAFT — Phase 0 planning written 2026-11-08 (before the build window). Re-author into the repo during the window; if committed verbatim, commit it as 'docs: import Phase 0 planning (written pre-window)'.
-
 # API-CONTRACT — mobile ↔ server ↔ integrations
 
 The wire contract for `apps/server`: the REST API the iPhones call, the realtime WebSocket, the ElevenLabs and QuickNode webhooks, the Solana transaction contracts, and the internal model calls. Shapes are named by their SCHEMAS.md type (`Terms`, `TermsEnvelope`, `PartyAuthorization`, `RealtimeEvent`, …) and never redefined. Types this doc introduces are **API-owned** (§2.18) and belong in `packages/shared/src/api.ts`.
 
-Authority order: lead-engineer decisions D1–D7 (README.md) > FINDINGS.md (Phase-0 roll-up; each spike's Verification wins) > SCHEMAS / ESCROW-PROGRAM / DATA-MODEL. Ownership: SCHEMAS owns types, ESCROW the onchain side, DATA-MODEL tables; this doc owns endpoints, realtime events and voice tools. The core specs now describe the atomic lock (D3) too; the 2026-11-08 consistency pass aligned this doc to them. Conflicts and their status are in §9.
+Authority order: lead-engineer decisions D1–D7 (README.md) > SCHEMAS / ESCROW-PROGRAM / DATA-MODEL. Ownership: SCHEMAS owns types, ESCROW the onchain side, DATA-MODEL tables; this doc owns endpoints, realtime events and voice tools. The core specs now describe the atomic lock (D3) too. Conflicts and their status are in §9.
 
 ---
 
@@ -20,10 +18,10 @@ Authority order: lead-engineer decisions D1–D7 (README.md) > FINDINGS.md (Phas
 | Stage view | `GET /stage` + the same WS, stage-scoped token | stage key | §2.17, §3 |
 
 - **Money moves only on device signatures.** A face match returns a candidate and a 60 s `match_ticket` that can only address a challenge (D1). The lock is one server-built transaction `[AdvanceNonce, ComputeBudget…, create_bet, accept_bet]` on a durable nonce. Both phones receive the identical message bytes in `terms.authorize_request` (SCHEMAS `AuthorizeRequest`), run the device signing policy (§6.3), and sign at their own hold + Face ID in either order. The server submits once, with preflight ON, at the second `PartyAuthorization` (D2, D3).
-- **The two lanes are fixed.** The server's own `signatureSubscribe` drives the UX: `processed` triggers the payout animation, `confirmed` triggers LOCKED/RULED. The QuickNode webhook writes the authoritative state and drives PAID/VOIDED (SCHEMAS X10, FINDINGS §3.12).
+- **The two lanes are fixed.** The server's own `signatureSubscribe` drives the UX: `processed` triggers the payout animation, `confirmed` triggers LOCKED/RULED. The QuickNode webhook writes the authoritative state and drives PAID/VOIDED (SCHEMAS X10).
 - **Voice runs as one ElevenLabs session per bet on A's phone** (D6). The LLM can call 5 webhook tools and 3 client tools, and none of them moves money. Every server result reaches the judge as a `judge.cue` event, which A's phone passes to `sendUserMessage("[EVENT] …")`.
 - **Every write is idempotent.** Domain keys (DATA-MODEL §8.6) are the guarantee; the `Idempotency-Key` header gives replay-safe retries over cellular. Errors share one envelope and a closed code catalogue (§1.5).
-- **Latency budgets come from the BRIEF §6 targets.** Face match < 1 s; judge first audio < 1.5 s; second authorization → LOCKED < 2 s; STOP → ruling audio < 4 s; concede/finalize → payout visible < 1 s. Each endpoint's server share is in §1.8. Every number that depends on a key, a phone or SOL is **PENDING** (FINDINGS §6).
+- **Latency budgets come from the BRIEF §6 targets.** Face match < 1 s; judge first audio < 1.5 s; second authorization → LOCKED < 2 s; STOP → ruling audio < 4 s; concede/finalize → payout visible < 1 s. Each endpoint's server share is in §1.8. Every number that depends on a key, a phone or SOL is **PENDING**.
 
 ```mermaid
 flowchart LR
@@ -50,11 +48,10 @@ Contents: [1 Conventions](#1-conventions) · [2 REST](#2-mobile--server-rest) ·
 
 | Env | REST / WS base | Notes |
 |---|---|---|
-| `prod` (demo) | `https://<FLY_APP>.fly.dev` (app name fixed at `fly launch` on Fri; **PENDING**) | Fly.io `dfw`, `shared-cpu-1x` 512 MB, `min_machines_running=1`, `auto_stop_machines="off"` (FINDINGS §3.13). It also serves `/stage`. It must be on public HTTPS **before** the Stream and the ElevenLabs tools are created. |
-| `dev` | `http://localhost:8080`, plus a **named** tunnel for webhooks | Quick tunnels change URL on restart and can get NXDOMAIN-cached (FINDINGS §7), so they are not fit for the Stream or for tool registrations. |
+| `prod` (demo) | `https://<FLY_APP>.fly.dev` (app name fixed at `fly launch` on Fri; **PENDING**) | Fly.io `dfw`, `shared-cpu-1x` 512 MB, `min_machines_running=1`, `auto_stop_machines="off"`. It also serves `/stage`. It must be on public HTTPS **before** the Stream and the ElevenLabs tools are created. |
+| `dev` | `http://localhost:8080`, plus a **named** tunnel for webhooks | Quick tunnels change URL on restart and can get NXDOMAIN-cached, so they are not fit for the Stream or for tool registrations. |
 
 - One origin serves REST, WS and the stage. Phones don't need CORS. Phones never talk to Gemini, QuickNode, Postgres or object storage directly; the one exception is the presigned clip PUT (§2.9).
-- **Route mapping from the spikes** (FINDINGS §3.13): `POST /el/tools/:name` is kept. `GET /el/token` becomes `POST /v1/voice/tokens`. `POST /webhooks/quicknode` is kept. `POST /attempts/:id/frames` becomes `POST /v1/bets/:bet_id/attempts/:n/frames`.
 
 ### 1.2 Versioning
 
@@ -65,12 +62,12 @@ Contents: [1 Conventions](#1-conventions) · [2 REST](#2-mobile--server-rest) ·
 
 ### 1.3 Authentication
 
-**Keys on the phone.** Both seeds live in `expo-secure-store` with `WHEN_UNLOCKED_THIS_DEVICE_ONLY` and **no** `requireAuthentication` (D2, FINDINGS §3.4).
+**Keys on the phone.** Both seeds live in `expo-secure-store` with `WHEN_UNLOCKED_THIS_DEVICE_ONLY` and **no** `requireAuthentication` (D2).
 
 | Key | Purpose | Gate | Notes |
 |---|---|---|---|
 | Wallet key (ed25519) | Signs Solana messages only: lock, concede, appeal | hold (lock) or tap (GG, appeal) + `authenticateAsync` (Face ID, then passcode) at **every** signature | = `users.wallet_pubkey`. Seed generated with `Crypto.getRandomValues` (never `getRandomBytes`). |
-| Device auth key (ed25519) | Signs login challenges and API write requests | none | = `devices.device_pubkey`. **Separate from the wallet key** (conflict C3, §9). The `.userPresence` upgrade path (FINDINGS §3.4) would otherwise prompt Face ID on every API call. |
+| Device auth key (ed25519) | Signs login challenges and API write requests | none | = `devices.device_pubkey`. **Separate from the wallet key** (conflict C3, §9). The `.userPresence` upgrade path would otherwise prompt Face ID on every API call. |
 
 **Domain separation.** Every non-transaction signature covers bytes that start with an ASCII tag (`yo-auth-v1\n`, `yo-bind-v1\n`, `yo-req-v1\n`). Read as a Solana message, a leading `0x79` declares 121 required signers (or a versioned prefix with an invalid version), and no such message fits in 1,232 bytes. So no API signature can double as a transaction signature.
 
@@ -87,8 +84,8 @@ DELETE /v1/auth/session                                                         
 
 - `device_sig` = ed25519 by the device key over `yo-auth-v1\npurpose=<signup|login|demo-claim>\nchallenge=<nonce>\ndevice=<device_pubkey>\nwallet=<wallet_pubkey or ->\n`.
 - `wallet_sig` = ed25519 by the wallet key over `yo-bind-v1\nwallet=<wallet_pubkey>\ndevice=<device_pubkey>\nchallenge=<nonce>\n`. At signup the seed is still in memory, so this needs no Face ID; it proves the phone holds the wallet key once.
-- Login takes **any** existing registered device key. Keychain items survive a reinstall with the same bundle ID (FINDINGS §7), so a reinstall logs in rather than re-signing up.
-- **Demo claim** issues the custodial seed of one of the 3–4 team accounts (FINDINGS §3.4). The `claim_token` comes from a stage-issued QR (§2.17), is single-use and lives 10 min; the response carries `wallet_seed_b64` exactly once. It returns 404 unless `DEMO_MODE=true`. The README must say these accounts are custodial.
+- Login takes **any** existing registered device key. Keychain items survive a reinstall with the same bundle ID, so a reinstall logs in rather than re-signing up.
+- **Demo claim** issues the custodial seed of one of the 3–4 team accounts. The `claim_token` comes from a stage-issued QR (§2.17), is single-use and lives 10 min; the response carries `wallet_seed_b64` exactly once. It returns 404 unless `DEMO_MODE=true`. The README must say these accounts are custodial.
 
 **Session.** `Session = {token: "yo_s_<base64url 32 B>", session_id, user: UserRef, device_id, expires_at (+7 d), server_time}`. The server stores `sha256(token)` (DATA-MODEL §5.21 `api_sessions`). On `401 SESSION_EXPIRED` the app re-runs login silently with the device key (no prompt).
 
@@ -159,7 +156,7 @@ yo-req-v1\n<METHOD>\n<path?query exactly as sent>\n<X-YO-Timestamp>\n<Idempotenc
 | `LOCK_REVOKED` | 410 | no | Nonce already advanced (decline, expiry, terms change) |
 | `LOCK_EXPIRED` | 410 | no | `expires_at` (= `accept_deadline` − 5 s) passed (skill: build + 300 s; gemini: `quotedAt` + 60 s) |
 | `STALE_LOCK_REQUEST` | 409 | re-fetch | `lock_request_id` is not the bet's current lock build (rebuilt or revoked); the server pushes the current `AuthorizeRequest` (SCHEMAS §9.4) |
-| `LOCK_PREFLIGHT_FAILED` | 409 | maybe | RPC preflight rejected the lock; `details.program_error`. Nothing was charged, and the nonce didn't advance (FINDINGS §1). |
+| `LOCK_PREFLIGHT_FAILED` | 409 | maybe | RPC preflight rejected the lock; `details.program_error`. Nothing was charged, and the nonce didn't advance. |
 | `INSUFFICIENT_FUNDS` | 409 | after top-up | Token-program insufficient funds in preflight; `details.party` |
 | `CONCEDE_NOT_ALLOWED` | 409 | no | `Split`/`Refund` outcome (ESCROW 6018) |
 | `APPEAL_WINDOW_CLOSED` | 409 | no | Now ≥ `appeal_deadline − 1 s` (UI rule, ESCROW §8.3), or the program says 6024 |
@@ -185,7 +182,7 @@ Program-error mapping for device-signed submits: `InvalidDeadline`/`AcceptDeadli
 
 - **Header.** Every signed write needs an `Idempotency-Key` (it is also the nonce, §1.3). The server caches `(device_id, key) → (body_sha256, status, response)` for 24 h. A replay returns the stored response with `Idempotent-Replayed: true`. In the P0 build the cache is an in-process LRU, which is fine with one Fly machine; P1 moves it to the `api_idempotency` table (DATA-MODEL §8.6).
 - **Domain keys are the guarantee** (DATA-MODEL §8.6); they hold even across cache loss. Each endpoint lists its key in §2. Examples: a `PartyAuthorization` per `(lock_request_id, party)` while the lock row is `built`/`signed`; an attempt per `(bet_id, attempt_no)`; evidence per `(bet_id, attempt_no, clip_sha256)`; a tool call per `(voice_session_id, el_tool_call_id)`; a chain event per `(signature, outer_ix, inner_ix)`.
-- **Never re-sign on retry.** A phone that lost the response to a signed submit resends the **same** signature with the same key. The server never rebuilds a message after collecting a signature (FINDINGS §3.5).
+- **Never re-sign on retry.** A phone that lost the response to a signed submit resends the **same** signature with the same key. The server never rebuilds a message after collecting a signature.
 
 ### 1.7 Rate limits
 
@@ -203,7 +200,7 @@ Token buckets in process (one machine). The response is `429 RATE_LIMITED` with 
 | attempts + frames | 6/min | bet | taken only after the party / recorder check: a stranger's 403 spends nothing; a `409 no_judge_cam` gives its token back (the two-phone fallback, §2.9) |
 | `call-off` | 6/min | bet + user | §2.9a; taken only after the party check (a stranger's 403 spends nothing) |
 | appeal | 3/h | user | ESCROW TM-L9 |
-| markets | 60/min | user | Gemini limit is 120 req/min with no headers (FINDINGS §7), so the server caches |
+| markets | 60/min | user | Gemini limit is 120 req/min with no headers, so the server caches |
 | `POST /v1/voice/tokens` | 6 / 10 min | user | each token opens a billed agent session of up to 20 min; under `DEMO_MODE` demo accounts only (`403 NOT_A_PARTY {reason:'demo_only'}`) |
 | everything else | 120/min | session | |
 | `/el/tools/*` | 30/min | conversation | runaway LLM loop |
@@ -275,7 +272,7 @@ Flows are in §1.3.
 - **`GET /v1/face/consent`** returns `{consent_version: "face-consent-v1", text, text_sha256, retention_summary, face_seal_pubkey: <x25519 base64>, accepted_models: [{name:"w600k_mbf", version:"buffalo_s-fp32", dim:512}, {name:"sface", version:"2021dec", dim:128}]}`.
 - **`POST /v1/face/enrollment`** (S):
   - Request `FaceEnrollmentRequest`: `{consent: {consent_version, consent_text_sha256, consent_at}, liveness: {method: 'blink'|'head_turn', passed_at}, model: {name, version, dim}, embedding: SealedEmbedding, shots: 3}`.
-  - The phone enrolls 3 stills across poses, averages them, L2-normalises, then seals the result (FINDINGS §3.2).
+  - The phone enrolls 3 stills across poses, averages them, L2-normalises, then seals the result.
   - Response 201: `{status:'active', enrolled_at}`.
   - Errors: `FACE_CONSENT_REQUIRED` (unknown version, hash mismatch, `consent_at` > now), `FACE_MODEL_UNSUPPORTED`, `FACE_SEAL_INVALID`.
   - Effects, in order: `audit_log 'face.consented'`; then a `face_enrollments` row (replacing any old row), re-encrypted at rest with the KEK and AAD of DATA-MODEL §10; then `'face.enrolled'`.
@@ -287,7 +284,7 @@ Flows are in §1.3.
 
 - The ciphertext is the float32-LE vector: 2,048 B at 512-d. The AAD is `"yo.face.seal.v1|" + purpose + "|" + user_id + "|" + (room_id ?? "-") + "|" + model + "@" + version + "|" + dim`, with `purpose` ∈ {`enroll`, `probe`}, so a captured probe can't be replayed as an enrollment.
 - `plain-v0` is accepted only while `FACE_SEAL_REQUIRED=false`, as the fallback if the cipher lib slips; it is TLS-only.
-- The libraries are `@noble/curves` x25519 and `@noble/ciphers`. The `@noble/ciphers` version was **not checked in Phase 0: pin it in the window**.
+- The libraries are `@noble/curves` x25519 and `@noble/ciphers`. The `@noble/ciphers` version is **not pinned yet**.
 
 ### 2.3 Rooms and presence
 
@@ -320,7 +317,7 @@ Flows are in §1.3.
 - Server steps:
   1. Open the probe in memory.
   2. Load the candidates of the caller's room (DATA-MODEL §7.2): active, same model and version, excluding the caller. In the lobby (§2.3a), only members online or seen within `LOBBY_RECENT_MS`.
-  3. Compute cosine top-2. Accept only when cos ≥ 0.30 **and** top1 − top2 ≥ 0.05 (FINDINGS §3.2; T is tuned on the team, and never below the highest stranger score plus a margin).
+  3. Compute cosine top-2. Accept only when cos ≥ 0.30 **and** top1 − top2 ≥ 0.05 (T is tuned on the team, and never below the highest stranger score plus a margin).
   4. Otherwise return `{match:null}` and store nothing.
   5. The probe is never written to a row, a log or a cache (DATA-MODEL §10).
   6. Update the matched user's `last_used_at` (day-truncated).
@@ -390,8 +387,8 @@ Flows are in §1.3.
 
 - Request: `{purpose: 'terms', bet_id?: Uuid}`.
 - Response 201 `VoiceTokenResponse`: `{conversation_token, conversation_id, agent_id, voice_session_id, expires_at|null}`.
-- The server calls `GET https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=<AGENT_ID>` with `xi-api-key`. The response is `{token, conversation_id}` (C: live OpenAPI, read 2026-11-08). The server stores `voice_sessions` (status `active`, `el_conversation_id`).
-- **Token lifetime is undocumented** (FINDINGS §7). Treat each token as single-use. The app pre-mints when the scan screen opens and re-mints if the token is unused after 10 min (**PENDING-KEY**: measure the real lifetime).
+- The server calls `GET https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=<AGENT_ID>` with `xi-api-key`. The response is `{token, conversation_id}` (C: live OpenAPI). The server stores `voice_sessions` (status `active`, `el_conversation_id`).
+- **Token lifetime is undocumented**. Treat each token as single-use. The app pre-mints when the scan screen opens and re-mints if the token is unused after 10 min (**PENDING-KEY**: measure the real lifetime).
 - Only A's phone hosts the session (D6), so a B caller gets `403 NOT_A_PARTY` once `bet_id` is given.
 - 6 tokens per 10 min per user (§1.7). Under `DEMO_MODE` only demo accounts mint (`403 NOT_A_PARTY {reason:'demo_only'}`); the app then falls back to typed terms.
 - Errors: `UPSTREAM_TIMEOUT`, `UPSTREAM_ERROR`.
@@ -407,7 +404,7 @@ Flows are in §1.3.
 
 - Request: `{kind: 'gavel'|'drumroll'|'buzzer'|'cheer'}`.
 - Response: 202.
-- Sent by the `cue` client tool (§4.4). The server relays a `stage.cue` control frame. The stage laptop plays the Sound Effects clip; A's phone does not, because that would stop mic capture (FINDINGS §4, LiveKit #286). When the server's Sound Effects are live (`SFX_PROVIDER=live`, or the default `auto` with the ElevenLabs key, §4.5) the frame carries `audio_url` (`GET /v1/stage/sfx/:kind`); without it the stage synthesizes the cue.
+- Sent by the `cue` client tool (§4.4). The server relays a `stage.cue` control frame. The stage laptop plays the Sound Effects clip; A's phone does not, because that would stop mic capture (LiveKit #286). When the server's Sound Effects are live (`SFX_PROVIDER=live`, or the default `auto` with the ElevenLabs key, §4.5) the frame carries `audio_url` (`GET /v1/stage/sfx/:kind`); without it the stage synthesizes the cue.
 
 ### 2.7 Terms
 
@@ -440,8 +437,8 @@ Odds (unequal stakes) are agreed with the §2.19 offer routes; an accepted offer
 **`POST /v1/bets/:bet_id/lock/authorizations`** (S+P)
 
 - Request: SCHEMAS `PartyAuthorization`: `{bet_id, lock_request_id, party, terms_hash, method: 'faceid_hold'|'passcode_hold', authorized_at, ms_since_auth_success, message_sha256, party_signature}`.
-- Optional sibling `client_metrics: {hold_started_at, faceid_ms, sign_ms}`, for FINDINGS §6 step 12 (`ms_since_auth_success` is in the schema itself).
-- `method`: `authenticateAsync` doesn't report which factor succeeded. The app first calls it with `disableDeviceFallback: true`; on `user_fallback` it calls again with the fallback allowed and records `passcode_hold` (FINDINGS §7; verify on the device).
+- Optional sibling `client_metrics: {hold_started_at, faceid_ms, sign_ms}` (`ms_since_auth_success` is in the schema itself).
+- `method`: `authenticateAsync` doesn't report which factor succeeded. The app first calls it with `disableDeviceFallback: true`; on `user_fallback` it calls again with the fallback allowed and records `passcode_hold` (verify on the device).
 - Server steps, under `SELECT … FOR UPDATE` on the bet:
   1. The caller's wallet must be that party's pubkey in `Terms`.
   2. `terms_hash` must equal the frozen hash.
@@ -472,7 +469,7 @@ Server timers:
 
 - **Expiry.** At `expires_at` (= `accept_deadline − LOCK_SUBMIT_MARGIN_SECS`, 5 s; SCHEMAS §0.1, §9.3) without both signatures, the server stops taking signatures and advances the nonce. State `EXPIRED`, `end_reason` `accept_timeout` (skill) or `quote_expired` (gemini); `judge.cue EXPIRED`. Gemini bets then re-quote on a new `bet_id` (SCHEMAS §8.3).
 - **Terms change.** If the terms change after any signature, advance the nonce and cancel; the conversation continues on a new `bet_id`.
-- **Sequential fallback.** `LOCK_MODE=sequential` keeps the same endpoints. `GET /lock` then returns a per-party `AuthorizeRequest` (`kind:'create_bet'` for A, `'accept_bet'` for B; `nonce_index: null`) on a recent blockhash, fetched at hold start. B-first holds B's tx ≤ 30 s, and a decline after the create sends the judge-key `cancel_open_bet` (FINDINGS §3.7 SEQUENTIAL).
+- **Sequential fallback.** `LOCK_MODE=sequential` keeps the same endpoints. `GET /lock` then returns a per-party `AuthorizeRequest` (`kind:'create_bet'` for A, `'accept_bet'` for B; `nonce_index: null`) on a recent blockhash, fetched at hold start. B-first holds B's tx ≤ 30 s, and a decline after the create sends the judge-key `cancel_open_bet`.
 
 ### 2.9 Attempts and evidence (Beat 4)
 
@@ -492,7 +489,7 @@ Server timers:
 
 - Parts:
   1. `evidence`, `application/json`: SCHEMAS `CameraEvidence`, with `clip_sha256` already computed on the phone at record end.
-  2. `frame` × N, `image/jpeg`, in `frames[].index` order (planning D10, `packages/shared/src/judge/frames.ts`): 8..12 frames, each ≤ 512 px (the phone sends 12: 4 spread over the clip and 8 in its last ~1.2 s, the landing), then at most one **landing crop**, always last and flagged `frames[i].landing_crop: true` (the last frame again, the middle 80 % of the full-resolution still, ≤ 1024 px). Every JPEG, the crop included, is ≤ 200 KB. An 8-frame upload with no crop (older builds, `scripts/cp1-drive.ts --frames 8..12`) is accepted unchanged. Anything else is `422 VALIDATION_FAILED`. (Was: N ≤ 24, normally 8 "u4d4" frames, FINDINGS §3.3.)
+  2. `frame` × N, `image/jpeg`, in `frames[].index` order (planning D10, `packages/shared/src/judge/frames.ts`): 8..12 frames, each ≤ 512 px (the phone sends 12: 4 spread over the clip and 8 in its last ~1.2 s, the landing), then at most one **landing crop**, always last and flagged `frames[i].landing_crop: true` (the last frame again, the middle 80 % of the full-resolution still, ≤ 1024 px). Every JPEG, the crop included, is ≤ 200 KB. An 8-frame upload with no crop (older builds, `scripts/cp1-drive.ts --frames 8..12`) is accepted unchanged. Anything else is `422 VALIDATION_FAILED`. (Was: N ≤ 24, normally 8 "u4d4" frames.)
 - Server steps:
   1. Check the attempt is open.
   2. sha256 each JPEG and compare it to `frames[i].sha256`.
@@ -509,7 +506,7 @@ Server timers:
 
 - **`POST …/attempts/:n/clip-upload`** (S) re-issues an expired `PresignedUpload`.
 - **`POST …/attempts/:n/clip-complete`** (S) takes `{clip_sha256, clip_bytes}`. The server re-hashes the stored object and returns 200 `{evidence_hash, matches: true}`. A mismatch returns `422 EVIDENCE_HASH_MISMATCH`, writes `audit_log 'evidence.mismatch'`, flags the bet, and makes the panel treat the clip as missing (DATA-MODEL §9). No `clip-complete` within 60 s of the 202 counts as missing too.
-- **Fallback (no frames).** `POST …/frames` with `evidence.frames=[]` returns a `PresignedUpload` only. Once the clip lands, the server runs static ffmpeg in one `select` pass (FINDINGS §3.13).
+- **Fallback (no frames).** `POST …/frames` with `evidence.frames=[]` returns a `PresignedUpload` only. Once the clip lands, the server runs static ffmpeg in one `select` pass.
 
 **Dance Off attempts (DANCE-OFF §5, §6.2; built 2026-11-18).** A `dance_off` bet uses the same `POST …/attempts`, with these differences: both parties dance, so neither is neutral and the round is filmed from A's side only (DANCE-OFF §6.2: the room's judge cam, else A's phone; the recorder uploads the whole PoseSeries): `'judge_cam'` picks the room's judge cam of **A** (a second device of A; a judge cam B binds is ignored, so `409 no_judge_cam`), `'self'` is A's phone only (`403 NOT_A_PARTY {reason:'recorder_is_a'}` for B) and only when the room has no judge cam of A (`409 INVALID_STATE {reason:'judge_cam_present'}`), `max_ms` is `DANCE_MAX_MS` = 50000 (fits the longest routine, 40 s, plus the count-in and the recording tail; informational, the phone stops at the routine's `duration_ms`), the response's and `attempt.started`'s `performer` is the yes party `A` (the field is a Party), and the `ATTEMPT_ARMED` cue names both dancers. A dance round never uploads to `/frames` (`409 INVALID_STATE {reason:'dance_upload'}`), and a non-dance bet never to `/dance` (`409 {reason:'not_dance'}`).
 
@@ -559,12 +556,12 @@ The server opens a hearing on its own rule (SCHEMAS §6: `contested`, `max_redos
 **`POST /v1/bets/:bet_id/hearing/turns`** (S, the speaking party)
 
 - **A's turn** (`application/json`): `{hearing_id, turn_index:0, party:'A', started_at, ended_at, transcript, stt:'elevenlabs', source:'agent_asr'}`. A unmutes the live session while holding the button. The transcript is the concatenation of the final `user_transcript` events from the ElevenLabs SDK (Scribe realtime).
-- **B's turn** (`multipart/form-data`): `meta` (the same JSON minus `transcript`) plus `audio` (`audio/mp4` AAC, ≤ 12 s, ≤ 1 MB). B's phone has no session. The server calls ElevenLabs STT `POST /v1/speech-to-text` (`scribe_v2`, C: FINDINGS §4 Verification) and **discards the audio** (SCHEMAS §6: audio is never persisted).
+- **B's turn** (`multipart/form-data`): `meta` (the same JSON minus `transcript`) plus `audio` (`audio/mp4` AAC, ≤ 12 s, ≤ 1 MB). B's phone has no session. The server calls ElevenLabs STT `POST /v1/speech-to-text` (`scribe_v2`, C) and **discards the audio** (SCHEMAS §6: audio is never persisted).
 - Server steps: run `normText` on the transcript and cap it at 600 chars; build SCHEMAS `HearingTurn` (`transcript_sha256`); emit `hearing.turn`. B's transcript then reaches the judge as `judge.cue HEARING_TURN`. After both turns (or 12 s per turn), start the hearing ruling (§7.1).
 - Response 201: `{turn: HearingTurn}`.
 - Errors: `INVALID_STATE` (not this party's open turn), `PAYLOAD_TOO_LARGE`, `UPSTREAM_TIMEOUT` (STT; that turn becomes `transcript: ""`).
 - Idem: `(hearing_id, party)`.
-- STT latency is **PENDING-KEY** (FINDINGS §6 step 1 follow-up).
+- STT latency is **PENDING-KEY**.
 
 ### 2.12 Appeal
 
@@ -631,7 +628,7 @@ Built 2026-11-18 (`feat/gg-moment`, `apps/server/src/review`, `apps/server/src/g
 
 ### 2.15 Devices and push
 
-- **`PUT /v1/devices/current/push`** (S) takes `{provider:'expo', token, categories: ['challenge']}` and returns 204. The token is partial-UNIQUE (DATA-MODEL §5.2). APNs via EAS is P1 (FINDINGS §3.14).
+- **`PUT /v1/devices/current/push`** (S) takes `{provider:'expo', token, categories: ['challenge']}` and returns 204. The token is partial-UNIQUE (DATA-MODEL §5.2). APNs via EAS is P1.
 - **`PATCH /v1/devices/current`** (S) takes `{role?: 'phone'|'judge_cam', room_id?}` and returns 204. The judge-cam role is bound to a room.
 
 ### 2.16 (reserved: no handshake endpoints exist; D1)
@@ -650,12 +647,12 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 | `POST /v1/demo/bets/:bet_id/force-hearing` | Opens a hearing with `trigger:'demo'` (SCHEMAS §6) |
 | `POST /v1/demo/bets/:bet_id/appeal {party?}` | Built. `LOCK_SIGNER=server` only (else `409 INVALID_STATE {reason:'lock_signer_phones'}`): the losing demo party's appeal (§2.12), signed custodially by the server with that party's demo key; `party` only for a VOID ruling (either may appeal; default A), naming the winner is `NOT_LOSER`. 202 `{status:'submitted', signature, appeal_id}`. Not counted in the 3/h bucket (admin key). |
 | `POST /v1/demo/fallback {beat: 1..6, action: 'play'\|'stop'}` | The stage plays the pre-recorded beat (BRIEF 5i) |
-| `POST /v1/demo/stream/replay {fixture}` | Replays recorded webhook payloads to the stage ticker only (FINDINGS §4); never writes `chain_events` |
-| `POST /v1/demo/stream/{pause\|activate\|reset-start}` | Not built as routes: done from the laptop with `npm run qn-stream -- pause\|resume\|reset-start <id>` (QuickNode REST). `reset-start` PATCHes `start_range` to the devnet tip before the demo, because `activate` resumes from the pause point (FINDINGS §7). |
-| `POST /v1/demo/lock-mode {mode: 'atomic'\|'sequential'}` | `LOCK_MODE` switch (FINDINGS §3.7) |
+| `POST /v1/demo/stream/replay {fixture}` | Replays recorded webhook payloads to the stage ticker only; never writes `chain_events` |
+| `POST /v1/demo/stream/{pause\|activate\|reset-start}` | Not built as routes: done from the laptop with `npm run qn-stream -- pause\|resume\|reset-start <id>` (QuickNode REST). `reset-start` PATCHes `start_range` to the devnet tip before the demo, because `activate` resumes from the pause point. |
+| `POST /v1/demo/lock-mode {mode: 'atomic'\|'sequential'}` | `LOCK_MODE` switch |
 | `POST /v1/demo/toggles {cached_ruling?, gemini_fallback?, voice_fallback?, face_pick_list?}` | The remaining ARCHITECTURE §7.2 toggles; every replay is labelled REPLAY on stage. **Built: `cached_ruling` and `checks`** (`apps/server/src/demo/toggles.ts`), body `{cached_ruling?: boolean \| null, checks?: boolean \| null}` (`checks`: the camera checks' runtime switch, default on; it can only switch off what env `CHECKS_ENABLED` + `SAM3_URL`/`SAM3_API_TOKEN` allow), strict (an unknown key is 422, so a typo can't leave a fallback off). It is a runtime value the judge reads per call, no restart; env `CACHED_RULING` is the boot default and `null` goes back to it. Answers `{ok, toggles, changed: [{toggle, from, to, source}]}`; each named toggle is audited `demo.toggle`. `GET /v1/demo/toggles` returns `{cached_ruling, cached_ruling_source: 'env'\|'runtime', cached_ruling_env, checks, checks_source, checks_env, updated_at}`. A cached ruling has `Ruling.model = 'cache/demo-bottle@1'` (shared `CACHED_RULING_MODEL` / `isCachedRuling`), which the stage can label. The others are elsewhere: the Gemini fallback is `POST /v1/demo/gemini {feed: 'live'\|'replay'}`, the voice fallback is the phone's "Type it instead", the face pick list is the phone's room list. |
 | `POST /v1/demo/timers {draft_idle_s, hearing_turn_s, finalize_delay_s}` | Offchain timers only. Onchain windows are snapshotted from `Config` and can't change per bet (ESCROW I11). |
-| `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch (FINDINGS §3.8). **Built** (`apps/server/src/demo/warmup.ts`), no bet and no money: one live judge call through `deps.providers.llm` with the real prompt and output schema on a stored 16×16 JPEG (`judge/fixtures/warmup-16px.jpg`; it ignores `cached_ruling`), `getLatestBlockhash` on the server's RPC, one poll of the Gemini relay and its current contract (no WS: the relay polls REST, §7.3), and voice readiness (config only: a pre-minted token would open a billed session, so none is minted; no panel, it is cut). 200 `{ok, at, modes: {llm, judge_model, cached_ruling, markets_feed, lock_signer}, notes[], checks: {judge, rpc, gemini, voice}}`, each check `{ok, ms, error, …}`; `notes` say when a check hit a mock, the REPLAY feed or the cached ruling. One per 10 s per server: 429 `RATE_LIMITED` + `Retry-After`. Audited `demo.warmup`. |
+| `POST /v1/demo/warmup` | Claude warm-up calls (the ruling schema too), one panel ping, an RPC `getLatestBlockhash`, a Gemini WS check, ElevenLabs token pre-mint. Run 10 min before the pitch. **Built** (`apps/server/src/demo/warmup.ts`), no bet and no money: one live judge call through `deps.providers.llm` with the real prompt and output schema on a stored 16×16 JPEG (`judge/fixtures/warmup-16px.jpg`; it ignores `cached_ruling`), `getLatestBlockhash` on the server's RPC, one poll of the Gemini relay and its current contract (no WS: the relay polls REST, §7.3), and voice readiness (config only: a pre-minted token would open a billed session, so none is minted; no panel, it is cut). 200 `{ok, at, modes: {llm, judge_model, cached_ruling, markets_feed, lock_signer}, notes[], checks: {judge, rpc, gemini, voice}}`, each check `{ok, ms, error, …}`; `notes` say when a check hit a mock, the REPLAY feed or the cached ruling. One per 10 s per server: 429 `RATE_LIMITED` + `Retry-After`. Audited `demo.warmup`. |
 | `POST /v1/demo/seed-h2h {a_wins?, b_wins?, records?}` | **Built** (`apps/server/src/demo/seed-h2h.ts`): the DATA-MODEL §11 SQL fallback as a route. Replaces the `is_seed` history between demo-a and demo-b (the users holding the demo wallets) with `a_wins + b_wins` settled bets, default 4-7 (each 0..30); `{0, 0}` clears it. Demo reset keeps them. Odds rehearsal: `records: [{player: 'a'\|'b', category: 'bottle_flip'\|'throw', made: 0..30, missed: 0..30}]` (≤ 3) makes that player the performer of `made + missed` of those rows (made = the performer won), for the judge's history-grounded odds (§2.19); they count toward the head-to-head, so a's made + b's missed ≤ `a_wins` and b's made + a's missed ≤ `b_wins` (else 422 `VALIDATION_FAILED`); the other rows rotate titles of other categories. Every seed row now has a real composed terms row (`bet_terms_versions`, final, `source_tool 'seed'`). Example: `{"a_wins": 4, "b_wins": 12, "records": [{"player": "b", "category": "bottle_flip", "made": 10, "missed": 2}]}`. 200 `{ok, a, b, a_wins, b_wins, replaced, inserted, head_to_head: {a_vs_b, b_vs_a}, performer_stats: PerformerStats[]}`; 409 `INVALID_STATE {reason:'demo_player_missing', party}` before a demo wallet has an account. Audited `demo.seed_h2h`. |
 | `GET /v1/demo/health` | `{fee_payer_sol, nonce_pool: {size, leased}, stream: {status, last_delivery_at}, rpc_ms, db_ms, gemini_ws: {connected, last_frame_at}, el_agent_ok, llm_last_ok}`. Built (`apps/server/src/chain/health.ts`) with more: also `toggles` (as `GET /v1/demo/toggles`), `judge_llm` (`{provider, model, cached_ruling, calls, failures, last_ok_at, last_ok_ms, last_ok_source, last_ok_model, last_error_at, last_error, last_error_source, window, p50_ms, p95_ms}`, in memory since boot; the warm-up counts) and `llm_last_ok` (= `judge_llm.last_ok_at`), and `checks` (camera checks: `{enabled, sam_configured, toggle, active, timeout_ms, calls?, failures?, last_ok_at?, last_ok_ms?, last_error_at?, last_error?, last_warm_at?}`, the SAM fields only when SAM is configured; warning `checks_sam_failing` (`warn`, judge-class) when the last SAM call failed). `stream` is `{last_delivery_at, events_last_hour, rpc_poll_last_hour}` (no `status`: that is QuickNode's, read by `scripts/demo-check.ts`): Stream deliveries only (`chain_events.source = 'stream'`, or `chain_txs.stream_seen_at` for a tx `rpc_poll` stored first); `rpc_poll_last_hour` is additive. Warning `stream_silent` (`warn`): `QN_STREAM_SECURITY_TOKEN` is set and server escrow txs (not `nonce_advance`) were sent in the last 10 min (older than 60 s) with no Stream delivery in that time; a dropped send (still `sent`, in `inflight.stuck`) can also trigger it. Judge warnings (level `warn`): `judge_no_success` (no judge success since boot), `judge_failing` (the last call failed after the last success), `cached_ruling_on`. They stay in `warnings`, but alone they never turn the server's health log lines into a WARN (`chain.boot_health` stays info, and the keeper's 10-minute `chain.unhealthy` is not logged): those lines mean a chain or money-path problem (`chain/health.ts` `chainNeedsAttention`). The projector polls it with its own stage token (scope `demo` under `DEMO_MODE`), so `#demo=` is optional in the stage URL. |
 
@@ -670,7 +667,7 @@ Every route under `/v1/demo/*` needs a stage token with `demo` scope **and** `X-
 
 ### 2.18 API-owned types
 
-A spec, not source; re-author it in `packages/shared/src/api.ts`. Imports: `BetId, Uuid, Hex32, Pubkey, Signature, IsoUtc, UnixSeconds, MicroUsdc, Party, UserRef, TermsEnvelope, TermsDraft, BetState, OnchainStatus, OnchainOutcome, PendingTx, Ruling, HearingRuling, AppealResult, AuthorizationMethod, AuthorizeRequest, PartyAuthorization, PartyDecline, FairRefusal` (SCHEMAS). The lock request is SCHEMAS `AuthorizeRequest`; `SignRequest` below covers `concede` and `appeal` only.
+A spec, not source; it is implemented in `packages/shared/src/api.ts`. Imports: `BetId, Uuid, Hex32, Pubkey, Signature, IsoUtc, UnixSeconds, MicroUsdc, Party, UserRef, TermsEnvelope, TermsDraft, BetState, OnchainStatus, OnchainOutcome, PendingTx, Ruling, HearingRuling, AppealResult, AuthorizationMethod, AuthorizeRequest, PartyAuthorization, PartyDecline, FairRefusal` (SCHEMAS). The lock request is SCHEMAS `AuthorizeRequest`; `SignRequest` below covers `concede` and `appeal` only.
 
 ```ts
 export const SignedMicroUsdc = z.string().regex(/^-?(0|[1-9][0-9]{0,19})$/);
@@ -792,7 +789,7 @@ Server control frames carry an `op` and are **not** `RealtimeEvent`s and not seq
 
 - `welcome`, `subscribed {bet_id, last_seq, replayed}`, `ping {t, server_time}`, `error {code, message}`;
 - `room.presence {room_id, members: RoomMember[]}`;
-- `stage.market {snapshot: GeminiMarketSnapshot}` (≤ 2/s; the chart ring buffer, FINDINGS §3.11);
+- `stage.market {snapshot: GeminiMarketSnapshot}` (≤ 2/s; the chart ring buffer);
 - `stage.cue {bet_id, kind, audio_url?}` (`audio_url`: the ElevenLabs Sound Effects clip, §2.6);
 - `stage.voice {bet_id, seq, type, voice, text, clip_id, audio_url}`, to the room's **stage sessions only**: the ElevenLabs TTS clip of the stage line for bet event `(bet_id, seq)` (§4.5). Sent right after that event, before the clip exists; `GET audio_url` waits for it. Never sent for a line the phone judge says (§4.5 "One judge at a time").
 
@@ -812,8 +809,8 @@ Server control frames carry an `op` and are **not** `RealtimeEvent`s and not seq
 
 - **seq.** Per bet, gapless, assigned in the same DB transaction that appends to `bet_events` (SCHEMAS §10.1, DATA-MODEL §5.19). Chain events are deduplicated on `(signature, outer_ix, inner_ix)` **before** `seq` is assigned.
 - **The client** applies events in seq order and drops `seq ≤ last_seen`. On a gap (`seq > last_seen + 1`) it buffers ≤ 2 s; if the gap is still open it calls `GET /v1/bets/:id/events?after=last_seen` and then drains the buffer. On reconnect it sends `hello` with `subs[].after_seq`.
-- **Heartbeat.** The server sends `ping` every 20 s (FINDINGS §3.13) and the client answers with `pong`. The client declares the socket dead after 45 s with no frame and reconnects with backoff 0.25 → 0.5 → 1 → 2 → 5 s plus jitter. The server drops a socket after 2 missed pongs, or when its send buffer exceeds 1 MB; the client resyncs.
-- **Background.** iOS kills a suspended app's socket. Keep B's app in the foreground for the demo; outbox push covers the rest (FINDINGS §3.14).
+- **Heartbeat.** The server sends `ping` every 20 s and the client answers with `pong`. The client declares the socket dead after 45 s with no frame and reconnects with backoff 0.25 → 0.5 → 1 → 2 → 5 s plus jitter. The server drops a socket after 2 missed pongs, or when its send buffer exceeds 1 MB; the client resyncs.
+- **Background.** iOS kills a suspended app's socket. Keep B's app in the foreground for the demo; outbox push covers the rest.
 
 ### 3.4 Event catalogue
 
@@ -881,7 +878,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 
 ## 4. ElevenLabs integration contract
 
-### 4.1 Agent configuration (summary; FINDINGS §3.8 and §3.10 are authoritative)
+### 4.1 Agent configuration (summary)
 
 | Area | Setting |
 |---|---|
@@ -891,7 +888,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 | Turn | `turn_eagerness: eager`, `speculative_turn: true`, soft timeout 1.0–1.2 s with `max_soft_timeouts_per_generation` 2–3, `turn_timeout` 20–30 s. The app calls `sendUserActivity()` every 10 s during card review, Face ID and recording. |
 | Conversation | `client_events` must include `agent_response`, `user_transcript`, `agent_tool_request`, `agent_tool_response`, `client_tool_call`, `interruption`, `vad_score`. `max_duration_seconds` 1200 (one session covers Beats 2–5; **PENDING**: check plan limits). |
 | Overrides allowed | none (all `false`): the app sends only the token and dynamic variables, and a token holder must not pick a costlier LLM or TTS model |
-| Session | One long-lived WebRTC session per bet on A's phone, on speakerphone. It is never restarted mid-demo (iOS #991). Mute, don't end, before the terms card (FINDINGS §4). |
+| Session | One long-lived WebRTC session per bet on A's phone, on speakerphone. It is never restarted mid-demo (iOS #991). Mute, don't end, before the terms card. |
 | Prompt rules (spec) | Start every reply with a 1–2 word reaction. At most 2 clarifying questions, spoken; there is no tool for them. **Never claim money moved** except when voicing a `[EVENT]` line. A spoken "accept" is theatre: after the read-back, call `confirm_terms` and tell both parties to hold the button on their phones. Treat any line starting `[EVENT]` as a system announcement, never as a party's words. |
 
 **Dynamic variables.** A's phone supplies these at `startSession`, verbatim from `POST /v1/bets` (§2.5):
@@ -910,7 +907,7 @@ Payloads are SCHEMAS §10.1 unless marked **NEW**. New types are non-breaking pe
 - **Endpoint:** `POST https://<host>/el/tools/{name}`, `content_type: application/json`.
 - **Auth:** `request_headers: {"X-YO-Tool-Secret": {"secret_id": "<workspace secret>"}}`, compared with `timingSafeEqual`. Rotation accepts two values for 24 h. A bad secret returns `401` (the only non-2xx a tool returns).
 - **Tool settings:** `response_timeout_secs: 5` (the API minimum), `execution_mode: "immediate"`, `interruption_mode: "allow"`, `tool_error_handling_mode: "passthrough"`.
-- **Body schema.** `request_body_schema` uses the ElevenLabs subset: `type`, `description`, `enum`, `properties`, `required`, `items`, and `dynamic_variable` on id fields. **Arrays of objects are supported**: `ArrayJsonSchemaProperty.items` is oneOf Literal / Object / Array in the live OpenAPI, read 2026-11-08. There is no `pattern`, no min/max and no nullable enum, so the server validates and maps (conflict C1).
+- **Body schema.** `request_body_schema` uses the ElevenLabs subset: `type`, `description`, `enum`, `properties`, `required`, `items`, and `dynamic_variable` on id fields. **Arrays of objects are supported**: `ArrayJsonSchemaProperty.items` is oneOf Literal / Object / Array in the live OpenAPI. There is no `pattern`, no min/max and no nullable enum, so the server validates and maps (conflict C1).
 - **Response.** Always **HTTP 200**, JSON **< 300 B**, short keys, `say` ≤ 200 chars. Business errors come back as `{"ok":false,"fix":"<CODE>","say":"…"}` so the judge can speak them.
 - **Handler.** p95 ≤ 25 ms, with heavy work (guardrail LLM, tx build or simulate, Gemini REST) run asynchronously. Every call is logged to `judge_tool_calls`.
 - **Idempotency:** `(voice_session_id, el_tool_call_id)` when the body carries a tool-call id (**PENDING-KEY**: unverified), else `sha256(conversation_id ‖ name ‖ JCS(args))` within 10 s (DATA-MODEL §5.11). A duplicate replays the stored response.
@@ -1066,9 +1063,9 @@ With odds the reply adds `"odds":"tap_accept"` and the stake sentence names both
 |---|---|---|---|
 | `request_attempt` | `{attempt_no: integer "1 for the first try; +1 after Run it back"}` | true / 5 s | `POST /v1/bets/:id/attempts {attempt_no, recorder:'judge_cam'}`, then `'self'` on `no_judge_cam` when A is the non-performer (§2.9, two phones). Returns `"armed: judge cam counting down"`, `"armed: this phone films, counting down"` (A's phone films), or `"error: <code>"` (`"error: NO_JUDGE_CAM"`: A performs and the room has no judge cam, so B taps Start). Allowed only after `[EVENT] LOCKED` or `[EVENT] REDO`. |
 | `show_terms_card` | none | false | Brings A's terms card to the front and re-sends the stage's card focus. The card appears anyway on `terms.authorize_request`. |
-| `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip (its synthesized cue when the server has none, §2.6). A light haptic on A's phone may be silent while the mic is live (FINDINGS §4). |
+| `cue` | `{kind: enum [gavel, drumroll, buzzer, cheer]}` | false | `POST /v1/bets/:id/cues`. The stage plays the Sound Effects clip (its synthesized cue when the server has none, §2.6). A light haptic on A's phone may be silent while the mic is live. |
 
-Pass `clientTools` to `useConversation`, because `useConversationClientTool` isn't exported (FINDINGS §7).
+Pass `clientTools` to `useConversation`, because `useConversationClientTool` isn't exported.
 
 ### 4.5 `[EVENT]` lines (`judge.cue` → `sendUserMessage`)
 
@@ -1081,7 +1078,7 @@ Grammar:
 - One line, ≤ 300 chars, ASCII; values with spaces are double-quoted.
 - The server composes `text`, so wording can be tuned without an EAS rebuild.
 - A's phone sends it **verbatim**. With `speak:false` the phone uses `sendContextualUpdate` instead.
-- The `[EVENT]` prefix matters because `sendUserMessage` text is logged as user speech (FINDINGS §7).
+- The `[EVENT]` prefix matters because `sendUserMessage` text is logged as user speech.
 
 | Cue | Example `text` |
 |---|---|
@@ -1107,7 +1104,7 @@ Grammar:
 | `PAID` after the clock | `… via=timeout loser=Jake :: No GG from Jake; the clock ran out. Congratulate Logan in one line.`; with `review=lapsed`: `Jake did not confirm the review, so the ruling stands. …`; with `review=declined`: `Jake kept the ruling. …` |
 | `REVIEW_CLOSED` (context) | `[EVENT] REVIEW_CLOSED by=Jake reason=declined :: Do not speak. Jake kept the ruling.` / `reason=lapsed :: Do not speak. The review was not confirmed; the ruling stands.` |
 
-**Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:clip_id` (§2.17). This keeps the agent's turn free and meets "voiced appeal votes" (FINDINGS §3.10).
+**Appeal votes are voiced on the stage**, not by the agent. The server calls ElevenLabs TTS with 3 distinct voices and the stage plays the clips via `GET /v1/stage/tts/:clip_id` (§2.17). This keeps the agent's turn free and meets "voiced appeal votes".
 
 **The stage voice** (`apps/server/src/stage/voice.ts`, `apps/stage/src/voice.ts`). The projector also speaks the judge's other spoken moments, so the ruling is heard in the hall when no voice judge hosts the bet (no ElevenLabs key at all, the typed fallback before the agent spoke, a bet driven from the laptop with `cp1-drive`):
 
@@ -1125,12 +1122,12 @@ Grammar:
 ### 4.6 Post-call webhook
 
 - **Endpoint:** `POST /webhooks/elevenlabs`.
-- **Verify** with the SDK, not by hand: `@elevenlabs/elevenlabs-js@2.77.0` `webhooks.constructEvent(rawBody, req.headers['elevenlabs-signature'], ELEVENLABS_WEBHOOK_SECRET)`. The signature header format and tolerance aren't in the docs page (fetched 2026-11-08); the SDK validates the timestamp. **PENDING-KEY**: confirm the method name exists in 2.77.0.
+- **Verify** with the SDK, not by hand: `@elevenlabs/elevenlabs-js@2.77.0` `webhooks.constructEvent(rawBody, req.headers['elevenlabs-signature'], ELEVENLABS_WEBHOOK_SECRET)`. The signature header format and tolerance aren't in the docs page; the SDK validates the timestamp. **PENDING-KEY**: confirm the method name exists in 2.77.0.
 - **Body:** `{type, event_timestamp, data}`.
 
 | `type` | Action |
 |---|---|
-| `post_call_transcription` | Store `data.transcript` JSON at `transcripts/{bet_id}/{conversation_id}.json`. Set `voice_sessions.transcript_sha256`, `ended_at` and `status`. Keep `metadata.charging` / `llm_usage`, which proves which LLM served (FINDINGS §6 step 1). Keep `analysis` as evidence. |
+| `post_call_transcription` | Store `data.transcript` JSON at `transcripts/{bet_id}/{conversation_id}.json`. Set `voice_sessions.transcript_sha256`, `ended_at` and `status`. Keep `metadata.charging` / `llm_usage`, which proves which LLM served. Keep `analysis` as evidence. |
 | `post_call_audio` | **Not enabled.** If one arrives anyway, return 200 and discard it; audio is never stored (DATA-MODEL §10). |
 | `call_initiation_failure` | Log it. |
 
@@ -1142,7 +1139,7 @@ Grammar:
 
 ## 5. QuickNode Stream contract
 
-### 5.1 Stream config (FINDINGS §3.12; created with REST `POST https://api.quicknode.com/streams/rest/v1/streams`, `x-api-key`)
+### 5.1 Stream config (created with REST `POST https://api.quicknode.com/streams/rest/v1/streams`, `x-api-key`)
 
 ```json
 {
@@ -1165,15 +1162,15 @@ Grammar:
 }
 ```
 
-- `filter_language` is undocumented and unverified; FINDINGS §6 step 4 checks it.
+- `filter_language` is undocumented and unverified.
 - The batch size must be ≥ 5, or the API returns 422.
 - Validate with `POST /streams/test_filter` and with `--probe`, which reveals the payload's encoding, whether a slot field exists, and which globals the filter engine has.
 - The response's `destination_attributes.security_token` goes into `QN_STREAM_SECURITY_TOKEN`.
 - **Ops:**
-  - Pause when idle: ~11 M credits/day at 24/7, and the credits are shared with the RPC (FINDINGS §5).
+  - Pause when idle: ~11 M credits/day at 24/7, and the credits are shared with the RPC.
   - Before the demo, run `npm run qn-stream -- reset-start <id>` (the Stream must be paused), then `resume <id>`.
   - The Stream is created only after the hosted URL exists.
-  - Free trial = 1 Stream; the Build plan is a decision (FINDINGS §1).
+  - Free trial = 1 Stream; the Build plan is a decision.
 
 ### 5.2 Filter output (one POST per batch with ≥ 1 match; the filter returns `null` otherwise)
 
@@ -1213,8 +1210,8 @@ The field names follow ESCROW §7.1 rule 5 (JS camelCase):
 
 | Header | Use |
 |---|---|
-| `X-QN-Nonce`, `X-QN-Timestamp`, `X-QN-Signature` | `X-QN-Signature` = hex HMAC-SHA256(`QN_STREAM_SECURITY_TOKEN`, nonce + timestamp + **decompressed body**), compared with `timingSafeEqual` (FINDINGS §3.12). Reject `|now − timestamp| > 300 s`; the unit is unix seconds per the spike simulator, so accept ms when the value has > 11 digits. Confirm with `--probe`. |
-| `batch-start-range`, `batch-end-range`, `stream-dataset` | Logged as `chain_events.delivery_id` (header names from the spike simulator; **PENDING-KEY** confirm) |
+| `X-QN-Nonce`, `X-QN-Timestamp`, `X-QN-Signature` | `X-QN-Signature` = hex HMAC-SHA256(`QN_STREAM_SECURITY_TOKEN`, nonce + timestamp + **decompressed body**), compared with `timingSafeEqual`. Reject `|now − timestamp| > 300 s`; the unit is taken as unix seconds, so accept ms when the value has > 11 digits. Confirm with `--probe`. |
+| `batch-start-range`, `batch-end-range`, `stream-dataset` | Logged as `chain_events.delivery_id` (**PENDING-KEY**: confirm the header names) |
 | `Content-Encoding` | Gunzip only when the bytes start with `1f 8b` |
 
 - Optional: allowlist the source IP `141.148.40.227`.
@@ -1247,12 +1244,12 @@ All events: insert into `chain_events` (`observed_via:'quicknode_stream'`), and 
 
 ## 6. Solana transaction contracts
 
-Common rules (FINDINGS §3.5):
+Common rules:
 
 - The server builds every message. A message is legacy, or v0 without lookup tables. The fee payer is the server hot key, which also fronts rent.
 - The server stores the exact bytes and verifies every phone signature against them. It never rebuilds a message after collecting a signature, and never co-signs a message a client built.
-- **CU limit** = simulated × 1.3, floored at the measured max + 10% (ESCROW §10.1; FINDINGS §3.5). Until ESCROW N11 measures this program, the atomic-lock floor is a provisional 100k (E, this doc; the spike max was 63,675, M). **Priority fee:** a modest `SetComputeUnitPrice` from `getRecentPrioritizationFees`.
-- **Send** through the QuickNode devnet RPC with `skipPreflight: false` and `preflightCommitment: 'processed'`. **Never** use `skipPreflight`: a doomed nonce tx sent that way is charged 15,000 lamports and burns the nonce (FINDINGS §1).
+- **CU limit** = simulated × 1.3, floored at the measured max + 10% (ESCROW §10.1). Until ESCROW N11 measures this program, the atomic-lock floor is a provisional 100k (E, this doc; the measured max was 63,675, M). **Priority fee:** a modest `SetComputeUnitPrice` from `getRecentPrioritizationFees`.
+- **Send** through the QuickNode devnet RPC with `skipPreflight: false` and `preflightCommitment: 'processed'`. **Never** use `skipPreflight`: a doomed nonce tx sent that way is charged 15,000 lamports and burns the nonce.
 - **Confirm** with `signatureSubscribe` at `processed` and `confirmed`. Rebroadcast the same signed bytes every 1 s until confirmed, or until expiry (blockhash: `last_valid_block_height`; nonce: the nonce advanced).
 - Reads pass `maxSupportedTransactionVersion: 1`.
 
@@ -1260,9 +1257,9 @@ Common rules (FINDINGS §3.5):
 
 | Kind | Instructions | Builder → signers (slot) | Lifetime | CU (E) | Trigger |
 |---|---|---|---|---|---|
-| **Atomic lock** | `[AdvanceNonceAccount(nonce, authority = fee payer), SetComputeUnitLimit, SetComputeUnitPrice, create_bet(bet_id, party_b, stake_a, stake_b, terms_hash, accept_deadline), accept_bet(expected_terms_hash, expected_stake_a, expected_stake_b, expected_party_a)]` | server → **fee payer (index 0, also the nonce authority)** + A's device key (the `create_bet.party_a` signer) + B's device key (the `accept_bet.party_b` signer). 3 signatures; each phone finds its own index among the first `numRequiredSignatures` keys. | **durable nonce** (`recentBlockhash` = nonce value). Valid until the nonce advances; bounded by `accept_deadline` (skill: build time + 300 s; gemini: `unix(quotedAt) + 60`; always ≤ now + 600; ESCROW §5.0.1 step 2). | 36.7k–63.7k on the spike program; real program **PENDING N11**; size ~990–1,005 B of 1,232 (E; N12) | built and simulated at `confirm_terms`, published as `terms.authorize_request`, submitted at the 2nd `PartyAuthorization` |
+| **Atomic lock** | `[AdvanceNonceAccount(nonce, authority = fee payer), SetComputeUnitLimit, SetComputeUnitPrice, create_bet(bet_id, party_b, stake_a, stake_b, terms_hash, accept_deadline), accept_bet(expected_terms_hash, expected_stake_a, expected_stake_b, expected_party_a)]` | server → **fee payer (index 0, also the nonce authority)** + A's device key (the `create_bet.party_a` signer) + B's device key (the `accept_bet.party_b` signer). 3 signatures; each phone finds its own index among the first `numRequiredSignatures` keys. | **durable nonce** (`recentBlockhash` = nonce value). Valid until the nonce advances; bounded by `accept_deadline` (skill: build time + 300 s; gemini: `unix(quotedAt) + 60`; always ≤ now + 600; ESCROW §5.0.1 step 2). | 36.7k–63.7k measured; real program **PENDING N11**; size ~990–1,005 B of 1,232 (E; N12) | built and simulated at `confirm_terms`, published as `terms.authorize_request`, submitted at the 2nd `PartyAuthorization` |
 | Nonce advance (revoke) | `[AdvanceNonceAccount]` | server → fee payer | recent blockhash | ~1k | decline, expiry, terms change, demo reset; afterwards re-read the nonce value and return it to the pool |
-| Nonce pool create (deploy script) | `[CreateAccountWithSeed(base = fee payer, seed = "yo-nonce-<i>", owner = System), InitializeNonceAccount(authority = fee payer)]` | server → fee payer | recent blockhash | — | `scripts/nonce-pool.ts` once at deploy, 5 accounts (ESCROW §10.3 step 9). The server re-reads them at boot and adds the next seed index only when the pool is empty or an account retires (≤ `NONCE_SEED_MAX` = 16; DATA-MODEL §5.20). 1,056,640 lamports each (FINDINGS §3.7) |
+| Nonce pool create (deploy script) | `[CreateAccountWithSeed(base = fee payer, seed = "yo-nonce-<i>", owner = System), InitializeNonceAccount(authority = fee payer)]` | server → fee payer | recent blockhash | — | `scripts/nonce-pool.ts` once at deploy, 5 accounts (ESCROW §10.3 step 9). The server re-reads them at boot and adds the next seed index only when the pool is empty or an account retires (≤ `NONCE_SEED_MAX` = 16; DATA-MODEL §5.20). 1,056,640 lamports each |
 | `resolve` | `[CB…, resolve(outcome, evidence_hash, ruling_hash)]` | server → fee payer + `judge_authority` | recent blockhash | 5–10k | ruling decided (attempt, hearing or settlement); `evidence_hash` = clip sha256 or `hashJcs(GeminiSettlementRecord)` |
 | `concede` | `[CB…, (CreateAssociatedTokenAccountIdempotent winner, funder = server), concede, close_bet]` | server → fee payer + loser's device key (the `concede.party` signer) | recent blockhash (~36 s); rebuilt if > 20 s old and unsigned | 30–55k | loser's GG (§2.10) |
 | `finalize` | `[CB…, (ATA create), finalize, close_bet]` | server → fee payer | recent blockhash | 30–55k | server timer at `appeal_deadline + 1 s`; on `AppealWindowOpen` retry every 1 s; on `InvalidStatus` re-read (an appeal may have landed) |
@@ -1287,7 +1284,7 @@ If a payout hasn't confirmed within 5 s of `processed`, or fails, the UI reverts
 
 ### 6.3 Device signing policy (phone, `packages/shared/device-policy.ts`)
 
-Everything below runs at terms-card mount: noble is pre-warmed, PDAs are derived with noble, and Kit is used only for codecs (FINDINGS §3.4). **The hold button stays disabled until every check passes.** A check that fails shows "Something's off. Not signing." and reports `{bet_id, kind, rule}` to `POST /v1/bets/:bet_id/policy-rejections` (S; writes `audit_log 'device.policy_rejected'`; P1). The phone signs the exact `message_b64` bytes and nothing else.
+Everything below runs at terms-card mount: noble is pre-warmed, PDAs are derived with noble, and Kit is used only for codecs. **The hold button stays disabled until every check passes.** A check that fails shows "Something's off. Not signing." and reports `{bet_id, kind, rule}` to `POST /v1/bets/:bet_id/policy-rejections` (S; writes `audit_log 'device.policy_rejected'`; P1). The phone signs the exact `message_b64` bytes and nothing else.
 
 | # | Check (all kinds) | Reject if |
 |---|---|---|
@@ -1313,7 +1310,7 @@ Everything below runs at terms-card mount: noble is pre-warmed, PDAs are derived
 | T2 | Ruling | `ruling_ref.ruling_hash` or `ruling_ref.outcome` ≠ the `ruling_hash` / `outcome` of the last `ruling.issued` the phone verified; the caller isn't the loser for that **verified** outcome (SCHEMAS §5.3) |
 | T3 | `close_bet` | `rent_payer` ≠ the fee payer; `party_a_token` (if present) isn't A's ATA |
 
-Tests (`packages/shared`): the 4 MEASURED gaps of the spike harness (mint swap, other `bet_id`, deadline +1 year, unpinned fee payer or nonce authority; FINDINGS §3.4), plus one negative case per rule above. The row IDs to implement are ESCROW §9.2 A13 and DP1–DP16; ESCROW §5.0.2 owns the policy, and this table is its phone-side checklist.
+Tests (`packages/shared`): the 4 MEASURED gaps (mint swap, other `bet_id`, deadline +1 year, unpinned fee payer or nonce authority), plus one negative case per rule above. The row IDs to implement are ESCROW §9.2 A13 and DP1–DP16; ESCROW §5.0.2 owns the policy, and this table is its phone-side checklist.
 
 ---
 
@@ -1326,14 +1323,14 @@ Settings for every call:
 - Output: a hand-written JSON schema passed through `output_config.format` via `jsonSchemaOutputFormat(schema, {transform:false})`, because `zodOutputFormat` drops `enum`. Upper-case enums before validating with Zod.
 - No `temperature` / `top_p` / `top_k` (Claude 5.x returns 400). Never force `tool_choice`.
 - `cache_control: {type:'ephemeral'}` on the system + terms prefix. **PENDING-KEY:** the prefix may sit under the model's minimum cacheable length; check `usage.cache_read_input_tokens`.
-- Check `stop_reason === 'refusal'` before reading `content`. A refusal, a parse error or confidence < 0.8 means REDO (FINDINGS §3.8).
+- Check `stop_reason === 'refusal'` before reading `content`. A refusal, a parse error or confidence < 0.8 means REDO.
 - Warm-up calls at boot and via `/v1/demo/warmup`. The schema is frozen between rehearsal and demo, because the first call after a schema change pays grammar compilation.
 - TS SDK timeouts are in **ms**. Latency-critical calls set `maxRetries: 0` and enforce their own deadline, because SDK retries multiply wall time.
 
-| Job | Model and params (FINDINGS §3.8) | Output schema | Deadline / retry | Notes |
+| Job | Model and params | Output schema | Deadline / retry | Notes |
 |---|---|---|---|---|
-| Guardrail on each `propose_terms` (async) | `claude-haiku-5-5`, `thinking:{type:'disabled'}`, `output_config.effort:'low'`, `max_tokens` 256 | `TermsGuardrailVerdict` = `{kind:'ok'} \| {kind:'refuse', refusal: GuardrailRefusal}` (API-owned; SCHEMAS `GuardrailRefusal`) | 2 s, 1 retry; on failure, fail closed (the bet can't reach the lock; the judge says "Clerk's out. Try again.") | Off the voice path. A synchronous keyword prefilter catches the obvious cases. **No model was evaluated in Phase 0.** |
-| Terms step (Speech Engine fallback only) | `claude-haiku-5-5`, as above, `max_tokens` 600 | SCHEMAS `TermsStepOutput` | 3 s | Used only if ElevenLabs post-tool latency misses (FINDINGS §3.10) |
+| Guardrail on each `propose_terms` (async) | `claude-haiku-5-5`, `thinking:{type:'disabled'}`, `output_config.effort:'low'`, `max_tokens` 256 | `TermsGuardrailVerdict` = `{kind:'ok'} \| {kind:'refuse', refusal: GuardrailRefusal}` (API-owned; SCHEMAS `GuardrailRefusal`) | 2 s, 1 retry; on failure, fail closed (the bet can't reach the lock; the judge says "Clerk's out. Try again.") | Off the voice path. A synchronous keyword prefilter catches the obvious cases. |
+| Terms step (Speech Engine fallback only) | `claude-haiku-5-5`, as above, `max_tokens` 600 | SCHEMAS `TermsStepOutput` | 3 s | Used only if ElevenLabs post-tool latency misses |
 | First ruling | Candidate A: `claude-haiku-5-5`, thinking `disabled`, effort `low`, `max_tokens` 2048, streaming. Candidate B: `claude-opus-5-5`, effort `low` (thinking can't be disabled), as the only model. **Pick after the eval (PENDING-KEY).** | SCHEMAS `VisionVerdict` → `toOutcome` → `Ruling` (with `frame_hashes`, D7) | first-token deadline 2.5 s, total 6 s, no SDK retry | 12 frames + the landing crop (D10) as separate images labelled `Frame k/N at t=…s`, with `, LANDING` on the frames in the clip's last ~1.2 s and `LANDING CROP of frame k` on the crop, + terms; frames inline base64, never URLs (DATA-MODEL §9). Play the pre-generated outcome stinger as soon as `claim_result` streams. |
 | Re-check (parallel, from t=0) | `claude-sonnet-5-5` (adaptive, effort `low`) or `claude-opus-5-5` (effort `low`) | `VisionVerdict` | 6 s | Rule: take the primary if it is decisive at ≥ 0.8; else take the re-check if it is decisive at ≥ 0.8; else REDO. Timeouts and errors count as non-decisive REDO `unclear` and **count toward `MAX_REDOS`** (simplicity; §9 O4). |
 | Dance Off round check (`apps/server/src/judge/dance.ts`) | env `JUDGE_MODEL`, effort `low`, `max_tokens` 1024 (as the vision judge: adaptive thinking counts against it); a canned VALID check while `cached_ruling` is on (no call); judge stats source `'dance'` | `{verdict: VALID\|INVALID, danced_full_time, nobody_left, no_third_person, no_side_swap, notes, announcer_line}` (VALID first, so the mock's default is the happy path) | 8 s (`DANCE_TIMEOUT_MS`, under `STUCK_JUDGING_MS` 20 s), no retry; any failure → validation `skipped`, the round settles on the score with a canned line | Never picks the winner: the server's scores, the per-move breakdown, the deterministic checks (coverage, most people seen, side swaps) and the key frames labelled `Frame k/N at t=…s` go in; the line must name the winner and must not pair the loser with a win word (or, with no winner, start "Too close to call"), else the canned line is used |
@@ -1343,7 +1340,7 @@ Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side
 
 `MAX_REDOS = 2`: the 3rd non-decisive recording goes to `HEARING` with `trigger:'max_redos'` (D7, SCHEMAS §5.2).
 
-### 7.2 Appeals panel (FINDINGS §3.9, SCHEMAS §7)
+### 7.2 Appeals panel (SCHEMAS §7)
 
 | Seat | Provider | Model / call | Params |
 |---|---|---|---|
@@ -1352,7 +1349,7 @@ Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side
 | 2 | `google` | `gemini-3.8-flash` via `@google/genai@2.32.0` `ai.interactions.create` | `generation_config.thinking_level:"low"`, `response_format {type:"text", mime_type:"application/json", schema}`. **Not** 3.0.0. |
 
 - **Inputs** are identical across seats: terms, the same frames, and the hearing transcripts if there was a hearing. Gemini bets use the `GeminiSettlementRecord` instead. **The panel never sees the original ruling or the other votes.**
-- **Fan-out:** all 3 in parallel; per-vote timeout **8 s** (the spike harness's 12 s is overridden by SCHEMAS).
+- **Fan-out:** all 3 in parallel; per-vote timeout **8 s** (SCHEMAS).
 - **Abstain:** a timeout, an error, a `REDO` vote or confidence < 0.6 (`countVote`).
 - **Decision:** at the second agreeing vote, or when all 3 are in or timed out (`decideAppeal`).
 - **No majority, including a tie, upholds the original ruling** (D7, SCHEMAS O7).
@@ -1360,7 +1357,7 @@ Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side
 - **Speculative start:** the panel starts at the `appeal` preflight (§2.12). Votes are stored, and `resolve_appeal` is sent only once `Appealed` is rpc-confirmed. If the `appeal` tx fails, the votes are discarded (`appeals.status='failed'`).
 - **Built (2026-11-18, `apps/server/src/appeal/panel.ts`):** one structured call per seat through `providers/structured.ts` (`deps.providers.llm`, the models of `DEFAULT_CHAT_MODELS`, effort `low`, the hand-written `VisionVerdict` schema `appeal_vote`). The 8 s budget is enforced around the provider call too, so a vendor that hangs abstains on time. Abstentions, in practice: no key (`not_configured`), a timeout, an HTTP / SDK error, a refusal, output that fails the schema, a thrown provider (the production mock), `UNCLEAR`, or confidence < 0.6. A vote's side is the voter's own (MET → the yes party, NOT_MET → the other): the first ruling's 0.8 REDO floor does not apply to votes (SCHEMAS §7). All three abstaining upholds the original. `CACHED_RULING` does not touch the panel. Votes are decided once all three are in (§2.12 built notes). The appeal ruling row is `rulings` stage `appeal`, model `panel/majority-of-3`, `onchain_ix` `resolve_appeal`; `resolve_appeal` pays only the sides that receive something (ATA created if missing) and bundles `close_bet`.
 
-### 7.3 Gemini market service (FINDINGS §3.11; no key, no trading)
+### 7.3 Gemini market service (no key, no trading)
 
 | Function | Endpoint | Cadence / rule |
 |---|---|---|
@@ -1369,27 +1366,27 @@ Opus 5.5 and Sonnet 5.5 calls send `fallbacks: "default"` with beta `server-side
 | Strike | WS `contractStatus` Active→Active frame field `p` (W+4.1–5.6 s, M); fallback `GET /v1/prediction-markets/events/{eventTicker}/strike` | latch the first non-null value; never quote without a strike (`STRIKE_PENDING`) |
 | Quote | `fairStakes(snapshot, amount, a_side, now)` (SCHEMAS §8.2) | lockable from strike-known to T−120 s; recommended lock by W+1:30; a stale WS quote triggers a REST refetch of `GET /events/{ticker}`; the snapshot is bound into `Terms.market` (`quotedAt` → `accept_deadline`) |
 | Settlement | on WS `contractStatus` Settled: `GET /v1/prediction-markets/events/{eventTicker}`; fallback: poll that endpoint every 2 s from expiry | build `GeminiSettlementRecord` (`response_sha256` of the raw body) → settlement `Ruling` (`yes`→MET, `no`→NOT_MET, `invalid`→`VOID/market_invalid`) → `resolve`. The payout follows the 10 s appeal window or the loser's GG (D7, SCHEMAS O6). `deadline` = expiry + 10 min, so `timeout_refund` covers a stuck settlement. |
-| Stage chart | the server's ring buffer of index ticks → `stage.market` | never `/v2/klines` (HTTP 400, FINDINGS §2.3) |
+| Stage chart | the server's ring buffer of index ticks → `stage.market` | never `/v2/klines` (HTTP 400) |
 
 - Settlement lands at p50 5.66 s after expiry (max 8.78 s, M, n=173). Avoid :00 expiries (p50 7.78 s).
 - Rate limit: 120 req/min documented, no headers. The relay serves every client, so per-request Gemini calls never happen.
 
 ### 7.4 Push sending
 
-- **Primary path:** a WS event → the app's full-screen view, `expo-haptics`, and a local `scheduleNotificationAsync({trigger:null})` with category `challenge` and action "View terms" (`opensAppToForeground: true`). **Notification actions cannot sign** (FINDINGS §3.14).
+- **Primary path:** a WS event → the app's full-screen view, `expo-haptics`, and a local `scheduleNotificationAsync({trigger:null})` with category `challenge` and action "View terms" (`opensAppToForeground: true`). **Notification actions cannot sign**.
 - **Outbox** (DATA-MODEL §5.17):
   - Rows are written in the state-change transaction with `dedupe_key = {bet_id}:{kind}:{signature|ruling_id}:{user_id}`.
   - The dispatcher wakes after commit. It sends Expo push (`POST https://exp.host/--/api/v2/push/send`, C) **only to devices with no live WS**, and checks receipts later.
   - Retries go up to 5 attempts, then `dead`.
   - Kinds: `challenge_received`, `authorize_terms`, `bet_locked`, `ruling`, `payout`, `appeal_decided`.
 - **Payloads** are display data only; never keys, embeddings or hashes beyond the terms code.
-- APNs remote push via the EAS push key is P1 (FINDINGS §6 step 15).
+- APNs remote push via the EAS push key is P1.
 
 ---
 
 ## 8. End-to-end trace (Beat 2 → Beat 4)
 
-Logan (A, `E97T44…AR4`) challenges Jake (B, `CnsajwK…sQr`) in room `UBC26X`. The Terms are the SCHEMAS §2.5 test vector (`terms_hash 05860f0a…f998f`). The ruling is the SCHEMAS §5.2 example (`ruling_hash 997ce278…5daa`, with `frame_hashes`, D7). Message bytes and signatures are placeholders (`<…>`). Times are 2026-11-21 UTC; latencies are (E) from FINDINGS.
+Logan (A, `E97T44…AR4`) challenges Jake (B, `CnsajwK…sQr`) in room `UBC26X`. The Terms are the SCHEMAS §2.5 test vector (`terms_hash 05860f0a…f998f`). The ruling is the SCHEMAS §5.2 example (`ruling_hash 997ce278…5daa`, with `frame_hashes`, D7). Message bytes and signatures are placeholders (`<…>`). Times are 2026-11-21 UTC; latencies are (E).
 
 ```mermaid
 sequenceDiagram
@@ -1512,7 +1509,7 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 
 **8. 18:07:04.5: ruling.** The primary returns `{claim_result:"MET", confidence:0.93, reason:"Two full rotations, lands upright on its base in frame 7. Jake never touches it.", cited_frames:[5,6,7], contested:false}` → `toOutcome` = `B_WINS` → `Ruling` (the SCHEMAS §5.2 example, `frame_hashes` included).
 
-- Emitted at once: `ruling.issued {ruling, ruling_hash:"997ce278…5daa"}` and `judge.cue RULING` → judge audio ~2.7–3.7 s after STOP (E). The 2.7 s budget assumes 0.5 s TTS; the Agent-voiced `[EVENT]` path is 0.6–1.0 s, which is unresolved (FINDINGS §2.3) and hidden by the outcome stinger.
+- Emitted at once: `ruling.issued {ruling, ruling_hash:"997ce278…5daa"}` and `judge.cue RULING` → judge audio ~2.7–3.7 s after STOP (E). The 2.7 s budget assumes 0.5 s TTS; the Agent-voiced `[EVENT]` path is 0.6–1.0 s, which is unresolved and hidden by the outcome stinger.
 - In parallel `resolve(PartyB, evidence_hash=6d16c2ef…, ruling_hash)` is sent → confirmed ~18:07:05.4 (block time 1795284425, `appeal_deadline` 1795284435 = 18:07:15).
 - `bet.state RULED`; Logan (the loser) receives `tx.sign_request` `concede` (`valid_until` 18:07:16) and `appeal` (`valid_until` 18:07:14).
 - The finalize timer is armed for 18:07:16.
@@ -1541,20 +1538,19 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 | # | Conflict | Resolution here | Doc to edit |
 |---|---|---|---|
 | C1 | SCHEMAS §3 says `TermsProposal` = the `propose_terms` params, generated by `z.toJSONSchema()`. The ElevenLabs schema subset has no `pattern`, min/max or nullable enums, and money as an LLM-typed micro-USDC string is error-prone. | The LLM-facing projection in §4.3 (`amount_usd`, `performer:'none'`, `market_side`, `deadline_minutes:0`) plus a deterministic server mapping into `TermsProposal`. | SCHEMAS §3 note |
-| C2 | `ask_clarification` is dropped (FINDINGS §3.10), so `ClarificationQuestion`, `terms.question` and `TermsDraft.clarifications` have no producer. Clarifications now live only as `edge_cases`. | Keep the schemas; mark them "no v1 producer". | SCHEMAS §3, §10.1 |
+| C2 | `ask_clarification` is dropped, so `ClarificationQuestion`, `terms.question` and `TermsDraft.clarifications` have no producer. Clarifications now live only as `edge_cases`. | Keep the schemas; mark them "no v1 producer". | SCHEMAS §3, §10.1 |
 | C3 | DATA-MODEL §5.2 says `device_pubkey` is the same keypair as the wallet in v1. | A separate device auth key, because the `.userPresence` upgrade would otherwise prompt Face ID on every API call. | DATA-MODEL §5.2 |
 | C4 | SCHEMAS X14/O9/§9, ESCROW §5.0/§8.4 and DATA-MODEL `chain_txs` still describe the two-tx lock (superseded by D3, edit in progress). `PendingTx.ix` / `chain_txs.ix` has no value for the combined tx. | **Resolved:** `AWAITING_LOCK` = atomic tx in flight; `kind:'atomic_lock'` (SCHEMAS `TxKind`, DATA-MODEL `tx_kind`; `PendingTx.ix` became `PendingTx.kind`). | SCHEMAS §9, DATA-MODEL §5.8 |
 | C5 | SCHEMAS §8.3: an expired Gemini quote → `timeout_refund` of A's stake. | Under atomic nothing is onchain before the lock: a nonce advance plus offchain `EXPIRED` (`quote_expired`), then a re-quote on a new `bet_id`. | SCHEMAS §8.3 |
 | C6 | SCHEMAS `MicroUsdc` is unsigned, but head-to-head `net` is negative. | API-owned `SignedMicroUsdc` (§2.18). | SCHEMAS §1.1 (optional) |
 | C7 | The SCHEMAS envelope requires `bet_id`, but room presence, the stage chart and cues are not bet-scoped. | Unsequenced WS control frames (`room.presence`, `stage.market`, `stage.cue`). NEW bet events: `tx.sign_request`, `judge.cue`, `hearing.turn_open`, `bet.invite_answered`; plus `attempt.started` gains `recorder_device_id` and `go_at`. | SCHEMAS §10.1 |
-| C8 | ESCROW §10.1: CU = simulated × 1.2. FINDINGS §3.5: × ~1.3. | × 1.3 with the floor (FINDINGS is newer). | ESCROW §10.1 |
+| C8 | ESCROW §10.1: CU = simulated × 1.2; the measured margin is × ~1.3. | × 1.3 with the floor (the measurement is newer). | ESCROW §10.1 |
 | C9 | SCHEMAS `TermsPresentation.readback` ≤ 400 chars vs a < 300 B tool response. | The tool returns a templated `say` ≤ 200 chars; the card keeps the full read-back. | none |
 | C10 | DATA-MODEL has no device role (judge cam), sessions table, nonce-pool table (D3) or API idempotency in P0. | Proposed: `devices.role`, `api_sessions(token_sha256, device_id, expires_at)`, `nonce_pool(nonce_pubkey, seed_index, leased_bet_id, nonce_value, leased_at)`. `api_idempotency` stays P1 (in-memory LRU in P0). | DATA-MODEL §5 |
 | C11 | D7: the Ruling must commit to the frames. SCHEMAS O3 is open, and the §5.2/§6/§7 example hashes are now obsolete. | **Resolved:** SCHEMAS O3 adopted `frame_hashes` (the per-frame SHA-256s in send order) in `Ruling`, `HearingRuling` and `AppealResult`; hashes recomputed (`997ce278…5daa`, `a7721bbc…d368`). There is no `evidence_record_hash`. | SCHEMAS §5.2, §6, §7, §11 vectors |
 | C12 | DATA-MODEL §5.11 still names `lock_bet` as a tool (BRIEF 5d lists `lock_bet`, `issue_ruling` and `ask_clarification`). | None of these is an LLM tool (D6). `lock_bet`'s role is `confirm_terms` plus `judge.cue LOCKED`, which closes SCHEMAS O5. | DATA-MODEL §5.11, SCHEMAS O5 |
-| C13 | FINDINGS §3.13 route names (`/el/token`, `/attempts/:id/frames`). | Renamed under `/v1` (§1.1 mapping). | none |
 
-**Status after the 2026-11-08 consistency pass.** C1, C2: SCHEMAS §3 now says the tool params are this doc's projection, and that clarification records come only from the Speech Engine fallback. C3: DATA-MODEL §5.2 now has a separate device auth key and `devices.role`. C4, C11: resolved in the rows above. C5: SCHEMAS §8.3 already matches. C6, C7: SCHEMAS §10.1 lists these API-owned extensions and control frames. C8: ESCROW §10.1 says × 1.3. C10: DATA-MODEL now has `devices.role`, `api_sessions` (§5.21) and `nonce_pool` (§5.20); `api_idempotency` is P1. C12: DATA-MODEL §5.11 and SCHEMAS O5 now say no LLM lock tool. **Lock push renamed:** the lock is `terms.authorize_request` carrying SCHEMAS `AuthorizeRequest`, not `tx.sign_request`, which now carries `concede`/`appeal` only.
+**Status.** C1, C2: SCHEMAS §3 now says the tool params are this doc's projection, and that clarification records come only from the Speech Engine fallback. C3: DATA-MODEL §5.2 now has a separate device auth key and `devices.role`. C4, C11: resolved in the rows above. C5: SCHEMAS §8.3 already matches. C6, C7: SCHEMAS §10.1 lists these API-owned extensions and control frames. C8: ESCROW §10.1 says × 1.3. C10: DATA-MODEL now has `devices.role`, `api_sessions` (§5.21) and `nonce_pool` (§5.20); `api_idempotency` is P1. C12: DATA-MODEL §5.11 and SCHEMAS O5 now say no LLM lock tool. **Lock push renamed:** the lock is `terms.authorize_request` carrying SCHEMAS `AuthorizeRequest`, not `tx.sign_request`, which now carries `concede`/`appeal` only.
 
 ### 9.2 Decisions this doc made (flag if wrong)
 
@@ -1575,20 +1571,13 @@ Second authorization → LOCKED: ~0.8 s (E; target < 2 s). Then `judge.cue` (seq
 - **PENDING-KEY (QuickNode):** payload encoding and slot field; `X-QN-Timestamp` unit; batch header names; `filter_language`; real Stream → webhook latency; the credits decision.
 - **PENDING-KEY (Anthropic, OpenAI, Google):** ruling model choice (Haiku vs Opus-low), accuracy (0% wrong winners bar), latency; whether caching engages on the prefix; real panel latency.
 - **PENDING-SOL/PHONE:** devnet atomic-lock CU (ESCROW N11) and size (N12); second authorization → LOCKED in both orders over cellular; processed → payout-visible; Face ID and passcode timing and the `method` detection trick; face match on the iPhone.
-- **PENDING (window):** Fly app name / base URL; `@noble/ciphers` version pin; consent text v1.
+- **PENDING:** Fly app name / base URL; `@noble/ciphers` version pin; consent text v1.
 
 ---
 
 ## Changelog
 
 - **2026-11-19, call it off:** §2.9a `POST /v1/bets/:bet_id/call-off {agree}` (a mutual VOID 'safety_stop' of a stuck locked bet, model `rule/called-off@1`, through the normal ruling → resolve(Refund) → VOIDED path; only before any ruling is in flight or out), §2.17 `POST /v1/demo/bets/:bet_id/void` (the operator's fallback), §1.7 the `call-off` bucket, §3.4 `bet.call_off`. No table (the request is the bet's `bet_events` log), no enum change.
-- **2026-11-08:** first draft (Phase 0). It adopts D1–D7: the atomic lock with durable nonce and preflight; on-phone authorization with recorded method; the voice topology of FINDINGS §3.10; the Ruling committing to frame hashes; no-majority upholds; the 10 s Gemini window; `MAX_REDOS = 2`. It covers REST, WS, ElevenLabs, QuickNode, the Solana tx contracts, the device policy, internal services and the Beat 2→4 trace. ElevenLabs tool-schema capabilities (arrays of objects, `assignments`, `execution_mode`, `tool_error_handling_mode`, the token response `{token, conversation_id}`) were checked against the live ElevenLabs OpenAPI on 2026-11-08, and the post-call webhook body against the ElevenLabs docs on 2026-11-08.
-- **2026-11-08, cross-doc consistency pass** (all eight planning docs checked against D1–D7 and FINDINGS; ownership: SCHEMAS types, ESCROW onchain, DATA-MODEL tables, API-CONTRACT endpoints/events/tools):
-  - **Lock request renamed to the SCHEMAS type and event:** the lock is SCHEMAS `AuthorizeRequest`, pushed as `terms.authorize_request` (§2.8, §3.4, §4.3, §4.4, §8). `SignRequest` / `tx.sign_request` now cover `concede` and `appeal` only, with a blockhash lifetime.
-  - **§2.8.** `PartyAuthorization` carries `lock_request_id` and `ms_since_auth_success` (SCHEMAS §9). The server records `chain_txs.a_/b_signature`, `a_/b_signed_at` and `first_signer`, not `party_signed_at`. Expiry is at `expires_at` = `accept_deadline − LOCK_SUBMIT_MARGIN_SECS` (5 s), not −2 s. Idempotency is `(lock_request_id, party)`. New error `STALE_LOCK_REQUEST` (§1.5).
-  - **Lock build timing:** the nonce lease, build and simulation happen at `confirm_terms` (ESCROW §5.0.1), not speculatively at `propose_terms`. The skill `accept_deadline` is build time + 300 s; the trace now uses 1795284618 (18:10:18) and `expires_at` 18:10:13.
-  - **D7:** `evidence_record_hash` replaced by `frame_hashes` (§2.9, §7.1, §8); the trace uses the recomputed SCHEMAS ruling hash `997ce278…5daa`.
-  - `tx.*` payloads carry `kind: TxKind` (was `ix`). Nonce pool is created by `scripts/nonce-pool.ts` at deploy, not at boot (§6.1). `/v1/config` serves `nonce_seed_max`. Pins come from committed `packages/shared` constants, not EAS env. CU floor cites ESCROW N11. Added `GET /health` to §2.0, `POST /v1/demo/toggles` to §2.17, and a status note for every §9.1 conflict.
 - **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`):
   - **§2.9 frames.** 8..12 frames + at most one landing crop (`frames[i].landing_crop`, last, ≤ 1024 px), every JPEG ≤ 200 KB; the phone sends 12 (8 in the last ~1.2 s) + the crop through the shared sampler `packages/shared/src/judge/frames.ts`. §1.4: the frames body limit is 3 MiB (it already was in code; the 2 MB here was stale).
   - **§2.9 attempts.** Called by the non-performer's Start as well as A's `request_attempt`. `'judge_cam'` first, then `'self'` on `409 no_judge_cam`, never from the performer; the `no_judge_cam` refusal refunds its rate-limit token. Deviation from ARCHITECTURE §1.1 ("recording never happens on A's phone"): with two phones and B performing, A's phone films, video only, so WebRTC keeps the mic.

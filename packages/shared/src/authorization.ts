@@ -87,7 +87,7 @@ export const PartyAuthorization = z.object({
   method: AuthorizationMethod,
   /** Device clock at Face ID success; the server also stores its receive time. */
   authorized_at: IsoUtc,
-  /** Latency metric (FINDINGS §6 step 12). */
+  /** Latency metric. */
   ms_since_auth_success: z.number().int().nonnegative().max(60_000),
   /** sha256 of the message bytes the phone signed. */
   message_sha256: Hex32,

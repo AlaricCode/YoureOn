@@ -410,7 +410,7 @@ describe('mock voice', () => {
 // ---- live LLM through the real SDKs, fake fetch ------------------------------------------------
 
 describe('LiveLlm: Anthropic (@anthropic-ai/sdk 1.6.0)', () => {
-  it('sends the spike-02 request shape and returns the validated verdict', async () => {
+  it('sends the pinned request shape and returns the validated verdict', async () => {
     const { f, calls } = fakeFetch(() =>
       json(
         anthropicMessage([
@@ -509,7 +509,7 @@ describe('LiveLlm: Anthropic (@anthropic-ai/sdk 1.6.0)', () => {
 });
 
 describe('LiveLlm: OpenAI (openai 7.53.0 responses.parse + zodTextFormat)', () => {
-  it('sends the spike-02 request shape and validates output_text', async () => {
+  it('sends the pinned request shape and validates output_text', async () => {
     const { f, calls } = fakeFetch(() =>
       json(openaiResponse([{ type: 'output_text', text: JSON.stringify(GOOD), annotations: [] }])),
     );
@@ -559,7 +559,7 @@ describe('LiveLlm: OpenAI (openai 7.53.0 responses.parse + zodTextFormat)', () =
 });
 
 describe('LiveLlm: Google (@google/genai 2.32.0 interactions.create)', () => {
-  it('sends the spike-02 request shape and validates output_text', async () => {
+  it('sends the pinned request shape and validates output_text', async () => {
     const { f, calls } = fakeFetch(() =>
       json({
         id: 'int_1',
@@ -654,7 +654,7 @@ const SCRIBE = {
   ],
 } satisfies ScribeResponse;
 
-describe('scribeToTranscript (ported from Verdict)', () => {
+describe('scribeToTranscript', () => {
   it('groups words into per-speaker segments and extracts audio events', () => {
     expect(scribeToTranscript(SCRIBE)).toEqual({
       text: 'It hit the cap. No way!',

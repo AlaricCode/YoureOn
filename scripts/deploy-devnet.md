@@ -194,7 +194,7 @@ Uses nonce `k=4` by default (`--nonce-index`); with `--database-url` it refuses 
 (A wins by default, `--winner b`), and the five events `BetCreated, BetAccepted` (one lock tx),
 `BetResolved`, `BetFinalized, BetClosed`. Paste the program ID, Config PDA and the printed Explorer
 links (`?cluster=devnet`) into the README, and the send → processed → confirmed timings into
-`docs/measurements.md` (FINDINGS §6 step 5).
+`docs/measurements.md`.
 
 ## 12. Verifiable build (optional, P2)
 

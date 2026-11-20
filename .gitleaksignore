@@ -1,5 +1,5 @@
 # Reviewed false positives (gitleaks generic-api-key), 2026-11-14. None is a credential:
-# - Groth16 verifying key constants in the retired Verdict code (a VK is public by design).
+# - Groth16 verifying key constants (a VK is public by design).
 22cc419548a90e31072972d70bee6b448807436f:docs/CONTRACTS.md:generic-api-key:1209
 22cc419548a90e31072972d70bee6b448807436f:circuits/build/vk.rs:generic-api-key:9
 22cc419548a90e31072972d70bee6b448807436f:circuits/scripts/vk-to-rust.ts:generic-api-key:89

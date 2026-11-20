@@ -2,10 +2,9 @@
 // multimodal LLM (judge, hearing, appeals panel), ElevenLabs Scribe speech-to-text (B's hearing
 // turn, API-CONTRACT §2.11) and ElevenLabs Sound Effects (stage cues, API-CONTRACT §2.6).
 //
-// Ported from Verdict packages/backend/src/providers/types.ts: one interface per capability, a
-// deterministic mock selected by default, and a paid "live" implementation that refuses to run
-// without ALLOW_SPEND=true (./spend.ts). Re-shaped for You're On: LLM output is a caller-supplied
-// structured schema (SCHEMAS VisionVerdict, HearingVerdict, ...), never Verdict's booth votes.
+// One interface per capability, a deterministic mock selected by default, and a paid "live"
+// implementation that refuses to run without ALLOW_SPEND=true (./spend.ts). LLM output is a
+// caller-supplied structured schema (SCHEMAS VisionVerdict, HearingVerdict, ...).
 import type { z } from 'zod/v4';
 import type { StageCueKind } from '@youre-on/shared/api';
 import type { PanelProvider } from '@youre-on/shared/appeal';

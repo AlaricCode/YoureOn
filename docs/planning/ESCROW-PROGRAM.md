@@ -1,10 +1,8 @@
-Status: DRAFT — Phase 0 planning written 2026-11-08 (before the build window). Re-author into the repo during the window; if committed verbatim, commit it as 'docs: import Phase 0 planning (written pre-window)'.
-
 # ESCROW-PROGRAM — Anchor escrow spec (`programs/escrow`)
 
-This is the spec for the onchain escrow. The program itself gets written during the window. Rust code blocks below are specs, not source. Where a choice depended on a Phase 0 spike, the default is written here. It is marked **(confirmed: spike NN)** where the spike's Verification settled it, and **(spike NN: pending)** where it still needs a key, SOL or a phone.
+This is the spec for the onchain escrow. Rust code blocks below are specs, not source. A default marked **(confirmed)** has been measured.
 
-**At a glance (2026-11-08)**
+**At a glance**
 
 - **Accounts:** one program, a `Config` PDA, and per bet a `Bet` PDA (`["bet", bet_id]`) plus a PDA token vault (`["vault", bet_id]`). Devnet USDC; the stake cap is $20 per side.
 - **Lock = ONE transaction (D3):** `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]` on a durable nonce from a 5-account server pool. The fee payer is also the nonce authority (§5.0.1).
@@ -17,16 +15,16 @@ This is the spec for the onchain escrow. The program itself gets written during 
 - **Latency:** second authorization → lock confirmed is ~0.70–1.39 s (E). Local Agave measured p50 406–407 ms. Devnet and phone runs are PENDING (§8.4).
 - **Threat model:** adversarial review in **Threat model**; the atomic-lock rows are TM-N. Tests are in §9.2 (atomic lock: N1–N17; device policy: A13, DP1–DP16).
 
-Toolchain **(confirmed: spike 06)**: Anchor 1.2.2 (avm 1.2.2; the repo moved to `otter-sec/anchor`), Agave CLI 4.1.2, platform-tools v1.57, and Rust 1.89.0 pinned by the Anchor template's `rust-toolchain.toml`. The crate is `anchor-lang = { version = "1.2.2", features = ["event-cpi"] }`, `Anchor.toml` sets `[toolchain] anchor_version = "1.2.2"`, and the dev-dependency is `litesvm = "0.15.0"` under `cargo test`. Devnet runs Agave 4.4.0. Set `NO_DNA=1` when scripting anchor or avm.
+Toolchain **(confirmed)**: Anchor 1.2.2 (avm 1.2.2; the repo moved to `otter-sec/anchor`), Agave CLI 4.1.2, platform-tools v1.57, and Rust 1.89.0 pinned by the Anchor template's `rust-toolchain.toml`. The crate is `anchor-lang = { version = "1.2.2", features = ["event-cpi"] }`, `Anchor.toml` sets `[toolchain] anchor_version = "1.2.2"`, and the dev-dependency is `litesvm = "0.15.0"` under `cargo test`. Devnet runs Agave 4.4.0. Set `NO_DNA=1` when scripting anchor or avm.
 
 ---
 
 ## 1. Overview
 
 - One program. One global `Config` PDA. One `Bet` PDA per bet, plus one PDA-owned token **vault** per bet.
-- There is no handshake (lead-engineer amendment, 2026-11-07). A face match only addresses B; it never authorizes anything.
+- There is no handshake (lead-engineer amendment). A face match only addresses B; it never authorizes anything.
 - Each party **authorizes on their own iPhone** with hold-to-confirm plus Face ID (iOS LocalAuthentication), which unlocks that party's device key.
-- **The lock is one transaction** (D3, 2026-11-08; §5.0.1): `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]` on a durable nonce from the server's pool.
+- **The lock is one transaction** (D3; §5.0.1): `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]` on a durable nonce from the server's pool.
   - Both phones receive the same message bytes. Each runs the device signing policy (§5.0.2) and signs at its own hold + Face ID, in either order.
   - A's key signs as `party_a` of `create_bet`, which is A's deposit. B's key signs as `party_b` of `accept_bet`, which is B's deposit and must match `terms_hash`, the stakes and `party_a`.
   - The server submits once, at the **second authorization**, with RPC preflight on. The Bet goes from nonexistent to `Locked` in that one transaction, so **nothing moves unless both sign**.
@@ -105,7 +103,7 @@ pub const MAX_STAKE_CEILING: u64 = u64::MAX / 4;      // validate_config bound: 
 Offchain derivation, for reference (server, mobile and stage must agree):
 
 ```ts
-// packages/shared — @solana/kit 8.6.0 + a Codama-generated client (confirmed: spike 07; codama 1.11.0,
+// packages/shared — @solana/kit 8.6.0 + a Codama-generated client (confirmed; codama 1.11.0,
 // @codama/nodes-from-anchor 1.5.6, @codama/renderers-js 2.8.0). No @anchor-lang/core or web3.js in the app
 // (it needs web3.js v1; pin @solana/web3.js@^1.99.0 if a server script ever uses it). Pass maxSupportedTransactionVersion: 1 on devnet reads.
 const betIdBytes = uuidParse(betId);                       // Uint8Array(16)
@@ -114,7 +112,7 @@ const [vaultPda] = await getProgramDerivedAddress({ programAddress: ESCROW_ID, s
 const [config]   = await getProgramDerivedAddress({ programAddress: ESCROW_ID, seeds: ["config"] });
 ```
 
-Devnet USDC: Circle mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`, classic SPL Token program (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`), 6 decimals, freeze authority `CJtyoK…` set **(confirmed: spike 07, read onchain)**.
+Devnet USDC: Circle mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`, classic SPL Token program (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`), 6 decimals, freeze authority `CJtyoK…` set **(confirmed, read onchain)**.
 
 ---
 
@@ -205,9 +203,9 @@ pub struct Bet {
 
 Notes:
 
-- Borsh layout, not `zero_copy`, so there is no padding. Field order is part of the client contract: append only, and redeploy plus drop open bets if it changes during the window.
+- Borsh layout, not `zero_copy`, so there is no padding. Field order is part of the client contract: append only, and redeploy plus drop open bets if it changes.
 - Terminal statuses (`Settled`, `Refunded`, `Cancelled`) persist only between a terminal instruction and `close_bet`. The server sends both in one transaction, so normally they are never observed. A bet is terminal iff `getAccountInfo(bet) == null` **or** its status is terminal. The terminal event says which status and how the money moved, and it is the only lasting onchain record of that. The server persists it.
-- Closing frees the PDA address. A later `create_bet` with the same `bet_id` would succeed. The server never reuses a `bet_id`. It records the signature of the lock it sent (of the `create_bet` under the sequential fallback) and ignores any `BetCreated` for that `bet_id` from another signature (anomaly). A landed lock can't be replayed: its own `AdvanceNonceAccount` (ix 0) moved the nonce, so a resubmission fails even after `close_bet` frees the PDA (TM-N2). A lock that never landed dies when the server advances the nonce, and at `accept_deadline` at the latest (TM-N3). Under the sequential fallback, a replay is rejected once its blockhash expires (~36 s: 150 blocks × ~240 ms, measured by spike 07) and is deduplicated before that.
+- Closing frees the PDA address. A later `create_bet` with the same `bet_id` would succeed. The server never reuses a `bet_id`. It records the signature of the lock it sent (of the `create_bet` under the sequential fallback) and ignores any `BetCreated` for that `bet_id` from another signature (anomaly). A landed lock can't be replayed: its own `AdvanceNonceAccount` (ix 0) moved the nonce, so a resubmission fails even after `close_bet` frees the PDA (TM-N2). A lock that never landed dies when the server advances the nonce, and at `accept_deadline` at the latest (TM-N3). Under the sequential fallback, a replay is rejected once its blockhash expires (~36 s: 150 blocks × ~240 ms, measured) and is deduplicated before that.
 - `bet_id` is not secret: it appears in every transaction, and the stage view shows bets. So anyone can **squat** a `bet_id` by front-running `create_bet` with themselves as `party_a`, the real B as `party_b`, and the real (public) terms hash and stakes. A's create then fails ("already in use"), and the server retries with a fresh `bet_id`. B can never be locked into the squatter's bet, because `accept_bet` checks `expected_party_a` (P9, TM-I1). Under the atomic lock B's `accept_bet` exists only inside the same transaction as A's `create_bet`, so a squat can only make the lock fail at preflight. That costs nothing and leaves the nonce unchanged (N13).
 
 ### 3.3 Vault: PDA token account `["vault", bet_id]`, authority = Bet PDA
@@ -306,7 +304,7 @@ Every instruction except the two config instructions takes `payer: Signer` (mut)
 |---|---|---|---|---|
 | `initialize_config` | `admin` (= upgrade authority) | admin | Config (2.71 M lamports) | never closed |
 | `update_config` | `admin` | admin | — | — |
-| **`atomic_lock`** (default, §5.0.1): `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]` | `payer` (also the nonce authority) + `party_a` (A's device) + `party_b` (B's device). 3 signatures = 15,000 lamports (M: spike 3b) | server | Bet + vault (≈5.78 M lamports), stored as `rent_payer = payer` | via the terminal tx's `close_bet` |
+| **`atomic_lock`** (default, §5.0.1): `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]` | `payer` (also the nonce authority) + `party_a` (A's device) + `party_b` (B's device). 3 signatures = 15,000 lamports (M) | server | Bet + vault (≈5.78 M lamports), stored as `rent_payer = payer` | via the terminal tx's `close_bet` |
 | `nonce_advance` (revoke a pending lock) | `payer` (nonce authority) only | server | — | — |
 | `create_bet` alone (`LOCK_MODE=sequential` fallback only, §5.0.3) | `party_a` (device) + `payer` | server | Bet + vault | — |
 | `accept_bet` alone (sequential fallback only) | `party_b` (device) + `payer` | server | — | — |
@@ -321,14 +319,14 @@ Every instruction except the two config instructions takes `payer: Signer` (mut)
 
 Signing flow (server side, P0):
 
-1. The server builds every message: `feePayer = server`, compute-budget instructions, a legacy message or v0 with no address lookup tables. **Lock:** the lifetime is a durable nonce leased from the pool (§5.0.1). The server builds and simulates it when the read-back finishes, before either hold. **Every other device-signed kind** (`concede`, `appeal`, and sequential `create_bet` / `accept_bet`): a recent blockhash, fetched when the party **starts** the hold, so the fetch overlaps the hold and Face ID. The blockhash is ~2–3 s old at signing, well inside its ~36 s life (spike 07).
-2. The device runs LocalAuthentication at **every** authorization: Face ID, with the passcode fallback allowed and the method recorded (SCHEMAS O8). Then it reads the seed, decodes the message with Kit codecs and runs the **device signing policy** (§5.0.2). It signs with `@noble/ed25519` only if every check passes, then wipes the seed (FINDINGS §3.4).
+1. The server builds every message: `feePayer = server`, compute-budget instructions, a legacy message or v0 with no address lookup tables. **Lock:** the lifetime is a durable nonce leased from the pool (§5.0.1). The server builds and simulates it when the read-back finishes, before either hold. **Every other device-signed kind** (`concede`, `appeal`, and sequential `create_bet` / `accept_bet`): a recent blockhash, fetched when the party **starts** the hold, so the fetch overlaps the hold and Face ID. The blockhash is ~2–3 s old at signing, well inside its ~36 s life.
+2. The device runs LocalAuthentication at **every** authorization: Face ID, with the passcode fallback allowed and the method recorded (SCHEMAS O8). Then it reads the seed, decodes the message with Kit codecs and runs the **device signing policy** (§5.0.2). It signs with `@noble/ed25519` only if every check passes, then wipes the seed.
 3. The server verifies each party signature against **its own stored message bytes**. It adds the fee-payer signature only to messages it built itself (byte-equal) and sends with **RPC preflight on**, never `skipPreflight`. It never rebuilds a message after collecting a signature.
 4. Terminal instructions always go out as `[compute budget…, <terminal ix>, close_bet]` in one transaction. If that transaction fails at `close_bet`, or fails to load because `rent_payer` is unwritable, the server resends the terminal instruction alone and raises an alert. The tokens move, and the bet waits in its terminal status for a later `close_bet` (P8).
 
-#### 5.0.1 Lock transaction (atomic, default; D3 2026-11-08)
+#### 5.0.1 Lock transaction (atomic, default; D3)
 
-One transaction locks both stakes. Both phones sign the **same message bytes**, in either order. The server submits once, at the second authorization. Nothing moves unless both sign. Source: FINDINGS §3.7 and spike 3b (LiteSVM 21/21; 20/20 atomic locks on local Agave 4.1.2).
+One transaction locks both stakes. Both phones sign the **same message bytes**, in either order. The server submits once, at the second authorization. Nothing moves unless both sign. Measured: LiteSVM 21/21; 20/20 atomic locks on local Agave 4.1.2.
 
 | ix | Instruction | Accounts | Notes |
 |---|---|---|---|
@@ -339,10 +337,10 @@ One transaction locks both stakes. Both phones sign the **same message bytes**, 
 | 4 | `accept_bet(expected_terms_hash, expected_stake_a, expected_stake_b, expected_party_a)` | §5.2 accept accounts; `party_b` = B's device key | B's deposit |
 
 - **Signers:** exactly `[fee payer, party_a, party_b]`.
-- **Size:** 875 B with the spike program (M). ~990–1,005 B of 1,232 with this spec's arguments (E; measure in N12).
+- **Size:** 875 B with a test program (M). ~990–1,005 B of 1,232 with this spec's arguments (E; measure in N12).
 - **Keys:** 16 unique keys, so it fits with no lookup table. There is no room budgeted for extra instructions.
 
-**Composition check: the program supports `create_bet` + `accept_bet` in one transaction with no change.** This is MEASURED for the spike program and ESTIMATED for this spec until N1 runs.
+**Composition check: the program supports `create_bet` + `accept_bet` in one transaction with no change.** This is MEASURED for a test program and ESTIMATED for this spec until N1 runs.
 
 - **Order.** `create_bet` must come first. `accept_bet` takes `bet` as an `Account<Bet>` whose seeds come from the stored `bet.bet_id`, so the reversed order fails with `AccountNotInitialized` (M: 3b L6). The device policy rejects any other order.
 - **Accounts shared across the two instructions.** `payer`, `config`, `mint`, `bet`, `vault`, `token_program`, `event_authority` and the program appear in both. The message lists each key once. Each instruction sees the state the previous one wrote, so `accept_bet` reads the Bet that `create_bet` initialized and sees `vault.amount == stake_a`. Anchor's duplicate-mutable-account check runs per instruction, not per transaction.
@@ -358,7 +356,7 @@ One transaction locks both stakes. Both phones sign the **same message bytes**, 
   - the device policy keeps each device key out of the other party's instruction;
   - `party_b_token` requires `token::authority = party_b`.
 - **Events.** One signature carries `BetCreated` (outer ix 3) and `BetAccepted` (outer ix 4), or outer ix 2 and 3 without the price ix. The dedup key `(signature, outer_ix, inner_ix)` keeps them apart (§7.1).
-- **CU.** The spike program used 36,675–63,675 CU (M, n = 20), and a 60k cap failed 1 bet in 20. Stored bumps don't remove `create_bet`'s `init` bump search. This spec's handlers do more work (config, allowlist, reload and delta checks), so its figure is PENDING (N11).
+- **CU.** A test program used 36,675–63,675 CU (M, n = 20), and a 60k cap failed 1 bet in 20. Stored bumps don't remove `create_bet`'s `init` bump search. This spec's handlers do more work (config, allowlist, reload and delta checks), so its figure is PENDING (N11).
 
 **Server `LockService`.** The stage view shows exactly this **one lock transaction**: 3 signatures (A, B, You're On as fee payer), `BetCreated → BetAccepted`, one Explorer link.
 
@@ -382,7 +380,7 @@ One transaction locks both stakes. Both phones sign the **same message bytes**, 
 
 - **Size and cost:** `NONCE_POOL_SIZE` = 5 System nonce accounts, 80 B each, rent 1,056,640 lamports each (M).
 - **Authority:** the server fee payer, so the lock stays at 3 signatures.
-- **Addresses:** `createAccountWithSeed(base = fee payer, seed = "yo-nonce-<k>", owner = System)` for `k < NONCE_SEED_MAX` (16). A phone can verify pool membership from the pinned fee-payer key alone, so no list ships with the app. This is a design choice (E), not a spike result.
+- **Addresses:** `createAccountWithSeed(base = fee payer, seed = "yo-nonce-<k>", owner = System)` for `k < NONCE_SEED_MAX` (16). A phone can verify pool membership from the pinned fee-payer key alone, so no list ships with the app. This is a design choice (E), not a measured result.
 - **Leases:** one nonce per pending lock. Never build two messages on one nonce value (TM-N1).
 - **Details:** the lifecycle (allocate, advance, rotate, recover) and the table are in DATA-MODEL §5.20.
 
@@ -392,7 +390,7 @@ The device's key signs the **whole message**, and signer privileges carry into C
 
 - Implement every row below in full.
 - In an `atomic_lock`, **both** phones check **both** escrow instructions.
-- The spike's harness `devicePreflight` accepted four of these cases (MEASURED; FINDINGS §3.4), and DP13 tests each of them: a swapped mint, another `bet_id`, a deadline a year out, and an unpinned fee payer.
+- A test harness's `devicePreflight` accepted four of these cases (MEASURED), and DP13 tests each of them: a swapped mint, another `bet_id`, a deadline a year out, and an unpinned fee payer.
 
 | Check | Reject if |
 |---|---|
@@ -405,17 +403,17 @@ The device's key signs the **whole message**, and signer privileges carry into C
 | Instruction allowlist: other kinds | Any instruction other than: `ComputeBudget` (`SetComputeUnitLimit`, `SetComputeUnitPrice`); ATA `CreateIdempotent` whose funder is the server; and exactly **one** escrow instruction of the expected kind, optionally followed by `close_bet`. This rejects SPL `Transfer`/`Approve`/`SetAuthority`/`CloseAccount` and any other program, because a CPI wrapper could reuse the device's signer privilege. |
 | Lookups | The message uses address lookup tables (hidden accounts) |
 | Device key placement | **`atomic_lock`:** A's key is listed anywhere except the `party_a` slot of `create_bet`, or B's key anywhere except the `party_b` slot of `accept_bet`. Neither key may appear in the other party's instruction, in `AdvanceNonceAccount` or in a ComputeBudget ix. **Other kinds:** the key is listed anywhere except the escrow instruction's party-signer slot or an allowlisted ATA `CreateIdempotent` (as the wallet). Signer status is per message, not per instruction, so every instruction that lists the key sees it as a signer. |
-| Program and accounts | Program ID ≠ `ESCROW_ID`; `mint` ≠ the pinned USDC; the Bet, vault or Config address ≠ the PDA re-derived on the device from the displayed `bet_id`; the party signer slot ≠ the device key. Re-derive the PDAs with noble, because Kit's `getProgramDerivedAddress` throws on Hermes (FINDINGS §7); it takes ~6.9 ms per bet+vault pair, so run it at card mount. In an `atomic_lock`, both escrow instructions must also name the same Bet, vault, Config and mint. |
+| Program and accounts | Program ID ≠ `ESCROW_ID`; `mint` ≠ the pinned USDC; the Bet, vault or Config address ≠ the PDA re-derived on the device from the displayed `bet_id`; the party signer slot ≠ the device key. Re-derive the PDAs with noble, because Kit's `getProgramDerivedAddress` throws on Hermes; it takes ~6.9 ms per bet+vault pair, so run it at card mount. In an `atomic_lock`, both escrow instructions must also name the same Bet, vault, Config and mint. |
 | `create_bet` args | `bet_id`, `stake_a`, `stake_b`, `terms_hash` or `party_b` ≠ what the UI showed (`terms_hash` recomputed on the device from the displayed Terms JSON). `accept_deadline` ≤ device now, or > device now + `LOCK_SIGNATURE_MAX_SECS` (600 s), or, for a gemini bet, ≠ `unix(market.quotedAt) + 60`. |
 | `accept_bet` args | `expected_terms_hash`, `expected_stake_a`, `expected_stake_b` or `expected_party_a` ≠ the displayed terms and challenger. In an `atomic_lock`, they must also equal the `create_bet` args in the same message. |
 
-Never use an SPL `Approve` to a server key to make deposits "one tap". Spike 07 (S3) showed that the server delegate can then pay anyone, which breaks I1.
+Never use an SPL `Approve` to a server key to make deposits "one tap". Testing showed that the server delegate can then pay anyone, which breaks I1.
 
 The judge and appeal keys never pay fees, so they hold 0 SOL.
 
 #### 5.0.3 Sequential fallback (`LOCK_MODE=sequential`)
 
-This is the 2026-11-07 default, kept as a switch in case the atomic path misbehaves on devnet. It needs no program change.
+It is kept as a switch in case the atomic path misbehaves on devnet. It needs no program change.
 
 - **Two transactions.** A's `create_bet` lands at A's authorization and B's `accept_bet` at B's. Each phone fetches its message at hold start, with a recent blockhash and no nonce.
 - **B first.** If B authorizes first, the server holds B's signed tx for at most `HELD_SIGNATURE_MAX_SECS` (30 s), then re-prompts B. B-first takes ~1.3–2.4 s to confirmed (E) and can miss < 2 s.
@@ -766,7 +764,7 @@ pub struct CloseBet<'info> {
 | Event | `BetClosed { bet_id, final_status, rent_payer, rent_returned /* Bet + vault lamports, read before closing */, residual_to_a, ts }` |
 | Errors | `InvalidStatus`, `WrongRentPayer`, `MissingPayoutAccount`, `VaultNotEmpty` (post-sweep assert); `AccountNotInitialized` on a second close |
 
-Gotcha: `payer` and `rent_payer` are usually the same key (the server fee payer). If the installed Anchor rejects duplicate mutable accounts, mark `rent_payer` with that version's duplicate-allow constraint. Check this while scaffolding on Day 1. **(spike 06: not covered; still open.)** This gotcha now lives only in `close_bet`; the payout set no longer has `rent_payer`.
+Gotcha: `payer` and `rent_payer` are usually the same key (the server fee payer). If the installed Anchor rejects duplicate mutable accounts, mark `rent_payer` with that version's duplicate-allow constraint. Check this while scaffolding on Day 1. **(Not yet checked; still open.)** This gotcha now lives only in `close_bet`; the payout set no longer has `rent_payer`.
 
 ---
 
@@ -819,13 +817,13 @@ Tokens sent after settlement go to A via `close_bet` (§5.2). Tokens sent to *ot
 
 ### 7.1 `emit_cpi!` (recommended) vs `emit!`
 
-**Default: `emit_cpi!`** on every instruction (`#[event_cpi]` on every Accounts struct; `anchor-lang` feature `event-cpi`). **(Confirmed: spike 06.)** It emitted the same event both ways on Anchor 1.2.2. After 120 spam `msg!` lines the logs were capped at 9,967 bytes ending in "Log truncated": the `emit!` event was **lost**, and the `emit_cpi!` event decoded from `meta.innerInstructions`.
+**Default: `emit_cpi!`** on every instruction (`#[event_cpi]` on every Accounts struct; `anchor-lang` feature `event-cpi`). **(Confirmed.)** It emitted the same event both ways on Anchor 1.2.2. After 120 spam `msg!` lines the logs were capped at 9,967 bytes ending in "Log truncated": the `emit!` event was **lost**, and the `emit_cpi!` event decoded from `meta.innerInstructions`.
 
 | | `emit!` (log line) | `emit_cpi!` (self-CPI inner instruction) |
 |---|---|---|
 | Truncation | Lost if the transaction logs exceed ~10 KB ("Log truncated"; measured) | Survives: it's in `meta.innerInstructions` (measured) |
 | Spoofing | A naive "grep `Program data:`" filter would accept bytes logged by **another** program in the same tx. Attribution needs the invoke-stack parse. | The inner instruction has `programId = escrow` and is signed by our `["__event_authority"]` PDA, which only our program can produce. |
-| Cost | Cheapest | +2 account metas (`event_authority`, `program`), of which 1 is a new key; +1 CPI. Measured on spike 06's ping: 12,531 vs 10,030 CU (+2,501). |
+| Cost | Cheapest | +2 account metas (`event_authority`, `program`), of which 1 is a new key; +1 CPI. Measured on a ping instruction: 12,531 vs 10,030 CU (+2,501). |
 | Decoding | base64 of `disc(8) ‖ borsh` | Inner ix data = Anchor event-ix tag (8) ‖ `disc(8)` ‖ borsh |
 | Visibility | `logsSubscribe` and the log path | Not in `logsSubscribe`. It needs the Streams **block** dataset (it carries inner instructions; whether `programs_with_logs` does is unknown) or `getTransaction`. |
 
@@ -836,14 +834,14 @@ Streams filter contract (details live in the Streams doc; every rule maps to a T
 1. Drop transactions with `meta.err != null`. A failed transaction still records the inner instructions that ran before the failure, so `[finalize, <failing ix>]` would show a `BetFinalized` that never happened (test E4).
 2. An event is an **inner** instruction where all three hold. (a) Its program ID, resolved through `accountKeys` + `meta.loadedAddresses`, equals `ESCROW_ID` exactly. (b) Its data starts with `EVENT_IX_TAG_LE`. (c) Its first account is `EVENT_AUTHORITY` (precomputed). Never match on the 8-byte event discriminator alone: any program built from our IDL emits identical bytes (test E3).
 3. Never decode top-level instructions as events. Anchor's event handler requires `EVENT_AUTHORITY` to be a signer, so such a transaction fails anyway, but don't rely on that in the filter (test E2).
-4. The production filter **disables the `emit!` log-path decoder** (the spike 06 filter decodes both). Then no `Program data:` line can create an event. If FINDINGS forces a fallback to `emit!`: attribute by invoke-stack parse only; treat `Log truncated` as "events may be missing" and reconcile from account state.
-5. Forward `{signature, blockHeight, parentSlot, blockTime, outerIx, innerIx, eventBase64}`. These are the filter's JS names. Solana getBlock objects carry **no slot field**, and a tip Stream delivers ≥ 5 blocks per batch, so the filter can't know the slot (spike 06). The webhook maps these to the snake_case `ChainMeta` fields `signature`, `block_height`, `block_time`, `outer_ix` and `inner_ix`, with `slot = null` (SCHEMAS §10.2). The filter avoids `BigInt`/`atob`/`TextDecoder`/`Buffer`, because QuickNode's JS engine is undocumented. Validate it with `POST /streams/test_filter`.
+4. The production filter **disables the `emit!` log-path decoder**. Then no `Program data:` line can create an event. If a fallback to `emit!` is ever needed: attribute by invoke-stack parse only; treat `Log truncated` as "events may be missing" and reconcile from account state.
+5. Forward `{signature, blockHeight, parentSlot, blockTime, outerIx, innerIx, eventBase64}`. These are the filter's JS names. Solana getBlock objects carry **no slot field**, and a tip Stream delivers ≥ 5 blocks per batch, so the filter can't know the slot. The webhook maps these to the snake_case `ChainMeta` fields `signature`, `block_height`, `block_time`, `outer_ix` and `inner_ix`, with `slot = null` (SCHEMAS §10.2). The filter avoids `BigInt`/`atob`/`TextDecoder`/`Buffer`, because QuickNode's JS engine is undocumented. Validate it with `POST /streams/test_filter`.
 
-Stream config **(confirmed: spike 06)**: network `solana-devnet`, dataset `block`, `dataset_batch_size` 5 (tip Streams on sub-second chains reject less with 422) with `elastic_batch_enabled`, region `usa_east`, webhook compression none, `max_retry` 3, `retry_interval_sec` 1, `post_timeout_sec` 10. Pause the Stream when idle: at the calculator's 30 credits per devnet block, a 24/7 Stream costs ~11 M credits a day, against a 10 M-credit free trial (spike 06 estimate, pending the logged-in calculator).
+Stream config **(confirmed)**: network `solana-devnet`, dataset `block`, `dataset_batch_size` 5 (tip Streams on sub-second chains reject less with 422) with `elastic_batch_enabled`, region `usa_east`, webhook compression none, `max_retry` 3, `retry_interval_sec` 1, `post_timeout_sec` 10. Pause the Stream when idle: at the calculator's 30 credits per devnet block, a 24/7 Stream costs ~11 M credits a day, against a 10 M-credit free trial (estimate, pending the logged-in calculator).
 
 Server side:
 
-- Verify the QuickNode webhook signature **(confirmed: spike 06)**: `X-QN-Signature` = hex HMAC-SHA256(Stream security token, `X-QN-Nonce` + `X-QN-Timestamp` + decompressed body), compared with `timingSafeEqual`. Gunzip only when the body starts with `1f 8b`. Reject stale timestamps. Optionally allowlist the source IP `141.148.40.227`. Ack 2xx fast, because delivery is sequential and the Stream auto-pauses after 3 failed retries.
+- Verify the QuickNode webhook signature **(confirmed)**: `X-QN-Signature` = hex HMAC-SHA256(Stream security token, `X-QN-Nonce` + `X-QN-Timestamp` + decompressed body), compared with `timingSafeEqual`. Gunzip only when the body starts with `1f 8b`. Reject stale timestamps. Optionally allowlist the source IP `141.148.40.227`. Ack 2xx fast, because delivery is sequential and the Stream auto-pauses after 3 failed retries.
 - Decode with the IDL **compiled into the server** (Codama/Anchor coder), never an IDL fetched at runtime.
 - Be idempotent on `(signature, outer_ix, inner_ix)`. This is the single dedup key in SCHEMAS §10.1 and in DATA-MODEL `chain_events` UNIQUE.
 - Apply an event only to a `bet_id` in the DB whose recorded lock signature (the `create_bet` signature under the sequential fallback) matches the `BetCreated` it saw. Other bets are authentic chain events but not ours: log them, never push them.
@@ -1011,11 +1009,11 @@ REDO, the hearing, and the appeals panel's deliberation are offchain. During the
 2. The loser taps "GG", and `[concede, close_bet]` (device-signed) pays at once.
 3. Otherwise the server sends `[finalize, close_bet]` at its own clock ≥ `appeal_deadline + 1 s`. On `AppealWindowOpen` it retries every 1 s, because the devnet clock can lag. On `InvalidStatus` it re-reads the Bet; the loser may have appealed.
 4. The UI disables "I appeal!" at `appeal_deadline − 1 s` to avoid sending a doomed transaction.
-5. The Gemini closer uses the same window, so its payout lands ~10 s after `resolve` unless the loser taps GG. Spike 05 flagged this. D7 / SCHEMAS O6 (resolved 2026-11-08) keeps the 10 s window with a GG prompt, so there is no per-bet `appeal_window_secs`.
+5. The Gemini closer uses the same window, so its payout lands ~10 s after `resolve` unless the loser taps GG. D7 / SCHEMAS O6 (resolved) keeps the 10 s window with a GG prompt, so there is no per-bet `appeal_window_secs`.
 
 ### 8.4 Latency notes (targets: second on-phone authorization → lock confirmed < 2 s; concede/finalize → payout visible < 1 s)
 
-Values are from FINDINGS §2.1 and §2.3. Labels: M = measured, E = estimated.
+Labels: M = measured, E = estimated.
 
 | Leg | Value | Label |
 |---|---|---|
@@ -1025,19 +1023,19 @@ Values are from FINDINGS §2.1 and §2.3. Labels: M = measured, E = estimated.
 | B's finger-down → LOCKED (adds the 0.8 s hold and Face ID 0.6–1.2 s) | ~2.1–3.4 s | E |
 | Phone-side policy + sign, Hermes v0.13 desktop proxy | warm 5.6–5.8 ms preflight + 8.6–8.9 ms sign; cold 124–127 ms unless pre-warmed | M (desktop) |
 | Sequential fallback, B first (two confirmations in series) | ~1.3–2.4 s; can miss < 2 s | E |
-| Devnet basics (spike 06/07) | slots ~236–240 ms; `confirmed` − `processed` p50 ~400 ms; send → processed ~0.2–0.6 s; send → confirmed ~0.6–1.0 s | M / E |
+| Devnet basics | slots ~236–240 ms; `confirmed` − `processed` p50 ~400 ms; send → processed ~0.2–0.6 s; send → confirmed ~0.6–1.0 s | M / E |
 
 - **Lock:** advance to `LOCKED` on the server's own RPC `confirmed` of the **lock tx** (SCHEMAS §9.2). Show "Locking…" at `processed`. The < 2 s target holds only if the clock starts when the second authorization completes. The atomic lock needs one confirmation whoever signs first, which is the main latency reason for D3.
 - **Message prep is off the critical path.** The server builds and simulates the lock when the read-back finishes. Each phone runs the device policy, re-derives the PDAs (~6.9 ms) and pre-warms noble when the terms card mounts. The durable nonce means no blockhash refresh while people read the card.
-- **Payout:** the animation fires when the payout tx reaches **`processed`** on the server's `signatureSubscribe` (SCHEMAS X10). Spike 06's correction: `confirmed` plus the phone ↔ server cellular hops is ~1.0–1.6 s and misses the target. The Streams webhook then confirms "money moved" and sets the terminal state.
-- **PENDING:** devnet runs need SOL a human funds (FINDINGS §6 steps 0 and 5). The iPhone authorization matrix is step 8, and the end-to-end 10× A-first plus 10× B-first over cellular is step 12. Pass: p50 < 2 s from Face ID success in both orders.
-- Set the compute-unit limit from simulation and a small priority fee (§10.1). Use a QuickNode devnet RPC endpoint for every send and read. The public RPC limits getBlock to 6 per window, and per-slot polling got 99% 429s (spike 06).
+- **Payout:** the animation fires when the payout tx reaches **`processed`** on the server's `signatureSubscribe` (SCHEMAS X10). `confirmed` plus the phone ↔ server cellular hops is ~1.0–1.6 s and misses the target. The Streams webhook then confirms "money moved" and sets the terminal state.
+- **PENDING:** devnet runs need SOL a human funds, as do the iPhone authorization matrix and the end-to-end 10× A-first plus 10× B-first over cellular. Pass: p50 < 2 s from Face ID success in both orders.
+- Set the compute-unit limit from simulation and a small priority fee (§10.1). Use a QuickNode devnet RPC endpoint for every send and read. The public RPC limits getBlock to 6 per window, and per-slot polling got 99% 429s.
 
 ---
 
 ## Threat model
 
-Adversarial review of this spec (2026-11-07; atomic-lock rows TM-N added and TM-D4/I1/I3/S3/S6/T6/R5 updated on 2026-11-08). Attackers considered:
+Adversarial review of this spec. Attackers considered:
 
 - **Mallory**: any keypair with SOL and USDC.
 - **A or B acting in bad faith**: the losing party is the usual attacker.
@@ -1063,7 +1061,7 @@ Every row names its mitigation (spec section) and the test that proves it (§9.2
 | TM-F7 | Token-2022 `PermanentDelegate` drains the vault | Mint extension allowlist (§3.3) + admin mint allowlist | B14, B21 |
 | TM-F8 | Admin, judge or appeal authority withdraws or redirects | No such instruction. Config ixs take no bet or vault accounts. Authorities choose an outcome, never an account (I4). | U1–U8, R1, RA1 |
 | TM-F9 | A permissionless closer redirects the rent | `address = bet.rent_payer` | L3, L7 |
-| TM-F10 | SPL `Approve` to a server key for "one-tap" deposits. The server delegate can then pay anyone (spike 07 S3). | Forbidden. Deposits are only user-signed `transfer_checked` inside `create_bet`/`accept_bet`, and the device policy rejects `Approve`. | A13 |
+| TM-F10 | SPL `Approve` to a server key for "one-tap" deposits. The server delegate can then pay anyone. | Forbidden. Deposits are only user-signed `transfer_checked` inside `create_bet`/`accept_bet`, and the device policy rejects `Approve`. | A13 |
 | TM-F11 | Tokens sent to *non-vault* token accounts owned by the Bet PDA | Stranded by design. A generic sweep would be a new withdrawal path. Only the sender loses. **Residual.** | G5 |
 | TM-F12 | Another program CPIs into a terminal ix with substituted accounts | The constraints are identical for CPI callers, and signer privileges come only from the outer transaction | CPI1 |
 
@@ -1148,7 +1146,7 @@ Every row names its mitigation (spec section) and the test that proves it (§9.2
 |---|---|---|---|
 | TM-U1 | `party_a == party_b` | `SameParty` | B7 |
 | TM-U2 | The same token account passed as both destinations | Both owner constraints can't hold, since `party_a ≠ party_b` | K11 |
-| TM-U3 | `payer == rent_payer`, both mutable, in `close_bet` | Check Anchor 1.2.2's duplicate-mutable behavior on the Day 1 scaffold (spike 06 didn't cover it); use the dup-allow constraint if needed | L1 |
+| TM-U3 | `payer == rent_payer`, both mutable, in `close_bet` | Check Anchor 1.2.2's duplicate-mutable behavior on the Day 1 scaffold; use the dup-allow constraint if needed | L1 |
 | TM-U4 | One human with two keys bets against themself | Undetectable onchain and harmless (money moves between their own accounts). The server rejects the same user on both sides. | server suite |
 
 ### TM-I: front-running and terms integrity
@@ -1216,10 +1214,10 @@ Every row names its mitigation (spec section) and the test that proves it (§9.2
 | TM-S3 | A durable nonce keeps a signature valid indefinitely | `AdvanceNonceAccount` is allowed only as ix 0 of an `atomic_lock`, with a pool nonce and the pinned fee payer as authority. Every lock carries `accept_deadline ≤ now + 600`, checked on both phones and onchain. Every other kind rejects nonces (§5.0.2). | A13, DP2–DP6, DP12 |
 | TM-S4 | The device is made the fee payer | `feePayer` pinned to the server key | A13 |
 | TM-S5 | A malicious device returns an altered message | The server co-signs only byte-equal messages it built | server suite |
-| TM-S6 | The server sits on lock signatures and submits later | Bounded by `accept_deadline`: ≤ 600 s after the build; skill 300 s, gemini `quotedAt + 60`. The server also revokes at `expires_at`. Sequential fallback: blockhash expiry (~36 s, spike 07) plus the 30 s held-tx rule. | N6, N8, A15 |
+| TM-S6 | The server sits on lock signatures and submits later | Bounded by `accept_deadline`: ≤ 600 s after the build; skill 300 s, gemini `quotedAt + 60`. The server also revokes at `expires_at`. Sequential fallback: blockhash expiry (~36 s) plus the 30 s held-tx rule. | N6, N8, A15 |
 | TM-S7 | A wrong face match makes someone the "B" of a bet they never wanted | A face match only addresses the challenge. Nothing moves until that person authorizes on their own phone with Face ID, which signs their own deposit (I3, device policy). | — |
 
-### TM-N: atomic lock and durable nonce (D3, 2026-11-08)
+### TM-N: atomic lock and durable nonce (D3)
 
 | ID | Attack or failure | Mitigation | Test |
 |---|---|---|---|
@@ -1257,7 +1255,7 @@ Every row names its mitigation (spec section) and the test that proves it (§9.2
 
 ### 9.1 Framework
 
-**Recommended: Rust `litesvm` (0.15.x) tests under `cargo test`**, the Anchor 1.2.2 template default (`[scripts] test = "cargo test"`). **(Confirmed: spike 06.)** Its test program pins `litesvm = "0.15.0"` with a Rust-1.89-compatible `Cargo.lock` and builds under `cargo test`. Why:
+**Recommended: Rust `litesvm` (0.15.x) tests under `cargo test`**, the Anchor 1.2.2 template default (`[scripts] test = "cargo test"`). **(Confirmed.)** A test program pins `litesvm = "0.15.0"` with a Rust-1.89-compatible `Cargo.lock` and builds under `cargo test`. Why:
 
 - Runs in-process, with milliseconds per test.
 - `svm.set_sysvar::<Clock>()` warps time, so the 10 s window and the 10 min / 1 h deadlines need no sleeps.
@@ -1267,14 +1265,12 @@ Every row names its mitigation (spec section) and the test that proves it (§9.2
 
 Two more layers:
 
-- **TS client suite** (npm `litesvm` 1.6.2 + the Codama-generated `@solana/kit` 8.6.0 client; confirmed: spike 07, whose 18/18 sponsorship checks ran this way with the real SPL Token program): about 5 happy-path and sponsorship cases that prove the shared client encodes and decodes correctly and that fee-payer-only-SOL works. It also runs the **device signing policy** cases (A13).
-- **Filter + webhook suite** (TS, no network): runs the production Streams filter function over transaction JSON captured from LiteSVM (E2–E4), and runs the webhook handler against forged and replayed deliveries (E5, E6). Fixtures follow the spike 06 `fixtures/` format.
+- **TS client suite** (npm `litesvm` 1.6.2 + the Codama-generated `@solana/kit` 8.6.0 client; confirmed: 18/18 sponsorship checks ran this way with the real SPL Token program): about 5 happy-path and sponsorship cases that prove the shared client encodes and decodes correctly and that fee-payer-only-SOL works. It also runs the **device signing policy** cases (A13).
+- **Filter + webhook suite** (TS, no network): runs the production Streams filter function over transaction JSON captured from LiteSVM (E2–E4), and runs the webhook handler against forged and replayed deliveries (E5, E6).
 - **Local validator suite** (Agave 4.1.2 `solana-test-validator`, TS). It covers what LiteSVM hides: a failed durable-nonce tx is still charged and still advances the nonce, because LiteSVM doesn't commit failed txs. Cases:
   - preflight on vs `skipPreflight` (N10);
   - CU across many `bet_id`s (N11);
   - atomic-lock timing.
-
-  Spike 3b's runner always exited 143, so read the PASS/FAIL lines. Rewrite it in the repo; don't copy it.
 - **Devnet smoke script**: the atomic lock (one tx) → resolve → `[finalize, close_bet]` with two funded test wallets, plus a check that the Stream webhook received all 5 events (`BetCreated`, `BetAccepted`, `BetResolved`, `BetFinalized`, `BetClosed`). Also the crank test (CR1).
 
 Bankrun is deprecated in favor of LiteSVM. Mollusk is single-instruction only and isn't needed.
@@ -1354,7 +1350,7 @@ Notation: `[x]` = expected error. Shorthands used in the setup column:
 | A13 | device policy (TS), single-party kinds (`concede`, `appeal`, sequential `create_bet`/`accept_bet`) | message with: an extra SPL `Transfer`/`Approve`/`SetAuthority`/`CloseAccount` on the party's ATA; an ix to any other program; an address lookup table; **any** `AdvanceNonceAccount`; `feePayer ≠ S`; the device key listed in a second ix; mint ≠ USDC; Bet PDA ≠ derived from the shown `bet_id`; args ≠ the displayed terms / stakes / `party_a`; `terms_hash` ≠ sha256(JCS(displayed Terms)); `create_bet` with a gemini `accept_deadline ≠ quotedAt + 60` or a skill one > now + 600 | device refuses to sign each; the clean message signs (TM-S1..S4, TM-F10) |
 | A14 | accept_bet (TS, LiteSVM), **sequential fallback** | B authorizes first: B's `accept_bet` is built and device-signed before the Bet exists; the server submits it after `create_bet` lands | ok; Locked (`LOCK_MODE=sequential`, §5.0.3) |
 | A15 | accept_bet (TS, LiteSVM), **sequential fallback** | B's held `accept_bet` submitted after its blockhash expired (warp > 150 slots) | `BlockhashNotFound`; B's balance unchanged; B re-authorizes and the fresh tx locks |
-| DP1 | device policy, `atomic_lock` (TS) | the clean lock message on A's phone and on B's phone | both sign; both signatures verify over the same bytes; the server's assembled wire carries those exact message bytes (M in spike 3b: payload 14/14) |
+| DP1 | device policy, `atomic_lock` (TS) | the clean lock message on A's phone and on B's phone | both sign; both signatures verify over the same bytes; the server's assembled wire carries those exact message bytes (M: payload 14/14) |
 | DP2 | device policy, `atomic_lock` | `AdvanceNonceAccount` not at ix 0 (e.g. after the CB ixs); missing | refuse each |
 | DP3 | device policy, `atomic_lock` | two `AdvanceNonceAccount` ixs | refuse |
 | DP4 | device policy, `atomic_lock` | nonce account not `createWithSeed(S, "yo-nonce-<k>", System)` for any `k < 16`; `k = 16` | refuse each (TM-N7) |
@@ -1366,7 +1362,7 @@ Notation: `[x]` = expected error. Shorthands used in the setup column:
 | DP10 | device policy, `atomic_lock` | `accept_bet`'s `expected_stake_a/b`, `expected_terms_hash` or `expected_party_a` ≠ the `create_bet` args in the same message; `create_bet.party_b` ≠ B's displayed pubkey | refuse each, on both phones |
 | DP11 | device policy, `atomic_lock` | the two escrow ixs name different Bet / vault / Config / mint; either ≠ the PDAs re-derived (noble) from the displayed `bet_id` | refuse each |
 | DP12 | device policy, `atomic_lock` | `accept_deadline` = device now; = now + 601; one year out; gemini ≠ `quotedAt + 60` | refuse each (TM-N3, TM-T6) |
-| DP13 | device policy, `atomic_lock` | **the four cases spike 3b's harness accepted (M):** mint ≠ pinned USDC; `create_bet.bet_id` ≠ the displayed one; `accept_deadline` + 1 year; fee payer / nonce authority not pinned | refuse each, both roles |
+| DP13 | device policy, `atomic_lock` | **the four cases a test harness accepted (M):** mint ≠ pinned USDC; `create_bet.bet_id` ≠ the displayed one; `accept_deadline` + 1 year; fee payer / nonce authority not pinned | refuse each, both roles |
 | DP14 | device policy, `atomic_lock` | `terms_hash` ≠ sha256(JCS(displayed Terms)); `AuthorizeRequest.message_sha256` ≠ sha256(decoded message); Terms edited on the server after A signed (new message) | refuse; A's old signature fails on the new bytes (TM-N5) |
 | DP15 | device policy | kind mismatch: an `atomic_lock` request arrives while the phone's UI is on the GG or appeal screen; a `concede` message on the terms card | refuse each |
 | DP16 | device policy, `atomic_lock` | address lookup table in the lock message | refuse |
@@ -1482,53 +1478,53 @@ Notation: `[x]` = expected error. Shorthands used in the setup column:
 
 | Ix | Est. CU | Accounts (incl. event_cpi + compute-budget program) | Tx bytes (approx.) |
 |---|---|---|---|
-| **lock** (default): AdvanceNonce + CB + create_bet + accept_bet | spike program **36,675–63,675** (p50 39,675; M, n = 20; a 60k cap failed 1 in 20). This program: PENDING (N11) | 16 unique keys (3 signers, nonce, RecentBlockhashes sysvar, System, ComputeBudget, escrow, Config, mint, Bet, vault, 2 party token accounts, token program, event authority) | **875 B** spike (M); **~990–1,005 B** of 1,232 (E) |
+| **lock** (default): AdvanceNonce + CB + create_bet + accept_bet | test program **36,675–63,675** (p50 39,675; M, n = 20; a 60k cap failed 1 in 20). This program: PENDING (N11) | 16 unique keys (3 signers, nonce, RecentBlockhashes sysvar, System, ComputeBudget, escrow, Config, mint, Bet, vault, 2 party token accounts, token program, event authority) | **875 B** test program (M); **~990–1,005 B** of 1,232 (E) |
 | nonce_advance (revoke) | small (one System ix) | 4 (fee payer, nonce, sysvar, System) | ≈ 200 (1 sig) |
-| create_bet (sequential fallback) | 35–55k (2 inits, `InitializeAccount3`, `transfer_checked`, event CPI); spike: 22,123 for one `bet_id` (M) | 13 | ≈ 650 (2 sigs); spike 646 B (M) |
-| accept_bet (sequential fallback) | 15–25k; spike 14,555 (M) | 11 | ≈ 560; spike 555 B (M) |
+| create_bet (sequential fallback) | 35–55k (2 inits, `InitializeAccount3`, `transfer_checked`, event CPI); measured: 22,123 for one `bet_id` (M) | 13 | ≈ 650 (2 sigs); measured 646 B (M) |
+| accept_bet (sequential fallback) | 15–25k; measured 14,555 (M) | 11 | ≈ 560; measured 555 B (M) |
 | resolve / appeal | 5–10k | 6 | ≈ 400 |
 | payout ixs (standalone) | 20–35k (1–2× `transfer_checked`, event CPI); +~25k if the server prepends ATA create | 10–11 | ≈ 560 |
 | close_bet | 10–20k (`close_account`, Anchor close, event CPI; +`transfer_checked` if residual) | 9–10 | — |
 | payout ix + close_bet (bundled, the normal case) | 30–55k | 12–13 unique (`rent_payer` = `payer` dedups) | ≈ 650–700 |
 
 - Every instruction is far below the 200k per-instruction default, and every transaction fits under 1232 bytes. No lookup table is needed. The lock has the least headroom (~230 B), so add nothing to it.
-- The server sets `SetComputeUnitLimit = simulated × ~1.3`, never below the measured max plus a margin (FINDINGS §3.5), and a modest `SetComputeUnitPrice` from `getRecentPrioritizationFees`, to land fast under devnet load. For the lock, the floor is N11's measured max + 10% until devnet numbers exist. CU varies with `create_bet`'s `init` bump search per `bet_id`; stored bumps don't remove it.
+- The server sets `SetComputeUnitLimit = simulated × ~1.3`, never below the measured max plus a margin, and a modest `SetComputeUnitPrice` from `getRecentPrioritizationFees`, to land fast under devnet load. For the lock, the floor is N11's measured max + 10% until devnet numbers exist. CU varies with `create_bet`'s `init` bump search per `bet_id`; stored bumps don't remove it.
 - `Box` every `InterfaceAccount` and `Account` in the Accounts structs to avoid BPF stack-frame overflows (Anchor warns at build time: "Stack offset exceeded"). Treat that warning as an error.
 - Stored bumps (`bet.bump`, `vault_bump`, `config.bump`) avoid `find_program_address` after creation.
-- Rent per bet: 3,737,520 (Bet) + 2,039,280 (vault) = **5,776,800 lamports ≈ 0.0058 SOL**, fronted by the server and returned on close. These figures use the classic 6,960 lamports/byte. Spike 06 measured devnet `getMinimumBalanceForRentExemption` at ≈5,080 lamports/byte (2026-11), so real rent is ~27% lower. The program never hardcodes rent (Anchor reads the Rent sysvar), so only these estimates change.
-- Fees are all paid by the server, plus priority; users pay 0 (measured: spike 07). The fee payer starts with 2 SOL (SETUP-CHECKLIST KP3; FINDINGS §5: 0.5 to start, ~1–2 over 30 rehearsals, E). Rent (~0.0058 SOL per open bet, returned on close) dominates, so 2 SOL still floats hundreds of concurrent bets.
-  - 15,000 lamports for the 3-signature lock (M: spike 3b);
+- Rent per bet: 3,737,520 (Bet) + 2,039,280 (vault) = **5,776,800 lamports ≈ 0.0058 SOL**, fronted by the server and returned on close. These figures use the classic 6,960 lamports/byte. Devnet `getMinimumBalanceForRentExemption` measured ≈5,080 lamports/byte, so real rent is ~27% lower. The program never hardcodes rent (Anchor reads the Rent sysvar), so only these estimates change.
+- Fees are all paid by the server, plus priority; users pay 0 (measured). The fee payer starts with 2 SOL (SETUP-CHECKLIST KP3; 0.5 to start, ~1–2 over 30 rehearsals, E). Rent (~0.0058 SOL per open bet, returned on close) dominates, so 2 SOL still floats hundreds of concurrent bets.
+  - 15,000 lamports for the 3-signature lock (M);
   - 10,000 for a 2-signature transaction;
   - 5,000 per revoke.
-- Lock size: 875 B measured by spike 3b with its spike program (3 signatures, nonce, both instructions, no ALT). With this spec's arguments the estimate is ~990–1,005 B of 1,232 (FINDINGS §2.3): the 16 B `bet_id`, the `party_b`, `expected_party_a` and `expected_stake_a` args, the config account and a `SetComputeUnitPrice`. Spike 07's plain-SPL figures (562 B, or 628 B with a nonce) are superseded.
+- Lock size: 875 B measured with a test program (3 signatures, nonce, both instructions, no ALT). With this spec's arguments the estimate is ~990–1,005 B of 1,232: the 16 B `bet_id`, the `party_b`, `expected_party_a` and `expected_stake_a` args, the config account and a `SetComputeUnitPrice`.
 
 ### 10.2 Program ID, keypairs, secrets
 
 | Key | Holder | Where | Notes |
 |---|---|---|---|
-| Program keypair (`target/deploy/escrow-keypair.json`) | Lead | Local + password manager | Needed only for the first deploy. Gitignored; never committed. Generate **during the window** (Fri). Optional vanity prefix via `solana-keygen grind`. |
+| Program keypair (`target/deploy/escrow-keypair.json`) | Lead | Local + password manager | Needed only for the first deploy. Gitignored; never committed. Generate it on Fri. Optional vanity prefix via `solana-keygen grind`. |
 | Deployer / upgrade authority | Lead | `~/.config/solana/youre-on-deployer.json` + password manager | Also the initial `config.admin` (required by `initialize_config`) |
-| Server fee payer | Server | Fly secret `FEE_PAYER_SECRET_KEY` (base58 or solana-keygen JSON; SETUP-CHECKLIST §7) | Funded with **2 devnet SOL** to start, alert below 1 SOL, topped up from the human-held bank wallet (SETUP-CHECKLIST KP0/KP3; FINDINGS §5). Also the **nonce authority** of the lock pool, and pinned in the app (§5.0.2). Rotating it means `AuthorizeNonceAccount` on every pool account plus an app build with the new pin. |
+| Server fee payer | Server | Fly secret `FEE_PAYER_SECRET_KEY` (base58 or solana-keygen JSON; SETUP-CHECKLIST §7) | Funded with **2 devnet SOL** to start, alert below 1 SOL, topped up from the human-held bank wallet (SETUP-CHECKLIST KP0/KP3). Also the **nonce authority** of the lock pool, and pinned in the app (§5.0.2). Rotating it means `AuthorizeNonceAccount` on every pool account plus an app build with the new pin. |
 | Nonce pool (5 System nonce accounts) | Server (authority = fee payer) | Onchain; addresses `createAccountWithSeed(fee payer, "yo-nonce-<k>", System)`, k = 0..4 (spares up to 15) | 5 × 1,056,640 lamports ≈ 0.0053 SOL (M), withdrawable with `WithdrawNonceAccount`. State is in DATA-MODEL §5.20. |
 | `judge_authority` | Server | Fly secret `JUDGE_AUTHORITY_SECRET_KEY` | 0 SOL; distinct key |
 | `appeal_authority` | Server | Fly secret `APPEAL_AUTHORITY_SECRET_KEY` | 0 SOL; distinct key (enforced onchain) |
-| Treasury (devnet USDC float) | Server top-up job only | Fly secret `TREASURY_SECRET_KEY` (FINDINGS §3.5; SETUP-CHECKLIST KP6) | 0 SOL. Funds demo wallets with USDC; never appears in a bet tx and is never an SPL delegate. |
-| User keys | Each iPhone | 32-byte seed in `expo-secure-store` (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`, not `requireAuthentication`), unlocked by `expo-local-authentication` at each authorization; needs `NSFaceIDUsageDescription` | Hold USDC, never SOL. **(Confirmed: spike 07.)** |
+| Treasury (devnet USDC float) | Server top-up job only | Fly secret `TREASURY_SECRET_KEY` (SETUP-CHECKLIST KP6) | 0 SOL. Funds demo wallets with USDC; never appears in a bet tx and is never an SPL delegate. |
+| User keys | Each iPhone | 32-byte seed in `expo-secure-store` (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`, not `requireAuthentication`), unlocked by `expo-local-authentication` at each authorization; needs `NSFaceIDUsageDescription` | Hold USDC, never SOL. **(Confirmed.)** |
 
 The program ID is committed in `declare_id!`, in `Anchor.toml` `[programs.devnet]`, in the `packages/shared` constants, and in the README. Run `anchor keys sync` after generating.
 
-Devnet SOL: the public RPC faucet returns HTTP 410 (spike 06/07). faucet.solana.com allows 2 requests per 8 h and says AI agents must not use it, and the PoW faucets are drained (spike 06), so **a human must fund** the deployer and the fee payer. Deploying needs ≈ 2 × program size × ~5,080 lamports/byte (the rate measured by spike 06) while the buffer exists; the buffer part is refunded. Spike 06's 145 KB test program cost ≈0.74 SOL for a first devnet deploy, so a 250–450 KB `.so` needs ≈2.5–4.6 SOL. Collect ≈10 devnet SOL **before the window** in a human-held bank wallet (SETUP-CHECKLIST KP0; account setup, not code), because the deployer and fee-payer keys are generated in the window. Budget (FINDINGS §1, §5): ≥ 5 SOL for deploys and upgrades, 2 SOL for the fee payer, ~0.0053 SOL for the nonce pool.
+Devnet SOL: the public RPC faucet returns HTTP 410. faucet.solana.com allows 2 requests per 8 h and says AI agents must not use it, and the PoW faucets are drained, so **a human must fund** the deployer and the fee payer. Deploying needs ≈ 2 × program size × ~5,080 lamports/byte (the measured rate) while the buffer exists; the buffer part is refunded. A 145 KB test program cost ≈0.74 SOL for a first devnet deploy, so a 250–450 KB `.so` needs ≈2.5–4.6 SOL. Collect ≈10 devnet SOL **in advance** in a human-held bank wallet (SETUP-CHECKLIST KP0; account setup, not code), because the deployer and fee-payer keys are generated later. Budget: ≥ 5 SOL for deploys and upgrades, 2 SOL for the fee payer, ~0.0053 SOL for the nonce pool.
 
 ### 10.3 Deploy steps (devnet, Saturday)
 
 1. `solana config set --url <QuickNode devnet HTTPS>` (avoids public RPC limits) and `--keypair <deployer>`. The URL embeds an auth token: pass it via `solana config` or `ANCHOR_PROVIDER_URL`, never in the committed `Anchor.toml` (SETUP-CHECKLIST §5 item 12).
 2. `anchor build`. Treat stack warnings as errors. Run `cargo test`, and the whole matrix must be green.
 3. `anchor deploy --provider.cluster devnet`, or `solana program deploy target/deploy/escrow.so --program-id target/deploy/escrow-keypair.json --with-compute-unit-price 1000` for retries under load.
-4. Publish the IDL onchain: `anchor idl init -f target/idl/escrow.json <PROGRAM_ID>`, then `anchor idl upgrade` on changes. Anchor 1.x may route this through the Program Metadata program, so use the command that `anchor idl --help` shows. **(Spike 06: not covered; check on Day 1.)** This lets Solana Explorer and Solscan decode our instructions and events on the stage view's explorer links.
+4. Publish the IDL onchain: `anchor idl init -f target/idl/escrow.json <PROGRAM_ID>`, then `anchor idl upgrade` on changes. Anchor 1.x may route this through the Program Metadata program, so use the command that `anchor idl --help` shows. **(Not yet checked; check on Day 1.)** This lets Solana Explorer and Solscan decode our instructions and events on the stage view's explorer links.
 5. Copy `target/idl/escrow.json` into `packages/shared/idl/` and generate the `@solana/kit` client with Codama. Commit both, so server, mobile and stage share one client.
 6. Fill in `security.json` (Anchor 1.x template) with the team contact and repo, and deploy it with `anchor program deploy --security-metadata` (P1, cheap).
 7. Run `scripts/init-config.ts` with the demo values (§3.1) and allowed mint = devnet USDC. Record the Config PDA.
-8. Fund the server fee payer with 2 SOL from the bank wallet (a human does it; see §10.2). Store the fee-payer, judge, appeal and treasury secrets as Fly secrets (names in §10.2). Fund each demo wallet with devnet USDC from faucet.circle.com: 20 USDC per 2 h per address, so start early and spread the clicks across addresses (spike 07).
+8. Fund the server fee payer with 2 SOL from the bank wallet (a human does it; see §10.2). Store the fee-payer, judge, appeal and treasury secrets as Fly secrets (names in §10.2). Fund each demo wallet with devnet USDC from faucet.circle.com: 20 USDC per 2 h per address, so start early and spread the clicks across addresses.
 9. Create the nonce pool with `scripts/nonce-pool.ts`: 5 × (`CreateAccountWithSeed` + `InitializeNonceAccount`), authority = fee payer. Insert the `nonce_pool` rows with each value read at `confirmed`. The server's boot check re-reads all of them (DATA-MODEL §5.20).
 10. Point the QuickNode Stream filter at the program ID (see the Streams doc).
 11. Run the devnet smoke script. Paste the program ID, Config PDA and explorer links into the README.
@@ -1564,9 +1560,9 @@ Upgrades: `anchor upgrade target/deploy/escrow.so --program-id <ID>`. Recent Aga
 | P7 | Event macro unspecified | Use `emit_cpi!` by default | Robust to log truncation, and the event can't be spoofed by another program logging the same bytes. That matters because the webhook is the source of truth for "money moved". |
 | P8 | "rent lamports are returned to the stored rent payer when accounts close", which the earlier draft did inside every terminal ix | Terminal ixs move tokens and set a terminal status only. A new permissionless `close_bet` (terminal status only) closes the vault + Bet to `rent_payer` and sweeps post-settlement donations to A. The server always bundles `[terminal ix, close_bet]` in one tx, so UX and latency are unchanged. | A lamport destination can become unusable: if the key holder drains it and deploys a program there, the runtime rejects writable or credited executable accounts. With the close inside payout, every payout for every bet with that `rent_payer` would fail forever. Because `rent_payer` is the server fee payer, **a fee-payer key compromise could freeze every live escrow**. Splitting makes token liveness independent of anything the program can't vouch for (TM-L4). Rent still always returns to the stored rent payer. Cost: 1 instruction, 1 event, 7 tests. |
 | P9 | `accept_bet` must match `terms_hash` (+ stakes, P3) | Also take `expected_party_a: Pubkey` (`PartyMismatch`) | Bet PDA seeds are `["bet", bet_id]` (baseline, kept), so `bet_id` doesn't bind A. `bet_id` and the terms are public, so a squatter can front-run `create_bet` with the same `bet_id`, terms hash and stakes but themselves as `party_a`. B's pre-signed accept would then bet B's money against the squatter (TM-I1). The alternative, seeds `["bet", party_a, bet_id]`, would change the baseline and every client derivation; one 32-byte argument is cheaper. |
-| P10 | Accept window = `config.accept_deadline_secs` for every bet | `create_bet` takes `accept_deadline: i64`, bounded by `now < arg ≤ now + config.accept_deadline_secs` (`InvalidDeadline`) | SCHEMAS needs the Gemini quote TTL (`quotedAt + 60 s`) enforced onchain, while skill bets use 300 s. One bounded argument does both. Added in the consistency pass. |
+| P10 | Accept window = `config.accept_deadline_secs` for every bet | `create_bet` takes `accept_deadline: i64`, bounded by `now < arg ≤ now + config.accept_deadline_secs` (`InvalidDeadline`) | SCHEMAS needs the Gemini quote TTL (`quotedAt + 60 s`) enforced onchain, while skill bets use 300 s. One bounded argument does both. |
 
-**Resolutions (cross-doc consistency pass, 2026-11-07):**
+**Resolutions:**
 
 | # | Resolution | One-line rationale |
 |---|---|---|
@@ -1576,15 +1572,15 @@ Upgrades: `anchor upgrade target/deploy/escrow.so --program-id <ID>`. Recent Aga
 | P4 | Accepted (supersedes SCHEMAS P1 and DATA-MODEL P1, which had narrower signer sets) | The refund can only go to A, so B ("decline") and the judge key ("cleanup") are safe signers. |
 | P5 | Accepted. SCHEMAS P2 ("finalize immediately for Split/Refund") is rejected. | Either party may disagree with a Refund. A hearing that can't decide should still be appealable to the panel. |
 | P6 | Accepted as an offchain outcome: `RulingOutcome` gains `VOID` (→ `Refund`), produced only by server rules. DRAW → `Split` stays reserved (no v1 producer). | `resolve(Refund)` needs a hashable ruling. Overloading `REDO` would contradict "REDO never goes onchain". |
-| P7 | Accepted; **confirmed by spike 06** (`emit!` lost on log truncation, `emit_cpi!` decoded from inner instructions, +~2.5k CU) | Unforgeable attribution matters because the webhook is the source of truth for money. |
+| P7 | Accepted; **confirmed** (`emit!` lost on log truncation, `emit_cpi!` decoded from inner instructions, +~2.5k CU) | Unforgeable attribution matters because the webhook is the source of truth for money. |
 | P8 | Accepted. DATA-MODEL P4 ("keep the Bet open as a receipt") is rejected. | Token liveness must not depend on a lamport destination. The baseline returns rent on close, and terminal events plus Postgres are the receipt. |
 | P9 | Accepted | One 32-byte argument stops the squat without changing the baseline seeds. |
 | P10 | Accepted | It is required by SCHEMAS §8.3, and its bounds keep it safe (TM-T6). |
 
-**Lead-engineer decision D3 (2026-11-08): atomic lock adopted.**
+**Lead-engineer decision D3: atomic lock adopted.**
 
 - **The change:** the lock is one transaction on a server durable nonce (§5.0.1), replacing the two-transaction default.
-- **No program change** (MEASURED for spike 3b's program, ESTIMATED for this spec until N1).
+- **No program change** (MEASURED for a test program, ESTIMATED for this spec until N1).
 - **What changed in this doc:** the device policy (§5.0.2) gets the lock-only `AdvanceNonceAccount` exception. "Exactly one escrow instruction" stays for every other kind.
 - **Kept for robustness:** `cancel_open_bet` and `timeout_refund` from `Open` remain, with `LOCK_MODE=sequential` as the fallback (§5.0.3).
 - **Why:** "nothing moves until you both lock in" becomes literally true, and either order takes one confirmation (B-first sequential was ~1.3–2.4 s, E). There is no held 30 s signature and no refund path for the lock step.
@@ -1604,52 +1600,23 @@ Spec hardening from the adversarial review. These are not baseline changes; see 
 - The server never maps an error code to "settled".
 - There is a public crank.
 
-## 13. Open items: status vs spike FINDINGS (each spike's Verification section wins)
+## 13. Open items: status
 
-| Item | Spike | Default here | Status |
-|---|---|---|---|
-| Anchor 1.2.2 / Agave 4.1.2 / platform-tools v1.57 / Rust 1.89.0 | 06 | as listed | **Confirmed** |
-| Duplicate-mutable-account behavior (`payer == rent_payer` in `close_bet`); `idl` publish command | 06 | dup-allow constraint if needed | Not covered: check on the Day 1 scaffold |
-| `emit_cpi!` decodable from the Streams block payload; `emit!` lost on truncation | 06 | `emit_cpi!` | **Confirmed** |
-| Rust LiteSVM tests under `cargo test` | 06 | `litesvm` 0.15.0 | **Confirmed** (ProgramData handling still to check when writing C1) |
-| Devnet USDC mint, token program and decimals | 07 | `4zMMC9…DncDU`, classic, 6 | **Confirmed** |
-| Device keypair in secure storage, Face ID at each authorization, server-built messages verified byte for byte, no SPL delegate | 07 | as §5.0 | **Confirmed** (LiteSVM 18/18) |
-| Lock flow | 3b (supersedes 07's two-tx default) | **Atomic** one-tx lock on a durable nonce (§5.0.1), D3 2026-11-08 | **Decided.** Spike program: MEASURED (LiteSVM 21/21; local Agave 20/20 atomic; doomed-lock fee/nonce behaviour, with and without preflight) |
-| create_bet + accept_bet in one tx with this spec's program; real CU range and tx size | 3b | no program change; CU from simulation × 1.3; ~1,000 B | Pending: N1, N11, N12 in the window (FINDINGS §6 step 13) |
-| Face ID-gated signing latency on a real iPhone; devnet send → processed/confirmed | 3b / 07 | ESTIMATED ~0.70–1.39 s second authorization → LOCKED (§8.4) | Pending: phone and devnet SOL (FINDINGS §6 steps 5, 8, 12) |
-| Device signing policy incl. the lock exception and the 4 harness gaps | 3b | §5.0.2 in full | Spec'd; tests DP1–DP16 and A13 to write in `packages/shared` |
-| `@solana/kit` + Codama client for server and mobile | 07 | kit 8.6.0, codama 1.11.0 | **Confirmed** |
-| `Option<InterfaceAccount>` with `token::*` and `constraint` on an optional account (Anchor 1.2.2): constraints apply when `Some`; the client passes the program ID as the `None` placeholder | 06 (scaffold Day 1) | Supported since Anchor 0.28 | Not covered |
-| Exact runtime error when a writable or credited account is executable (feature-gate dependent); L4 must reproduce *some* failure in LiteSVM | 06 | Any failure; the test asserts the standalone payout still works | Not covered |
-| Streams payload: failed txs delivered? slot field present? | 06 | Filter drops `meta.err`; `slot` nullable | Pending: QuickNode key (`test_filter --probe`) |
-| QuickNode webhook signature headers and algorithm | 06 | HMAC-SHA256(token, nonce + timestamp + body), `X-QN-*` headers | **Confirmed** (docs + local receiver) |
-| Real Streams send → webhook latency; devnet credit multiplier | 06 | est. 1–2.5 s; 30 credits/block | Pending: key and logged-in calculator |
-
-## Changelog
-
-- **2026-11-07, first cross-doc consistency pass** (interrupted before it wrote a changelog; reconstructed): replaced the handshake with on-phone confirmation in §1/§8.4/§11. Added P10 (`accept_deadline` argument) and the P1–P10 resolution table. Mapped `VOID` → `Refund` in §4. Mirrored the events in SCHEMAS §10.2.
-- **2026-11-07, second consistency pass** (lead-engineer amendment + spike FINDINGS; each spike's Verification section wins):
-  - **Amendment.** Rewrote the §1 overview: no handshake, a face match only addresses B, each party's hold + Face ID signs their own deposit (A → `create_bet`, B → `accept_bet`), and the second authorization locks the bet. "Confirm" became "authorize" in §1, §5.2, §8.4 and §11. Rewrote the §5.0 signing flow (message fetched at hold start, Face ID at every authorization) and its sequence diagram. Added the durable-nonce note to the device policy, TM-S7 (a wrong face match can't move money), and tests A14/A15 (B authorizes first; held tx expires). The instruction set is unchanged.
-  - **Spike results.** Toolchain, `emit_cpi!` (+2.5k CU, `emit!` lost on truncation), Rust `litesvm` 0.15.0, npm `litesvm` 1.6.2, kit 8.6.0 + Codama, devnet USDC, the device keypair and the QuickNode HMAC scheme are marked confirmed. The blockhash life is now ~36 s (was 60–90 s). §8.4 latency now uses spike 06/07 numbers, and the payout animation fires on `processed`. Added the Stream config and credit warning (§7.1), slot-less filter output, the devnet rent per byte (~5,080 lamports), deploy SOL, the human-only faucet, USDC faucet limits, and the Gemini closer appeal-window note (§8.3). §13 is now a status table.
-- **2026-11-08, atomic lock (D3) + open items (D7)**. Sources: FINDINGS §2.1, §2.3, §3.5–§3.7, §7, and spike 3b including its Verification.
-  - **Header.** Status line updated; added an "At a glance" summary.
-  - **§1 / §1.2.** The lock is one transaction, `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]`, submitted at the second authorization. Nothing moves unless both sign. A decline advances the nonce, with no `cancel_open_bet` in the normal flow. Added the trust assumption that the fee payer is the nonce authority.
-  - **§3.2.** Replay protection now comes from the nonce. Under the atomic lock a squat fails at preflight.
-  - **§5.0** rewritten:
-    - signer/fee table rows for `atomic_lock` and `nonce_advance`; sequential rows marked as the fallback;
-    - signing flow: nonce for the lock, blockhash at hold start for the other kinds, preflight on, never rebuild after a signature;
-    - new §5.0.1: lock layout, a **composition check** (order, accounts shared across instructions, no duplicate mutable account inside either instruction, one clock, atomicity, per-message signer privilege, two events under one signature, CU), the `LockService` steps, and the nonce pool with seed-derived addresses so phones can verify membership;
-    - new §5.0.2: device policy with the lock-only nonce exception, the strict lock allowlist, kind taken from the phone's own UI, an exact signer set, per-party key placement, cross-instruction argument equality, and `accept_deadline ≤ now + 600` as the signature-validity bound; "exactly one escrow instruction" kept for every other kind;
-    - new §5.0.3: the sequential fallback;
-    - new sequence diagram;
-    - removed the "Rejecting durable nonces…" paragraph.
-  - **§5.2.** `accept_deadline` is the signature bound. The `accept_bet` server pre-check is split into atomic and sequential cases. `cancel_open_bet` is kept "for robustness".
-  - **§7 / §8.** The lock signature is the webhook's bet-ownership key. The lock carries `BetCreated` + `BetAccepted` under one signature. Noted that `Open` is never observable under the atomic lock. §8.3 cites D7/O6. **§8.4** is rewritten with FINDINGS §2.1/§2.3 values: ~0.70–1.39 s (E); local Agave p50 406–407 ms (M); finger-down ~2.1–3.4 s; sequential B-first ~1.3–2.4 s (replaces spike 07's ~1.0–1.2 s).
-  - **Threat model.** New **TM-N1–N10**: nonce reuse, replay, stale signature, doomed lock, terms changed after one signature, cross-party signer use, foreign nonce/authority, partial lock, double submit, revoke fee drain. Updated TM-D4, I1, I3, S3, S6, T6 and R5. Residual list: added TM-N4 and the TM-I1 squat DoS.
-  - **§9.** Added the local-validator layer. The smoke test is now lock → resolve → finalize. A13 is scoped to single-party kinds; A14/A15 are labelled sequential fallback. New **DP1–DP16** (lock device policy, including the 4 cases the spike harness accepted) and **N1–N17** (atomic lock, nonce, preflight, CU, size, squat, pause, balance drop, terms edit, LockService concurrency and recovery).
-  - **§10.** Lock CU/size rows (spike 36,675–63,675 CU and 875 B, M; spec ~990–1,005 B, E). CU limit × ~1.3 with a floor (was × 1.2). Fees 15,000 / 10,000 / 5,000. Added nonce-pool keys and deploy step 9 (steps renumbered).
-  - **§11–§13.** README paragraph rewritten for the one-tx lock. Recorded decision D3 in §12. §13 rows updated: atomic decided; real-program CU/size and phone/devnet latency PENDING.
-  - **Naming aligned** with API-CONTRACT and TASKS, which were drafted in parallel: the lock's tx kind is `atomic_lock` (SCHEMAS `TxKind` = DATA-MODEL `tx_kind`), and the signed payload field is `message_b64`.
-- **2026-11-08, cross-doc consistency pass** (all eight planning docs checked against D1–D7 and FINDINGS; ownership: SCHEMAS types, ESCROW onchain, DATA-MODEL tables, API-CONTRACT endpoints/events/tools):
-  - **§10.1–§10.2.** Fee payer funded with 2 SOL (alert below 1 SOL) instead of ≈5 SOL, per FINDINGS §5 and SETUP-CHECKLIST KP3. Added the treasury key row (FINDINGS §3.5) and the Fly secret names (`FEE_PAYER_SECRET_KEY`, `JUDGE_AUTHORITY_SECRET_KEY`, `APPEAL_AUTHORITY_SECRET_KEY`, `TREASURY_SECRET_KEY`). The ≈10 SOL pre-window target now goes into the human-held bank wallet (SETUP-CHECKLIST KP0), with its breakdown.
-  - **§10.3.** Step 1: the QuickNode URL never goes in the committed `Anchor.toml`. Step 8: names the four secrets and the 2 SOL funding.
+| Item | Default here | Status |
+|---|---|---|
+| Anchor 1.2.2 / Agave 4.1.2 / platform-tools v1.57 / Rust 1.89.0 | as listed | **Confirmed** |
+| Duplicate-mutable-account behavior (`payer == rent_payer` in `close_bet`); `idl` publish command | dup-allow constraint if needed | Not yet checked: check on the Day 1 scaffold |
+| `emit_cpi!` decodable from the Streams block payload; `emit!` lost on truncation | `emit_cpi!` | **Confirmed** |
+| Rust LiteSVM tests under `cargo test` | `litesvm` 0.15.0 | **Confirmed** (ProgramData handling still to check when writing C1) |
+| Devnet USDC mint, token program and decimals | `4zMMC9…DncDU`, classic, 6 | **Confirmed** |
+| Device keypair in secure storage, Face ID at each authorization, server-built messages verified byte for byte, no SPL delegate | as §5.0 | **Confirmed** (LiteSVM 18/18) |
+| Lock flow | **Atomic** one-tx lock on a durable nonce (§5.0.1), D3 | **Decided.** Test program: MEASURED (LiteSVM 21/21; local Agave 20/20 atomic; doomed-lock fee/nonce behaviour, with and without preflight) |
+| create_bet + accept_bet in one tx with this spec's program; real CU range and tx size | no program change; CU from simulation × 1.3; ~1,000 B | Pending: N1, N11, N12 |
+| Face ID-gated signing latency on a real iPhone; devnet send → processed/confirmed | ESTIMATED ~0.70–1.39 s second authorization → LOCKED (§8.4) | Pending: phone and devnet SOL |
+| Device signing policy incl. the lock exception and the 4 harness gaps | §5.0.2 in full | Spec'd; tests DP1–DP16 and A13 to write in `packages/shared` |
+| `@solana/kit` + Codama client for server and mobile | kit 8.6.0, codama 1.11.0 | **Confirmed** |
+| `Option<InterfaceAccount>` with `token::*` and `constraint` on an optional account (Anchor 1.2.2): constraints apply when `Some`; the client passes the program ID as the `None` placeholder | Supported since Anchor 0.28 | Not yet checked: check on the Day 1 scaffold |
+| Exact runtime error when a writable or credited account is executable (feature-gate dependent); L4 must reproduce *some* failure in LiteSVM | Any failure; the test asserts the standalone payout still works | Not yet checked |
+| Streams payload: failed txs delivered? slot field present? | Filter drops `meta.err`; `slot` nullable | Pending: QuickNode key (`test_filter --probe`) |
+| QuickNode webhook signature headers and algorithm | HMAC-SHA256(token, nonce + timestamp + body), `X-QN-*` headers | **Confirmed** (docs + local receiver) |
+| Real Streams send → webhook latency; devnet credit multiplier | est. 1–2.5 s; 30 credits/block | Pending: key and logged-in calculator |

@@ -3,7 +3,7 @@
 // nodeModulesPaths at the repo root) and package "exports" (needed by @elevenlabs/react-native).
 // Additions:
 //   - the .tflite asset extension for the face-embedding model, which is bundled with require()
-//     and loaded by react-native-fast-tflite from a file:// URL (FINDINGS §3.2);
+//     and loaded by react-native-fast-tflite from a file:// URL;
 //   - .mp4 as an asset (Expo's default list has it; kept explicit for the Dance Off clips);
 //   - the Dance Off local media override below (opt-in: DANCE_LOCAL_MEDIA=1).
 const fs = require('node:fs');

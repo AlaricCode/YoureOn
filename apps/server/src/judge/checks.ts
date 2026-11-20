@@ -1,4 +1,4 @@
-// Deterministic bottle-flip checks (planning README D10, MERGE-PLAN #4): the vision call returns
+// Deterministic bottle-flip checks (planning README D10): the vision call returns
 // two narrow yes/no observations next to its verdict, and this file compares them with the
 // verdict by a fixed rule. If they disagree, the ruling is REDO. The rule never picks a winner;
 // it can only refuse to accept one.
