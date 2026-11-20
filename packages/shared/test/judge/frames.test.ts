@@ -85,10 +85,12 @@ describe('judgeFrameTimesMs (D10)', () => {
 });
 
 describe('sizes', () => {
-  it('frames fit 768 px, never upscaled', () => {
-    expect(FRAME_MAX_PX).toBe(768);
-    expect(fitSize(1280, 720)).toEqual({ width: FRAME_MAX_PX, height: 432 });
-    expect(fitSize(720, 1280)).toEqual({ width: 432, height: FRAME_MAX_PX });
+  it("frames keep the clip's own size (1280 px), never upscaled", () => {
+    expect(FRAME_MAX_PX).toBe(1280);
+    expect(fitSize(1280, 720)).toEqual({ width: FRAME_MAX_PX, height: 720 });
+    expect(fitSize(720, 1280)).toEqual({ width: 720, height: FRAME_MAX_PX });
+    // a 1080p still is the only thing scaled down
+    expect(fitSize(1080, 1920)).toEqual({ width: 720, height: 1280 });
     expect(fitSize(320, 240)).toEqual({ width: 320, height: 240 });
   });
 
