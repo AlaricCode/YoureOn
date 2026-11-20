@@ -15,10 +15,12 @@ import {
 import { homeMode } from '../app/lobby';
 import { signedUsd } from '../bets/view';
 import type { HistoryItem, PreviewUser } from '../preview/data';
+import { Wordmark } from '../ui/brand';
 import { AlertLine, Label, PrimaryButton, QuietButton, TextField } from '../ui/kit';
 import {
   Avatar,
   BalanceHeader,
+  Card,
   DataText,
   ListRow,
   OperatorHold,
@@ -110,14 +112,15 @@ export function HomeScreen({
   /** The code entry is over the lobby ("Back" returns to it), not the no-room fallback. */
   const lobbyAround = room?.lobby === true || (room === null && lobbyJoining);
 
-  const memberRow = (m: PreviewUser) => (
-    <View key={m.user_id} style={styles.member}>
+  // The roster is one soft panel; a hairline separates the people in it.
+  const memberRow = (m: PreviewUser, i: number) => (
+    <View key={m.user_id} style={[styles.member, i > 0 && styles.memberRule]}>
       <Avatar name={m.display_name} size={avatarSize.md} online={m.online} />
       <DataText variant="heading" style={[styles.flex, styles.rowTitle]} lines={1}>
         {m.display_name}
       </DataText>
       {m.online ? (
-        // A small grey pill, not green: green stays "the one action" (Scan a face).
+        // A small soft pill: the white pill stays the one action (Scan a face).
         <QuietButton
           small
           testID={`challenge-${m.user_id}`}
@@ -141,13 +144,24 @@ export function HomeScreen({
 
   return (
     <Screen offline={offline}>
-      {/* The balance leads, full width, on black; your avatar sits on its "Balance" label row. The
-          operator tag (diagnostics builds only) gets a slim row above it. */}
-      {tag ? (
-        <View style={styles.top}>
-          <Label variant="small">{tag}</Label>
+      {/* The wordmark and you. The operator tag (diagnostics builds only) sits beside your disc. */}
+      <View style={styles.brandRow}>
+        <Wordmark name={t(COPY.app.name)} />
+        <View style={styles.brandRight}>
+          {tag ? <Label variant="small">{tag}</Label> : null}
+          <PressScale
+            testID="home-profile"
+            accessibilityRole="button"
+            accessibilityLabel={t(COPY.home.profile)}
+            onPress={onProfile}
+            hitSlop={8}
+            scaleTo={press.avatarScale}
+          >
+            <Avatar name={name} size={avatarSize.sm + half.x05} />
+          </PressScale>
         </View>
-      ) : null}
+      </View>
+      {/* The balance leads, full width, on black, over its own line of light. */}
       <OperatorHold style={styles.head} onHold={onTitleLongPress}>
         <BalanceHeader
           cents={balanceCents}
@@ -155,18 +169,6 @@ export function HomeScreen({
           inBetsUsd={inBetsUsd}
           change={change ?? null}
           series={series ?? null}
-          trailing={
-            <PressScale
-              testID="home-profile"
-              accessibilityRole="button"
-              accessibilityLabel={t(COPY.home.profile)}
-              onPress={onProfile}
-              hitSlop={8}
-              scaleTo={press.avatarScale}
-            >
-              <Avatar name={name} size={avatarSize.sm} />
-            </PressScale>
-          }
         />
       </OperatorHold>
       {/* The room code field sits at the bottom: keep it and "Join room" above the keyboard. */}
@@ -179,7 +181,7 @@ export function HomeScreen({
             <>
               {/* The lobby: everyone with the app open. No code to read out; scan or tap. */}
               <View style={styles.roomHead}>
-                <Label testID="lobby-title" variant="heading">
+                <Label testID="lobby-title" variant="section">
                   {t(COPY.home.everyone)}
                 </Label>
               </View>
@@ -194,7 +196,9 @@ export function HomeScreen({
                 ) : members.length === 0 ? (
                   <StatusHero mark="ring" title={t(COPY.home.lobbyEmpty)} />
                 ) : (
-                  members.map(memberRow)
+                  <Card raised style={styles.roster}>
+                    {members.map(memberRow)}
+                  </Card>
                 )}
               </ScrollView>
               <AlertLine testID="home-alert" message={note ?? null} />
@@ -223,7 +227,7 @@ export function HomeScreen({
           ) : mode === 'room' && room ? (
             <>
               <View style={styles.roomHead}>
-                <Label variant="heading">{t(COPY.home.room)}</Label>
+                <Label variant="section">{t(COPY.home.room)}</Label>
                 {/* The code friends read out loud: plain grey text on the "Room" baseline (a pill
                     would read as a button). */}
                 <Label testID="room-code-chip" variant="labelMedium" style={styles.codeText}>
@@ -237,7 +241,9 @@ export function HomeScreen({
                 {members.length === 0 ? (
                   <StatusHero mark="ring" title={t(COPY.home.empty)} />
                 ) : (
-                  members.map(memberRow)
+                  <Card raised style={styles.roster}>
+                    {members.map(memberRow)}
+                  </Card>
                 )}
               </ScrollView>
               <AlertLine testID="home-alert" message={note ?? null} />
@@ -436,7 +442,7 @@ export function ProfileScreen({
       <ScrollView style={styles.flex} contentContainerStyle={styles.profileScroll}>
         <View style={styles.profileHead}>
           <Avatar name={name} size={avatarSize.hero} />
-          <DataText variant="figure" style={styles.profileName} lines={1}>
+          <DataText variant="endTitle" style={styles.profileName} lines={1}>
             {name}
           </DataText>
         </View>
@@ -479,9 +485,16 @@ const rowDivider = {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   centre: { flex: 1, justifyContent: 'center' },
-  /** The profile name in Geist Light 34, like the big numerals. */
-  profileName: { textAlign: 'center', letterSpacing: -0.6, fontVariant: [] },
-  top: { height: space.x4, justifyContent: 'center', paddingHorizontal: space.page },
+  /** The profile name: 32 Bold, under the disc. */
+  profileName: { textAlign: 'center' },
+  brandRow: {
+    height: space.x6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.page,
+  },
+  brandRight: { flexDirection: 'row', alignItems: 'center', gap: half.x15 },
   head: { paddingHorizontal: space.page },
   /** 40 pt under the sparkline (the balance block keeps 16 pt of its own below it). */
   codeGroup: { marginTop: space.x3 },
@@ -489,21 +502,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    marginTop: space.x2,
-    paddingBottom: space.x1,
-    ...rowDivider,
+    marginTop: space.x1,
+    paddingBottom: half.x15,
+    paddingHorizontal: half.x05,
   },
-  codeText: { color: palette.textSecondary, letterSpacing: 0.5, fontVariant: TABULAR },
+  codeText: { color: palette.textTertiary, letterSpacing: 1, fontVariant: TABULAR },
   list: { paddingBottom: space.x1 },
   listEmpty: { flexGrow: 1, justifyContent: 'center', paddingVertical: space.x3 },
+  /** The roster: one soft panel, the people in it separated by hairlines. */
+  roster: { paddingVertical: 0, paddingHorizontal: space.x2 },
   member: {
-    minHeight: space.x8,
+    minHeight: space.x8 + half.x05,
     flexDirection: 'row',
     alignItems: 'center',
     gap: half.x15 + half.x05,
-    ...rowDivider,
   },
-  rowTitle: { fontFamily: fontFamily.medium, fontWeight: fontWeight.medium },
+  memberRule: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.rim },
+  rowTitle: { fontFamily: fontFamily.semibold, fontWeight: fontWeight.semibold },
   actions: { gap: half.x15, paddingBottom: space.x1 },
   row: { flexDirection: 'row', gap: half.x15 },
   historyList: { paddingBottom: space.x3 },

@@ -3,7 +3,7 @@
 // server's limits and prompt labels (apps/server/src/judge) and the eval (scripts/judge-eval.ts),
 // so the three always look at the same instants of a clip.
 //
-//   12 frames, each ≤ 512 px: LEAD_IN_FRAMES (4) spread over the clip before the landing window
+//   12 frames, each ≤ 1280 px (the clip's own size): LEAD_IN_FRAMES (4) spread over the clip before the landing window
 //   (the release and the flight), then 8 packed into its last LANDING_WINDOW_MS (~1.2 s: the
 //   landing and where the bottle comes to rest), the last one FRAME_END_GUARD_MS before the end.
 //   + 1 landing crop: the last frame again, taken from the full-resolution still, cropped to its
@@ -31,8 +31,16 @@ export const LEAD_IN_FRAMES = 4;
 export const LANDING_WINDOW_MS = 1200;
 /** Never sample the very last ms: thumbnailers often fail at the exact end. */
 export const FRAME_END_GUARD_MS = 80;
-/** Longest side of a regular frame. */
-export const FRAME_MAX_PX = 512;
+/**
+ * Longest side of a regular frame: 1280, the clip's own resolution (720 x 1280), so a frame is
+ * never scaled down. It was 512 and then 768 to keep the upload small; at those sizes a paper
+ * ball thrown from across a room is a dot four to twelve pixels wide, the judge described real
+ * makes as "seems to drop toward the bin", and the object tracker (SAM 3.1) never found the ball
+ * at all, in the air or lying in plain view on the floor. The phones are on Wi-Fi: what matters
+ * is that the ball can be seen. Each JPEG still fits the 200 KB a frame may weigh (the encoder
+ * steps the quality down before it ever shrinks the picture).
+ */
+export const FRAME_MAX_PX = 1280;
 /** Longest side of the landing crop. */
 export const LANDING_CROP_MAX_PX = 1024;
 /** The crop keeps the middle 80 % of the still in each direction. */

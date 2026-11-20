@@ -3,7 +3,7 @@
     "name": "You're On",
     "slug": "youre-on",
     "scheme": "youreon",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "platforms": ["ios"],
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -11,7 +11,7 @@
     "ios": {
       "bundleIdentifier": "dev.youreon.app",
       "deploymentTarget": "16.4",
-      "supportsTablet": false,
+      "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "You're On uses the camera to scan faces you choose to challenge, to enroll your own face if you opt in, and to record the attempt the AI judge rules on.",
         "NSMicrophoneUsageDescription": "You're On uses the microphone so you can talk to the AI judge while setting up a bet and during a hearing.",

@@ -17,7 +17,7 @@ import {
   StageBubble,
 } from '../ui/kit';
 import { Page, Screen, StatusHero, TopBar } from '../ui/parts';
-import { palette, radius, space } from '../ui/tokens';
+import { dp, palette, radius, space } from '../ui/tokens';
 import { COPY, t } from './copy';
 
 /** Four thin white corners framing where the stage code goes. Decoration only. */
@@ -132,7 +132,7 @@ export function DemoClaimScreen({
   );
 }
 
-const FINDER = 220;
+const FINDER = dp(220);
 const CORNER = space.x5;
 const STROKE = 2;
 

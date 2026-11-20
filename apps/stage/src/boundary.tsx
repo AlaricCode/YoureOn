@@ -17,7 +17,7 @@ export function CrashScreen({
   return (
     <div className="stage connect crash" role="alert">
       <h1>
-        You&apos;re <span className="on">On</span> <span className="muted">· stage</span>
+        You&rsquo;re <span className="on">On</span> <span className="muted">· stage</span>
       </h1>
       <p className="big">The stage page hit an error.</p>
       <p className="muted small mono">{message}</p>

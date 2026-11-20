@@ -1,8 +1,8 @@
-// StakePicker: the row of stake chips ($1 $2 $5 $10) with ONE green pill that slides to the
+// StakePicker: the row of stake chips ($1 $2 $5 $10) with ONE white pill that slides to the
 // chosen chip, instead of each chip snapping its own fill. At rest it looks exactly like the old
-// ChoiceChip row: #1C1C1F pills, the selected one green with black ink.
+// ChoiceChip row: #1C1C1F pills, the selected one white with black ink.
 //
-// Layers (one coordinate space, the row): grey discs at each chip's measured frame, then the green
+// Layers (one coordinate space, the row): grey discs at each chip's measured frame, then the white
 // pill, then the chips themselves (transparent, label only) on top. Until every chip has
 // measured, each chip draws its own fill, so nothing flashes on first paint. The pill's x, y,
 // width and height are shared values animated on the UI thread (200 ms ease-out); a chip's ink
@@ -43,7 +43,7 @@ import {
   stakeTap,
   type Frame,
 } from './polish';
-import { color, half, motion, palette, radius, space, TABULAR, type } from './tokens';
+import { color, dp, half, motion, palette, radius, space, TABULAR, type } from './tokens';
 
 const easeOut = Easing.bezier(...motion.easing);
 
@@ -303,7 +303,7 @@ const styles = StyleSheet.create({
   // ChoiceChip's box: 44 pt pill, at least 64 wide, 20 pt sides.
   chip: {
     minWidth: space.x8,
-    height: 44,
+    height: dp(44),
     borderRadius: radius.pill,
     paddingHorizontal: space.x2 + half.x05,
     alignItems: 'center',

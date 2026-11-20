@@ -113,6 +113,12 @@ export interface WakeController {
   setForeground(foreground: boolean): void;
   /** Listen again after 'heard' or 'error' (no-op otherwise). */
   resume(): void;
+  /**
+   * "Tap to talk": capture a sentence now, without the wake word (detector.arm). If the
+   * recognizer is not running yet (it was heard, failed, or is still starting) it is started
+   * and armed as soon as it listens.
+   */
+  captureNow(): void;
   /** Stops the recognizer (fire and forget) and silences every callback. */
   dispose(): void;
   readonly status: WakeStatus;
@@ -154,6 +160,7 @@ export function createWakeController(opts: WakeControllerOptions): WakeControlle
   let dirty = false;
   let ticker: unknown = null;
   let pendingUtterance: string | null = null;
+  let armOnStart = false; // captureNow() while not running: arm once the recognizer listens
 
   let status: WakeStatus = 'off';
   const setStatus = (s: WakeStatus) => {
@@ -301,6 +308,10 @@ export function createWakeController(opts: WakeControllerOptions): WakeControlle
       if (!disposed && running && !stopping) handle(detector.tick(clock.now()));
     }, tickMs);
     setStatus('listening');
+    if (armOnStart) {
+      armOnStart = false;
+      handle(detector.arm(clock.now()));
+    }
   };
 
   const doStop = async () => {
@@ -390,6 +401,17 @@ export function createWakeController(opts: WakeControllerOptions): WakeControlle
     },
     resume() {
       if (disposed || (!heard && !failed)) return;
+      heard = false;
+      failed = false;
+      reconcile();
+    },
+    captureNow() {
+      if (disposed || !enabled || denied || (loaded && !available)) return;
+      if (running && !stopping) {
+        handle(detector.arm(clock.now()));
+        return;
+      }
+      armOnStart = true;
       heard = false;
       failed = false;
       reconcile();

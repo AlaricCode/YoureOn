@@ -36,7 +36,7 @@ export interface BetView {
   success: readonly string[];
   failure: readonly string[];
   edgeCases: readonly EdgeCaseView[];
-  /** "Camera", "Gemini market" or "Pose score" (a dance off). */
+  /** "Camera", "Market" or "Pose score" (a dance off). */
   evidence: string;
   myStake: MicroUsdc;
   theirStake: MicroUsdc;
@@ -68,7 +68,7 @@ export const kindOf = (t: Pick<Terms, 'type'>): BetKind =>
 
 const EVIDENCE: Readonly<Record<BetKind, string>> = {
   skill: 'Camera',
-  market: 'Gemini market',
+  market: 'Market',
   dance: 'Pose score',
 };
 
@@ -196,7 +196,7 @@ export interface AppealSeatView {
 const PANEL_NAMES: Readonly<Record<PanelProvider, string>> = {
   anthropic: 'Claude',
   openai: 'GPT',
-  google: 'Gemini',
+  google: 'Google',
 };
 
 /**

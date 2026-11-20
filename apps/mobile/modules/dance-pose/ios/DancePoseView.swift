@@ -2,7 +2,7 @@ import AVFoundation
 import ExpoModulesCore
 import UIKit
 
-/// The Dance Off judge-cam view (DANCE-OFF.md §6.1): a live back-camera preview (aspect fit, so
+/// The Dance Off judge-cam view (DANCE-OFF.md §6.1): a live camera preview (aspect fit, so
 /// the overlay coordinates map 1:1 onto the letterboxed image) plus the pose + recording engine.
 /// All methods run on the main thread (props, view functions and UIKit callbacks).
 public final class DancePoseView: ExpoView {
@@ -13,6 +13,10 @@ public final class DancePoseView: ExpoView {
   private let engine = DancePoseEngine()
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private var active = false
+  /// AVCaptureDevice.RotationCoordinator (iOS 17+): the angles that keep the preview and the
+  /// frames upright however the device is held. Kept as AnyObject for the older-OS build.
+  private var rotationCoordinator: AnyObject?
+  private var rotationObservations: [NSKeyValueObservation] = []
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -35,6 +39,7 @@ public final class DancePoseView: ExpoView {
   }
 
   deinit {
+    rotationObservations.forEach { $0.invalidate() }
     // The engine outlives the view until its queues have stopped the session.
     engine.shutdown()
   }
@@ -65,6 +70,11 @@ public final class DancePoseView: ExpoView {
     engine.setMaxFps(value)
   }
 
+  /// "front": the selfie camera (its preview is a mirror image). Anything else: the back camera.
+  func setFacing(_ value: String?) {
+    engine.setFacing(front: value == "front")
+  }
+
   // MARK: - View functions
 
   func startRound(_ options: StartRoundOptions, promise: Promise) {
@@ -91,10 +101,46 @@ public final class DancePoseView: ExpoView {
 
   // MARK: - Private
 
+  /// The preview and the frames follow how the device is held (portrait or on its side), through
+  /// the system's rotation coordinator, which knows each camera's mounting. Before iOS 17 both
+  /// stay portrait, as they always were.
   private func orientPreview() {
     guard let connection = previewLayer.connection else {
       return
     }
-    DancePoseEngine.orientPortrait(connection)
+    // The preview's mirroring is set here, not left to the system: the app flips the name tags
+    // and skeletons it draws over a front-camera preview on the understanding that the picture
+    // is a mirror image, and the names came out on the wrong dancers. Front: a mirror image.
+    // Back: not. Decided by the camera that is actually open.
+    if connection.isVideoMirroringSupported {
+      let front = engine.captureDevice.get()?.position == .front
+      connection.automaticallyAdjustsVideoMirroring = false
+      connection.isVideoMirrored = front
+    }
+    guard #available(iOS 17.0, *), let device = engine.captureDevice.get() else {
+      DancePoseEngine.orientPortrait(connection)
+      return
+    }
+    rotationObservations.forEach { $0.invalidate() }
+    let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+    rotationCoordinator = coordinator
+    rotationObservations = [
+      coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) {
+        [weak self] coordinator, _ in
+        let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+        DispatchQueue.main.async {
+          guard let connection = self?.previewLayer.connection,
+            connection.isVideoRotationAngleSupported(angle)
+          else {
+            return
+          }
+          connection.videoRotationAngle = angle
+        }
+      },
+      coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) {
+        [weak self] coordinator, _ in
+        self?.engine.setCaptureRotation(coordinator.videoRotationAngleForHorizonLevelCapture)
+      },
+    ]
   }
 }

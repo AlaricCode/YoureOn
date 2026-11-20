@@ -114,6 +114,7 @@ import { half, palette, radius, space } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
 import { STATUS_COPY, WAKE_COPY, wt } from '../wake/copy';
 import { RainbowLoop } from '../wake/RainbowLoop';
+import { SPOKEN_BET_TIMING } from '../wake/detector';
 import { useWakeWord } from '../wake/useWakeWord';
 import { WalletError } from '../wallet/wallet';
 import type { DanceUploadBundle } from '../dance/index';
@@ -213,6 +214,7 @@ import {
   canConfirm,
   canSubmit,
   confirmTypedTerms,
+  DEFAULT_STAKE_USD,
   initialTyped,
   submitTypedTerms,
   TYPED_STAKES_USD,
@@ -237,6 +239,7 @@ import {
   type HeldUtterance,
   type LoopState,
 } from './wakeGate';
+import { danceEventsFor, danceRequest, saidStakeUsd, type DanceRequest } from './wakeDance';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 import { CallOffLayer } from '../screens/CallOff';
 import { callOffOnRoute, callOffWithdrawDue, type CallOffGuard } from './callOff';
@@ -248,15 +251,24 @@ const LAST_ROOM_KEY = 'youreon.room.v1';
  * back after a restart, or re-sends a turn-off the server never confirmed.
  */
 const JUDGE_CAM_KEY = 'youreon.judgecam.v1';
-/** EXPO_PUBLIC_VOICE=off builds run without the live judge (screens still follow the server). */
-const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE !== 'off';
+/**
+ * The live voice judge is OFF unless a build asks for it (EXPO_PUBLIC_VOICE=on; the EAS profiles
+ * say which they want). Logan had it disabled on 2026-11-20: no AI voice, and "Jarvis, …" should
+ * just start the bet instead of answering "Objection noted." Without it nothing is spoken and no
+ * ElevenLabs session is ever opened: what is said after "Jarvis" is sent as the bet's terms
+ * (sayBet below), and the server writes them out (terms/structure).
+ */
+const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE === 'on';
 /**
  * EXPO_PUBLIC_LOBBY=off: no shared lobby (./lobby); home opens on the room-code entry, as before.
  * On, every phone joins the one live lobby room by itself and a code is the "Private room" option.
  */
 const LOBBY_ENABLED = process.env.EXPO_PUBLIC_LOBBY !== 'off';
-/** EXPO_PUBLIC_MARKET=off hides "Bet on Bitcoin" (the server refuses it without the Gemini relay). */
-const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET !== 'off';
+/**
+ * "Bet on Bitcoin" (the market closer) is out of the app: only EXPO_PUBLIC_MARKET=on brings it
+ * back. The code stays so a market bet already in someone's history still opens.
+ */
+const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET === 'on';
 /** A voice SDK that throws while it loads falls back to typed terms (the boundary below). */
 const JudgeVoice = lazy(() => importSafely(() => import('../voice/JudgeVoice')));
 /** How long A's judge session outlives its bet: the closing [EVENT] line, spoken (§4.5). */
@@ -280,10 +292,16 @@ const loadDanceFaceEmbedder = () =>
 /** EXPO_PUBLIC_DANCE=off hides "Dance off" on the negotiate screen (a dance bet still plays). */
 const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
 /**
- * EXPO_PUBLIC_WAKE=off turns "Jarvis" off (./wakeGate): A's judge then starts on the negotiate
- * screen by itself, as before. It needs the voice judge (EXPO_PUBLIC_VOICE) to have anyone to hear.
+ * EXPO_PUBLIC_WAKE=off turns "Jarvis" off (./wakeGate). With the voice judge on, what is said
+ * goes to the judge (who then waits for "Jarvis" or a tap instead of starting by itself); with
+ * it off, what is said becomes the bet's terms directly.
  */
-const WAKE_ENABLED = VOICE_ENABLED && process.env.EXPO_PUBLIC_WAKE !== 'off';
+const WAKE_ENABLED = process.env.EXPO_PUBLIC_WAKE !== 'off';
+/**
+ * No voice judge, but "Jarvis" listens: A's challenge screen keeps its listening view (the orb
+ * and the wake line) and nothing is ever spoken back. What is said is sent as the bet.
+ */
+const SAY_MODE = !VOICE_ENABLED && WAKE_ENABLED;
 /**
  * The Dance Off screens (../dance) pull the pose camera's native view: loaded on first use and
  * through importSafely, like the voice SDK, so a build without it never fails at launch.
@@ -447,10 +465,25 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [judgeArmedBet, setJudgeArmedBet] = useState<string | null>(null);
   /** The bet whose JudgeVoice is mounted: it stays until the bet's session ends as before. */
   const [judgeMountedBet, setJudgeMountedBet] = useState<string | null>(null);
+  /**
+   * The bet whose attempt this phone is framing: its camera is up (JudgeCamScreen, standing by)
+   * before the attempt exists, and "Start recording" there starts it. Two phones, this one films.
+   */
+  const [framingBet, setFramingBet] = useState<string | null>(null);
   /** What was said after "Jarvis", per bet: the judge's first user message (JudgeVoice). */
   const wakeUtterances = useRef(new Map<string, string>());
   /** Said on Home: waits for the challenge it started (openNewBet). */
   const heldWake = useRef<HeldUtterance | null>(null);
+  /**
+   * "Jarvis, dance off" on Home (./wakeDance): the challenge it started opens on the Dance off
+   * panel, applied once that bet's panel exists (the init effect below).
+   */
+  const saidDance = useRef<{ betId: string; req: DanceRequest } | null>(null);
+  /**
+   * "Jarvis, <the bet>" on Home with no voice judge: the challenge it started gets the sentence
+   * as its terms, sent once that bet's form exists (the typed init effect below).
+   */
+  const saidBet = useRef<{ betId: string; text: string } | null>(null);
   /** The rainbow loop. */
   const [loop, loopDispatch] = useReducer(loopReducer, 'off' as LoopState);
 
@@ -869,9 +902,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const opponentName = bet?.party_b?.display_name ?? '';
   // No judge to talk to: voice off, this phone never got the bet's voice variables (a restart
   // mid-bet), or the session failed.
-  const typedForced =
-    !VOICE_ENABLED ||
-    (bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id)));
+  // With the voice judge off the screen still LISTENS (SAY_MODE: the orb, 'Say "Jarvis"', then
+  // the sentence becomes the bet); the form is forced only when nothing can listen at all.
+  const typedForced = VOICE_ENABLED
+    ? bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id))
+    : !SAY_MODE;
   /** Double or nothing (./rematch): every stake picker starts on the suggested stake. */
   const rematchStake = bet?.rematchOf ? bet.suggestedStakeUsd : null;
   useEffect(() => {
@@ -885,7 +920,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       shown: typedCardOf(bet.envelope),
       stakeUsd: rematchStake,
     });
+    // Said on Home: this bet starts with it.
+    const said = saidBet.current;
+    if (said?.betId === bet.bet_id) {
+      saidBet.current = null;
+      void sayBet(bet.bet_id, said.text);
+    }
   }, [negotiating, bet?.bet_id, opponentName, typedForced, rematchStake]);
+  // The card this form sent, as the server wrote it: the form shows that claim, not the sentence.
+  const writtenHash = bet?.envelope?.terms_hash ?? null;
+  const writtenClaim = bet?.envelope?.terms.claim ?? null;
+  useEffect(() => {
+    if (writtenHash !== null && writtenClaim !== null)
+      typedDispatch({ type: 'written', terms_hash: writtenHash, claim: writtenClaim });
+  }, [writtenHash, writtenClaim, typed.proposedHash]);
   // ---- odds (both phones): offers, counters, the judge's suggestion (../odds/useOdds) --------
   const oddsTheirName =
     (me === 'A' ? bet?.party_b?.display_name : bet?.party_a?.display_name) ?? '';
@@ -975,6 +1023,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       shown: danceCardOf(bet.envelope),
       stakeUsd: rematchStake,
     });
+    // Asked for out loud on Home: the panel opens on what was said.
+    const said = saidDance.current;
+    if (said?.betId === bet.bet_id) {
+      saidDance.current = null;
+      for (const e of danceEventsFor(said.req)) danceDispatch(e);
+    }
   }, [negotiating, bet?.bet_id]);
 
   const submitDance = async () => {
@@ -1173,6 +1227,38 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   // ---- actions -----------------------------------------------------------------------------
   /**
+   * "Jarvis, <the bet>" with no voice judge: the sentence goes out as the bet's terms at once,
+   * with the stake that was said (else the form's). The server writes the claim, who performs
+   * and what the camera must see (terms/structure); the card comes back like any typed one, and
+   * a refusal or an error lands in the form as its note, the sentence still there to edit.
+   */
+  const sayBet = async (betId: string, text: string) => {
+    const claim = text.replace(/\s+/g, ' ').trim();
+    if (claim === '') return;
+    const stakeUsd =
+      saidStakeUsd(text, TYPED_STAKES_USD) ?? typedStakeFor(rematchStake) ?? DEFAULT_STAKE_USD;
+    typedDispatch({ type: 'open' });
+    typedDispatch({ type: 'claim', text: claim });
+    typedDispatch({ type: 'stake', usd: stakeUsd });
+    typedDispatch({ type: 'submit' });
+    const outcome = await submitTypedTerms(
+      { api: rt.api },
+      {
+        betId,
+        claim,
+        stakeUsd,
+        bName: rt.hub.get(betId)?.party_b?.display_name ?? opponentName,
+      },
+    );
+    typedDispatch({ type: 'submitted', outcome });
+    if (outcome.kind !== 'proposed') feel('failed');
+  };
+
+  /** The Dance Off a sentence asked for (./wakeDance), or null: then it is the judge's to hear. */
+  const danceAsked = (text: string): DanceRequest | null =>
+    DANCE_ENABLED ? danceRequest(text, DANCE_ROUTINE_CHOICES, DANCE_STAKES_USD) : null;
+
+  /**
    * Start A's judge for this bet (a wake, "Tap to talk", or a sentence held from Home): it mounts
    * with `text` as its first user message ('' = none) while the loop thinks.
    */
@@ -1188,10 +1274,17 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** A new challenge (list or face): A hosts the judge, follows the bet, and opens it. */
   const openNewBet = (r: CreateBetResponse) => {
     voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
-    // "Jarvis, …" on Home started this challenge: the judge hears it as the screen opens.
+    // "Jarvis, …" on Home started this challenge: the judge hears it as the screen opens,
+    // unless it asked for a Dance Off, which the judge cannot write: that opens the panel.
     const held = heldUtterance(heldWake.current, Date.now());
     heldWake.current = null;
-    if (held !== null && WAKE_ENABLED) armJudge(r.bet.bet_id, held);
+    const saidDanceOff = held !== null ? danceAsked(held) : null;
+    if (saidDanceOff) saidDance.current = { betId: r.bet.bet_id, req: saidDanceOff };
+    else if (held !== null && WAKE_ENABLED) {
+      if (VOICE_ENABLED) armJudge(r.bet.bet_id, held);
+      // No voice judge: the sentence is the bet. Nothing said ("Jarvis" alone): the form waits.
+      else if (held.trim() !== '') saidBet.current = { betId: r.bet.bet_id, text: held };
+    }
     rt.hub.adopt(r.bet);
     rt.ws.subscribe(r.bet.bet_id);
     dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
@@ -1682,6 +1775,24 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         }
       : null;
 
+  // Framing is for one attempt: once it has started, or the bet is another, it is over.
+  const attemptNoNow = bet?.attempt?.attempt_no ?? null;
+  useEffect(() => {
+    setFramingBet(null);
+  }, [bet?.bet_id, attemptNoNow]);
+  /** This phone films the next attempt and is framing it (the camera up, nothing started). */
+  const framing = bet !== null && canStart && framingBet === bet.bet_id;
+  const framingCam = (
+    <JudgeCamScreen
+      arm={null}
+      onSend={sendClip}
+      onBack={() => setFramingBet(null)}
+      onRecord={() => void startAttempt()}
+      recordBusy={busy}
+      onCallOffGuard={setCallOffGuard}
+    />
+  );
+
   const dismiss = () => {
     setAlert(null);
     // Home after a payout: its history catches up if the settle event did not (deduped).
@@ -1760,19 +1871,34 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         ? null
         : bet.bet_id
       : null;
+  // No voice judge: A's listening view, nothing sent yet and no panel over it, takes a sentence.
+  const sayPendingBet =
+    !VOICE_ENABLED &&
+    negotiating &&
+    bet !== null &&
+    typed.bet_id === bet.bet_id &&
+    typed.mode === 'voice' &&
+    !(market.bet_id === bet.bet_id && market.phase !== 'closed') &&
+    !(dance.bet_id === bet.bet_id && danceOpen(dance))
+      ? bet.bet_id
+      : null;
   const routeRef = useRef(route);
   routeRef.current = route;
   const pendingRef = useRef(judgePendingBet);
   pendingRef.current = judgePendingBet;
+  const sayPendingRef = useRef(sayPendingBet);
+  sayPendingRef.current = sayPendingBet;
 
   const wake = useWakeWord({
+    // A spoken bet, not a short command: it may pause to think (wake SPOKEN_BET_TIMING).
+    timing: SPOKEN_BET_TIMING,
     enabled: wakeListening({
       flag: WAKE_ENABLED,
       signedIn: app.auth === 'signedIn',
       judgeCam: app.judgeCam,
       route,
       inRoom: app.room !== null,
-      judgePending: judgePendingBet !== null,
+      judgePending: judgePendingBet !== null || sayPendingBet !== null,
       judgeBusy: judgeUp || !judgeReleased,
     }),
     onWake: () => {
@@ -1784,10 +1910,26 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       // The mic is already released here.
       const pending = pendingRef.current;
       if (routeRef.current === 'negotiate' && pending) {
+        // "Jarvis, dance off": the panel opens (already this bet's: the judge was pending on
+        // it), and the judge is not asked for terms it cannot write.
+        const asked = danceAsked(text);
+        if (asked) {
+          loopDispatch({ type: 'utterance', toJudge: false });
+          for (const e of danceEventsFor(asked)) danceDispatch(e);
+          return;
+        }
         armJudge(pending, text);
         return;
       }
       loopDispatch({ type: 'utterance', toJudge: false });
+      // No voice judge, on A's form: a dance off opens its panel, anything else is the bet.
+      const sayPending = sayPendingRef.current;
+      if (routeRef.current === 'negotiate' && sayPending) {
+        const asked = danceAsked(text);
+        if (asked) for (const e of danceEventsFor(asked)) danceDispatch(e);
+        else void sayBet(sayPending, text);
+        return;
+      }
       if (routeRef.current !== 'home') return;
       const a = appRef.current;
       const opponents = a.members
@@ -1833,6 +1975,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   useEffect(() => {
     if (judgeOn && voiceBet) setJudgeMountedBet(voiceBet.bet_id);
   }, [judgeOn, voiceBet?.bet_id]);
+  // SAY_MODE, on A's listening view: a capture that heard nothing listens again shortly.
+  const sayIdle = sayPendingBet !== null && wake.status === 'heard';
+  useEffect(() => {
+    if (!sayIdle) return;
+    const tm = setTimeout(wake.resume, HEARD_REARM_MS);
+    return () => clearTimeout(tm);
+  }, [sayIdle, wake.resume]);
+  // SAY_MODE in a binary that cannot listen (no wake module): the form, as with it off.
+  const cannotListen = SAY_MODE && wake.status === 'unavailable';
+  useEffect(() => {
+    if (cannotListen && negotiating) typedDispatch({ type: 'open' });
+  }, [cannotListen, negotiating, bet?.bet_id]);
   /** On A's negotiate screen: the judge waits for "Jarvis" or "Tap to talk". */
   const judgeWaiting = judgePendingBet !== null && judgeWaits && !judgeOn;
   const wakeStatusLine = STATUS_COPY[wake.status];
@@ -2110,10 +2264,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             speaking={voiceLive ? judgeSpeaking : captions.at(-1)?.who === 'judge'}
             hasMic={me === 'A' && VOICE_ENABLED && !typedForced}
             micMuted={!voiceLive || micMutedFor(state)}
-            voice={VOICE_ENABLED}
+            voice={VOICE_ENABLED || (SAY_MODE && me === 'A')}
             // The judge session runs on A's phone only (hostsVoice): B's says where it is, and A's
-            // listens only once that session is live (./judgeHead).
-            judgeLive={voiceLive}
+            // listens only once that session is live (./judgeHead). With no voice judge
+            // (SAY_MODE) there is no session to wait for.
+            judgeLive={VOICE_ENABLED ? voiceLive : true}
             judgeOn={me === 'B' && bet ? judgeHostLabel(bet) : undefined}
             draft={view}
             typed={
@@ -2161,7 +2316,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     onOpenSettings:
                       wake.status === 'denied' ? () => void Linking.openSettings() : undefined,
                   }
-                : undefined
+                : sayPendingBet !== null
+                  ? {
+                      // No judge to start: the tap captures the sentence itself.
+                      line: wakeLine,
+                      onTapToTalk: () => {
+                        loopDispatch({ type: 'wake' });
+                        wake.capture();
+                      },
+                      onOpenSettings:
+                        wake.status === 'denied' ? () => void Linking.openSettings() : undefined,
+                    }
+                  : undefined
             }
             market={
               negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id
@@ -2249,7 +2415,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 : undefined
             }
             onDecline={() => {
+              // Backing out ends the bet for both phones. B declines the invite; A, the
+              // challenger, declines the bet itself (lock/decline, which takes a draft too).
+              // A's back-out used to only leave this screen: the bet stayed open on B's phone
+              // and refused a new challenge between the two until the draft idled out.
               if (bet && me === 'B') void rt.api.declineInvite(bet.bet_id).catch(() => undefined);
+              else if (bet && me === 'A')
+                void rt.api
+                  .declineLock({
+                    bet_id: bet.bet_id,
+                    party: 'A',
+                    lock_request_id: null,
+                    declined_at: new Date(rt.clock.now()).toISOString(),
+                  })
+                  .catch(() => undefined);
               dismiss();
             }}
           />
@@ -2289,12 +2468,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       case 'live': {
         const phase: LivePhase =
           state === 'LOCKED' ? 'locked' : state === 'ATTEMPT' ? 'filming' : 'judging';
+        // This phone may have to film: it opens its camera first, and the recording starts on
+        // "Start recording" there, never by itself (a room with a judge cam still uses that one).
+        if (framing && state === 'LOCKED') return framingCam;
         return view ? (
           <LiveScreen
             view={view}
             phase={phase}
             attemptNo={bet?.attempt?.attempt_no ?? 1}
-            onStart={canStart ? () => void startAttempt() : undefined}
+            onStart={canStart && bet ? () => setFramingBet(bet.bet_id) : undefined}
+            startLabel={canStart ? t(COPY.live.openCamera) : undefined}
             startBusy={busy}
           />
         ) : (
@@ -2377,6 +2560,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                   danceEmbedder
                     ? {
                         open: (uri) => danceEmbedder.open(uri),
+                        prewarm: danceEmbedder.prewarm,
                         identify: (req) => rt.api.danceIdentify(bet.bet_id, req),
                       }
                     : null
@@ -2458,13 +2642,15 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           />
         );
       case 'redo':
+        // "Ready" opens the camera; the retake starts on "Start recording" there, as the first did.
+        if (framing) return framingCam;
         return (
           <RedoScreen
             attemptNo={nextAttemptNo(bet ?? { lastAttemptNo: null })}
             maxAttempts={3}
             tip={FILMING_TIP}
             onReady={() => {
-              if (canStart) void startAttempt();
+              if (canStart && bet) setFramingBet(bet.bet_id);
             }}
           />
         );
@@ -2617,10 +2803,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               dynamicVariables={voice}
               initialUtterance={wakeUtterances.current.get(voiceBet.bet_id)}
               // A dance round starts on the dance screen, after its framing check (never by voice).
-              startAttempt={(n) =>
+              // A camera attempt is the filmer's to start too ("Open camera", "Start recording"):
+              // started by the judge the moment the bet locked, nobody was ready and nothing was
+              // framed. The judge is told to say so instead.
+              startAttempt={() =>
                 isDanceBet(voiceBet)
                   ? Promise.reject(new ActionError('INVALID_STATE'))
-                  : startAttemptFor(voiceBet, n, 'A')
+                  : Promise.resolve('manual' as const)
               }
               micMuted={micMutedFor(voiceBet.state, {
                 reviewable: reviewable(voiceBet),

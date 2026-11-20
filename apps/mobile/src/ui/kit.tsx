@@ -1,13 +1,16 @@
-// UI kit for party screens ("Obsidian", ./tokens): step header with back chevron and progress
+// UI kit for party screens ("Limelight", ./tokens): step header with back chevron and progress
 // bars, a title with a short explanation, the prompt bubble over the camera with an animated
 // "Checking…", red fix-it lines, the check badge, the shutter, pill buttons, a text field and a
 // Yes/No confirmation sheet. Every color, size and duration comes from ./tokens; copy follows
 // ./copyRule.
 //
+// White asks, green answers: the primary pill, a ticked box, a focused field and a done step are
+// white; green is kept for what is on (a saved tick, a switch that is on). Everything is soft:
+// filled, borderless, round, with bold labels.
+//
 // Backdrops: what a component sits on changes how it draws, without new props at the call site.
-// The page is black; a ConfirmSheet, a raised Card or the camera Stage is "raised" (#0F0F11), so
-// a text field in it takes the next step up (#1C1C1F) instead of vanishing. Read it with
-// useBackdrop().
+// The page is black; a ConfirmSheet, a raised Card or the camera Stage is glass ("raised"), so
+// a text field in it takes the next step up instead of vanishing. Read it with useBackdrop().
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -18,13 +21,28 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
   type StyleProp,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
 
+import { columnFor, type Column } from './column';
 import { PressScale } from './press';
-import { border, color, half, palette, radius, space, type, type TypeToken } from './tokens';
+import { isDisplay, typographic } from './typography';
+import {
+  border,
+  color,
+  dp,
+  half,
+  material,
+  palette,
+  radius,
+  space,
+  stroke as glyph,
+  type,
+  type TypeToken,
+} from './tokens';
 
 // ---------------------------------------------------------------------------------------
 // Backdrop
@@ -49,10 +67,27 @@ export function useBackdropColor(): string {
 }
 
 // ---------------------------------------------------------------------------------------
+// Column
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The content column for this window (./column): the window itself on a phone, a centred
+ * phone-width column on an iPad. Screens (ui/parts Screen, MomentScreen) apply it; anything
+ * placed against the window's own edges (a sheet, a corner control) uses its `inset`.
+ */
+export function useColumn(): Column {
+  const { width, height } = useWindowDimensions();
+  return columnFor(width, height);
+}
+
+// ---------------------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------------------
 
-/** UI copy: 1-3 words (copy rule). */
+/**
+ * UI copy: 1-3 words (copy rule). At headline sizes it is set with real apostrophes; VoiceOver
+ * and the e2e flows still get the text as written.
+ */
 export function Label({
   children,
   variant = 'label',
@@ -67,9 +102,15 @@ export function Label({
   lines?: number;
   testID?: string;
 }) {
+  const shown = isDisplay(variant) ? typographic(children) : children;
   return (
-    <Text testID={testID} style={[type[variant], style]} numberOfLines={lines}>
-      {children}
+    <Text
+      testID={testID}
+      style={[type[variant], style]}
+      numberOfLines={lines}
+      accessibilityLabel={shown === children ? undefined : children}
+    >
+      {shown}
     </Text>
   );
 }
@@ -80,7 +121,7 @@ export function BodyText({ children, style }: { children: string; style?: StyleP
 }
 
 // ---------------------------------------------------------------------------------------
-// Buttons: full pills, 56 pt, Geist 600 17. Fills, no outlines.
+// Buttons: full pills, 56 pt, Geist 700 17. The primary is white; the rest are soft grey.
 // ---------------------------------------------------------------------------------------
 
 type ButtonProps = {
@@ -142,15 +183,15 @@ function BaseButton({
 }
 
 /**
- * The one filled action on a screen: a green pill with black text. Disabled, it is a #1C1C1F pill
- * with dim text at full opacity (a dimmed green reads murky on black).
+ * The one filled action on a screen: a white pill with black text. Disabled, it is the glass
+ * pill with dim text at full opacity (a dimmed white reads as a grey button, not an off one).
  */
 export function PrimaryButton(p: ButtonProps) {
   return (
     <BaseButton
       {...p}
       box={styles.primary}
-      ink={color.onAccent}
+      ink={color.onPrimary}
       offBox={styles.secondary}
       offInk={palette.textTertiary}
     />
@@ -158,8 +199,8 @@ export function PrimaryButton(p: ButtonProps) {
 }
 
 /**
- * A secondary action: a #1C1C1F pill with white text. `small` is the 32 pt in-row pill (white
- * 15/500, 14 pt sides), e.g. "Challenge" on a room row.
+ * A secondary action: a soft grey pill with white text. `small` is the 36 pt in-row pill
+ * (white 15/600, 16 pt sides), e.g. "Challenge" on a room row.
  */
 export function QuietButton({ small = false, ...p }: ButtonProps & { small?: boolean }) {
   return small ? (
@@ -175,8 +216,9 @@ export function QuietButton({ small = false, ...p }: ButtonProps & { small?: boo
 }
 
 /**
- * A tertiary action: text only, no fill (44 pt tall). Green by default; `tone="danger"` is red
- * (e.g. "Back out"), `tone="muted"` grey, `tone="plain"` white 17/500 ("Skip for now", "Back").
+ * A tertiary action: text only, no fill (44 pt tall). White 17/600 by default (it asks, so it
+ * is not green); `tone="danger"` is red (e.g. "Back out"), `tone="muted"` grey, `tone="plain"`
+ * white 17/500 ("Skip for now", "Back").
  */
 export function TextButton({
   tone = 'accent',
@@ -191,13 +233,7 @@ export function TextButton({
   dense?: boolean;
 }) {
   const ink =
-    tone === 'danger'
-      ? palette.danger
-      : tone === 'muted'
-        ? palette.textSecondary
-        : tone === 'plain'
-          ? palette.text
-          : palette.accent;
+    tone === 'danger' ? palette.danger : tone === 'muted' ? palette.textSecondary : palette.text;
   return (
     <BaseButton
       {...p}
@@ -210,7 +246,7 @@ export function TextButton({
 }
 
 /**
- * A destructive action: red text on a #1C1C1F pill; `filled` is a red pill with black text
+ * A destructive action: red text on a glass pill; `filled` is a red pill with black text
  * ("Yes, delete").
  */
 export function DangerButton({ filled = false, ...p }: ButtonProps & { filled?: boolean }) {
@@ -227,7 +263,7 @@ export function DangerButton({ filled = false, ...p }: ButtonProps & { filled?: 
 
 /** A tick drawn with borders (no icon font, no emoji). */
 export function Tick({ size, tint }: { size: number; tint: string }) {
-  const stroke = Math.max(2, Math.round(size * 0.12));
+  const stroke = Math.max(glyph.glyph, Math.round(size * 0.14));
   return (
     <View
       style={{
@@ -243,21 +279,26 @@ export function Tick({ size, tint }: { size: number; tint: string }) {
 }
 
 /**
- * A round badge with a tick ("Face saved", the per-photo flash): a #1C1C1F disc with a green
- * tick. Pass `fill={palette.accent}` for a solid green disc (the tick turns black).
+ * A round badge with a tick ("Face saved", the per-photo flash): a glass disc with a green
+ * tick, lit by a green ring (it answers: something was saved). Pass `fill={palette.accent}` for
+ * a solid green disc (the tick turns black).
  */
 export function CheckBadge({ size, fill = palette.fill }: { size: number; fill?: string }) {
-  const tick = fill === palette.accent ? color.onAccent : palette.accent;
+  const solid = fill === palette.accent;
+  const tick = solid ? color.onAccent : palette.accent;
   return (
     <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: fill,
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+      style={[
+        {
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: fill,
+          alignItems: 'center',
+          justifyContent: 'center',
+        },
+        solid ? null : { backgroundImage: material.disc, boxShadow: material.ringOn },
+      ]}
     >
       <Tick size={size * 0.42} tint={tick} />
     </View>
@@ -269,10 +310,10 @@ export function ChevronLeft({ tint = palette.text }: { tint?: string } = {}) {
   return (
     <View
       style={{
-        width: 11,
-        height: 11,
-        borderLeftWidth: 2,
-        borderBottomWidth: 2,
+        width: dp(12),
+        height: dp(12),
+        borderLeftWidth: glyph.glyph,
+        borderBottomWidth: glyph.glyph,
         borderColor: tint,
         transform: [{ translateX: 3 }, { rotate: '45deg' }],
       }}
@@ -350,10 +391,7 @@ export function StepHeader({
         {Array.from({ length: count }, (_, i) => (
           <View
             key={i}
-            style={[
-              styles.segment,
-              { backgroundColor: i <= step ? palette.accent : palette.hairline },
-            ]}
+            style={[styles.segment, { backgroundColor: i <= step ? palette.text : palette.rim }]}
           />
         ))}
       </View>
@@ -391,7 +429,7 @@ export function StepScaffold({
   );
 }
 
-/** "I consent": a checkbox (green when checked); the whole row is tappable. */
+/** "I consent": a checkbox (white when checked); the whole row is tappable. */
 export function CheckRow({
   label,
   checked,
@@ -413,7 +451,7 @@ export function CheckRow({
       style={styles.checkRow}
     >
       <View style={[styles.box, checked ? styles.boxOn : styles.boxOff]}>
-        {checked ? <Tick size={12} tint={color.onAccent} /> : null}
+        {checked ? <Tick size={dp(12)} tint={color.onPrimary} /> : null}
       </View>
       <Label variant="labelMedium">{label}</Label>
     </Pressable>
@@ -421,8 +459,8 @@ export function CheckRow({
 }
 
 /**
- * A labelled one-line text field ("Your name"); the label sits above, never inside. A #0F0F11
- * well (#1C1C1F inside a raised sheet), radius 14; focused, a 1 pt green border.
+ * A labelled one-line text field ("Your name"); the label sits above, never inside. A soft
+ * well (one step up inside a raised sheet), radius 18; focused, it gets a 2 pt white outline.
  */
 export function TextField({
   label,
@@ -469,8 +507,8 @@ export function TextField({
         textContentType={textContentType}
         returnKeyType="done"
         keyboardAppearance="dark"
-        selectionColor={palette.accent}
-        cursorColor={palette.accent}
+        selectionColor={palette.text}
+        cursorColor={palette.text}
         onSubmitEditing={onSubmitEditing}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
@@ -521,7 +559,7 @@ export function SavedRow({ label, value }: { label: string; value: string }) {
       <Label variant="labelMedium">{label}</Label>
       <View style={styles.rowRight}>
         <Text style={type.value}>{value}</Text>
-        <Tick size={12} tint={palette.accent} />
+        <Tick size={dp(12)} tint={palette.accent} />
       </View>
     </View>
   );
@@ -531,7 +569,7 @@ export function SavedRow({ label, value }: { label: string; value: string }) {
 // Camera stage
 // ---------------------------------------------------------------------------------------
 
-/** The rounded camera / phrase area (#0F0F11, radius 20). Children see a raised backdrop. */
+/** The rounded camera / phrase area (glass, radius 20). Children see a raised backdrop. */
 export function Stage({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   return (
     <BackdropProvider value="raised">
@@ -652,13 +690,15 @@ export function ConfirmSheet({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  // On an iPad the sheet is as wide as the column the screens sit in, centred at the bottom.
+  const column = useColumn();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <Pressable style={styles.sheetBackdrop} onPress={onCancel} accessibilityLabel="Close">
         <View style={[StyleSheet.absoluteFill, styles.backdropTint]} />
       </Pressable>
       <BackdropProvider value="raised">
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, column.wide && { width: column.width, alignSelf: 'center' }]}>
           <View style={styles.grabber} />
           {/* Up to 3 lines: "{Name} wants to call it off. Refund both?" must show whole. */}
           <Label variant="subtitle" lines={3}>
@@ -698,10 +738,10 @@ const styles = StyleSheet.create({
   },
   dimmed: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
-  primary: { backgroundColor: color.primaryAction },
+  primary: { backgroundColor: color.primaryAction, boxShadow: material.bloomPrimary },
   secondary: { backgroundColor: palette.fill },
-  text: { backgroundColor: 'transparent', height: 44, paddingHorizontal: half.x15 },
-  small: { height: space.x4, paddingHorizontal: 14 },
+  text: { backgroundColor: 'transparent', height: dp(44), paddingHorizontal: half.x15 },
+  small: { height: space.x4 + half.x05, paddingHorizontal: space.x2 },
   dense: { height: space.x4 },
   dangerFilled: { backgroundColor: color.destructive },
   alertSlot: { height: space.x4, alignItems: 'center', justifyContent: 'center' },
@@ -715,13 +755,13 @@ const styles = StyleSheet.create({
     gap: space.x2,
   },
   back: {
-    width: 24,
-    height: 44,
+    width: dp(24),
+    height: dp(44),
     justifyContent: 'center',
     alignItems: 'flex-start',
   },
   segments: { flex: 1, flexDirection: 'row', gap: half.x05 },
-  segment: { flex: 1, height: 2, borderRadius: 1 },
+  segment: { flex: 1, height: glyph.bar, borderRadius: glyph.bar / 2 },
   tagSlot: { minWidth: space.x1, alignItems: 'flex-end', paddingRight: space.page },
   step: { flex: 1, paddingHorizontal: space.page, paddingBottom: space.x2, paddingTop: space.x1 },
   stepBody: { marginTop: space.x1 },
@@ -742,8 +782,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  boxOn: { backgroundColor: palette.accent },
-  boxOff: { borderWidth: 1.5, borderColor: palette.textTertiary },
+  boxOn: { backgroundColor: color.selected },
+  boxOff: { borderWidth: 2, borderColor: palette.textTertiary },
   row: {
     minHeight: space.row,
     flexDirection: 'row',
@@ -798,8 +838,9 @@ const styles = StyleSheet.create({
   backdropTint: { backgroundColor: palette.background, opacity: 0.72 },
   sheet: {
     backgroundColor: palette.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
+    backgroundImage: material.glass,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
     paddingHorizontal: space.page,
     paddingTop: half.x15,
     paddingBottom: space.x5,

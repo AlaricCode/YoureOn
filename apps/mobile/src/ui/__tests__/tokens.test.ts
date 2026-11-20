@@ -5,17 +5,21 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALLOWED_COLORS,
+  aurora,
   border,
   color,
   displayScale,
   fontFamily,
+  headlineScale,
   GRID,
   haptics,
   hold,
+  material,
   MAX_MOMENT_MS,
   MAX_TRANSITION_MS,
   moneyColor,
   motion,
+  orb,
   palette,
   payout,
   radius,
@@ -23,6 +27,7 @@ import {
   skeleton,
   space,
   spectrum,
+  stroke,
   swatch,
   swipe,
   ticker,
@@ -54,7 +59,7 @@ const rolesOf = (hex: string) =>
     .map(([k]) => k)
     .sort();
 
-describe('color: Obsidian (black, white, greys, one green, one red)', () => {
+describe('color: Limelight (black, white, greys, one green, one red)', () => {
   it('every swatch and palette value is #RRGGBB', () => {
     for (const v of Object.values(palette)) expect(v).toMatch(HEX);
   });
@@ -62,11 +67,12 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
   it('pins the swatches', () => {
     expect(swatch).toEqual({
       black: '#000000',
-      raised: '#0F0F11',
-      line: '#1C1C1F',
+      raised: '#161618',
+      line: '#232327',
+      edge: '#2E2E33',
       white: '#FFFFFF',
-      grey: '#8D8D93',
-      dim: '#4A4A4F',
+      grey: '#98989F',
+      dim: '#5C5C63',
       green: '#00D47A',
       red: '#FF4F45',
     });
@@ -78,6 +84,7 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
       surface: swatch.raised,
       fill: swatch.line,
       hairline: swatch.line,
+      rim: swatch.edge,
       text: swatch.white,
       textSecondary: swatch.grey,
       textTertiary: swatch.dim,
@@ -103,19 +110,17 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
     for (const v of Object.values(color)) expect(ALLOWED_COLORS.has(v)).toBe(true);
   });
 
-  it('green is the action, selection, live, money up and online; nothing else', () => {
+  it('white asks: the primary action, a selection and focus are white with black ink', () => {
+    expect(color.primaryAction).toBe(palette.white);
+    expect(color.selected).toBe(palette.white);
+    expect(color.borderFocused).toBe(palette.white);
+    expect(color.onPrimary).toBe(palette.black);
+    expect(ratio(color.onPrimary, color.primaryAction)).toBeGreaterThan(15);
+  });
+
+  it('green answers: on, live, money up, online and the one commit control; never a plain action', () => {
     expect(rolesOf(palette.green)).toEqual(
-      [
-        'accent',
-        'borderFocused',
-        'green',
-        'live',
-        'online',
-        'positive',
-        'primaryAction',
-        'selected',
-        'success',
-      ].sort(),
+      ['accent', 'commit', 'green', 'live', 'online', 'positive', 'success'].sort(),
     );
     expect(payout.deltaColor).toBe(palette.green);
   });
@@ -125,6 +130,20 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
       ['danger', 'destructive', 'fixable', 'negative', 'red'].sort(),
     );
     expect(color.error).toBe(palette.text);
+  });
+
+  it('panels step up from black: surface, then fill, then rim, all neutral', () => {
+    for (const c of [palette.surface, palette.fill, palette.rim]) expect(chromatic(c)).toBe(false);
+    expect(lum(palette.surface)).toBeGreaterThan(lum(palette.background));
+    expect(lum(palette.fill)).toBeGreaterThan(lum(palette.surface));
+    // a soft panel must read as off the black, not as the black
+    expect(ratio(palette.surface, palette.background)).toBeGreaterThan(1.12);
+  });
+
+  it('the rim is a neutral one step brighter than the fill it sits on', () => {
+    expect(chromatic(palette.rim)).toBe(false);
+    expect(lum(palette.rim)).toBeGreaterThan(lum(palette.fill));
+    expect(lum(palette.rim)).toBeLessThan(lum(palette.textTertiary));
   });
 
   it('avatars are a grey disc (no per-person tints)', () => {
@@ -158,21 +177,21 @@ describe('color: Obsidian (black, white, greys, one green, one red)', () => {
   });
 });
 
-describe('type: Geist only, thin tabular figures', () => {
+describe('type: one voice, Geist, and it is bold', () => {
   const styles = Object.values(type);
   const families = new Set<string>(Object.values(fontFamily));
+  const weightOf: Record<string, string> = {
+    Geist_400Regular: '400',
+    Geist_500Medium: '500',
+    Geist_600SemiBold: '600',
+    Geist_700Bold: '700',
+  };
 
-  it('every style uses a loaded Geist face, one family name per weight', () => {
+  it('every style uses a loaded Geist face, one family name per weight; nothing lighter than 400', () => {
     for (const s of styles) expect(families.has(s.fontFamily)).toBe(true);
-    for (const f of families) expect(f).toMatch(/^Geist_\d00[A-Za-z]+$/);
-    // The fallback weight matches the face, so the system font keeps the hierarchy.
-    const weightOf: Record<string, string> = {
-      Geist_300Light: '300',
-      Geist_400Regular: '400',
-      Geist_500Medium: '500',
-      Geist_600SemiBold: '600',
-    };
+    for (const f of families) expect(f).toMatch(/^Geist_[4-9]00[A-Za-z]+$/);
     expect(Object.keys(weightOf).sort()).toEqual([...families].sort());
+    // The fallback weight matches the face, so the system font keeps the hierarchy.
     for (const s of styles) expect(s.fontWeight).toBe(weightOf[s.fontFamily]);
   });
 
@@ -185,40 +204,56 @@ describe('type: Geist only, thin tabular figures', () => {
       expect(src).toMatch(new RegExp(`^\\s+${name},$`, 'm'));
     }
     expect(src.match(/\.ttf'/g)).toHaveLength(families.size);
-    expect(src).not.toMatch(/big-shoulders|instrument-sans/);
+    expect(src).not.toMatch(/big-shoulders|instrument|300Light/i);
   });
 
-  it('UI sizes come from 13/15/17/22/28; display sizes 34/44/56 are Light/Regular figures only', () => {
+  it('nothing on screen is thin: every style is Medium or heavier', () => {
+    for (const [name, s] of Object.entries(type))
+      expect(Number(s.fontWeight), name).toBeGreaterThanOrEqual(500);
+  });
+
+  it('sizes come from 13/15/17/22/28 (UI), 34/44/56 (figures) and 20/24/32/44/56 (headlines)', () => {
     for (const s of styles) {
-      expect([...typeScale, ...displayScale]).toContain(s.fontSize);
-      if ((displayScale as readonly number[]).includes(s.fontSize)) {
-        expect([fontFamily.light, fontFamily.regular]).toContain(s.fontFamily);
-        expect(s.fontVariant).toEqual(['tabular-nums']);
-      }
+      expect([...typeScale, ...displayScale, ...headlineScale]).toContain(s.fontSize);
       expect(ALLOWED_COLORS.has(s.color)).toBe(true);
     }
     const used = new Set(styles.map((s) => s.fontSize));
-    for (const size of [...typeScale, ...displayScale]) expect(used).toContain(size);
+    for (const size of [...typeScale, ...displayScale, ...headlineScale])
+      expect(used).toContain(size);
   });
 
-  it('money and big numbers are big, thin, tabular and tightly tracked', () => {
-    for (const k of ['balance', 'money', 'moment', 'momentSmall', 'display', 'figure'] as const) {
-      expect(type[k].fontFamily).toBe(fontFamily.light);
+  it('money and big numbers are big, bold, tabular and tightly tracked', () => {
+    for (const k of ['balance', 'money', 'display', 'figure'] as const) {
+      expect(type[k].fontFamily).toBe(fontFamily.bold);
       expect(type[k].fontVariant).toEqual(['tabular-nums']);
       expect(type[k].letterSpacing).toBeLessThan(0);
     }
     expect(type.amount.fontVariant).toEqual(['tabular-nums']);
     expect(type.balance.fontSize).toBe(56);
     expect(type.money.fontSize).toBe(56);
-    expect(type.moment.fontSize).toBeGreaterThanOrEqual(44);
   });
 
-  it('headings 600, body 400, labels 500; small UI type is untracked with room to breathe', () => {
-    expect(type.title).toMatchObject({ fontFamily: fontFamily.semibold, fontSize: 28 });
-    expect(type.heading.fontFamily).toBe(fontFamily.semibold);
-    expect(type.button).toMatchObject({ fontFamily: fontFamily.semibold, fontSize: 17 });
-    expect(type.body.fontFamily).toBe(fontFamily.regular);
-    expect(type.labelMedium.fontFamily).toBe(fontFamily.medium);
+  it('headlines are heavy and tight, and step down in size', () => {
+    for (const k of ['moment', 'momentSmall', 'endTitle', 'hero', 'wordmark'] as const) {
+      expect(type[k].fontFamily).toBe(fontFamily.bold);
+      expect(type[k].letterSpacing).toBeLessThan(0);
+    }
+    for (const k of ['statement', 'statementSmall'] as const)
+      expect(type[k].fontFamily).toBe(fontFamily.semibold);
+    expect(type.moment.fontSize).toBeGreaterThan(type.momentSmall.fontSize);
+    expect(type.momentSmall.fontSize).toBeGreaterThan(type.endTitle.fontSize);
+    expect(type.statement.fontSize).toBeGreaterThan(type.statementSmall.fontSize);
+    // what the judge says is white and a step up from what people say (the grey body size)
+    expect(type.spoken.color).toBe(palette.text);
+    expect(type.spoken.fontSize).toBeGreaterThan(type.row.fontSize);
+  });
+
+  it('titles and buttons 700, names and labels that matter 600, reading text 500', () => {
+    expect(type.title).toMatchObject({ fontFamily: fontFamily.bold, fontSize: 28 });
+    expect(type.heading.fontFamily).toBe(fontFamily.bold);
+    expect(type.button).toMatchObject({ fontFamily: fontFamily.bold, fontSize: 17 });
+    expect(type.body.fontFamily).toBe(fontFamily.medium);
+    expect(type.labelMedium.fontFamily).toBe(fontFamily.semibold);
     for (const s of styles) {
       if (s.fontSize <= 17) expect(s.letterSpacing).toBe(0);
       else expect(s.letterSpacing).toBeLessThanOrEqual(0);
@@ -234,16 +269,104 @@ describe('space and shape', () => {
     expect(space.page).toBe(20);
   });
 
-  it('controls are 56 pt pills; inputs radius 14; sheets radius 20; focus is a 1 pt border', () => {
+  it('big and round: 56 pt pills, inputs radius 18, tiles 24, panels 32; focus is a 2 pt outline', () => {
     expect(space.control).toBe(56);
     expect(radius.pill).toBe(999);
-    expect(radius.md).toBe(14);
-    expect(radius.lg).toBe(20);
-    expect(border.focused).toBe(1);
+    expect(radius.md).toBe(18);
+    expect(radius.lg).toBe(24);
+    expect(radius.xl).toBe(32);
+    expect(border.focused).toBe(2);
+  });
+
+  it('bars and drawn marks are thick enough to read at a glance', () => {
+    expect(stroke.bar).toBeGreaterThanOrEqual(4);
+    expect(stroke.glyph).toBeGreaterThanOrEqual(2);
+    expect(stroke.bar % 2).toBe(0);
+  });
+});
+
+describe('materials and light', () => {
+  const hexes = (s: string) => s.match(/#[0-9A-Fa-f]{6}\b/g) ?? [];
+  const alphas = (s: string) =>
+    [...s.matchAll(/rgba\(\s*(\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\s*\)/g)].map((m) => ({
+      rgb: `#${[m[1], m[2], m[3]].map((c) => Number(c).toString(16).padStart(2, '0')).join('')}`,
+      a: Number(m[4]),
+    }));
+
+  it('panel fills are neutral, a touch lighter at the top, and never brighter than the rim', () => {
+    for (const fill of [material.glass, material.glassRaised, material.disc]) {
+      const stops = hexes(fill);
+      expect(stops.length).toBeGreaterThanOrEqual(2);
+      for (const c of stops) expect(chromatic(c.toUpperCase())).toBe(false);
+      const lums = stops.map((c) => lum(c.toUpperCase()));
+      expect([...lums].sort((a, b) => b - a)).toEqual(lums);
+    }
+    const top = lum((hexes(material.glass)[0] as string).toUpperCase());
+    expect(top).toBeLessThan(lum(palette.rim));
+    // soft, not glossy: a panel's gradient is barely there
+    const bottom = lum((hexes(material.glass).at(-1) as string).toUpperCase());
+    expect(top - bottom).toBeLessThan(0.006);
+  });
+
+  it('light is only white or the palette green, always at an alpha', () => {
+    const green = palette.green.toLowerCase();
+    for (const [name, value] of Object.entries(material)) {
+      for (const { rgb, a } of alphas(value)) {
+        expect(a, name).toBeGreaterThan(0);
+        expect(a, name).toBeLessThan(1);
+        expect(['#ffffff', green], name).toContain(rgb);
+      }
+    }
+    for (const k of ['bloomOn', 'ringOn'] as const)
+      expect(alphas(material[k]).every((c) => c.rgb === green)).toBe(true);
+    expect(alphas(material.bloomPrimary).every((c) => c.rgb === '#ffffff')).toBe(true);
+  });
+
+  it('the aurora hangs from above the screen, runs past both sides, and the loss is quieter', () => {
+    expect(aurora.width).toBeGreaterThan(1);
+    expect(aurora.top).toBeLessThan(0);
+    expect(aurora.top + aurora.height).toBeGreaterThan(0.4);
+    expect(aurora.top + aurora.height).toBeLessThan(0.7);
+    expect(aurora.lossOpacity).toBeLessThan(aurora.opacity);
+    expect(aurora.neutralOpacity).toBeLessThan(aurora.lossOpacity);
+    expect(aurora.fadeMs).toBeLessThanOrEqual(MAX_MOMENT_MS);
+  });
+
+  it('the aurora swells slowly and slightly: light, not an animation', () => {
+    expect(aurora.swellMs).toBeGreaterThanOrEqual(3_000);
+    expect(aurora.swellTo).toBeGreaterThan(1);
+    expect(aurora.swellTo).toBeLessThanOrEqual(1.1);
+    expect(aurora.swellDim).toBeGreaterThanOrEqual(0.7);
+    expect(aurora.swellDim).toBeLessThan(1);
+  });
+
+  it('the judge orb is shaded from a white highlight to a near-black rim and breathes gently', () => {
+    const offsets = orb.stops.map(([o]) => o);
+    expect(offsets[0]).toBe(0);
+    expect(offsets.at(-1)).toBe(1);
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
+    const lums = orb.stops.map(([, c]) => lum(c));
+    expect([...lums].sort((a, b) => b - a)).toEqual(lums);
+    expect(orb.stops[0]?.[1]).toBe('#FFFFFF');
+    expect(orb.breatheTo).toBeGreaterThan(1);
+    expect(orb.breatheTo).toBeLessThanOrEqual(1.06);
+    expect(orb.speakTo).toBeGreaterThan(orb.breatheTo);
+    expect(orb.speakTo).toBeLessThanOrEqual(1.1);
+    expect(orb.speakMs).toBeLessThan(orb.breatheMs);
+    expect([...orb.rings].sort((a, b) => a - b)).toEqual(orb.rings);
+    for (const r of orb.rings) expect(r).toBeGreaterThan(1);
+    expect(orb.haloSize).toBeGreaterThanOrEqual(orb.rings.at(-1) as number);
   });
 });
 
 describe('motion and timing', () => {
+  it('a screen eases in: a short fade and a small rise, inside the transition budget', () => {
+    expect(motion.screenMs).toBeGreaterThanOrEqual(120);
+    expect(motion.screenMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
+    expect(motion.screenRise).toBeGreaterThan(0);
+    expect(motion.screenRise).toBeLessThanOrEqual(16);
+  });
+
   it('transitions are <= 200 ms, ease-out; the one moment reveal is <= 300 ms', () => {
     expect(motion.fastMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);
     expect(hold.releaseMs).toBeLessThanOrEqual(MAX_TRANSITION_MS);

@@ -17,7 +17,7 @@ describe('judge client tools (API-CONTRACT §4.4)', () => {
       can?: boolean;
       fail?: string;
       details?: Record<string, unknown>;
-      recorder?: 'judge_cam' | 'self';
+      recorder?: 'judge_cam' | 'self' | 'manual';
     } = {},
   ) => {
     const calls: unknown[] = [];
@@ -36,6 +36,16 @@ describe('judge client tools (API-CONTRACT §4.4)', () => {
 
   it('implements every client tool the agent registers', () => {
     expect(Object.keys(make().tools).sort()).toEqual([...CLIENT_TOOLS].sort());
+  });
+
+  it("request_attempt starts nothing when the recording is the players' to start", async () => {
+    // The filmer opens the camera, frames the shot and taps "Start recording": the judge is told
+    // to say so, not that a camera is counting down.
+    const said = await make({ recorder: 'manual' }).tools.request_attempt({ attempt_no: 1 });
+    expect(said.startsWith('not started:')).toBe(true);
+    expect(said).not.toContain('armed');
+    expect(said).not.toContain('error');
+    expect(said).toContain('start recording');
   });
 
   it('request_attempt arms the camera, or reports the error code', async () => {

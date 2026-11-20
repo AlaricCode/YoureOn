@@ -97,6 +97,8 @@ export const COPY = {
     round: ['Round', 'label'],
     odds: ['Odds', 'label'],
     code: ['Terms code', 'label'],
+    /** Between the two stakes on the slip. */
+    pot: ['Pot', 'label'],
     timeLeft: ['Time left', 'label'],
     nothingMoves: ['Nothing moves until you both lock in', 'contract'],
     checking: ['Checking', 'label'],
@@ -119,6 +121,8 @@ export const COPY = {
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
     start: ['Start', 'label'],
+    // The filmer frames the shot first; the recording is theirs to start (JudgeCamScreen).
+    openCamera: ['Open camera', 'label'],
     noJudgeCam: ['No judge cam', 'error'],
   },
   judgeCam: {
@@ -130,6 +134,9 @@ export const COPY = {
     sending: ['Sending', 'label'],
     sent: ['Sent', 'label'],
     start: ['Start', 'label'],
+    record: ['Start recording', 'label'],
+    // The camera never came up for the attempt, or the clip came back empty.
+    empty: ['Nothing recorded', 'error'],
     noCamera: ['No camera', 'error'],
   },
   ruling: {
@@ -175,7 +182,7 @@ export const COPY = {
     side: ['Your side', 'label'],
     odds: ['Odds', 'label'],
     settlesIn: ['Settles in', 'label'],
-    waiting: ['Waiting for Gemini', 'label'],
+    waiting: ['Waiting to settle', 'label'],
     // Beat 6 on A's negotiate screen ("Bet on Bitcoin", app/marketTerms)
     open: ['Bet on Bitcoin', 'label'],
     panel: ['Bitcoin, 5 minutes', 'label'],
@@ -188,8 +195,8 @@ export const COPY = {
     propose: ['Send terms', 'label'],
     pricing: ['Getting odds', 'label'],
     back: ['Back', 'label'],
-    gemini: ['Gemini', 'label'],
-    settled: ['Gemini settled', 'label'],
+    gemini: ['Market', 'label'],
+    settled: ['Market settled', 'label'],
     replay: ['Replay', 'label'],
     nextRound: ['Next round', 'label'],
   },
@@ -240,6 +247,8 @@ export const COPY = {
     demo: ['Demo account', 'label'],
   },
   app: {
+    // The wordmark at the top of Home, beside the logo.
+    name: ["You're On", 'label'],
     loading: ['Loading', 'label'],
     offline: ["Can't connect", 'error'],
     failed: ['Try again', 'error'],

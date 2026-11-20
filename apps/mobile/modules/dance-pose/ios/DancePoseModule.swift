@@ -1,3 +1,4 @@
+import AVFoundation
 import ExpoModulesCore
 
 /// startRound options (DANCE-OFF.md §6.1): ms since the round's first frame at which to keep a
@@ -13,6 +14,26 @@ public final class DancePoseModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DancePose")
 
+    // A line on the process's stderr and in the unified log: read from a Mac with
+    // `devicectl device process launch --console`. For finding out on a real device why the
+    // face assignment fell back to the left / right rule (nothing reaches the server then).
+    Function("debugLog") { (message: String) in
+      let line = "[yo] \(message)\n"
+      fputs(line, stderr)
+      fflush(stderr)
+      NSLog("[yo] %@", message)
+    }
+
+    // The real length of a recorded media file, read from the file itself (ms); -1 when it cannot
+    // be read. The judge-cam clip's length was being estimated from timers around the recording,
+    // and on a real device the estimate came out at 1.1 s for a clip several seconds long, so
+    // the judge was only shown its first second.
+    AsyncFunction("mediaDurationMs") { (uri: String) -> Double in
+      let url = URL(string: uri).flatMap { $0.isFileURL ? $0 : nil } ?? URL(fileURLWithPath: uri)
+      let seconds = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+      return seconds.isFinite && seconds > 0 ? seconds * 1000 : -1
+    }
+
     View(DancePoseView.self) {
       Events("onPoses", "onStatus")
 
@@ -22,6 +43,10 @@ public final class DancePoseModule: Module {
 
       Prop("maxFps") { (view: DancePoseView, maxFps: Double?) in
         view.setMaxFps(maxFps ?? DancePoseEngine.defaultMaxFps)
+      }
+
+      Prop("facing") { (view: DancePoseView, facing: String?) in
+        view.setFacing(facing)
       }
 
       AsyncFunction("startRound") { (view: DancePoseView, options: StartRoundOptions, promise: Promise) in
