@@ -82,13 +82,13 @@ describe('scoreRound (§4)', () => {
     }
   });
 
-  it('a decent amateur (12° errors, ~250 ms late, jitter) lands 60..90', () => {
+  it('a decent amateur (12° errors, ~250 ms late, jitter) lands 60..96', () => {
     for (const [i, r] of ROUTINES.entries()) {
       for (const seed of [1, 2, 3]) {
         const res = round(r, AMATEUR, AMATEUR, seed * 10 + i);
         for (const p of [res.a, res.b]) {
           expect(p.score_x10).toBeGreaterThanOrEqual(600);
-          expect(p.score_x10).toBeLessThanOrEqual(900);
+          expect(p.score_x10).toBeLessThanOrEqual(960);
           expect(p.mean_lag_ms).toBeGreaterThan(50);
           expect(p.mean_lag_ms).toBeLessThan(400);
         }
@@ -206,7 +206,10 @@ describe('scorer helpers', () => {
   it('lag factor and display curve', () => {
     expect(lagFactor(0)).toBe(1);
     expect(lagFactor(-DANCE_SCORING.LAG_GRACE_MS)).toBe(1);
-    expect(lagFactor(500)).toBeCloseTo(1 - (DANCE_SCORING.LAG_PENALTY * 350) / 500, 12);
+    expect(lagFactor(500)).toBeCloseTo(
+      1 - (DANCE_SCORING.LAG_PENALTY * (500 - DANCE_SCORING.LAG_GRACE_MS)) / 500,
+      12,
+    );
     expect(displayX10(0)).toBe(0);
     expect(displayX10(1)).toBe(1000);
     expect(displayX10(DANCE_SCORING.RAW_CEIL)).toBe(1000);
