@@ -6,7 +6,7 @@
 //
 // Importing never throws, even in a binary without the native module.
 export { DancePoseView } from './src/DancePoseView';
-export { DANCE_POSE_MODULE, isDancePoseAvailable } from './src/native';
+export { DANCE_POSE_MODULE, isDancePoseAvailable, mediaDurationMs } from './src/native';
 export {
   DEFAULT_MAX_FPS,
   JOINT_ORDER,
