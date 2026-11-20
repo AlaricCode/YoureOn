@@ -18,6 +18,7 @@ import { plainEmbedding } from '../enroll/flow';
 import { FACE_MODEL } from '../face/model';
 import {
   associateFaces,
+  facePlayers,
   facesToSend,
   normalizeBox,
   resolveIdentity,
@@ -101,19 +102,21 @@ async function attempt(deps: FaceIdDeps): Promise<FaceIdResult | FaceIdMiss> {
       log('no_frame: no kept pose frame near the still');
       return 'no_frame';
     }
+    // The dancers do not have to be in position: two people with heads and hips are enough.
     const fr = framingCheck(frame.people, deps.size.w, deps.size.h);
-    if (!fr.ok || fr.a === undefined || fr.b === undefined) {
-      log(`framing ${fr.reason} people=${frame.people.length}`);
+    const players = facePlayers(frame.people, fr);
+    if (!players) {
+      log(`framing ${fr.reason} people=${frame.people.length}: nobody to look at`);
       return 'framing';
     }
     still = await deps.open(shot.uri);
     log(`opened ${still.width}x${still.height} faces=${still.faces.length}`);
     const boxes = still.faces.map((f) => normalizeBox(f.bounds, still!));
     const owners = associateFaces(boxes, frame.people, still.width / still.height);
-    const send = facesToSend(owners, { a: fr.a, b: fr.b });
+    const send = facesToSend(owners, players);
     log(
       `boxes=${JSON.stringify(boxes.map((b) => [b.x, b.y, b.width, b.height].map((v) => +v.toFixed(3))))} ` +
-        `owners=${JSON.stringify(owners)} players=${fr.a},${fr.b} send=${send.length}`,
+        `owners=${JSON.stringify(owners)} players=${players.a},${players.b} send=${send.length}`,
     );
     // Both players must be identified; one face cannot tell A from B on its own.
     if (send.length < 2) return 'faces';
@@ -124,10 +127,7 @@ async function attempt(deps: FaceIdDeps): Promise<FaceIdResult | FaceIdMiss> {
       faces: vectors.map((v) => ({ embedding: plainEmbedding(v) })),
     });
     log(`server ${JSON.stringify(res.assignments)}`);
-    const who = resolveIdentity(res.assignments as IdentifyAssignment[], send, {
-      a: fr.a,
-      b: fr.b,
-    });
+    const who = resolveIdentity(res.assignments as IdentifyAssignment[], send, players);
     return who ? { ts: frame.ts, ...who } : 'unknown';
   } catch (e) {
     log(`error ${String(e instanceof Error ? e.message : e).slice(0, 200)}`);
@@ -160,8 +160,11 @@ export const isFaceIdResult = (r: FaceIdResult | FaceIdMiss): r is FaceIdResult 
   typeof r === 'object';
 
 export const FACE_ID_RETRY = {
-  /** Attempts per framing session (a run of the round engine). */
-  MAX_TRIES: 8,
+  /**
+   * Attempts per framing session (a run of the round engine) that got as far as asking the
+   * server. One that ended before that (no two faces in the still yet) is not counted.
+   */
+  MAX_TRIES: 12,
   /** Between two attempts (a new still each time: a turned head or a blink is not final). */
   GAP_MS: 1_000,
 } as const;
