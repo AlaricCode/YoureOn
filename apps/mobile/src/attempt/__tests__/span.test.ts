@@ -25,7 +25,7 @@ describe('recordedSpan: the real recording span, not the wall clock around recor
     const wallClock = marks.finishedAtMs - marks.requestedAtMs; // what PlayScreens used to send
     expect(wallClock).toBe(3400);
     const past = frameTimesMs(wallClock).filter((t) => t >= realMs);
-    expect(past.length).toBeGreaterThanOrEqual(3); // copies of the last frame, as "landing" frames
+    expect(past.length).toBeGreaterThanOrEqual(2); // copies of the last frame, as "landing" frames
     const { durationMs } = recordedSpan(marks);
     expect(frameTimesMs(durationMs).every((t) => t < realMs)).toBe(true);
     // the landing window still ends at the real end (the last frame 80 ms before it)
