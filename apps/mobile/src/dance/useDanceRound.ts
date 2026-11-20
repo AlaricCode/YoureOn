@@ -183,6 +183,10 @@ export function useDanceRound(opts: {
   const identitySize = useRef({ w: 0, h: 0 });
   /** Face attempts this run: one in flight, a few tries, spaced. */
   const faceTry = useRef({ inFlight: false, tries: 0, lastTryAt: null as number | null });
+  // The face model loads while the dancers walk into place, not inside the first attempt.
+  useEffect(() => {
+    void Promise.resolve(optsRef.current.faceId?.prewarm?.()).catch(() => undefined);
+  }, []);
 
   const stopAudio = () => {
     const a = audio.current;
@@ -379,6 +383,7 @@ export function useDanceRound(opts: {
       ft.inFlight = true;
       ft.tries += 1;
       ft.lastTryAt = nowMs();
+      store.update({ faces: 'looking' });
       void identifyPlayers({
         open: (uri) => faceId.open(uri),
         identify: (req) => faceId.identify(req),
@@ -390,11 +395,15 @@ export function useDanceRound(opts: {
       }).then((r) => {
         if (stateRef.current.run !== run) return;
         faceTry.current.inFlight = false;
+        // An attempt that ran out of time is not counted against the tries: the next one starts
+        // from a warm model.
+        faceTry.current.lastTryAt = nowMs();
         const phase = stateRef.current.phase;
         // Too late: the round already counted in on the left / right rule.
         if (phase !== 'framing' && phase !== 'ready' && phase !== 'starting') return;
         if (isFaceIdResult(r) && id.identify(r.ts, r.aPerson, r.bPerson))
-          store.update({ byFace: true });
+          store.update({ byFace: true, faces: 'matched' });
+        else store.update({ faces: isFaceIdResult(r) ? 'no_frame' : r });
       });
     },
     [store],

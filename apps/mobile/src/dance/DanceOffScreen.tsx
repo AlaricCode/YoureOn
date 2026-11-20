@@ -183,6 +183,7 @@ function FramingFooter({
 }) {
   const now = useFrameClock(round.phase === 'framing' && round.okSince !== null, 30);
   const reason = useLive(store, (v) => v.framing?.reason ?? null);
+  const faces = useLive(store, (v) => v.faces);
   const progress = framingProgress(round, now);
   const ready = round.phase === 'ready';
   const line =
@@ -205,6 +206,17 @@ function FramingFooter({
       <View style={styles.holdTrack}>
         <View style={[styles.holdFill, { width: `${progress * 100}%` }]} />
       </View>
+      {/* Who is who: by face once both are matched; until then each name is a side. The reason
+          an attempt ended is shown as it came, so it can be read out. */}
+      {faces === 'idle' ? null : (
+        <Text style={styles.faces} numberOfLines={1} testID="dance-faces">
+          {faces === 'matched'
+            ? dt(DANCE_COPY.facesMatched)
+            : faces === 'looking'
+              ? dt(DANCE_COPY.facesLooking)
+              : `${dt(DANCE_COPY.facesSides)} (${faces})`}
+        </Text>
+      )}
       <PrimaryButton
         label={dt(DANCE_COPY.start)}
         onPress={ready ? onStart : undefined}
@@ -225,6 +237,9 @@ function FramingFooter({
 function StatusFooter({ children }: { children: ReactNode }) {
   return <View style={[styles.footer, styles.statusFooter]}>{children}</View>;
 }
+
+/** How long past the countdown the round waits for a face attempt that is still running. */
+const FACE_OVERTIME_MS = 3_000;
 
 // ---------------------------------------------------------------------------------------
 // The round
@@ -446,13 +461,22 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   const framedAndHeld = state.phase === 'ready';
   const autoNow = useFrameClock(framedAndHeld, 10);
   const autoLeft = autoStartLeftMs(state, autoNow);
-  const autoDue = autoLeft !== null && autoLeft <= 0;
+  // A face attempt still running when the count runs out gets a little longer to answer, so
+  // the names it is about to settle are the ones the round starts with.
+  const facesLooking = useLive(engine.store, (v) => v.faces === 'looking');
+  const [overtimeFrom, setOvertimeFrom] = useState<number | null>(null);
+  const countDone = autoLeft !== null && autoLeft <= 0;
+  useEffect(() => {
+    setOvertimeFrom(countDone ? nowMs() : null);
+  }, [countDone]);
+  const overtimeUp = overtimeFrom !== null && autoNow - overtimeFrom >= FACE_OVERTIME_MS;
+  const autoDue = countDone && (!facesLooking || overtimeUp);
   const engineStart = useRef(engine.start);
   engineStart.current = engine.start;
   useEffect(() => {
     if (autoDue) engineStart.current();
   }, [autoDue]);
-  const autoCount = autoStartNumeral(autoLeft);
+  const autoCount = autoStartNumeral(autoLeft) ?? (countDone && !autoDue ? 1 : null);
 
   const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
   // The selfie camera's preview is a mirror image; the sample round has no camera to mirror.
@@ -628,6 +652,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   guideName: { ...type.heading },
+  faces: { ...type.small, color: palette.textSecondary, textAlign: 'center' },
   autoCount: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   autoLabel: { ...type.heading, color: palette.text },
   autoNumeral: {
