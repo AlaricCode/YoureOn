@@ -117,3 +117,32 @@ describe('danceEventsFor on the panel', () => {
     expect(apply(initialDance, 'dance off').phase).toBe('closed');
   });
 });
+
+describe('danceRequest: said loosely, as the recognizer hands it over', () => {
+  it('a routine and "dance" or "battle" anywhere is a Dance Off (seen on an iPad)', () => {
+    for (const text of [
+      'do a dance to bye bye bye for one dollar',
+      'a battle to bye-bye bye for one dollar',
+      'Alaric does a dance to bye-bye bye-bye for one dollar',
+      'I want to dance to Bye Bye Bye by NSYNC for one dollar',
+      'a battle with Alaric a dancing one',
+    ]) {
+      expect(ask(text), text).not.toBeNull();
+    }
+    expect(ask('a battle to bye bye bye for one dollar')).toEqual({
+      routineId: 'bye-bye-shuffle',
+      stakeUsd: 1,
+    });
+  });
+
+  it('a camera bet that only mentions dancing or a battle is still a camera bet', () => {
+    for (const text of [
+      "bet you can't dance on the table",
+      'I bet Eva dances at the party',
+      'a thumb battle for five dollars',
+      'bet you wave bye bye to the bus',
+    ]) {
+      expect(ask(text), text).toBeNull();
+    }
+  });
+});
