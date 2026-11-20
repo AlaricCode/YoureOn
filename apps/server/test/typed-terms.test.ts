@@ -19,6 +19,7 @@ import {
   typedTermsRequest,
   TypedTermsResponse,
 } from '@youre-on/shared/judge/typed-terms';
+import type { ChatRequest, LlmProvider } from '../src/providers/types';
 import { createDeps, startServer } from '../src/server';
 import {
   describeDb,
@@ -272,6 +273,124 @@ describeDb('typed terms: POST /v1/bets/:id/terms/typed + /terms/confirm (DB)', (
     const late = await post(A, typedTermsPath(betId), flip(5));
     expect(late.status).toBe(409);
     expect(late.json!.error.code).toBe('INVALID_STATE');
+  });
+
+  // ---- a sentence nobody has structured (src/terms/structure.ts) --------------------------------
+  const SAID = "let's do a challenge where I have to throw a paper ball into a trash trashcan";
+  const STRUCTURED = {
+    claim: 'Logan throws a paper ball into the trash can.',
+    performer: 'A',
+    yes_party: 'A',
+    success_criteria: ['The paper ball goes into the trash can and stays in.'],
+    failure_criteria: ['The ball misses, or bounces out of the trash can.'],
+    edge_cases: [
+      { question: 'Does it count if it bounces off the rim and in?', answer: 'Yes. In is in.' },
+    ],
+  };
+  /** A stand-in for the live model: answers the terms call (as `answer` says), nothing else. */
+  function liveModel(answer: 'terms' | 'fails') {
+    const calls: ChatRequest<unknown>[] = [];
+    const llm = {
+      name: 'live',
+      chat: async (req: ChatRequest<unknown>) => {
+        const base = { vendor: req.vendor, model: 'stand-in', latency_ms: 1 };
+        if (req.output.name !== 'bet_terms' || answer === 'fails')
+          return { ...base, ok: false, status: 'error', message: 'not here' };
+        calls.push(req);
+        return { ...base, ok: true, value: STRUCTURED, text: JSON.stringify(STRUCTURED) };
+      },
+    } as unknown as LlmProvider;
+    return { llm, calls };
+  }
+  const termsOf = async (c: Ctx, betId: string) =>
+    (
+      await c.deps.db
+        .select({ terms: betTermsVersions.terms, source: betTermsVersions.source_tool })
+        .from(betTermsVersions)
+        .where(eq(betTermsVersions.bet_id, betId))
+        .orderBy(asc(betTermsVersions.version))
+    ).at(-1)!;
+
+  it('a raw sentence is structured by the model: the claim, who performs, what the camera must see', async () => {
+    const model = liveModel('terms');
+    const c2 = await startTestServer({
+      env: { MAX_STAKE_MICRO: '20000000' },
+      providers: { llm: model.llm },
+    });
+    try {
+      const { A, betId } = await newBet(c2);
+      const r = await post(
+        A,
+        typedTermsPath(betId),
+        typedTermsRequest({ claim: SAID, stakeUsd: 5, bName: 'Jake' }),
+        c2,
+      );
+      expect(r.status).toBe(200);
+      expect(TypedTermsResponse.parse(r.json)).toMatchObject({ ok: true, kind: 'proposed' });
+      // The phone sent the sentence with B as the performer: the terms say who really throws.
+      const v = await termsOf(c2, betId);
+      expect(v.source).toBe('typed');
+      expect(v.terms).toMatchObject({
+        claim: STRUCTURED.claim,
+        performer: 'A',
+        yes_party: 'A',
+        success_criteria: STRUCTURED.success_criteria,
+        failure_criteria: STRUCTURED.failure_criteria,
+        stakes: { a: '5000000', b: '5000000' },
+      });
+      // one call, with both players' names and the sentence as it was said
+      expect(model.calls).toHaveLength(1);
+      const part = model.calls[0]!.parts[0] as { text: string };
+      expect(JSON.parse(part.text.replace(/^BET /, ''))).toEqual({
+        party_a: 'Logan',
+        party_b: 'Jake',
+        said: SAID,
+      });
+
+      // Terms that already have their own criteria (the bottle-flip template) are left alone.
+      const second = await newBet(c2);
+      expect((await post(second.A, typedTermsPath(second.betId), flip(5), c2)).status).toBe(200);
+      expect(model.calls).toHaveLength(1);
+      expect((await termsOf(c2, second.betId)).terms).toMatchObject({
+        claim: bottleFlipClaim('Jake'),
+        performer: 'B',
+      });
+
+      // A sentence the guardrails refuse is refused as sent: the model is never asked to reword it.
+      const third = await newBet(c2);
+      const refused = await post(
+        third.A,
+        typedTermsPath(third.betId),
+        typedTermsRequest({ claim: String(CHUG.claim), stakeUsd: 5, bName: 'Jake' }),
+        c2,
+      );
+      expect(TypedTermsResponse.parse(refused.json)).toMatchObject({ ok: false, kind: 'refused' });
+      expect(model.calls).toHaveLength(1);
+    } finally {
+      await c2.server.close();
+    }
+  });
+
+  it('a model that fails never blocks the bet: the sentence goes through as it was sent', async () => {
+    const model = liveModel('fails');
+    const c2 = await startTestServer({
+      env: { MAX_STAKE_MICRO: '20000000' },
+      providers: { llm: model.llm },
+    });
+    try {
+      const { A, betId } = await newBet(c2);
+      const r = await post(
+        A,
+        typedTermsPath(betId),
+        typedTermsRequest({ claim: SAID, stakeUsd: 5, bName: 'Jake' }),
+        c2,
+      );
+      expect(r.status).toBe(200);
+      expect(TypedTermsResponse.parse(r.json)).toMatchObject({ ok: true, kind: 'proposed' });
+      expect((await termsOf(c2, betId)).terms).toMatchObject({ claim: SAID, performer: 'B' });
+    } finally {
+      await c2.server.close();
+    }
   });
 
   it('rate limit: the per-(bet, user) bucket answers 429 RATE_LIMITED', async () => {

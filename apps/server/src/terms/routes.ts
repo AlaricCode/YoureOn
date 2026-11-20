@@ -49,13 +49,14 @@ import { HttpError } from '../errors';
 import { readBody } from '../http/body';
 import type { BucketSpec } from '../http/rate-limit';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
-import type { BetRow } from '../bets/snapshot';
+import { loadUserRefs, type BetRow } from '../bets/snapshot';
 import { readBet } from '../lock/common';
 import { priorAnswers } from '../bets/invite';
 import { betIdParam } from '../lock/routes';
 import { displayCode, loadEnvelope, persistEvaluation, type PersistResult } from '../lock/terms';
 import { marketMessage } from '../markets/routes';
 import { confirmAndLock, PROPOSABLE_STATES } from '../voice/tools';
+import { needsStructuring, structureClaim } from './structure';
 
 /** Typed proposals + confirms: 12/min per (bet, user). Plenty for a person, stops a loop. */
 export const TYPED_TERMS_BUCKET: BucketSpec = { limit: 12, windowMs: 60_000 };
@@ -137,10 +138,30 @@ export const termsRoutes: RouteModule = {
       const body = await readBody(c, TypedTermsRequest);
 
       const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
-      const evaluation = evaluateProposeTerms(typedTermsArgs(body), {
-        maxStake,
-        realWorldEnabled: false,
-      });
+      const evaluate = (r: TypedTermsRequest) =>
+        evaluateProposeTerms(typedTermsArgs(r), { maxStake, realWorldEnabled: false });
+      let evaluation = evaluate(body);
+      // A sentence nobody has structured yet (./structure): one model call writes the claim, who
+      // performs and what the camera must see. Only for a sentence that is already acceptable as
+      // sent (a refusal stays a refusal), and only kept when the result is at least as complete.
+      if (evaluation.kind === 'proposal' && needsStructuring(body) && bet.party_b_id) {
+        // Never in the way of the bet: any failure here leaves the sentence as it was sent.
+        const structured = await loadUserRefs(deps.db, [bet.party_a_id, bet.party_b_id])
+          .then((names) =>
+            structureClaim(deps, {
+              said: body.claim,
+              aName: names.get(bet.party_a_id)?.display_name ?? 'Party A',
+              bName: names.get(bet.party_b_id!)?.display_name ?? 'Party B',
+              betId: bet.id,
+            }),
+          )
+          .catch(() => null);
+        if (structured) {
+          const better = evaluate({ ...body, ...structured });
+          if (better.kind === 'proposal' && better.missing.length <= evaluation.missing.length)
+            evaluation = better;
+        }
+      }
       const reply = proposeTermsReply(evaluation, { maxStake });
       if (evaluation.kind === 'invalid')
         throw new HttpError('VALIDATION_FAILED', undefined, {

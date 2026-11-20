@@ -10,7 +10,8 @@
 #
 # Needs: Xcode 26 with an iOS 26 simulator runtime, CocoaPods, the face model at
 # assets/models/w600k_mbf_float32.tflite (scripts/face-model.sh; gitignored) and the API URL in
-# apps/mobile/.env.local (EXPO_PUBLIC_API_URL=...; EXPO_PUBLIC_VOICE=off for no voice judge).
+# apps/mobile/.env.local (EXPO_PUBLIC_API_URL=...). The voice judge is OFF in a simulator build
+# whatever .env.local says; SIM_VOICE=on builds with it (see below).
 #
 # Afterwards a DEVICE build needs the device pods back: (cd apps/mobile/ios && pod install).
 set -euo pipefail
@@ -48,6 +49,18 @@ cd "$MOBILE"
   exit 1
 }
 [[ -f .env.local ]] || echo "note: no apps/mobile/.env.local; the app will call http://localhost:8080" >&2
+
+# Simulators are mostly driven by agents and left sitting on a screen: with the voice judge on,
+# every challenge opens a real ElevenLabs conversation, billed by the minute (one stayed open for
+# 20 minutes on 2026-11-19, and the account ran out of credits that morning). So a simulator build
+# has no voice judge unless it is asked for: SIM_VOICE=on scripts/sim-build.sh. The environment
+# wins over .env.local (Expo never overrides a variable that is already set).
+if [[ "${SIM_VOICE:-off}" == "on" ]]; then
+  echo "sim-build: voice judge ON (SIM_VOICE=on): each challenge opens a real ElevenLabs session"
+else
+  export EXPO_PUBLIC_VOICE=off
+  echo "sim-build: voice judge off (SIM_VOICE=on to build with it)"
+fi
 
 # The newest installed iOS runtime.
 RUNTIME="$(xcrun simctl list runtimes -j | node -e '
