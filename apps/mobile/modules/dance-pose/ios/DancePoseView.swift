@@ -108,6 +108,15 @@ public final class DancePoseView: ExpoView {
     guard let connection = previewLayer.connection else {
       return
     }
+    // The preview's mirroring is set here, not left to the system: the app flips the name tags
+    // and skeletons it draws over a front-camera preview on the understanding that the picture
+    // is a mirror image, and the names came out on the wrong dancers. Front: a mirror image.
+    // Back: not. Decided by the camera that is actually open.
+    if connection.isVideoMirroringSupported {
+      let front = engine.captureDevice.get()?.position == .front
+      connection.automaticallyAdjustsVideoMirroring = false
+      connection.isVideoMirrored = front
+    }
     guard #available(iOS 17.0, *), let device = engine.captureDevice.get() else {
       DancePoseEngine.orientPortrait(connection)
       return
