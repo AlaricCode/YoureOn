@@ -2508,6 +2508,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                   danceEmbedder
                     ? {
                         open: (uri) => danceEmbedder.open(uri),
+                        prewarm: danceEmbedder.prewarm,
                         identify: (req) => rt.api.danceIdentify(bet.bet_id, req),
                       }
                     : null

@@ -25,13 +25,20 @@ import {
 } from './model/faceId';
 import type { IdentityFrame } from './model/identity';
 
-/** The whole attempt, still to answer. */
-export const FACE_ID_TIMEOUT_MS = 2_500;
+/**
+ * The whole attempt, still to answer. It was 2.5 s, when the round started the moment the
+ * framing held; on a real device the first attempt also loads the face model, and no attempt
+ * ever finished in time (the names stayed on fixed sides). The round now waits for a countdown,
+ * so an attempt has the time it needs.
+ */
+export const FACE_ID_TIMEOUT_MS = 7_000;
 
 /** What the app provides: the face embedder and the identify call for this bet. */
 export interface DanceFaceId {
   /** Opens a still with the on-device face embedder (src/enroll/embedder FaceEmbedder.open). */
   open(uri: string): Promise<FaceStill>;
+  /** Loads the face model ahead of the first attempt (the dance screen calls it on mount). */
+  prewarm?: (() => Promise<void>) | undefined;
   /** POST /v1/bets/:bet_id/dance/identify. */
   identify(req: DanceIdentifyRequest): Promise<Pick<DanceIdentifyResponse, 'assignments'>>;
 }
@@ -129,9 +136,9 @@ export const isFaceIdResult = (r: FaceIdResult | FaceIdMiss): r is FaceIdResult 
 
 export const FACE_ID_RETRY = {
   /** Attempts per framing session (a run of the round engine). */
-  MAX_TRIES: 3,
-  /** Between two attempts. */
-  GAP_MS: 4_000,
+  MAX_TRIES: 8,
+  /** Between two attempts (a new still each time: a turned head or a blink is not final). */
+  GAP_MS: 1_000,
 } as const;
 
 /** Whether the engine may start a face attempt now. */
