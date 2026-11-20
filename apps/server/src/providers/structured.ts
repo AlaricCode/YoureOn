@@ -1,7 +1,5 @@
 // Shared by the mock and live LLM providers so both produce identical ChatResults: JSON
 // extraction from model text, enum upper-casing, zod validation, and a hard per-call deadline.
-//
-// firstJson is ported from Verdict packages/backend/src/providers/real/boothLlm.ts.
 import type { ChatResult, ChatVendor, StructuredOutput } from './types';
 
 /** Panel seats (API-CONTRACT §7.2); also the default model per vendor. */

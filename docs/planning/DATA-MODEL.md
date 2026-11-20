@@ -1,10 +1,8 @@
-Status: DRAFT — Phase 0 planning written 2026-11-08 (before the build window). Re-author into the repo during the window; if committed verbatim, commit it as 'docs: import Phase 0 planning (written pre-window)'.
-
 # You're On: Data Model (Postgres + onchain mapping)
 
-Scope: the Postgres schema for `apps/server`, how each row relates to Solana accounts and Anchor events, and the rules for consistency, evidence, and biometric data. Other Phase 0 docs (architecture, API contract, Terms/Ruling schemas, escrow program, task breakdown) are being written in parallel. Where this doc names something one of those docs owns (instruction names, event names, Zod schemas), that doc wins and this one gets updated to match.
+Scope: the Postgres schema for `apps/server`, how each row relates to Solana accounts and Anchor events, and the rules for consistency, evidence, and biometric data. Other docs (architecture, API contract, Terms/Ruling schemas, escrow program, task breakdown) own their own areas. Where this doc names something one of those docs owns (instruction names, event names, Zod schemas), that doc wins and this one gets updated to match.
 
-**At a glance (2026-11-08)**
+**At a glance**
 
 - **Systems of record.** Postgres holds people, conversations, evidence pointers and rulings. Solana holds money. Only the projector writes `bets.onchain_status`, from Streams events (D1).
 - **Lock = one transaction (D10, from decision D3).**
@@ -29,8 +27,8 @@ Scope: the Postgres schema for `apps/server`, how each row relates to Solana acc
 | D6 | Commitment is `confirmed` for state and projection. "Optimistic" means the server's own RPC result: `bets.onchain_pending` is set at `confirmed`, and the payout animation fires at `processed` (`chain_txs.rpc_processed_at`, SCHEMAS X10). "Confirmed" means the event arrived through Streams (`bets.onchain_status`). |
 | D7 | Face embeddings are encrypted at the app layer with AES-256-GCM and a per-row nonce. There is no pgvector: matching runs in memory, only over the members of one room. A face match only **addresses** a challenge. It never authorizes anything. |
 | D8 | Tooling is Drizzle ORM + drizzle-kit + drizzle-zod. Triggers, views and grants go in one hand-written SQL migration. |
-| D9 | No handshake (lead-engineer amendment, 2026-11-07). Each party authorizes on their own iPhone (hold-to-confirm + Face ID), and that signs the shared lock message. A's key authorizes only `create_bet` (A's deposit) and B's only `accept_bet` (B's). The DB records per-party `*_authorized_at` and `*_authorization_method`. No handshake column, enum, table or test exists. |
-| D10 | **Atomic lock (D3, 2026-11-08).** The lock is one transaction `[AdvanceNonce, ComputeBudget…, create_bet, accept_bet]` on a durable nonce (ESCROW §5.0.1).<br>• The DB holds the pool (`nonce_pool`, §5.20).<br>• Per build, one `chain_txs` row (kind `atomic_lock`) holds the exact message bytes and both party signatures until the second arrives and the server sends it once.<br>• Decline, expiry, a terms edit or a failed lock revoke the lock by advancing its nonce.<br>• `bets.lock_mode` records `atomic`, or `sequential` (the fallback). |
+| D9 | No handshake (lead-engineer amendment). Each party authorizes on their own iPhone (hold-to-confirm + Face ID), and that signs the shared lock message. A's key authorizes only `create_bet` (A's deposit) and B's only `accept_bet` (B's). The DB records per-party `*_authorized_at` and `*_authorization_method`. No handshake column, enum, table or test exists. |
+| D10 | **Atomic lock (D3).** The lock is one transaction `[AdvanceNonce, ComputeBudget…, create_bet, accept_bet]` on a durable nonce (ESCROW §5.0.1).<br>• The DB holds the pool (`nonce_pool`, §5.20).<br>• Per build, one `chain_txs` row (kind `atomic_lock`) holds the exact message bytes and both party signatures until the second arrives and the server sends it once.<br>• Decline, expiry, a terms edit or a failed lock revoke the lock by advancing its nonce.<br>• `bets.lock_mode` records `atomic`, or `sequential` (the fallback). |
 
 ---
 
@@ -152,14 +150,14 @@ erDiagram
 | Config PDA | `["config"]` (escrow doc) | none. Env mirrors `MAX_STAKE_MICRO=20000000` and `APPEAL_WINDOW_S=10` | admin, judge_authority, appeal_authority, max_stake, default deadlines |
 | Bet PDA | `["bet", bet_id]` | one `bets` row; `bets.bet_pda` (cached, UNIQUE) | |
 | Vault | `["vault", bet_id]`, authority = Bet PDA | `bets.vault` (cached, UNIQUE) | Closed together with the Bet by `close_bet`, which the server bundles into every terminal tx. Rent goes back to the rent payer (ESCROW P8). `bets.closed_at`/`close_sig` come from `BetClosed`. |
-| User wallet | device keypair: 32-byte seed in `expo-secure-store` (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`), unlocked by LocalAuthentication at each authorization (confirmed: spike 07) | `users.wallet_pubkey`; snapshots in `bets.party_a_wallet`/`party_b_wallet` | Snapshot, because a new keypair can appear after a reinstall (on iOS an old one can also resurface, spike 07) |
+| User wallet | device keypair: 32-byte seed in `expo-secure-store` (`WHEN_UNLOCKED_THIS_DEVICE_ONLY`), unlocked by LocalAuthentication at each authorization (confirmed) | `users.wallet_pubkey`; snapshots in `bets.party_a_wallet`/`party_b_wallet` | Snapshot, because a new keypair can appear after a reinstall (on iOS an old one can also resurface) |
 | User USDC account | ATA(wallet, mint), classic SPL Token | not stored (derived) | The server, as fee payer, creates it at funding time |
 | Fee payer, judge_authority, appeal_authority | server secrets | **never in DB** | Pubkeys live in config. The fee payer is also the nonce authority. |
 | Lock nonce pool | 5 System nonce accounts (80 B, rent 1,056,640 lamports each, M), `createAccountWithSeed(fee payer, "yo-nonce-<k>", System)`, authority = fee payer | `nonce_pool` (§5.20) | Holds no tokens. Its value is the lock message's lifetime (ESCROW §5.0.1). |
 | USDC balances | token accounts | **not stored** | Read over RPC; cached in memory for ≤ 5 s |
-| Anchor events | `emit_cpi!` self-CPI inner instructions (confirmed: spike 06; `emit!` log events are lost on log truncation) | `chain_events` | Arrive via the Streams webhook (§8) |
+| Anchor events | `emit_cpi!` self-CPI inner instructions (confirmed; `emit!` log events are lost on log truncation) | `chain_events` | Arrive via the Streams webhook (§8) |
 
-Devnet USDC mint default: `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` (Circle, classic SPL Token, 6 decimals, freeze authority set) (confirmed: spike 07). It is stored per bet in `bets.mint`; the env sets `USDC_MINT`.
+Devnet USDC mint default: `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` (Circle, classic SPL Token, 6 decimals, freeze authority set) (confirmed). It is stored per bet in `bets.mint`; the env sets `USDC_MINT`.
 
 ### 3.2 Bet PDA fields ↔ `bets` columns
 
@@ -304,11 +302,11 @@ Conventions:
 | display_name | text | N | | 1–32 chars; shown on the stage view |
 | avatar_key | text | Y | | Object key in the `avatars` bucket. The **profile photo the user chose**. It is NOT the biometric enrollment and is never embedded or matched. |
 | wallet_pubkey | text (pubkey) | Y | | UNIQUE. Device-generated. NULL only for `is_demo` users before their phone binds. |
-| wallet_kind | wallet_kind | N | 'device_keypair' | Confirmed: spike 07. No embedded-wallet vendor offers selfie-only signup on a free tier. |
+| wallet_kind | wallet_kind | N | 'device_keypair' | Confirmed. No embedded-wallet vendor offers selfie-only signup on a free tier. |
 | age_attested_18plus | boolean | N | false | Self-attestation at signup. Both parties must be true to create a bet (trigger). |
 | attested_at | timestamptz | Y | | |
 | is_demo | boolean | N | false | Seeded team accounts |
-| demo_seed_ciphertext / demo_seed_nonce | bytea / bytea | Y | | `is_demo` only. The **custodial** demo wallet seed (FINDINGS §3.4): 32 bytes generated on the server, AES-256-GCM under env `DEMO_SEED_KEK` (devnet only), 12-byte nonce. Released once by `POST /v1/auth/demo-claim` (API-CONTRACT §1.3). Never logged. |
+| demo_seed_ciphertext / demo_seed_nonce | bytea / bytea | Y | | `is_demo` only. The **custodial** demo wallet seed: 32 bytes generated on the server, AES-256-GCM under env `DEMO_SEED_KEK` (devnet only), 12-byte nonce. Released once by `POST /v1/auth/demo-claim` (API-CONTRACT §1.3). Never logged. |
 | created_at / updated_at | timestamptz | N | now() | |
 | deleted_at | timestamptz | Y | | Account deletion anonymizes the row: display_name becomes "Deleted user", avatar is removed, devices and face enrollment are hard-deleted, bets are kept |
 
@@ -321,9 +319,9 @@ CHECKs: `NOT age_attested_18plus OR attested_at IS NOT NULL`; `is_demo OR delete
 | id | uuid | N | | PK |
 | user_id | uuid FK users | N | | CASCADE |
 | platform | platform | N | 'ios' | iOS only for the hackathon |
-| push_provider | text | N | 'expo' | `CHECK IN ('expo','apns')`. Primary realtime path is WS + haptics + a local notification; Expo push (APNs via EAS) is secondary (spike 07). |
+| push_provider | text | N | 'expo' | `CHECK IN ('expo','apns')`. Primary realtime path is WS + haptics + a local notification; Expo push (APNs via EAS) is secondary. |
 | push_token | text | Y | | Expo push token; partial UNIQUE where not null |
-| device_pubkey | text (pubkey) | Y | | Ed25519 **device auth key** that signs login challenges and API write requests (API-CONTRACT §1.3, which owns the login flow). It is a **separate keypair from the wallet**, ungated, so the `.userPresence` upgrade (FINDINGS §3.4) never prompts Face ID on an API call. UNIQUE where not null. |
+| device_pubkey | text (pubkey) | Y | | Ed25519 **device auth key** that signs login challenges and API write requests (API-CONTRACT §1.3, which owns the login flow). It is a **separate keypair from the wallet**, ungated, so the `.userPresence` upgrade never prompts Face ID on an API call. UNIQUE where not null. |
 | role | device_role | N | 'phone' | `judge_cam` for the tripod iPhone (set by `PATCH /v1/devices/current`). Only a room's `judge_cam` device may upload attempt frames. |
 | app_version | text | Y | | |
 | created_at / last_seen_at | timestamptz | N | now() | `last_seen_at` is bumped at most once a minute |
@@ -342,7 +340,7 @@ One row per user who opted in. It contains no images: enrollment selfies never l
 | embedding_nonce | bytea | N | | 12 random bytes per row, never reused. `CHECK octet_length = 12` |
 | key_id | text | N | | Key version, e.g. `face-kek-2026-11-a`; used for rotation |
 | embedding_dim | smallint | N | | `CHECK 64..1024`; `CHECK octet_length(embedding_ciphertext) = embedding_dim*4 + 16` |
-| model_name / model_version | text | N | | On-device embedding model. Confirmed: spike 01, default InsightFace `w600k_mbf` (512-d, TFLite fp32; weights are non-commercial, so disclose that), fallback OpenCV SFace (128-d). Matching only compares rows with the same model and version. |
+| model_name / model_version | text | N | | On-device embedding model. Confirmed: default InsightFace `w600k_mbf` (512-d, TFLite fp32; weights are non-commercial, so disclose that), fallback OpenCV SFace (128-d). Matching only compares rows with the same model and version. |
 | consent_version | text | N | | ID of the consent text shown, e.g. `face-consent-v1` |
 | consent_text_sha256 | text (hex32) | N | | Hash of the exact consent text shown |
 | consent_at | timestamptz | N | | `CHECK consent_at <= created_at` (consent before capture) |
@@ -364,7 +362,7 @@ A room is a demo session or a group of people nearby. It is the boundary for fac
 | code | text | N | | UNIQUE, `CHECK ~ '^[A-HJ-NP-Z2-9]{6}$'` (no 0/O/1/I) |
 | name | text | Y | | |
 | kind | room_kind | N | 'session' | |
-| join_method | join_method | N | 'code' | Primary way to join: code, QR, nearby, demo_seed. No spike covered nearby discovery, so code/QR is the P0 path. |
+| join_method | join_method | N | 'code' | Primary way to join: code, QR, nearby, demo_seed. Nearby discovery is untested, so code/QR is the P0 path. |
 | created_by | uuid FK users | Y | | NULL for system-created demo rooms |
 | is_demo | boolean | N | false | |
 | created_at | timestamptz | N | now() | |
@@ -498,7 +496,7 @@ One row per transaction the server builds. The atomic lock is **one** row (kind 
 | signature | text (tx_sig) | Y | | UNIQUE. Known once the fee payer signs (the fee payer's signature is the tx id). For a lock, set at send. |
 | expected_status | onchain_status | N | | Status this tx should produce: `atomic_lock` → `locked`; `nonce_advance` → `none` (no bet account) |
 | status | tx_status | N | 'built' | `built` → `signed` → `sent` → `confirmed` / `failed`; see the lifecycle below. Partial UNIQUE `(bet_id, kind) WHERE status IN ('built','signed','sent')`: **one in-flight tx per kind per bet**, so one pending lock per bet. |
-| last_valid_block_height | bigint | Y | | Blockhash txs only (a recent blockhash lives ~36 s on devnet, spike 07). NULL for `atomic_lock`, which is bounded by `expires_at` instead. |
+| last_valid_block_height | bigint | Y | | Blockhash txs only (a recent blockhash lives ~36 s on devnet). NULL for `atomic_lock`, which is bounded by `expires_at` instead. |
 | err | text | Y | | Program error name or code, or the preflight error (e.g. `-32002` with the simulated error) |
 | built_at | timestamptz | N | now() | Lock: when the read-back finished and the message was built and simulated. Other device-signed kinds: hold start. |
 | sent_at / rpc_processed_at / rpc_confirmed_at / stream_seen_at | timestamptz | Y | | Latency metrics. Second authorization (`greatest(a_signed_at, b_signed_at)`) → `rpc_confirmed_at` of the lock must be < 2 s (ESCROW §8.4). For payouts, `sent_at` → `rpc_processed_at` drives the payout animation. |
@@ -532,11 +530,11 @@ CHECK (status <> 'revoked' OR kind = 'atomic_lock')
 | signature | text (tx_sig) | N | | **`UNIQUE (signature, outer_ix, inner_ix)`**: the single dedup key shared with ESCROW §7.1 and SCHEMAS §10.1 |
 | outer_ix | smallint | N | | Index of the top-level instruction in the tx |
 | inner_ix | smallint | N | | Index of the `emit_cpi!` self-CPI within `meta.innerInstructions[outer_ix]`. The Stream filter and the RPC fallback share one decoder, so the indices always match. |
-| slot | bigint | Y | | NULL from Streams: getBlock objects carry no slot field (spike 06; check whether Streams adds one with `test_filter --probe`). Set by `rpc_poll`. |
+| slot | bigint | Y | | NULL from Streams: getBlock objects carry no slot field (check whether Streams adds one with `test_filter --probe`). Set by `rpc_poll`. |
 | block_height | bigint | Y | | From the Streams block (`blockHeight`); NULL from `rpc_poll` |
 | tx_index | integer | Y | | Position of the tx in the block, if the filter provides it |
 | block_time | timestamptz | Y | | Second precision; can be NULL |
-| commitment | text | N | 'confirmed' | `CHECK IN ('confirmed','finalized')`. On devnet finalized ≈ confirmed (spike 06 measured p50 −2 ms). Which one Streams delivers is unverified until the key run. |
+| commitment | text | N | 'confirmed' | `CHECK IN ('confirmed','finalized')`. On devnet finalized ≈ confirmed (measured p50 −2 ms). Which one Streams delivers is unverified until the key run. |
 | program_id | text (pubkey) | N | | Always `ESCROW_ID` (the filter requires it) |
 | event_name | text | N | | IDL name (ESCROW §7.2). Unknown names are stored but not applied. |
 | bet_id | uuid | Y | | Taken from the payload. **No FK**: test scripts can emit events for bets that have no row. NULL for Config events. |
@@ -576,8 +574,8 @@ The Stream filter must **drop failed transactions** (`meta.err != null`). A fail
 | id | uuid | N | | PK |
 | voice_session_id | uuid FK voice_sessions | N | | CASCADE |
 | bet_id | uuid FK bets | N | | |
-| tool_name | text | N | | Webhook tools only (FINDINGS §3.10): `propose_terms`, `confirm_terms` (read-back done; not binding; it triggers the lock build), later `open_hearing`, `file_appeal`, `get_market_odds`. `lock_bet` and `issue_ruling` are not LLM tools (SCHEMAS O5): the server pushes their results to A's phone. |
-| el_tool_call_id | text | Y | | Partial UNIQUE `(voice_session_id, el_tool_call_id)`. A retried call replays the stored response. Spike 04 saw `tool_call_id` in the WebSocket `agent_tool_request`; whether the webhook body carries it is unverified until the key run. If it doesn't, dedupe on sha256(conversation_id, tool, canonical args) within 10 s. |
+| tool_name | text | N | | Webhook tools only: `propose_terms`, `confirm_terms` (read-back done; not binding; it triggers the lock build), later `open_hearing`, `file_appeal`, `get_market_odds`. `lock_bet` and `issue_ruling` are not LLM tools (SCHEMAS O5): the server pushes their results to A's phone. |
+| el_tool_call_id | text | Y | | Partial UNIQUE `(voice_session_id, el_tool_call_id)`. A retried call replays the stored response. `tool_call_id` was seen in the WebSocket `agent_tool_request`; whether the webhook body carries it is unverified until the key run. If it doesn't, dedupe on sha256(conversation_id, tool, canonical args) within 10 s. |
 | request / response | jsonb | N / Y | | |
 | status | text | N | | `CHECK IN ('ok','error','duplicate')` |
 | latency_ms | integer | Y | | |
@@ -594,13 +592,13 @@ The Stream filter must **drop failed transactions** (`meta.err != null`). A fail
 | recorded_by_device_id | uuid FK devices | Y | | |
 | status | attempt_status | N | 'recording' | |
 | clip_key | text | Y | | `attempts/{bet_id}/{attempt_no}/clip.{mp4\|mov}` |
-| clip_mime / clip_bytes / duration_ms | text / int / int | Y | | `clip_mime IN ('video/mp4','video/quicktime')`, `CHECK clip_bytes <= 25 MB`, `duration_ms <= 30000` (= SCHEMAS `CameraEvidence`; ~19 MB at 720p / 5 Mbps, spike 02) |
+| clip_mime / clip_bytes / duration_ms | text / int / int | Y | | `clip_mime IN ('video/mp4','video/quicktime')`, `CHECK clip_bytes <= 25 MB`, `duration_ms <= 30000` (= SCHEMAS `CameraEvidence`; ~19 MB at 720p / 5 Mbps) |
 | client_clip_hash | text (hex32) | Y | | Hash computed on the phone at record end, so the ruling isn't blocked on upload (§9). = `CameraEvidence.clip_sha256` = the onchain `evidence_hash`. |
 | evidence_hash | text (hex32) | Y | | sha256(stored clip bytes), recomputed by the server. Must equal `client_clip_hash`. |
 | evidence_canonical | text | Y | | JCS of the SCHEMAS `CameraEvidence` record (frames, hashes, timings) |
 | frame_keys | text[] | N | '{}' | 12 JPEGs per try plus one landing crop (planning D10; 8..12 accepted), extracted on the phone, 8 of them in the last ~1.2 s |
 | frame_ts_ms | integer[] | N | '{}' | `CHECK cardinality = cardinality(frame_keys) AND <= 24` (= SCHEMAS `CameraEvidence.frames` max) |
-| frame_hashes | text[] | N | '{}' | sha256 of each frame = `CameraEvidence.frames[i].sha256`. Committed in `ruling_hash` through the record's `frame_hashes` (SCHEMAS O3, adopted 2026-11-08). |
+| frame_hashes | text[] | N | '{}' | sha256 of each frame = `CameraEvidence.frames[i].sha256`. Committed in `ruling_hash` through the record's `frame_hashes` (SCHEMAS O3). |
 | started_at / uploaded_at | timestamptz | Y | | |
 | purged_at | timestamptz | Y | | Set by the 30-day retention sweeper |
 
@@ -708,7 +706,7 @@ Built by migration 0008 (`packages/db/src/schema/judge.ts`, 2026-11-18), with th
 
 ### 5.16 `gemini_markets` and `market_snapshots`
 
-Field names follow the spike 05 samples (`btc5m-listing.json`, `event-…-settled.json`). Symbols come **only from the API**; they are never built by hand.
+Field names follow the Gemini API's sample responses (`btc5m-listing.json`, `event-…-settled.json`). Symbols come **only from the API**; they are never built by hand.
 
 `gemini_markets` (one row per contract we touch):
 
@@ -731,7 +729,7 @@ Field names follow the spike 05 samples (`btc5m-listing.json`, `event-…-settle
 | event_raw | jsonb | Y | | Latest raw event, kept for audit |
 | first_seen_at / updated_at | timestamptz | N | now() | |
 
-`UNIQUE (event_ticker, instrument_symbol)`. The hashed settlement **evidence** is per bet (`GeminiSettlementRecord` contains `bet_id` and `terms_hash`), so it lives on the settlement `rulings` row (`evidence_canonical`, SCHEMAS X12), not here. What a voided (`invalid`) market looks like in the API is still unseen: 0 of 173 contracts in spike 05.
+`UNIQUE (event_ticker, instrument_symbol)`. The hashed settlement **evidence** is per bet (`GeminiSettlementRecord` contains `bet_id` and `terms_hash`), so it lives on the settlement `rulings` row (`evidence_canonical`, SCHEMAS X12), not here. What a voided (`invalid`) market looks like in the API is still unseen: 0 of 173 contracts.
 
 Gemini camelCase ↔ columns (SCHEMAS §0.3):
 
@@ -752,8 +750,8 @@ Gemini camelCase ↔ columns (SCHEMAS §0.3):
 |---|---|---|---|---|
 | id | bigint identity | N | | PK |
 | market_id | uuid FK gemini_markets | N | | CASCADE |
-| captured_at | timestamptz | N | now() | = snapshot `observedAt`. Persist **≤ 1 per second** per market. The stage chart reads an in-memory ring buffer of 1 Hz index ticks (the undocumented `/v2/klines` backfill was not reproducible, spike 05). |
-| exchange_ts | timestamptz | Y | | bookTicker `E` (nanoseconds; parse as bigint, confirmed: spike 05) |
+| captured_at | timestamptz | N | now() | = snapshot `observedAt`. Persist **≤ 1 per second** per market. The stage chart reads an in-memory ring buffer of 1 Hz index ticks (the undocumented `/v2/klines` backfill was not reproducible). |
+| exchange_ts | timestamptz | Y | | bookTicker `E` (nanoseconds; parse as bigint, confirmed) |
 | source | text | N | | `CHECK IN ('ws_book_ticker','rest_event')` (= SCHEMAS `GeminiMarketSnapshot.source`) |
 | best_bid / best_ask / last_price | numeric(5,4) | Y | | YES prices 0–1. The 0.01/0.99 placeholder levels are stored as seen. |
 | index_price | numeric(20,8) | Y | | `lukka:LS-LRRR-XBTUSD` index (its `E` is in seconds), for the BTC-vs-strike chart |
@@ -1103,7 +1101,7 @@ WHERE r.id = $room AND r.closed_at IS NULL AND r.expires_at > now()
 LIMIT 50;
 ```
 
-Match rule, in memory after decryption (confirmed: spike 01, desktop): accept the top-1 candidate only if cosine ≥ 0.30 **and** top-1 − top-2 ≥ 0.05. Otherwise return nothing and store nothing. A match returns `{user_id, display_name}` so A can send the challenge (`challenge_method = 'face'`). It never authorizes anything: B still authorizes on B's own phone (D9).
+Match rule, in memory after decryption (confirmed on desktop): accept the top-1 candidate only if cosine ≥ 0.30 **and** top-1 − top-2 ≥ 0.05. Otherwise return nothing and store nothing. A match returns `{user_id, display_name}` so A can send the challenge (`challenge_method = 'face'`). It never authorizes anything: B still authorizes on B's own phone (D9).
 
 ---
 
@@ -1136,23 +1134,23 @@ flowchart LR
   rc[Reconciler every 5 s] -.->|stale pending: getTransaction| ce
 ```
 
-1. Verify the QuickNode signature (confirmed: spike 06). `X-QN-Signature` = hex HMAC-SHA256(stream security token, `X-QN-Nonce` + `X-QN-Timestamp` + decompressed body), compared with `timingSafeEqual`. Gunzip only when the body starts with `1f 8b`. Reject stale timestamps. Then parse the batch (Solana tip Streams deliver ≥ 5 blocks per batch).
+1. Verify the QuickNode signature (confirmed). `X-QN-Signature` = hex HMAC-SHA256(stream security token, `X-QN-Nonce` + `X-QN-Timestamp` + decompressed body), compared with `timingSafeEqual`. Gunzip only when the body starts with `1f 8b`. Reject stale timestamps. Then parse the batch (Solana tip Streams deliver ≥ 5 blocks per batch).
 2. `INSERT INTO chain_events … ON CONFLICT (signature, outer_ix, inner_ix) DO NOTHING RETURNING id, bet_id`. Apply only to `bet_id`s that have a `chain_txs` row (kind `atomic_lock`; sequential: `create_bet`) whose `signature` equals the `BetCreated` signature (ESCROW §7.1). The server knows the lock signature at send time, before any event arrives. Store others with `apply_error`.
 3. For each distinct returned `bet_id`: `SELECT … FROM bets WHERE id=$1 FOR UPDATE`. Then **fold all** of that bet's events into the projection. The fold is order-independent, because Streams rows have no slot and `rpc_poll` rows have no block height, so no single sort key exists: status = the furthest status reached; final outcome = the terminal event's, else AppealResolved, else BetResolved. Verify the hashes and amounts against the row. Write the projected columns. Clear `onchain_pending` if `onchain_status >= onchain_pending`. Update `chain_txs` (`status='confirmed'`, `stream_seen_at`). Append `bet_events` (assigning `seq`), insert outbox rows with dedupe keys, and set `applied_at`.
-4. COMMIT, then return 2xx **fast**. Delivery is sequential, a slow webhook stalls the Stream, and the Stream auto-pauses after 3 failed retries (`max_retry 3`, `retry_interval_sec 1`, confirmed: spike 06). Return non-2xx only for transient DB errors. If the Stream does pause, the reconciler and the startup sweep (§8.3) cover the gap until someone re-activates it. Mismatches return 2xx with `apply_error` set and an audit row, because a retry won't fix them.
+4. COMMIT, then return 2xx **fast**. Delivery is sequential, a slow webhook stalls the Stream, and the Stream auto-pauses after 3 failed retries (`max_retry 3`, `retry_interval_sec 1`, confirmed). Return non-2xx only for transient DB errors. If the Stream does pause, the reconciler and the startup sweep (§8.3) cover the gap until someone re-activates it. Mismatches return 2xx with `apply_error` set and an audit row, because a retry won't fix them.
 5. After commit, publish to WS in-process and wake the outbox dispatcher.
 
 ### 8.3 Duplicates, out-of-order delivery, gaps, races
 
 - **Duplicates** (Stream retries, RPC fallback + Stream): the UNIQUE key turns them into no-ops. Duplicates alone produce an empty `RETURNING` and the handler returns 200 straight away.
 - **Out of order:** the projector re-folds the bet's full event set each time, so arrival order doesn't matter. The program enforces a monotonic state machine (no REDO onchain, no re-resolve), so "furthest status reached" is correct even when slot and `tx_index` are missing. The `bets_guard` trigger rejects any backward move.
-- **Gaps** (missed or late webhook): the reconciler runs every 5 s (= SCHEMAS `STREAM_FALLBACK_MS`). For `chain_txs` with `status='sent'`, `rpc_confirmed_at < now()−5 s` and `stream_seen_at IS NULL`, it calls `getTransaction(sig, {commitment:'confirmed', maxSupportedTransactionVersion: 1})` on the QuickNode devnet RPC. Devnet now carries v1 transactions, and version 0 fails with -32015 (confirmed: spike 06).
+- **Gaps** (missed or late webhook): the reconciler runs every 5 s (= SCHEMAS `STREAM_FALLBACK_MS`). For `chain_txs` with `status='sent'`, `rpc_confirmed_at < now()−5 s` and `stream_seen_at IS NULL`, it calls `getTransaction(sig, {commitment:'confirmed', maxSupportedTransactionVersion: 1})` on the QuickNode devnet RPC. Devnet now carries v1 transactions, and version 0 fails with -32015 (confirmed).
   - Success: decode with the same decoder and insert with `source='rpc_poll'` (same unique key).
   - `meta.err`: mark the tx `failed`, clear pending, offer a retry.
   - Not found and past `last_valid_block_height`: mark `expired` and clear pending.
 
   `rpc_poll` is a **degraded mode**. Streams remains the normal source, and the stage view shows which source confirmed each event.
-- **Startup sweep** (Solana Streams have no backfill on any plan, spike 06): for every bet whose `onchain_status` is not terminal, call `getSignaturesForAddress(bet_pda)`, then ingest any missing txs with `source='rpc_poll'`. Run it again after re-activating a paused Stream, because a resumed Stream may replay a backlog or skip to the tip.
+- **Startup sweep** (Solana Streams have no backfill on any plan): for every bet whose `onchain_status` is not terminal, call `getSignaturesForAddress(bet_pda)`, then ingest any missing txs with `source='rpc_poll'`. Run it again after re-activating a paused Stream, because a resumed Stream may replay a backlog or skip to the tip.
 - **Instructions anyone can call** (`finalize`, `timeout_refund`, `close_bet`): these may not be ours, so they arrive only via Streams or the sweep. Normally the server cranks `finalize` itself when the appeal window closes.
 - **Lock fate is decided by the nonce.** A sent lock with no confirmation stays `sent` until one of these: its signature status resolves; the nonce is observed advanced; or `expires_at` passes, at which point the server revokes. After the revoke confirms, the lock either landed earlier (Bet exists, signature confirmed, so `LOCKED`: the chain wins) or never will. A durable-nonce tx never expires by blockhash, so `last_valid_block_height` doesn't apply to it.
 - **Concurrent signatures:** see §8.1. The lock row lock serializes them, and the second one sends.
@@ -1168,7 +1166,7 @@ flowchart LR
 | Second party signed → sent once (preflight on) | sent | NULL | none | Both: "Locking…" |
 | Declined / expired before the second signature | revoked (after the nonce advance confirms) | NULL | none | "Declined" / "Expired". Nothing moved. |
 | Payout txs: party signed (GG / appeal) → sent | signed → sent | NULL | old | Spinner |
-| Server's RPC `processed` | sent (`rpc_processed_at` set) | NULL | old | Payout txs: **payout animation and haptics play here** (target < 1 s; ~0.2–0.6 s after send, spike 06/07 estimates). Lock: still "Locking…" |
+| Server's RPC `processed` | sent (`rpc_processed_at` set) | NULL | old | Payout txs: **payout animation and haptics play here** (target < 1 s; ~0.2–0.6 s after send, estimated). Lock: still "Locking…" |
 | Server's RPC `confirmed` | confirmed | target | old | New state shown (e.g. `LOCKED` on both phones, double-buzz: second authorization → lock confirmed < 2 s, E ~0.70–1.39 s, ESCROW §8.4). Stage shows **one lock tx** (3 signatures) as "pending". |
 | Stream event applied | confirmed | NULL | target | Stage shows a ✓, the Explorer link and "Streams +x.x s". The lock shows `BetCreated → BetAccepted` under one signature. |
 | Failed, expired, or not confirmed within 5 s of `processed` | failed / expired | NULL | old | Revert and offer a retry |
@@ -1177,7 +1175,7 @@ The server's RPC result is real (`processed`, then `confirmed`). "Optimistic" on
 
 ### 8.5 Reorg and finality stance (devnet)
 
-- Use **`confirmed`** for sends, the server's own confirmation and projection, and `processed` only for the payout animation (§8.4). Spike 06 measured devnet `confirmed` − `processed` at p50 ~400 ms and `finalized` ≈ `confirmed` (p50 −2 ms, probably Alpenglow), so `finalized` costs about nothing extra on devnet today. We keep `confirmed` so nothing breaks if that changes.
+- Use **`confirmed`** for sends, the server's own confirmation and projection, and `processed` only for the payout animation (§8.4). Measured devnet `confirmed` − `processed` at p50 ~400 ms and `finalized` ≈ `confirmed` (p50 −2 ms, probably Alpenglow), so `finalized` costs about nothing extra on devnet today. We keep `confirmed` so nothing breaks if that changes.
 - Confirmed blocks have supermajority votes and are not expected to roll back. We accept that residual risk for devnet test money (ESCROW TM-E8).
 - P2, not built: a sweeper sets `chain_events.finalized_at` from `getSignatureStatuses`. A confirmed signature that drops would be handled by hand: mark it and re-fold, the only case where status moves backward.
 - If Streams delivers only finalized blocks (unverified until the key run), nothing in the schema changes. The UI rides on the optimistic layer and the "Streams ✓" arrives later.
@@ -1205,7 +1203,7 @@ The server's RPC result is real (`processed`, then `confirmed`). "Optimistic" on
 | Object | Bucket / key | Written by | Hash | Retention | Access |
 |---|---|---|---|---|---|
 | Attempt clip | `evidence` / `attempts/{bet_id}/{n}/clip.{mp4\|mov}` | Phone via presigned PUT (≤ 25 MB, URL TTL 60 s, content-type pinned) | `evidence_hash = sha256(exact stored bytes)` | **30 days** (lifecycle rule) | Server only. Signed GET (5 min) for the stage view and the two parties. |
-| Frames (12 JPEG + 1 landing crop per try since D10, each ≤ 200 KB, ≤ 24) | `evidence` / `attempts/{bet_id}/{n}/frames/{00..23}.jpg` | Phone (confirmed: spike 02: expo-video `generateThumbnailsAsync`, 512 px; server ffmpeg is the fallback) | Per frame, in `attempts.frame_hashes` and `CameraEvidence.frames[]` | 30 days | Same. Models receive frames inline (base64) from the server, never as URLs. |
+| Frames (12 JPEG + 1 landing crop per try since D10, each ≤ 200 KB, ≤ 24) | `evidence` / `attempts/{bet_id}/{n}/frames/{00..23}.jpg` | Phone (confirmed: expo-video `generateThumbnailsAsync`, 512 px; server ffmpeg is the fallback) | Per frame, in `attempts.frame_hashes` and `CameraEvidence.frames[]` | 30 days | Same. Models receive frames inline (base64) from the server, never as URLs. |
 | Transcripts | `evidence` / `transcripts/{bet_id}/{el_conversation_id}.json` | Server, when the session ends | `voice_sessions.transcript_sha256` | 30 days | Server |
 | Hearing audio | not stored by default | | | | |
 | Gemini settlement | DB: raw body in `gemini_markets.settlement_raw`; the per-bet `GeminiSettlementRecord` in `rulings.evidence_canonical` | Server | `rulings.evidence_hash` (= onchain `evidence_hash`) | Kept with the bet | Server |
@@ -1213,15 +1211,15 @@ The server's RPC result is real (`processed`, then `confirmed`). "Optimistic" on
 | Face images | **none: they never leave the device** | | | | |
 
 - **Never public.** Buckets block public access. There are no public ACLs and no listable prefixes. Provider-side encryption at rest is on. Evidence and avatars live in separate buckets.
-- **Provider:** any S3-compatible store with presigned URLs. Default **Tigris on Fly** (the host spike 07 picked), or Cloudflare R2. Supabase Storage is out: spike 07 found the connected Supabase org's free-project quota already used by another product.
-- **Hashing order (latency; confirmed: spike 02 matches this order):**
+- **Provider:** any S3-compatible store with presigned URLs. Default **Tigris on Fly**, or Cloudflare R2. Supabase Storage is out: the connected Supabase org's free-project quota is already used by another product.
+- **Hashing order (latency; confirmed):**
   1. The phone hashes the clip when recording ends (~12–24 ms for 5.5 MB on a desktop; ~20–60 ms estimated on an iPhone) and uploads the frames first.
   2. The judge rules from the frames.
   3. `resolve` commits `client_clip_hash`.
   4. When the clip upload finishes, the server recomputes sha256 into `evidence_hash`.
   5. On a mismatch, or no upload within 60 s, it writes `audit_log 'evidence.mismatch'`, flags the bet, and the appeal panel treats the clip as missing.
 
-  `ruling_hash` commits to the clip (through `evidence_hash`) **and** to the exact frames the model saw (`frame_hashes` in the record; SCHEMAS O3 adopted 2026-11-08, D7). They are stored in `attempts.frame_hashes` / `evidence_canonical` and mirrored in `rulings.frame_hashes`. The phone uploads the frames first, so their hashes are known before the ruling.
+  `ruling_hash` commits to the clip (through `evidence_hash`) **and** to the exact frames the model saw (`frame_hashes` in the record; SCHEMAS O3, D7). They are stored in `attempts.frame_hashes` / `evidence_canonical` and mirrored in `rulings.frame_hashes`. The phone uploads the frames first, so their hashes are known before the ruling.
 - **After retention:** DB rows keep the keys and hashes. The sweeper sets `attempts.purged_at`, and a 404 on purge is treated as expired. The onchain hash is the permanent record.
 
 ## 10. Biometric data handling
@@ -1291,13 +1289,13 @@ A daily job enforces the schedule and writes audit rows.
 - **We treat face embeddings as biometric identifiers** (scans of face geometry).
 - **Residual question for counsel:** the probe embedding of a person scanned who has not opted in is processed transiently in memory and never stored. Room scoping limits where scanning can happen, and a match only addresses the challenge. Money moves only when each person authorizes their own deposit on their own phone (hold + Face ID). A wrong match can't move money.
 - **Face ID is not our biometric.** iOS LocalAuthentication runs on the device and only returns success or failure to the app. We store only `*_authorization_method` and a timestamp, never anything from Face ID.
-- **Voice:** we never build voiceprints. ElevenLabs processes speech for STT only. Set the agent's data retention to the minimum available. Spike 04 didn't cover the retention setting, so check it in the dashboard during the key run.
+- **Voice:** we never build voiceprints. ElevenLabs processes speech for STT only. Set the agent's data retention to the minimum available. The retention setting is unverified, so check it in the dashboard during the key run.
 
 ---
 
 ## 11. Seed data (demo mode)
 
-Preferred: create the demo history **for real**. A `seed:chain` script runs about 11 small devnet bets between the team wallets the day before the demo, which gives real signatures and real `chain_events`. The script builds the same atomic lock (both demo keys sign one tx on a pool nonce) with the **custodial demo seeds the server holds** (`users.demo_seed_ciphertext`, FINDINGS §3.4), not through Face ID, so it records no authorization and marks its rows `is_seed=true` (exempt from `bets_locked_authorized`; the stage view labels them "demo history"). Fund the demo wallets with devnet USDC from faucet.circle.com beforehand. It gives 20 USDC per 2 h per address, so spread the clicks across addresses (spike 07).
+Preferred: create the demo history **for real**. A `seed:chain` script runs about 11 small devnet bets between the team wallets the day before the demo, which gives real signatures and real `chain_events`. The script builds the same atomic lock (both demo keys sign one tx on a pool nonce) with the **custodial demo seeds the server holds** (`users.demo_seed_ciphertext`), not through Face ID, so it records no authorization and marks its rows `is_seed=true` (exempt from `bets_locked_authorized`; the stage view labels them "demo history"). Fund the demo wallets with devnet USDC from faucet.circle.com beforehand. It gives 20 USDC per 2 h per address, so spread the clicks across addresses.
 Fallback: the SQL below, where rows have `is_seed=true` and no signatures. The stage view labels them "demo history".
 **Built as a route** (`POST /v1/demo/seed-h2h`, API-CONTRACT §2.17): each seed row now also has a real composed terms row (`bet_terms_versions`, `version 1`, `is_final`, `drafted_by 'judge'`, `source_tool 'seed'`, `bets.terms_hash` = its hash, so `bet_terms_versions_hash` holds): a skill claim with performer B = the yes party ("Jake lands a water bottle flip upright on the table."). The judge's history-grounded odds (API-CONTRACT §2.19) read the claim, performer and yes party from it; the challenge category is derived from the claim, never stored. Optional `records` make a player the performer of N bets of one category (e.g. Jake 10–2 on bottle flips), still `is_seed` and titled "Demo history: …". Re-seeding deletes the seed bets; their terms rows cascade. No migration: odds offers live in `bet_events` (`odds.*`), the category is derived. **Face enrollments are never seeded.** Each teammate enrolls live on their own phone through the consent screen.
 
@@ -1367,36 +1365,34 @@ FROM s;
 - **Commands:** `drizzle-kit generate` → review the SQL → `drizzle-kit migrate`. Triggers, views, grants, the `audit_log` CHECK and the hash CHECKs go in **one** `drizzle-kit generate --custom --name=triggers_views_grants` migration.
 - **Types:** `bigint({ mode: 'bigint' })` for micro-USDC; convert to a decimal string at the API edge. The domain Zod schemas (Terms, Ruling, BetState) live in `packages/shared` and are the source of truth. drizzle-zod is for row shapes only.
 - **Driver:** `postgres` (postgres.js). Run migrations over the **direct** (non-pooled) URL; the app uses the pooled one. With a transaction-mode pooler, set `prepare: false` and don't use LISTEN/NOTIFY: fan-out is in-process.
-- **Postgres:** spike 07's pick is **Neon Free** in `aws-us-east-2` (pooled URL for the app, direct URL for migrations), close to the Fly.io `dfw` server. Neon scales to zero after 5 min idle and that can't be disabled, so run a 60 s keepalive query; otherwise the first query mid-demo pays a cold start. Any managed Postgres ≥ 15 works. Run `ALTER DATABASE … SET timezone TO 'UTC'`.
-- **If Supabase is used after all** (spike 07: the connected org's free quota is taken, so it would need a new org or Pro): enable RLS on **every** table with **no policies**. The server's role bypasses RLS, so PostgREST and the anon key can read nothing. Phones never talk to the DB directly.
+- **Postgres:** the pick is **Neon Free** in `aws-us-east-2` (pooled URL for the app, direct URL for migrations), close to the Fly.io `dfw` server. Neon scales to zero after 5 min idle and that can't be disabled, so run a 60 s keepalive query; otherwise the first query mid-demo pays a cold start. Any managed Postgres ≥ 15 works. Run `ALTER DATABASE … SET timezone TO 'UTC'`.
+- **If Supabase is used after all** (the connected org's free quota is taken, so it would need a new org or Pro): enable RLS on **every** table with **no policies**. The server's role bypasses RLS, so PostgREST and the anon key can read nothing. Phones never talk to the DB directly.
 
 ---
 
-## 13. Open items: status vs spike FINDINGS and sibling docs
-
-Each spike's Verification section wins over the rest of its findings.
+## 13. Open items: status vs sibling docs
 
 | Item | Default in this doc | Status |
 |---|---|---|
-| Devnet USDC mint, classic SPL Token, 6 decimals | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` | **Confirmed: spike 07** |
-| Wallet = device keypair; Face ID at each authorization; device auth key **separate** from the wallet key | yes | **Confirmed: spike 07 / 3b** (wallet, Face ID). The separate auth key is API-CONTRACT §1.3's choice (it owns the login flow). |
-| Atomic lock row + nonce pool (D10) | §5.8, §5.20 | **Decided (D3).** 3b MEASURED the flow in LiteSVM and on local Agave. Real-program CU/size, devnet and phone latency are pending (FINDINGS §6 steps 5, 8, 12, 13). |
+| Devnet USDC mint, classic SPL Token, 6 decimals | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` | **Confirmed** |
+| Wallet = device keypair; Face ID at each authorization; device auth key **separate** from the wallet key | yes | **Confirmed** (wallet, Face ID). The separate auth key is API-CONTRACT §1.3's choice (it owns the login flow). |
+| Atomic lock row + nonce pool (D10) | §5.8, §5.20 | **Decided (D3).** The flow was MEASURED in LiteSVM and on local Agave. Real-program CU/size, devnet and phone latency are pending. |
 | Rulings commit to frames (`frame_hashes`) | §5.12, §5.13 | **Decided (D7, SCHEMAS O3)** |
-| Postgres host and object-storage provider | Neon Free us-east-2 + keepalive; Tigris/R2 | **Spike 07 recommendation.** Account setup is pending. |
-| Event encoding (`emit_cpi!` inner ixs), filter drops failed txs, HMAC scheme, retry policy (3 × 1 s, then auto-pause), no slot in the getBlock payload | §5.9, §8.2 | **Confirmed: spike 06** |
+| Postgres host and object-storage provider | Neon Free us-east-2 + keepalive; Tigris/R2 | **Recommended.** Account setup is pending. |
+| Event encoding (`emit_cpi!` inner ixs), filter drops failed txs, HMAC scheme, retry policy (3 × 1 s, then auto-pause), no slot in the getBlock payload | §5.9, §8.2 | **Confirmed** |
 | Which commitment Streams delivers; real Streams latency; whether Streams adds a slot | `confirmed`; `slot` nullable | Pending: QuickNode key |
 | Anchor event names and payload fields; Bet closed by `close_bet` | §3.5 table | **Matches ESCROW §7.2 / SCHEMAS §10.2** |
-| Embedding model, dimension, threshold | `w600k_mbf` 512-d; T = 0.30, margin 0.05 | **Confirmed on desktop: spike 01.** The on-iPhone test is pending. |
-| ElevenLabs tool-call ID in webhook bodies; data-retention setting | `el_tool_call_id`, with a hash-dedupe fallback | Pending: ElevenLabs key (spike 04) |
-| Gemini voided (`invalid`) market representation | `status='invalid'`, `resolution_side` NULL | Unseen in 173 contracts (spike 05) |
-| Clip hash committed before the upload finishes | client hash committed; server verifies | **Confirmed: spike 02** |
+| Embedding model, dimension, threshold | `w600k_mbf` 512-d; T = 0.30, margin 0.05 | **Confirmed on desktop.** The on-iPhone test is pending. |
+| ElevenLabs tool-call ID in webhook bodies; data-retention setting | `el_tool_call_id`, with a hash-dedupe fallback | Pending: ElevenLabs key |
+| Gemini voided (`invalid`) market representation | `status='invalid'`, `resolution_side` NULL | Unseen in 173 contracts |
+| Clip hash committed before the upload finishes | client hash committed; server verifies | **Confirmed** |
 | Hearing before `resolve`; appeal after | §5.6 | **Confirmed: SCHEMAS §6** |
 
 ---
 
 ## 14. Proposed changes
 
-Resolutions (cross-doc consistency pass, 2026-11-07):
+Resolutions:
 
 | # | Resolution | One-line rationale |
 |---|---|---|
@@ -1425,39 +1421,6 @@ The original proposals, kept for the record:
 
 ## Changelog
 
-- **2026-11-07, cross-doc consistency pass** (lead-engineer amendment + spike FINDINGS; each spike's Verification section wins). An earlier interrupted pass had only touched §1 (names follow SCHEMAS §0.3) and the ER diagram's `chain_events` key; everything below is this pass:
-  - **No handshake.** Dropped `handshake_at`, `handshake_method`, the `handshake_method` enum, the `awaiting_handshake` state and the voice-accept columns on `bet_terms_versions`. Added `a_/b_authorized_at`, `a_/b_authorization_method` (enum `authorization_method`), `a_/b_authorized_device_at`, a freeze-after-lock trigger rule, and the CHECKs `bets_auth_pairs` and `bets_locked_authorized`. Added D9. A face match only addresses the challenge (D7, §7.2, §10).
-  - **States and enums now equal SCHEMAS.** `bet_state` is the 18-value `BetState`. `void_reason` became `end_reason` (`bet_end_reason`) plus `refusal_category`. `ruling_outcome` gained `VOID`. Added `ruling_stage`, `redo_reason`, `ruling_void_reason`, `claim_result`, `panel_provider`, `vote_status`, `vote_counted_as`, `appeal_decided_by`. `hearing_trigger`, `market_status`, `chain_ix` (+`close_bet`, same order), `payout_via` and `tx_status` (+`signed`) were aligned. `platform` is iOS only.
-  - **Onchain mapping.** Deadline columns now use the Rust names (`accept_deadline`, `resolve_deadline`, `appeal_deadline`, `appeal_resolve_deadline`). Added `appealed_at`, `appeal_ruling_hash`, `close_sig`/`closed_at`, `supersedes_bet_id`, `last_seq`, `quoted_at`. §3.3–§3.5 were rewritten to match ESCROW (close_bet closes the Bet; payouts use `V = vault.amount`; event → state table incl. `BetClosed`). The payout CHECK now covers `refunded`/`cancelled` and tolerates excess.
-  - **Chain events.** The dedup key is `(signature, outer_ix, inner_ix)`. `slot` is nullable and `block_height` was added (spike 06). HMAC verification, fast ack and the auto-pause risk follow spike 06. The reconciler uses `maxSupportedTransactionVersion: 1`. Finality notes are updated.
-  - **Tables.** Added §5.19 `bet_events`. `chain_txs` allows one in-flight tx per `(bet_id, ix)` and has `message_sha256`, `bundled_close`, `party_signed_at` and `rpc_processed_at`. `rulings` stores the SCHEMAS record verbatim (`stage`, `claim_result`, `redo_reason`, `void_reason`, `cited_frames`, `evidence_canonical`). The per-bet Gemini settlement record moved from `gemini_markets` to `rulings` (X12). Aligned `hearing_turns`, `appeals` and `appeal_votes` to SCHEMAS. Added a Gemini camelCase ↔ column table. Clip ≤ 30 s and ≤ 24 frames.
-  - **Payout UX.** The animation fires on `processed` (§8.4, SCHEMAS X10). Seeds use `PAID` and `terms_final_at`, and `seed:chain` rows are `is_seed`.
-  - **Infra and markers.** Neon Free with keepalive and Tigris/R2 (spike 07); spike 01 face model and match rule; spike 02 frames and hashing order. `ruling_hash` does not commit to frames (SCHEMAS O3). §13 is now a status table, and §14 P1–P4 are resolved.
-- **2026-11-08, atomic lock (D3 → D10) + D7.** Sources: FINDINGS §3.7 and spike 3b, including its Verification.
-  - **Header.** Status line updated; added an "At a glance" summary. D2 now says a failed lock continues on a new `bet_id`. D9 now says each key authorizes only its own deposit inside the shared lock message. Added **D10** (atomic lock, nonce pool, `lock_mode`).
-  - **ER diagram.** Added `nonce_pool`, the lock relations, and `chain_txs` / `nonce_pool` attribute boxes.
-  - **§3.** Added the nonce-pool account row. The `rent_payer` pre-check is atomic vs sequential. Under the atomic lock, `BetCreated` folds with `BetAccepted` (one signature, `create_sig = accept_sig`).
-  - **§4 enums.** New `tx_kind` (= SCHEMAS `TxKind`), `lock_mode` and `nonce_status`. `tx_status` gained `revoked` ('expired' is for blockhash txs only). `bet_end_reason` gained `lock_failed`. `chain_ix` stays for escrow instruction names.
-  - **§5.6 `bets`.** Added `lock_mode`. Wallet snapshots are taken at lock build. The authorization notes now point to where signatures live, and who went first is recorded. State rows: `AWAITING_LOCK` is transient (atomic) or Open (sequential); `CANCELLED`/`EXPIRED` move nothing under atomic.
-  - **§5.8 `chain_txs` rewritten** for the one-row lock:
-    - columns: `kind`, `message_b64`, `nonce_account`, `nonce_value`, `a_/b_signature`, `a_/b_signed_at`, `first_signer`, `expires_at`, `revoked_by_tx_id`, `simulated_cu`/`cu_limit`; `party_signed_at` replaced by the per-party columns;
-    - new signer roles `both_parties` and `fee_payer`;
-    - CHECKs: never sent half-signed; lock fields required;
-    - a status lifecycle table.
-  - **New §5.20 `nonce_pool`:** table, CHECKs, lifecycle diagram, and the allocate / advance-after-use / advance-on-revoke / rotate / boot-reconcile rules.
-  - **§5.11.** `lock_bet` is not an LLM tool (SCHEMAS O5).
-  - **§5.12 / §5.13 / §9.** Rulings now commit to `frame_hashes`: `rulings.frame_hashes` added (SCHEMAS O3, D7).
-  - **§6.** Trigger comment updated. New indices: in-flight per `(bet_id, kind)`, UNIQUE `(nonce_account, nonce_value)` for locks, a lock-expiry index, nonce lease UNIQUE, and a free-nonce LRU index.
-  - **§8.** LockService is the writer for lock rows and the pool (row lock; one send). Webhook ownership is now keyed by the lock signature. Flowchart updated. New §8.3 rules: the nonce decides lock fate; concurrent signatures; cancel/accept race is sequential-only. The §8.4 UI table now covers built → first signer → sent → confirmed and revoked, with the stage view showing one lock tx. New §8.6 idempotency keys: `(lock_request_id, party)`, lock submission, nonce lease.
-  - **§11 / §13.** `seed:chain` builds the same atomic lock. Status rows added for the atomic lock and frame commitment.
-  - **Naming aligned** with API-CONTRACT and TASKS, which were drafted in parallel: the lock's tx kind is `atomic_lock` (SCHEMAS `TxKind` = DATA-MODEL `tx_kind`), and the signed payload field is `message_b64`.
-- **2026-11-08, cross-doc consistency pass** (all eight planning docs checked against D1–D7 and FINDINGS; ownership: SCHEMAS types, ESCROW onchain, DATA-MODEL tables, API-CONTRACT endpoints/events/tools):
-  - **§5.1 `users`.** Custodial demo seed columns (`demo_seed_ciphertext`/`demo_seed_nonce`, AES-GCM under `DEMO_SEED_KEK`; FINDINGS §3.4) with CHECKs.
-  - **§5.2 `devices`.** `device_pubkey` is now a separate device auth key, not the wallet key (API-CONTRACT §1.3 owns the login flow). New `role` column and `device_role` enum (`phone`, `judge_cam`).
-  - **New §5.21 `api_sessions`** (sha256 of the bearer token; app and stage scopes) and its ER line.
-  - **§8.6.** `STALE_LOCK_REQUEST` naming; client idempotency is an in-process LRU in P0 and an `api_idempotency` table in P1 (was P2).
-  - **§10.** Face KEK env name is `FACE_KEK_<KEY_ID in UPPER_SNAKE>` (e.g. `FACE_KEK_2026_11_A`) plus `FACE_KEK_ACTIVE`.
-  - **§11.** Demo wallets are custodial and server-generated (no `DEMO_WALLET_*` env); `seed:chain` uses those seeds; `npm run db:demo-reset` (npm workspaces, not pnpm). §13 row updated.
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): `frame_keys` and the §9 frames row say 12 frames + one landing crop per try. No schema change: the crop is one more `attempt_frames` row (idx 12, the 204800 B CHECK holds it), and which row is the crop is read back from `attempts.evidence_canonical` (`frames[i].landing_crop`). `attempts.recorder = 'self'` is now also the two-phone demo's fallback (API-CONTRACT §2.9).
 - **2026-11-18 (Beat 5 appeal built, migration 0008).** §5.15 `appeals` / `appeal_votes` created as specified, plus the CHECKs listed under §5.15 and the deferred FK `rulings.appeal_id → appeals`. No new enum (0000 has them).
 - **2026-11-18, live rivalry scan (feat/rivalry-scan).** §7.1 documents the head-to-head rivalry fields (`total`, `last_result`, `streak`, `rival`), computed inline in the same single `headToHead()` statement. No migration and no schema change.

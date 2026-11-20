@@ -41,7 +41,7 @@ export interface JudgeVoiceProps {
   dynamicVariables: VoiceDynamicVariables;
   /** The challenge said after "Jarvis" (../wake): the judge hears it first. Read at mount. */
   initialUtterance?: string | undefined;
-  /** Mute, don't end (FINDINGS §4): true from the terms card on, except in a hearing. */
+  /** Mute, don't end: true from the terms card on, except in a hearing. */
   micMuted: boolean;
   /** Resolves with who films (../attempt/recorder): the judge cam, or this phone. */
   startAttempt(attemptNo: number): Promise<'judge_cam' | 'self' | 'manual' | void>;

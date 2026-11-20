@@ -130,7 +130,7 @@ describe('assertCopy', () => {
   });
 });
 
-describe('checkScreenCopy (Verdict rule 2: nothing smaller directly below a label)', () => {
+describe('checkScreenCopy (rule 2: nothing smaller directly below a label)', () => {
   const label = (text: string, y: number, fontSize = 15): ScreenText => ({
     text,
     role: 'label',

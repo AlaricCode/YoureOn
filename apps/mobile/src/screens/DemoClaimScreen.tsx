@@ -1,6 +1,6 @@
 // Demo account (DEMO_MODE only; API-CONTRACT §2.1 demo-claim, §2.17): scan the one-time QR the
 // stage shows to take over one of the team's seeded accounts. The accounts are custodial, and
-// the README says so (FINDINGS §3.4). Opened from a youreon:// demo-claim link (app/deepLink),
+// the README says so. Opened from a youreon:// demo-claim link (app/deepLink),
 // the code is already there and the claim waits for an explicit "Use this account": it replaces
 // this phone's wallet, so a link alone never claims.
 import { CameraView, useCameraPermissions } from 'expo-camera';

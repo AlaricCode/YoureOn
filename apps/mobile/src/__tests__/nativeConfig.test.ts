@@ -1,5 +1,5 @@
-// Guards the native-stack config for EAS build #1 (TASKS D0-M2 install checklist, FINDINGS §3.1-3.3,
-// §3.10, §7). These are cheap to break and expensive to find on a 90-minute cloud build.
+// Guards the native-stack config for EAS build #1 (TASKS D0-M2 install checklist).
+// These are cheap to break and expensive to find on a 90-minute cloud build.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -47,7 +47,7 @@ const installedVersion = (name: string) =>
   (JSON.parse(readFileSync(join(packageDir(name), 'package.json'), 'utf8')) as { version: string })
     .version;
 
-describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
+describe('exact pins', () => {
   const exact: Record<string, string> = {
     'react-native-nitro-modules': '0.37.2',
     'react-native-vision-camera': '5.2.4',
@@ -81,7 +81,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
     expect(installedVersion('react-native-gesture-handler')).toMatch(/^3\.3\./);
   });
 
-  it('SDK 58 Expo modules for the judge cam are present (FINDINGS §3.3)', () => {
+  it('SDK 58 Expo modules for the judge cam are present', () => {
     for (const name of [
       'expo-camera',
       'expo-video',
@@ -101,7 +101,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
     }
   });
 
-  it('keeps forbidden packages off the phone (FINDINGS §3.1, §3.2)', () => {
+  it('keeps forbidden packages off the phone', () => {
     for (const name of [
       '@solana/web3.js',
       '@coral-xyz/anchor',
@@ -116,7 +116,7 @@ describe('exact pins (FINDINGS §3.1, §3.2, §3.10)', () => {
   });
 });
 
-describe('config plugins and usage strings (FINDINGS §7: one string each)', () => {
+describe('config plugins and usage strings (one string each)', () => {
   const camera = app.ios.infoPlist.NSCameraUsageDescription;
   const mic = app.ios.infoPlist.NSMicrophoneUsageDescription;
 
@@ -189,7 +189,7 @@ describe('config plugins and usage strings (FINDINGS §7: one string each)', () 
   });
 });
 
-describe('face-detector iOS performanceMode patch (FINDINGS §3.2, §7)', () => {
+describe('face-detector iOS performanceMode patch', () => {
   const patchPath = here(
     '../../../../patches/react-native-vision-camera-face-detector+2.1.0.patch',
   );

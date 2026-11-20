@@ -4,7 +4,7 @@
 //!   inner instruction, with fields equal to the chain state and the token balance deltas; the
 //!   atomic lock and the bundled `[terminal ix, close_bet]` carry two, one per outer ix, in order.
 //!   No "Log truncated" and no `Program data:` log line (no `emit!` path) anywhere; and the
-//!   inner-instruction events survive when the log collector does truncate (§7.1, spike 06).
+//!   inner-instruction events survive when the log collector does truncate (§7.1).
 //! - E2 (Rust half): a forged top-level event ix fails, and so do fake event-authority / `program`
 //!   accounts on a real ix (TM-E2, TM-C6). The Streams filter half is in the TS filter suite.
 //! - E4 (Rust half): `[finalize, <failing ix>]` fails atomically; the inner event the runtime
@@ -491,7 +491,7 @@ fn e1_failed_instructions_emit_nothing_and_change_nothing() {
 
 #[test]
 fn e1_events_survive_log_truncation() {
-    // §7.1 / spike 06: with the log collector capped so the logs truncate, `emit_cpi!` events are
+    // §7.1: with the log collector capped so the logs truncate, `emit_cpi!` events are
     // still complete in the inner instructions (the reason the filter never reads logs).
     let mut env = Env::with_config();
     let id = bet_id(1);

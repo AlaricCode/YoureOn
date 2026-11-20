@@ -1,9 +1,8 @@
 // QuickNode Streams receiver (API-CONTRACT §5, DATA-MODEL §8.2):
 //   POST /webhooks/quicknode   X-QN-Signature HMAC, no bearer auth
 //
-// Ported from Verdict packages/backend/src/routes/webhooks.ts:35-80 (cheap header checks before
-// the HMAC, JSON parsed only after the HMAC over the raw bytes verified, idempotent handler).
-// Ack rules are OURS (API-CONTRACT §5.3), not Verdict's 204/400:
+// Cheap header checks before the HMAC, JSON parsed only after the HMAC over the raw bytes
+// verified, idempotent handler. Ack rules (API-CONTRACT §5.3):
 //   - bad / missing / stale signature → 401 (and an alert: 3 failed retries auto-pause the Stream);
 //   - transient DB error (an allowlist: connection loss, serialization/deadlock, resources,
 //     admin shutdown, lock timeout) → 503 so QuickNode retries (3 × 1 s);

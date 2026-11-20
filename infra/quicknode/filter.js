@@ -16,8 +16,7 @@
 //      IDL compiled into it and ignores `name`.
 //
 // No BigInt / atob / TextDecoder / Buffer / require: QuickNode's JS engine is undocumented.
-// Adapted from youre-on-spikes/06-quicknode-solana/filter/stream-filter.js (base58 / base64
-// helpers, block walking) with Verdict's infra/quicknode layout (CONFIG + stream.json).
+// base58 / base64 helpers and block walking; the infra/quicknode layout is CONFIG + stream.json.
 //
 // The CONFIG block is generated: `npx tsx infra/quicknode/build-filter.ts` (from the escrow IDL
 // and ESCROW_ID). apps/server/test/chain-unit.test.ts fails if it drifts.

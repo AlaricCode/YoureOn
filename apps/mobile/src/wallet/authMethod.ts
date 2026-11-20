@@ -1,4 +1,4 @@
-// How an authorization is gated and which method is recorded (SCHEMAS §12.3 O8, FINDINGS §7).
+// How an authorization is gated and which method is recorded (SCHEMAS §12.3 O8).
 //
 // `authenticateAsync` resolves only {success, error, warning}: it never says whether Face ID or the
 // passcode succeeded. So:
@@ -11,7 +11,7 @@
 //      must not end Beat 3). This goes beyond O8's literal list; the method is still recorded.
 //   3. Anything else (user_cancel, system_cancel, authentication_failed, passcode_not_set, ...)
 //      fails without a second prompt.
-// ESTIMATED behaviour: check it on a device (FINDINGS §6 step 8, TASKS D1-M2).
+// ESTIMATED behaviour: check it on a device (TASKS D1-M2).
 import type { LocalAuthenticationError, LocalAuthLike } from './platform';
 
 /** Mirrors SCHEMAS `AuthorizationMethod` (packages/shared/src/authorization.ts). */

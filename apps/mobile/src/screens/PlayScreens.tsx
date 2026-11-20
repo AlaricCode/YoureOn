@@ -214,7 +214,7 @@ const FINALIZE_WAIT_MS = 8000;
 const CAMERA_WAIT_MS = 10_000;
 
 /**
- * expo-camera records the clip (FINDINGS §3.3, codec avc1, maxDuration 6). Without `arm` (the
+ * expo-camera records the clip (codec avc1, maxDuration 6). Without `arm` (the
  * preview) the operator starts it; with `arm` the server's attempt.started does, counting down
  * to go_at. `onSend` gets the clip (null when nothing was recorded) and does the frames.
  *

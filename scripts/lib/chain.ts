@@ -1,5 +1,5 @@
 // RPC, cluster detection, Explorer links, transaction build/simulate/send/confirm with timings
-// (FINDINGS §6 step 5: send -> processed -> confirmed), and small account readers.
+// (send -> processed -> confirmed), and small account readers.
 //
 // Safety rails (hard rules for these scripts):
 //   - mainnet-beta is refused outright (detected by genesis hash, not by URL);

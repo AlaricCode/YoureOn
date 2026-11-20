@@ -76,11 +76,11 @@ import { lifecycleOf } from '../lock/runtime';
 import { loadEnvelope } from '../lock/terms';
 import { cleanDecimal, isoOrNull, RawEvent, toStrike, type RawEventResponse } from './gemini';
 
-/** First settlement check after expiry (spike 05: settled p50 5.66 s, max 8.78 s). */
+/** First settlement check after expiry (measured: settled p50 5.66 s, max 8.78 s). */
 export const SETTLE_FIRST_CHECK_MS = 5_000;
 /** Fast-path poll interval (API-CONTRACT §7.3 "poll that endpoint every 2 s from expiry"). */
 export const SETTLE_POLL_MS = 2_000;
-/** Inside the settlement band (spike 05: 5.7-8.8 s after expiry) the fast path polls every 1 s. */
+/** Inside the settlement band (measured: 5.7-8.8 s after expiry) the fast path polls every 1 s. */
 export const SETTLE_BAND_MS = 12_000;
 export const SETTLE_BAND_POLL_MS = 1_000;
 /** The fast path stops after this past expiry; the keeper sweep carries on. */

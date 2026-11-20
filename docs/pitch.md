@@ -273,8 +273,3 @@ nights with a stage screen. Not built; it's the direction.
 
 **Is this mainnet-ready?** No. Next: an audit, a multisig upgrade authority, a sealed transport for
 face embeddings, a commercial face model, and the dispute panel.
-
-**What was built during the hackathon?** The team wrote two prototypes before the window, and the
-organizers confirmed that reusing them is allowed. One was imported as the base on 2026-11-14,
-with the planning docs; the commit history shows everything after that. The README's "Prior work"
-section and `docs/MERGE-PLAN.md` say what was kept, ported and dropped.

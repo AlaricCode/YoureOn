@@ -1,5 +1,5 @@
 // Pure byte helpers for the wallet. No platform imports: this file runs in Node (vitest) and on Hermes.
-// Hermes (RN 0.88, Expo 58) has no crypto.subtle and no global getRandomValues (FINDINGS §7), and the
+// Hermes (RN 0.88, Expo 58) has no crypto.subtle and no global getRandomValues, and the
 // app ships no Buffer polyfill, so base58/hex/UUID handling is done here by hand.
 
 const B58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';

@@ -1,6 +1,6 @@
 // The one place that configures @noble/ed25519 for synchronous use. Hermes has no crypto.subtle, so
 // noble's *Async functions (which use WebCrypto SHA-512) cannot run there; the sync API needs
-// `ed.hashes.sha512` set from @noble/hashes (FINDINGS §3.4). Import `ed` from here, not from the package.
+// `ed.hashes.sha512` set from @noble/hashes. Import `ed` from here, not from the package.
 import * as ed from '@noble/ed25519';
 import { sha256, sha512 } from '@noble/hashes/sha2.js';
 
@@ -14,7 +14,7 @@ const WARMUP_SEED = new Uint8Array(32).fill(7);
 let warmed = false;
 
 /**
- * Builds noble's base-point precompute tables (cold cost measured at 92-127 ms on Hermes, FINDINGS §7)
+ * Builds noble's base-point precompute tables (cold cost measured at 92-127 ms on Hermes)
  * so the first real signature after Face ID is fast. Idempotent and cheap once warm.
  */
 export function prewarmSigner(): void {

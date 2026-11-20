@@ -1,11 +1,10 @@
-// Minimal ElevenLabs REST client for the server (FINDINGS §3.10: "Server: plain fetch or
-// @elevenlabs/elevenlabs-js"). Only what the running server needs: the conversation token,
+// Minimal ElevenLabs REST client for the server (plain fetch, no
+// @elevenlabs/elevenlabs-js). Only what the running server needs: the conversation token,
 // (for src/providers, behind STT_PROVIDER / SFX_PROVIDER) Scribe speech-to-text and Sound Effects,
 // and text-to-speech for the stage's voice (src/voice/tts.ts).
 // `fetch` is injectable so tests mock the HTTP call (no key exists yet: PENDING-KEY).
 //
-// speechToText / soundGeneration are ported from Verdict
-// packages/backend/src/providers/real/elevenlabs.ts (ElevenLabsStt, ElevenLabsSfx), re-shaped to
+// speechToText / soundGeneration (ElevenLabsStt, ElevenLabsSfx) use
 // this client's error type and deadlines (API-CONTRACT §1.8: STT 6 s) and to `scribe_v2` (§2.11).
 import { z } from 'zod/v4';
 import { ElTokenResponse } from '@youre-on/shared/judge/voice';
@@ -24,7 +23,7 @@ export const EL_SFX_TIMEOUT_MS = 30_000;
 export const EL_TTS_TIMEOUT_MS = 10_000;
 /** MP3 every browser decodes (`output_format` query of POST /v1/text-to-speech/{voice_id}). */
 export const EL_TTS_OUTPUT_FORMAT = 'mp3_44100_128';
-/** API-CONTRACT §2.11 (FINDINGS §4 Verification). */
+/** API-CONTRACT §2.11. */
 export const SCRIBE_MODEL_ID = 'scribe_v2';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;

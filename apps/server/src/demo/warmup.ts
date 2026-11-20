@@ -1,5 +1,5 @@
-// POST /v1/demo/warmup (API-CONTRACT §2.17; FINDINGS §3.8 "a Claude warm-up call 10 minutes
-// before the pitch"): touch every external dependency of the demo once, without a bet and
+// POST /v1/demo/warmup (API-CONTRACT §2.17; a warm-up call 10 minutes
+// before the pitch): touch every external dependency of the demo once, without a bet and
 // without moving money, and say how each answered.
 //
 //   judge    one live vision call through deps.providers.llm with the real prompt and the real

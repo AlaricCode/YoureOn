@@ -57,7 +57,7 @@ export async function startAttemptVia<T>(
 export const RECORDING_CAMERA = {
   facing: 'back',
   mode: 'video',
-  /** No audio track: the voice session keeps the mic (FINDINGS §4 Beat 4). */
+  /** No audio track: the voice session keeps the mic. */
   mute: true,
   videoQuality: '720p',
 } as const;
