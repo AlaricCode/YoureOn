@@ -460,7 +460,7 @@ Odds (unequal stakes) are agreed with the §2.19 offer routes; an accepted offer
 **`POST /v1/bets/:bet_id/lock/decline`** (S+P)
 
 - Request: SCHEMAS `PartyDecline`. No Face ID is needed.
-- Allowed until the lock tx is submitted, including after the caller's own authorization.
+- Allowed from `DRAFTING` (the challenger's "Back out" before any terms exist; B has `invite/decline` for that) until the lock tx is submitted, including after the caller's own authorization.
 - Effects:
   - The server sends an `AdvanceNonceAccount` (§6.1, "revoke"), which invalidates every collected signature, and returns the nonce to the pool.
   - State `CANCELLED`, `end_reason='declined'`; events `terms.declined`, `judge.cue DECLINED`.
