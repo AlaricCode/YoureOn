@@ -436,23 +436,9 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       state.phase === 'submitted' ||
       (state.phase === 'failed' && (state.canRetryUpload || state.error === 'no_frames')));
 
-  if (showResult && result) {
-    return (
-      <Screen>
-        <TopBar title={dt(DANCE_COPY.title)} tag={routineDisplayTitle(routine)} />
-        <ScrollView contentContainerStyle={styles.resultBody}>
-          <ResultCard data={resultFromRound(routine, result)} names={names} me={me} />
-          <ResultStatus
-            round={state}
-            ruling={props.ruling}
-            onRetry={() => void upload()}
-            onDanceAgain={danceAgain}
-          />
-        </ScrollView>
-      </Screen>
-    );
-  }
-
+  // (Hooks: everything below up to the result screen's early return must stay ABOVE it. Put after
+  // it, the screen rendered fewer hooks once the result was shown and React threw "Rendered fewer
+  // hooks than expected": the dance off "failed" for a moment after every round.)
   // Both dancers in position and held there: a countdown they can read from where they stand,
   // and the round starts by itself when it runs out (model/round AUTO_START_MS). They are in
   // front of the camera, not at the phone. Anyone leaving the frame ends the count (the round is
@@ -477,6 +463,23 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     if (autoDue) engineStart.current();
   }, [autoDue]);
   const autoCount = autoStartNumeral(autoLeft) ?? (countDone && !autoDue ? 1 : null);
+
+  if (showResult && result) {
+    return (
+      <Screen>
+        <TopBar title={dt(DANCE_COPY.title)} tag={routineDisplayTitle(routine)} />
+        <ScrollView contentContainerStyle={styles.resultBody}>
+          <ResultCard data={resultFromRound(routine, result)} names={names} me={me} />
+          <ResultStatus
+            round={state}
+            ruling={props.ruling}
+            onRetry={() => void upload()}
+            onDanceAgain={danceAgain}
+          />
+        </ScrollView>
+      </Screen>
+    );
+  }
 
   const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
   // The selfie camera's preview is a mirror image; the sample round has no camera to mirror.
