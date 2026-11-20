@@ -128,3 +128,17 @@ describe('recording on its side (landscape)', () => {
     expect(pipeline).toContain('if (size && (tracker !== null || offset !== null)) return;');
   });
 });
+
+describe('DanceOffScreen: hooks and the result screen', () => {
+  it('calls no hook after the early return that shows the result', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../DanceOffScreen.tsx', import.meta.url), 'utf8');
+    const from = src.indexOf('function DanceOffRound(');
+    const early = src.indexOf('if (showResult && result) {', from);
+    const end = src.indexOf('\n}\n', early);
+    expect(from).toBeGreaterThan(0);
+    expect(early).toBeGreaterThan(from);
+    // "Rendered fewer hooks than expected" after every round: the auto-start hooks sat here
+    expect(src.slice(early, end)).not.toMatch(/\buse[A-Z]\w*\(/);
+  });
+});
