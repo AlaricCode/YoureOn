@@ -6,7 +6,9 @@ import { buildMultipart } from '../../net/multipart';
 import {
   buildEvidence,
   capturePlan,
+  ACTION_WINDOW_MS,
   DEFAULT_FRAMES,
+  LEAD_FRAMES,
   encodeSteps,
   fitUnderCap,
   FRAME_MAX_PX,
@@ -26,23 +28,39 @@ const nodeSha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const increasing = (t: number[]) => t.every((x, i) => i === 0 || x > t[i - 1]!);
 
 describe('frame sampling (planning D10)', () => {
-  it('12 frames by default, strictly increasing, inside the clip, 8 in the last 1.2 s', () => {
+  it('12 frames by default, strictly increasing, inside the clip, 9 over the last 2.7 s', () => {
     const t = frameTimesMs(6000);
     expect(DEFAULT_FRAMES).toBe(12);
     expect(t).toHaveLength(12);
     expect(increasing(t)).toBe(true);
     expect(t[0]).toBe(0);
-    expect(t.at(-1)!).toBeLessThan(6000);
-    expect(t.filter((x) => x >= 6000 - 1200)).toHaveLength(8);
-    // the landing frames cluster at the end: 150 ms apart; the lead-in ~1.2 s apart
-    expect(t[11]! - t[10]!).toBe(150);
-    expect(t[1]! - t[0]!).toBeGreaterThan(1000);
+    expect(t.at(-1)!).toBe(6000 - 80);
+    expect(t.filter((x) => x >= 6000 - 80 - ACTION_WINDOW_MS)).toHaveLength(12 - LEAD_FRAMES);
+    // the action window is evenly spaced, no gap wider than ~340 ms
+    const gaps = t.slice(LEAD_FRAMES).map((x, i, a) => (i ? x - a[i - 1]! : 0));
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(340);
   });
 
-  it('a 3 s clip (a quick Stop) still puts 8 frames in its last 1.2 s', () => {
+  it('a throw is in the window even when Stop comes a second or two after it lands', () => {
+    // seen on a device: a 2.9 s clip, the ball released at 1.19 s; a 4.3 s clip, released ~2.3 s.
+    // The shared sampler left a 0.55 s and a 0.9 s gap right after the release.
+    for (const [duration, releaseMs] of [
+      [2867, 1190],
+      [4302, 2300],
+    ] as const) {
+      const t = frameTimesMs(duration);
+      const flight = t.filter((x) => x >= releaseMs && x <= releaseMs + 700);
+      expect(flight.length, `${duration}`).toBeGreaterThanOrEqual(2);
+      const after = t.filter((x) => x > releaseMs + 700);
+      expect(after.length, `${duration}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('a short clip: the window is three quarters of it', () => {
     const t = frameTimesMs(3000);
-    expect(t.filter((x) => x >= 3000 - 1200)).toHaveLength(8);
-    expect(t.filter((x) => x < 3000 - 1200)).toHaveLength(4);
+    const start = 2920 - 2920 * 0.75;
+    expect(t.filter((x) => x >= start)).toHaveLength(9);
+    expect(t.filter((x) => x < start)).toHaveLength(3);
   });
 
   it('clamps the count to 8..12 and survives very short clips', () => {
