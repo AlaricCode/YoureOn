@@ -1,5 +1,6 @@
-// Helpers shared by the terms sink, LockService and the payout service: the Drizzle tx type,
-// bet row locking, bet.state payloads, fan-out to both parties + the bet channel + the stage.
+// Helpers shared by the bet lifecycle (terms, lock, payout, refund, appeal and their callers): the
+// Drizzle tx type, bet row locking, bet.state payloads, fan-out to both parties + the bet channel
+// + the stage.
 import { and, eq, inArray } from 'drizzle-orm';
 import type { ReadonlyUint8Array } from '@solana/kit';
 import { bets, type Db } from '@youre-on/db';
@@ -96,7 +97,10 @@ export function hexBytes(hex: string): Uint8Array {
   return Uint8Array.from(Buffer.from(hex, 'hex'));
 }
 
-/** Tracks fire-and-forget work so tests (and shutdown) can wait for it. */
+/**
+ * Tracks fire-and-forget work so tests, the boot reconcile, POST /v1/demo/sweep and
+ * POST /v1/demo/reset can wait for it. A failure is logged, never thrown.
+ */
 export class Inflight {
   private readonly set = new Set<Promise<unknown>>();
   constructor(private readonly log: AppDeps['log']) {}

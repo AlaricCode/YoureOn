@@ -1,22 +1,13 @@
-// Terms composition and the terms state steps (API-CONTRACT §4.3 propose_terms "Server then",
-// confirm_terms; SCHEMAS §2, §3, §9.2; DATA-MODEL §5.7).
+// Terms composition and the terms state steps. persistEvaluation() stores a proposal (the voice
+// judge's, typed or market terms) as a hashed bet_terms_versions row and snapshots the binding
+// columns and wallets on the bet -> TERMS_PROPOSED (incomplete: terms.draft; refused: CANCELLED).
+// confirmTerms() freezes the latest version -> AWAITING_AUTHORIZATIONS (bets_guard keeps the
+// binding fields frozen from there); the caller then starts the lock.
 //
-//   persistEvaluation()  the real ProposalSink body: compose Terms from the judge's proposal plus
-//                        the server-owned fields, hash, store a bet_terms_versions row, snapshot the
-//                        binding columns + party wallets on the bet, -> TERMS_PROPOSED, push
-//                        terms.proposed. Incomplete proposals push terms.draft (state stays
-//                        DRAFTING); a refusal cancels the bet (terms.refused, judge.cue REFUSED).
-//   confirmTerms()       freeze: the latest version becomes is_final, -> AWAITING_AUTHORIZATIONS
-//                        (the bets_guard trigger freezes the binding fields from here). The
-//                        caller then starts the LockService. requireInviteAccepted: refused
-//                        (INVITE_PENDING + an audit row) until B tapped accept, under the row lock.
+// Gemini bets: the binding quote is taken before the row lock (it may refetch Gemini). The lock's
+// accept_deadline is unix(quotedAt) + 60 s, so confirm re-quotes a stale quote (requoteIfStale).
 //
-// Gemini (real_world) bets (Beat 6): the binding quote is taken when the terms are composed
-// (markets/quote.ts takeBindingQuote, before the row lock: it may refetch Gemini), copied into
-// Terms.market, and stored with the bet (gemini_markets, market_snapshots); a quote Gemini
-// can't give is a terms.draft issue (NO_MARKET / MARKET_UNFAIR / stake). At confirm, a quote
-// older than MARKET_CONFIRM_MAX_AGE_MS is re-quoted as a new version instead of freezing
-// (the lock's accept_deadline is unix(quotedAt) + 60 s, so an old quote could never land).
+// Spec: docs/planning/API-CONTRACT.md §4.3.
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { auditLog, bets, betTermsVersions } from '@youre-on/db';
 import { ACCEPT_WINDOW_SKILL_SECS, QUOTE_TTL_SECS } from '@youre-on/shared/constants';
@@ -60,9 +51,9 @@ import { scheduleCompile } from '../judge/camera-checks';
 import { autoOffer, oddsGate, recordOddsPending } from '../odds/service';
 import { fanout, iso, lockBet, statePayload, type LifecycleDeps, type Tx } from './common';
 
-/** SCHEMAS §2.2: skill deadline default. */
+/** The skill deadline when the proposal names none, in minutes from composing. */
 export const DEFAULT_DEADLINE_MINUTES = 10;
-/** States in which a new proposal may replace the draft (SCHEMAS §9.2). */
+/** States in which a new proposal may replace the draft. */
 const PROPOSABLE: readonly BetState[] = ['DRAFTING', 'TERMS_PROPOSED'];
 
 export interface ComposeInput {
@@ -83,8 +74,8 @@ export function composeTerms(i: ComposeInput) {
   const p = i.proposal;
   const q = i.quote;
   const minutes = p.deadline_minutes ?? DEFAULT_DEADLINE_MINUTES;
-  // Whole-second UTC, rounded to the nearest whole minute (SCHEMAS §2.2); market bets end at
-  // the contract's expiry + 10 min (whole seconds, as the expiry is).
+  // Whole-second UTC, rounded to the nearest whole minute; market bets end at the contract's
+  // expiry + 10 min (whole seconds, as the expiry is).
   const deadline = q
     ? Date.parse(q.ref.expiry) + MARKET_DEADLINE_AFTER_EXPIRY_MS
     : Math.round((i.nowMs + minutes * 60_000) / 60_000) * 60_000;
@@ -147,7 +138,7 @@ export function presentationOf(t: Terms): TermsPresentation {
       party_b_avatar_url: null,
     };
   const even = t.stakes.a === t.stakes.b;
-  // DANCE-OFF §1: the card is titled by the routine ("Dance Off: Wave Pop"), not the long claim.
+  // A dance off's card is titled by the routine ("Dance Off: Wave Pop"), not the long claim.
   const dance = t.type === 'dance_off' ? parseDanceTermsRoutine(t) : null;
   return {
     title: titleOf(dance !== null && dance.ok ? `Dance Off: ${dance.routine.title}` : t.claim),
@@ -170,7 +161,7 @@ export function envelopeOf(canonical: string, termsHash: string): TermsEnvelope 
   return { terms, terms_hash: termsHash, presentation: presentationOf(terms) };
 }
 
-/** "0586·0f0a" (API-CONTRACT §2.7). */
+/** The terms code as shown on the card: the first 8 hex chars of terms_hash, "0586·0f0a". */
 export const displayCode = (termsHash: string): string => {
   const c = termsCode(termsHash);
   return `${c.slice(0, 4)}·${c.slice(4)}`;
@@ -208,7 +199,7 @@ export type PersistResult =
       /** real_world: the binding quote's snapshot row and hash. */
       quote?: { snapshot_id: string; snapshot_sha256: string };
     }
-  /** `refusal`: Gemini could not give the binding quote (the terms.draft carries it as an issue). */
+  /** `refusal`: Gemini could not give the binding quote (terms.draft carries it as an issue). */
   | { kind: 'draft'; refusal?: FairRefusal }
   | { kind: 'refused' }
   | { kind: 'skipped'; reason: string };
@@ -220,8 +211,8 @@ export type PersistResult =
 export type TermsDeps = LifecycleDeps & Partial<Pick<AppDeps, 'markets' | 'providers' | 'sam'>>;
 
 /**
- * The real ProposalSink body (voice/tools.ts `termsSink`, and POST /v1/demo/bets/:id/terms).
- * One transaction; events fan out after COMMIT.
+ * The ProposalSink body (voice/tools.ts `termsSink`), also behind the typed and market terms
+ * routes. One transaction; events fan out after COMMIT.
  */
 export async function persistEvaluation(
   deps: TermsDeps,
@@ -389,10 +380,10 @@ export async function persistInTx(
       stake_b: BigInt(composed.terms.stakes.b),
       evidence_source: composed.terms.evidence_source,
       title: envelope.presentation.title,
-      // DATA-MODEL §5.6: the wallet snapshot = Terms.party_a/b.pubkey (bets_wallet_snapshot).
+      // The wallet snapshot = Terms.party_a/b.pubkey (bets_wallet_snapshot).
       party_a_wallet: composed.terms.party_a.pubkey,
       party_b_wallet: composed.terms.party_b.pubkey,
-      // DATA-MODEL §5.16: Terms.market -> columns (null again if a skill bet replaces it).
+      // Terms.market -> columns (null again if a skill bet replaces it).
       gemini_market_id: stored?.marketId ?? null,
       pricing_snapshot_id: stored?.snapshotId ?? null,
       a_position: market ? (market.side === 'YES' ? 'yes' : 'no') : null,
@@ -520,7 +511,7 @@ export interface ConfirmOptions {
   actor?: 'judge' | 'system' | 'user';
   actorUserId?: string;
   /**
-   * B's consent is B's own tap on the invite (§2.5), never what the judge heard: refuse with
+   * B's consent is B's own tap on the invite, never what the judge heard: refuse with
    * INVITE_PENDING until bet.invite_answered accepted is in the log. Checked here, under the row
    * lock, because the state a caller read before it can be stale (the propose_terms sink may be
    * committing DRAFTING -> TERMS_PROPOSED right then). With LOCK_SIGNER=server a freeze signs
@@ -571,7 +562,7 @@ async function requoteIfStale(
   };
 }
 
-/** confirm_terms step 2: freeze -> AWAITING_AUTHORIZATIONS. The caller starts the lock. */
+/** confirm_terms: freeze -> AWAITING_AUTHORIZATIONS. The caller then starts the lock. */
 export async function confirmTerms(
   deps: TermsDeps,
   betId: string,
@@ -687,10 +678,10 @@ export async function confirmTerms(
   return out.res;
 }
 
-/** The skill accept_deadline argument for a lock built at `nowMs` (SCHEMAS §9.3). */
+/** The skill accept_deadline argument for a lock built at `nowMs`. */
 export const acceptDeadlineFor = (nowMs: number): number =>
   Math.floor(nowMs / 1000) + ACCEPT_WINDOW_SKILL_SECS;
 
-/** The gemini accept_deadline argument: unix(quotedAt) + 60 s (SCHEMAS §8.3, device policy L3). */
+/** The gemini accept_deadline argument: unix(quotedAt) + 60 s (device policy L3 checks it). */
 export const quoteAcceptDeadline = (quotedAt: string): number =>
   Math.floor(Date.parse(quotedAt) / 1000) + QUOTE_TTL_SECS;

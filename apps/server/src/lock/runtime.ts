@@ -1,9 +1,9 @@
-// The chain lifecycle bundle (LockService + PayoutService + RefundService + AppealService over one
-// ChainRuntime) and its
-// per-deps locator. Routes, the voice tools and the keeper tasks call `lifecycleOf(deps)`; it is
-// built lazily from env (SOLANA_DEVNET_RPC + FEE_PAYER_SECRET_KEY, src/chain/tx.ts). Tests and
-// scripts install their own with `installLifecycle(deps, createLifecycle(deps, { runtime }))`
-// (e.g. a LiteSVM-backed ChainClient). No AppDeps field is needed, so no core edit.
+// The chain lifecycle bundle (LockService, PayoutService, RefundService and AppealService over one
+// ChainRuntime, plus the ReviewService) and its per-deps locator. Routes, the voice tools and the
+// keeper tasks call `lifecycleOf(deps)`; it is built lazily from env (SOLANA_DEVNET_RPC +
+// FEE_PAYER_SECRET_KEY, src/chain/tx.ts). Tests and scripts install their own with
+// `installLifecycle(deps, createLifecycle(deps, { runtime }))` (e.g. a LiteSVM-backed ChainClient).
+// The registry is a WeakMap keyed by the deps bag, so AppDeps needs no lifecycle field.
 import type { AppDeps } from '../context';
 import { AppealService, type AppealDeps } from '../appeal/service';
 import { chainRuntimeFromEnv, type ChainRuntime, type SendOptions } from '../chain/tx';
@@ -21,7 +21,7 @@ export interface Lifecycle {
   payout: PayoutService;
   /** timeout_refund of stuck bets, orphan escrow exits (src/payout/refund.ts). */
   refund: RefundService;
-  /** Beat 5: the loser's appeal, the three-vendor panel, resolve_appeal (src/appeal). */
+  /** The loser's appeal, the three-vendor panel, resolve_appeal (src/appeal). */
   appeal: AppealService;
   /** The spoken "check that again": asks the loser's phone to confirm an appeal (src/review). */
   review: ReviewService;
@@ -42,7 +42,7 @@ export interface LifecycleOptions {
   send?: SendOptions;
   /** Arm the finalize setTimeout fast path (default true). */
   timers?: boolean;
-  /** The appeal panel's per-vote budget (default 8 s, API-CONTRACT §7.2); tests shorten it. */
+  /** The appeal panel's per-vote budget (default 8 s, PANEL_VOTE_TIMEOUT_MS); tests shorten it. */
   appealVoteTimeoutMs?: number;
 }
 

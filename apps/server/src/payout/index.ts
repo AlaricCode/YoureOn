@@ -1,6 +1,7 @@
-// Public entry for other slices: the judge calls
+// Public entry for the rest of the server. server.ts points deps.onRuling (the judge, market
+// settlement, call-off and resolve-due call it) at
 //   await createPayoutService(deps).onRuling(betId, ruling)
-// with a decisive or VOID shared `Ruling` / `HearingRuling` (packages/shared ruling.ts,
+// for a decisive or VOID shared `Ruling` / `HearingRuling` (packages/shared ruling.ts,
 // hearing.ts). It returns the process-wide PayoutService of `deps` (lifecycleOf), so the
 // finalize timers and the keeper sweep share one instance.
 import type { LifecycleDeps } from '../lock/common';

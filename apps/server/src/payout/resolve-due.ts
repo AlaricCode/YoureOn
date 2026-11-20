@@ -1,10 +1,11 @@
 // Keeper sweep "resolve-due": the durable backstop of the judge -> payout seam.
 //
 // The judge commits a decisive or VOID ruling, then calls deps.onRuling in-process. If that call
-// fails (an RPC 429 / timeout, a restart between commit and send), nothing else would ever send
-// `resolve` and the bet would sit in JUDGING for good. This sweep finds bets whose latest ruling
-// is decisive / VOID but that never reached RULED (bets.ruling_hash still NULL), and re-runs
-// onRuling, which is idempotent (it adopts a resolve that already landed onchain).
+// fails (an RPC 429 / timeout, a restart between commit and send), nothing else sends `resolve`:
+// the bet would sit in JUDGING until the timeout refund at resolve_deadline, and the winner would
+// never be paid. This sweep finds bets whose latest ruling is decisive / VOID but that never
+// reached RULED (bets.ruling_hash still NULL), and re-runs onRuling, which is idempotent (it
+// adopts a resolve that already landed onchain).
 import { sql } from 'drizzle-orm';
 import { Ruling } from '@youre-on/shared/ruling';
 import type { AppDeps } from '../context';

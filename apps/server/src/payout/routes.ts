@@ -1,8 +1,10 @@
-// GG / concede (API-CONTRACT §2.10):
+// GG / concede:
 //   GET  /v1/bets/:bet_id/concede   (B, loser)  -> 200 SignRequest (kind 'concede')
 //   POST /v1/bets/:bet_id/concede   (S, loser)  -> 202 {status: 'submitted', signature}
-// POST takes SCHEMAS PartySignature. With LOCK_SIGNER=server (custodial demo) the signature
-// fields may be omitted: the server signs as the loser's demo key.
+// POST takes a PartySignature. With LOCK_SIGNER=server (custodial demo) the signature fields may
+// be omitted: the server signs as the loser's demo key.
+//
+// Spec: docs/planning/API-CONTRACT.md §2.10.
 import { PartySignature } from '@youre-on/shared/api';
 import type { RouteModule } from '../context';
 import { readBody } from '../http/body';

@@ -1,31 +1,13 @@
 // RefundService: the permissionless exits the server sends itself, so escrowed money can never sit
-// past its onchain deadline (ESCROW I12, TM-L1 / TM-L2; DATA-MODEL §3.5 BetRefunded).
+// past its onchain deadline: timeout refunds of the bets we track (sweep), exits for Bets no live
+// row owns (sweepOrphans) and the demo reset's void (voidForReset).
 //
-//   sweep(now)         keeper 'timeout-refund' (DB-first). Bets Locked onchain past
-//                      resolve_deadline (judge never ruled: a crash, a lost ruling, a dead LLM) or
-//                      Appealed past appeal_resolve_deadline get [ATA creates, timeout_refund,
-//                      close_bet] from the fee payer. Each side gets its own stake back; the bet
-//                      -> EXPIRED (end_reason resolve_timeout / appeal_timeout, payout_via
-//                      'timeout_refund'), with bet.state + tx.confirmed + judge.cue EXPIRED pushed.
-//                      'sent' refund rows whose in-process confirm is gone are settled first.
-//   sweepOrphans(now)  keeper 'orphan-escrow' (chain-first). Every Bet our fee payer created whose
-//                      bets row is gone (POST /v1/demo/reset deletes rows) or terminal, gets its
-//                      exit once due (timeout_refund / finalize), an Open one is cancelled at once
-//                      by the judge key (cancel_open_bet refunds A), and a terminal one left
-//                      unclosed gets close_bet. Bets owned by a live row are left to the DB paths.
-//   voidForReset(...)  POST /v1/demo/reset: a Locked rehearsal bet gets resolve(Refund) by the judge
-//                      key, so the orphan sweep can finalize it (both stakes back) right after the
-//                      10 s appeal window instead of an hour later at resolve_deadline.
-//
-// Retry safety ("never build a new tx while the old one may land"): a bet with any 'sent'
-// resolve / concede / finalize / timeout_refund row is skipped until that row is settled; a 'sent'
-// refund row is rebuilt only once it is known dead (failed onchain, or the chain is past its
+// Retry safety ("never build a new tx while the old one may land"): a bet with any 'sent' tx that
+// may still move its money (BLOCKING_KINDS) is skipped until that row is settled; a 'sent' refund
+// row is rebuilt only once it is known dead (failed onchain, or the chain is past its
 // lastValidBlockHeight and the signature is still unseen). Orphan exits keep the same rule in
-// memory per Bet PDA. The program itself makes every exit exclusive (I10 half-open windows,
+// memory per Bet PDA. The program itself makes every exit exclusive (half-open deadline windows,
 // InvalidStatus), so a race can cost a fee, never money.
-//
-// Not reachable today: an Open Bet tracked by a live row (the atomic lock never leaves one; the
-// sequential fallback is not implemented). The orphan path covers any Open Bet anyway.
 import {
   and,
   eq,
@@ -207,6 +189,14 @@ export class RefundService {
 
   // ---- DB-first: timeout_refund of bets we track ----------------------------------------------
 
+  /**
+   * Keeper 'timeout-refund': bets Locked onchain past resolve_deadline (the judge never ruled: a
+   * crash, a lost ruling, a dead LLM) or Appealed past appeal_resolve_deadline get [ATA creates,
+   * timeout_refund, close_bet] from the fee payer. Each side gets its own stake back; the bet ->
+   * EXPIRED (resolve_timeout / appeal_timeout). 'sent' refund rows whose confirm is gone are
+   * settled first. No Open Bet is handled here: the atomic lock never leaves one behind a live
+   * row, and the orphan sweep covers any Open Bet.
+   */
   async sweep(nowMs: number): Promise<RefundSweepResult> {
     const out: RefundSweepResult = { refunded: [], pending: [], notDue: [] };
     const rt = await this.o.runtime();
@@ -457,7 +447,7 @@ export class RefundService {
       }
       if (fate !== 'landed') continue; // may still land: never rebuilt meanwhile
       const b = await this.betRow(row.bet_id);
-      // From the DB alone: each side's own stake (ESCROW §6 refund; a donation would add to B).
+      // From the DB alone: each side's own stake (onchain, any donated excess also goes to B).
       const from = b && APPEAL_FAMILY.includes(b.state) ? BetStatus.Appealed : BetStatus.Locked;
       const payout = b ? { to_a: b.stake_a ?? 0n, to_b: b.stake_b ?? 0n } : null;
       await this.settle(
@@ -610,7 +600,12 @@ export class RefundService {
 
   // ---- chain-first: Bets no live row owns ---------------------------------------------------
 
-  /** Keeper 'orphan-escrow': exits for our Bets that no live bets row owns (see the header). */
+  /**
+   * Keeper 'orphan-escrow' (chain-first): every Bet our fee payer created whose bets row is gone
+   * (POST /v1/demo/reset deletes rows) or terminal gets its exit once due (timeout_refund /
+   * finalize); an Open one is cancelled at once by the judge key (cancel_open_bet refunds A), and
+   * a terminal one left unclosed gets close_bet. Bets owned by a live row are left to the DB paths.
+   */
   async sweepOrphans(nowMs: number): Promise<OrphanSummary> {
     const summary: OrphanSummary = {
       at: iso(nowMs),
@@ -773,10 +768,11 @@ export class RefundService {
 
   /**
    * POST /v1/demo/reset, per non-seed bet with a live Bet: make sure its money comes back.
-   * Locked before resolve_deadline -> resolve(Refund) signed by the judge key (the orphan sweep
-   * finalizes it after the appeal window: each side gets its own stake); anything already due ->
-   * that exit now; Open -> cancel_open_bet. Returns what it did (null: nothing to do yet, e.g.
-   * Resolved or Appealed inside its window: the orphan sweep finishes it).
+   * Locked before resolve_deadline -> resolve(Refund) signed by the judge key, so the orphan sweep
+   * finalizes it right after the 10 s appeal window instead of an hour later at resolve_deadline
+   * (each side gets its own stake); anything already due -> that exit now; Open ->
+   * cancel_open_bet. Returns what it did (null: nothing to do yet, e.g. Resolved or Appealed
+   * inside its window: the orphan sweep finishes it).
    */
   async voidForReset(
     rt: ChainRuntime,

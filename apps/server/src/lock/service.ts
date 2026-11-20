@@ -1,31 +1,13 @@
-// LockService (ESCROW §5.0.1, API-CONTRACT §2.8, DATA-MODEL §5.8 / §5.20 / §8.1, SCHEMAS §9.4).
-//
-// The atomic lock is ONE server-built transaction on a leased durable nonce:
-//   [AdvanceNonceAccount, SetComputeUnitLimit, create_bet, accept_bet]     (packages/shared lock-tx)
+// LockService: the atomic lock is ONE server-built transaction on a leased durable nonce:
+//   [AdvanceNonceAccount, SetComputeUnitLimit, create_bet, accept_bet]   (packages/shared lock-tx)
 // built and simulated once at confirm_terms, stored as exact message bytes in chain_txs, and sent
 // once with preflight ON when the second party signature arrives.
 //
-// LOCK_SIGNER (env):
-//   'phones'  API-CONTRACT §2.8: both phones get the same AuthorizeRequest (terms.authorize_request
-//             + GET /lock), sign the stored bytes after hold + Face ID, POST /lock/authorizations.
-//   'server'  custodial demo path (D-A): right after the build the server signs the stored bytes
-//             as demo-a and demo-b (DEMO_A/B_SECRET_KEY, which must equal the Terms pubkeys) and
-//             feeds both signatures through the SAME recordSignature path. CHECK-compatibility
-//             (bets_locked_authorized, bets_auth_pairs): a_/b_authorized_at = server time,
-//             a_/b_authorization_method = 'faceid_hold' (the enum has no custodial value),
-//             a_/b_authorized_device_at = NULL (no device: that NULL marks a custodial row), and an
-//             audit_log 'lock.custodial_signed' row per party.
+// LOCK_SIGNER=phones: both phones get the same AuthorizeRequest (terms.authorize_request +
+// GET /lock), sign the stored bytes after hold + Face ID and POST /lock/authorizations.
+// LOCK_SIGNER=server (custodial demo): the server signs both sides itself (custodialSign).
 //
-// Gemini bets (Beat 6): the lock's accept_deadline is unix(Terms.market.quotedAt) + 60 s (SCHEMAS
-// §8.3; the phones' device policy L3 checks exactly this), so a quote too old to lock is EXPIRED
-// (quote_expired) before a nonce is leased; at landing the bet goes LOCKED -> AWAITING_MARKET in
-// the same transaction (markets/settlement.ts) and the settlement keeper takes over.
-//
-// Projector compatibility (chain/projector.ts betsColumnLockSignatures): at the lock's own RPC
-// `confirmed` the bet gets onchain_pending='locked' + pending_sig=<lock signature> (bets_pending_pair).
-// Later server txs (resolve, payout) do NOT overwrite them, so the stub projector keeps attributing
-// every later event of the bet to our lock (see lockSignaturesFromChainTxs for the chain_txs-based
-// lookup a full projector should switch to).
+// Spec: docs/planning/ESCROW-PROGRAM.md §5.0.1.
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   address,
@@ -154,7 +136,7 @@ export class LockService {
     return this.o.deps;
   }
 
-  // ---- build (confirm_terms step 2) -------------------------------------------------------
+  // ---- build (after confirm_terms) --------------------------------------------------------
 
   /** start() off the request path (confirm_terms answers the judge first). */
   startInBackground(betId: string): void {
@@ -221,7 +203,7 @@ export class LockService {
       if (!final || final.envelope.terms_hash !== bet.terms_hash)
         throw new HttpError('TERMS_NOT_FINAL');
       const terms = final.envelope.terms;
-      // Gemini: the quote's TTL is the lock window (SCHEMAS §8.3); skill: build time + 300 s.
+      // Gemini: the quote's TTL is the lock window; skill: build time + 300 s.
       const acceptDeadline = terms.market
         ? quoteAcceptDeadline(terms.market.quotedAt)
         : acceptDeadlineFor(now);
@@ -234,7 +216,7 @@ export class LockService {
       // DEMO_MODE: a stranger's bets must not hold the pool hostage (5 nonces, 300 s leases).
       if (this.deps.env.DEMO_MODE) await this.assertNonceShare(tx, rt, bet);
 
-      // 1. lease the least-recently-advanced free nonce (DATA-MODEL §5.20 "Allocate").
+      // 1. lease the least-recently-advanced free nonce.
       const [nonce] = await tx
         .select()
         .from(noncePool)
@@ -401,7 +383,14 @@ export class LockService {
     };
   }
 
-  /** LOCK_SIGNER=server: sign the stored bytes as demo-a and demo-b (see the header). */
+  /**
+   * LOCK_SIGNER=server: right after the build, sign the stored bytes as demo-a and demo-b
+   * (DEMO_A/B_SECRET_KEY, which must equal the Terms pubkeys) and feed both signatures through the
+   * SAME recordSignature path. To pass the CHECKs (bets_locked_authorized, bets_auth_pairs):
+   * a_/b_authorized_at = server time, a_/b_authorization_method = 'faceid_hold' (the enum has no
+   * custodial value), a_/b_authorized_device_at = NULL (no device: that NULL marks a custodial
+   * row), and an audit_log 'lock.custodial_signed' row per party.
+   */
   private async custodialSign(rt: ChainRuntime, betId: string, lockId: string): Promise<void> {
     const { demoA, demoB } = rt.keys;
     const [row] = await this.deps.db
@@ -487,7 +476,7 @@ export class LockService {
 
   // ---- authorizations ---------------------------------------------------------------------
 
-  /** POST /v1/bets/:id/lock/authorizations (API-CONTRACT §2.8 server steps 1-7). */
+  /** POST /v1/bets/:id/lock/authorizations. */
   async authorize(
     betId: string,
     userId: string,
@@ -788,10 +777,10 @@ export class LockService {
         })
         .where(eq(chainTxs.id, lockId));
       await this.releaseNonce(tx, lockId, fresh?.value ?? null, now);
-      // The chain wins (DATA-MODEL §8.3): a lock that landed after the bet was expired or
-      // lock_failed still moved both stakes, so the bet is LOCKED. bets_guard only lets a
-      // terminal row move when onchain_status is locked or later in the same UPDATE, so this
-      // path writes it (the landed atomic lock is exactly that status).
+      // The chain wins: a lock that landed after the bet was expired or lock_failed still moved
+      // both stakes, so the bet is LOCKED. bets_guard only lets a terminal row move when
+      // onchain_status is locked..settled in the same UPDATE, so this path writes it (the landed
+      // atomic lock is exactly that status).
       const revived =
         (bet.state === 'EXPIRED' &&
           (bet.end_reason === 'accept_timeout' || bet.end_reason === 'quote_expired')) ||
@@ -803,6 +792,8 @@ export class LockService {
         .update(bets)
         .set({
           state: 'LOCKED',
+          // Our RPC ack (chain_ack 'rpc') until the projector applies the lock (from the Stream or
+          // an rpc_poll copy) and clears both.
           onchain_pending: 'locked',
           pending_sig: signature,
           ...(revived
@@ -860,7 +851,7 @@ export class LockService {
           now,
         }),
       ];
-      // Gemini (Beat 6): straight on to AWAITING_MARKET in this same commit.
+      // Gemini: straight on to AWAITING_MARKET in this same commit.
       if (market && final)
         envs.push(...(await enterAwaitingMarket(tx, betId, final.envelope.terms, now)));
       return { bet, envs, terms: market && final ? final.envelope.terms : null };
@@ -884,7 +875,7 @@ export class LockService {
       .limit(1);
     if (!n) return;
     if (!value) {
-      // Unknown value: keep it out of rotation until the sweep re-reads it.
+      // Unknown value: out of rotation (retired) until POST /v1/demo/reset re-reads the pool.
       await tx
         .update(noncePool)
         .set({
@@ -1004,9 +995,9 @@ export class LockService {
       const bet = await lockBet(tx, betId);
       if (!bet) throw new HttpError('NOT_FOUND');
       if (bet.state === 'CANCELLED' && bet.end_reason === 'declined') return null; // idempotent
-      // DRAFTING too: the challenger's "Back out" before any terms exist. Without it A's phone
-      // could only leave the screen, and the bet stayed open on B's phone and refused a new
-      // challenge between the two (pair_busy) until the draft idled out. B has invite/decline.
+      // DRAFTING too: the challenger's "Back out" before any terms exist ends the bet, so the
+      // draft does not stay open on B's phone, blocking a new challenge between the two
+      // (pair_busy) until it idles out. B has invite/decline.
       if (!['DRAFTING', 'TERMS_PROPOSED', 'AWAITING_AUTHORIZATIONS'].includes(bet.state))
         throw new HttpError('INVALID_STATE', undefined, { state: bet.state });
       const row = await this.currentLock(tx, betId, true);
@@ -1197,8 +1188,8 @@ export class LockService {
       // Unseen and its confirm loop is gone (it timed out, or the server restarted, maybe
       // before the first send): re-broadcast the exact signed bytes. A durable-nonce tx is
       // valid until accept_deadline and can land at most once (its ix 0 advances the nonce),
-      // so this is always safe; the next pass sees the status. Not in the last seconds before expires_at, so a re-send
-      // never races the expire + revoke below.
+      // so this is always safe; the next pass sees the status. Not in the last seconds before
+      // expires_at, so a re-send never races the expire + revoke below.
       if (!st && row.expires_at && nowMs < row.expires_at.getTime() - LOCK_RESEND_STOP_MS)
         await this.rebroadcastLock(rt, row);
       return;
@@ -1373,9 +1364,9 @@ export class LockService {
     );
     // ed25519 is deterministic: the re-signed fee payer signature is the stored tx id.
     if (sigString(full.signatures[rt.keys.feePayer.address]!) !== row.signature) return;
-    // Preflight stays ON (TM-N4: a doomed lock is rejected for free instead of burning the
-    // nonce). A rejection here (already processed, nonce moved, deadline) changes nothing: the
-    // status poll and the expires_at path below decide the lock's fate.
+    // Preflight stays ON: a doomed lock is rejected for free instead of burning the nonce. A
+    // rejection here (already processed, nonce moved, deadline) changes nothing: the sweep's
+    // status poll and its expires_at path decide the lock's fate.
     await rt.client
       .send(wireOf(full), false)
       .then(() => this.deps.log.info('lock.rebroadcast', { bet_id: row.bet_id }))
@@ -1410,7 +1401,7 @@ export class LockService {
 
   /**
    * built/signed (or sent, fate unknown) at expires_at -> EXPIRED (accept_timeout; gemini:
-   * quote_expired, SCHEMAS §8.3). `lockId` null: a gemini quote too old to build a lock for.
+   * quote_expired). `lockId` null: a gemini quote too old to build a lock for.
    */
   private async expire(betId: string, lockId: string | null, nowMs: number): Promise<boolean> {
     const out = await this.deps.db.transaction(async (tx) => {
@@ -1511,11 +1502,7 @@ export async function syncNoncePool(
   return n;
 }
 
-/**
- * chain_txs-based lock-signature lookup (DATA-MODEL §8.2 step 2) for chain/projector.ts: the
- * signature of the bet's confirmed or sent atomic_lock. Swap it in for betsColumnLockSignatures
- * once a full projector clears onchain_pending.
- */
+/** bet_id -> the signature of its sent or confirmed atomic_lock, read from chain_txs. */
 export async function lockSignaturesFromChainTxs(
   tx: Pick<Tx, 'select'>,
   betIds: readonly string[],

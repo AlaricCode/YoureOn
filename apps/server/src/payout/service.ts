@@ -1,32 +1,13 @@
-// Payout service (beats 3-4 money out): resolve -> RULED, then GG (concede) or finalize after the
-// appeal window, each bundled with close_bet -> PAID / VOIDED (ESCROW §5.2, SCHEMAS §9.2,
-// API-CONTRACT §2.10, scripts/smoke-devnet.ts + scripts/lib/crank.ts ported).
-//
-//   onRuling(betId, ruling)  the judge slice calls exactly this with a decisive or VOID shared
-//                            `Ruling` (attempt/settlement) or `HearingRuling`. Builds
-//                            [ComputeBudget, resolve] signed by judge_authority + fee payer with
-//                            evidence_hash = ruling.evidence_hash and ruling_hash = sha256(JCS(ruling)),
-//                            waits for `confirmed`, sets RULED, pushes bet.state (reason carries
-//                            appeal_deadline) and the loser's concede tx.sign_request, and arms the
-//                            finalize fast path (setTimeout at appeal_deadline + 1 s). REDO throws.
-//   finalizeDue(now)         keeper sweep (DB-first): reconcile() first (settles 'sent' resolve /
-//                            concede / finalize rows whose confirm timed out or died with a
-//                            restart), then every RULED bet past appeal_deadline + 1 s.
-//   concedeRequest / concede GET / POST /v1/bets/:id/concede (the loser signs on the phone;
-//                            LOCK_SIGNER=server signs as the demo key). GG and the appeal are
-//                            mutually exclusive: once the loser's appeal is signed / out, GET and
-//                            POST answer STATE_MOVED_ON {reason:'appeal_in_flight'} (checked under
-//                            the bet lock, as the appeal checks RULED under it).
+// PayoutService: money out after a ruling. onRuling() sends `resolve` and moves the bet to RULED;
+// then the loser's GG (concede) or finalize after the appeal window pays out, each bundled with
+// close_bet. finalizeDue() (keeper) settles what a confirm timeout or a restart left behind, then
+// finalizes every due RULED bet.
 //
 // The program emits no BetPaid: money moves in BetFinalized / BetConceded (then BetClosed). Our own
 // RPC `confirmed` of the payout tx moves the bet to PAID / VOIDED and pushes judge.cue PAID with
 // the amounts (computed with the shared `payout()` rule over the deposited stakes).
 //
-// Columns written here that DATA-MODEL §8.1 lists as projector-owned: outcome, evidence_hash,
-// ruling_hash, resolve_deadline, appeal_deadline (read back from the Bet account at our own
-// `confirmed`; the same values BetResolved carries). The stub projector writes none of them, and
-// the finalize sweep needs appeal_deadline in Postgres. onchain_pending / pending_sig keep the
-// lock's values (see lock/service.ts header).
+// Spec: docs/planning/API-CONTRACT.md §6.1.
 import { and, desc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
 import {
   createNoopSigner,
@@ -107,7 +88,7 @@ import {
 import { loadEnvelope } from '../lock/terms';
 import { txFromStored } from '../lock/service';
 
-/** A ruling the judge slice hands over: SCHEMAS Ruling (attempt / settlement) or HearingRuling. */
+/** A ruling handed to onRuling: the shared Ruling (attempt / settlement) or a HearingRuling. */
 export const PayoutRuling = z.union([Ruling, HearingRuling]);
 export type PayoutRuling = z.infer<typeof PayoutRuling>;
 
@@ -119,9 +100,9 @@ export const RESOLVABLE_STATES: readonly BetState[] = [
   'HEARING',
   'AWAITING_MARKET',
 ];
-/** SCHEMAS §9.2: the server finalizes at appeal_deadline + 1 s. */
+/** The server finalizes at appeal_deadline + 1 s. */
 export const FINALIZE_DELAY_MS = 1_000;
-/** API-CONTRACT §2.10: rebuild a concede message older than this (unsigned). */
+/** An unsigned concede message older than this is rebuilt. */
 export const CONCEDE_REBUILD_MS = 20_000;
 /** A recent blockhash lives ~60 s on devnet; the sign request stops a bit earlier. */
 export const SIGN_REQUEST_TTL_MS = 50_000;
@@ -208,6 +189,11 @@ export class PayoutService {
 
   // ---- resolve ----------------------------------------------------------------------------
 
+  /**
+   * deps.onRuling's target: a decisive or VOID ruling -> `resolve` (signed by judge_authority +
+   * fee payer, ruling_hash = sha256(JCS(ruling))) -> RULED. Idempotent: a resolve that already
+   * landed is adopted. REDO throws (it never goes onchain).
+   */
   async onRuling(betId: string, input: Ruling | HearingRuling): Promise<RuledResult> {
     try {
       return await this.resolveOnce(betId, input);
@@ -452,7 +438,7 @@ export class PayoutService {
     );
   }
 
-  /** Adopts a resolve found onchain (values from the Bet account): -> RULED as if we confirmed it. */
+  /** Adopts a resolve found onchain (values from the Bet account): RULED as if we confirmed it. */
   private async adoptResolved(
     rt: ChainRuntime,
     betId: string,
@@ -493,7 +479,9 @@ export class PayoutService {
   /**
    * The confirmed resolve -> RULED (reason carries appeal_deadline), then the loser's GG prompt
    * and the finalize fast path. No state change when the bet is no longer resolvable (e.g. a
-   * concurrent adopt already ruled it).
+   * concurrent adopt already ruled it). The write also sets outcome, evidence_hash, ruling_hash and
+   * the deadlines (the projector writes the same values from BetAccepted / BetResolved): finalize
+   * needs appeal_deadline in Postgres without waiting for the Stream.
    *
    * The chain may get there first: the projector's chain-wins rule (the Stream, or rpc_poll a few
    * seconds after the send) moves the bet to RULED with this ruling before our own confirm
@@ -594,7 +582,7 @@ export class PayoutService {
     });
 
     // The loser's GG prompt (decisive outcomes only), off the ruling's path, with the appeal
-    // request beside it (API-CONTRACT §3.4: "concede + appeal, loser"; camera bets only).
+    // request beside it when the bet can be appealed (appealRequest decides).
     if (this.o.signer === 'phones' && (outcome === 'PartyA' || outcome === 'PartyB')) {
       const loser: Party = outcome === 'PartyA' ? 'B' : 'A';
       this.o.inflight.run('payout.sign_request', async () => {
@@ -636,7 +624,10 @@ export class PayoutService {
     this.timers.set(betId, t);
   }
 
-  /** Keeper: every RULED bet past appeal_deadline + 1 s. */
+  /**
+   * Keeper: reconcile() and reconcileStranded() first, then finalize every RULED bet past
+   * appeal_deadline + 1 s.
+   */
   async finalizeDue(nowMs: number): Promise<string[]> {
     const rt = await this.o.runtime();
     if (!rt) return [];
@@ -674,7 +665,10 @@ export class PayoutService {
     return out;
   }
 
-  /** [ComputeBudget, (ATA creates), finalize, close_bet], fee payer only. Retries on AppealWindowOpen. */
+  /**
+   * [ComputeBudget, (ATA creates), finalize, close_bet], fee payer only. Re-armed 1 s later while
+   * the chain's appeal window is still open (AppealWindowOpen).
+   */
   async finalize(betId: string): Promise<'paid' | 'not_due' | 'skipped' | 'failed' | 'pending'> {
     if (this.finalizing.has(betId)) return 'skipped';
     this.finalizing.add(betId);
@@ -894,8 +888,8 @@ export class PayoutService {
         me: loser,
         appeal_deadline: appealEndSecs,
       }),
-      // T2: the phone compares this with the outcome of the ruling.issued it verified, so it is
-      // the offchain RulingOutcome (A_WINS / B_WINS), not the onchain enum name.
+      // The phone (device policy T2) compares this with the outcome of the ruling.issued it
+      // verified, so it is the offchain RulingOutcome (A_WINS / B_WINS), not the onchain enum name.
       ruling_ref: {
         ruling_hash: bet.ruling_hash!,
         outcome: bet.outcome === 'party_a' ? 'A_WINS' : 'B_WINS',
@@ -1203,7 +1197,7 @@ export class PayoutService {
       if (!landed && !dead) continue; // still in flight
       const onchain = await readBetAccount(rt, row.bet_id);
       if (kind === 'resolve') {
-        // Only judge_authority can resolve: a Resolved Bet is our ruling (this row or an earlier one).
+        // Only judge_authority resolves: a Resolved Bet is our ruling (this row or an earlier one).
         if (onchain?.status === BetStatus.Resolved)
           await this.adoptResolved(rt, row.bet_id, onchain, row);
         await this.deps.db
@@ -1496,7 +1490,7 @@ export class PayoutService {
 /**
  * How a decisive payout came about (the GG moment): the loser's GG (`gg`, with the pair's record
  * after this bet), or the clock (`timeout`, with how a spoken review ended, if one was asked).
- * resolve_appeal passes none: its wording is unchanged.
+ * resolve_appeal passes none: its cue is the plain congratulation.
  */
 export interface PayoutCueContext {
   via: PayoutVia;
@@ -1509,8 +1503,8 @@ export interface PayoutCueContext {
  * `[EVENT] PAID winner=Jake amount=$10 … :: Congratulate Jake in one line.` With `ctx` (concede /
  * finalize of a decisive ruling) the line says how: `… via=gg loser=Logan record="Logan 4-6 Jake"
  * :: Logan said GG. Praise the sportsmanship in one short line, then congratulate Jake.`, or
- * `… via=timeout loser=Logan :: No GG from Logan; the clock ran out. …`. Without `ctx` the line
- * is byte-identical to the original one.
+ * `… via=timeout loser=Logan :: No GG from Logan; the clock ran out. …`. Without `ctx` (or with
+ * via=appeal) it is the plain congratulation above.
  */
 export function payoutCue(
   outcome: OnchainOutcome,
@@ -1564,7 +1558,7 @@ export function payoutCue(
 const appealInFlight = sql`EXISTS (SELECT 1 FROM ${chainTxs} t WHERE t.bet_id = ${bets.id}
   AND t.kind = 'appeal' AND t.status IN ('signed','sent'))`;
 
-/** Is the loser's `appeal` signed / out (src/appeal)? finalize waits for its fate; GG is refused. */
+/** Is the loser's `appeal` signed / out (src/appeal)? Then finalize waits and GG is refused. */
 async function appealOut(db: Pick<Tx, 'select'>, betId: string): Promise<boolean> {
   const [row] = await db
     .select({ id: chainTxs.id })
@@ -1592,7 +1586,7 @@ async function noAppealOutOrThrow(db: Pick<Tx, 'select'>, betId: string): Promis
     });
 }
 
-/** One in-flight tx per (bet, kind) (chain_txs_inflight_uq): retire a stale one before a new build. */
+/** chain_txs_inflight_uq allows one in-flight tx per (bet, kind): retire a stale one first. */
 async function expireInflight(tx: Tx, betId: string, kind: 'resolve' | 'concede' | 'finalize') {
   await tx
     .update(chainTxs)
