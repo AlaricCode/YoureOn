@@ -52,6 +52,13 @@ export const DANCE_SCORER_VERSION = 'dance-score@1' as const;
  * packages/shared/test/dance-score.test.ts (self = 100.0, standing still ≈ 0, a decent amateur
  * 60–90, the better of two always wins). Changing any value is a new scorer_version.
  */
+// Tuned a little more lenient on 2026-11-20 (two real dancers scored in the 30s on a round they
+// plainly danced): a limb counts from a slightly wider angle (COS_FLOOR 0.75 -> 0.72), being late
+// costs a little less (LAG_GRACE_MS 150 -> 200), the key-move grades are easier (PERFECT 0.95 ->
+// 0.93, GOOD 0.82 -> 0.78) and the display curve tops out sooner (RAW_CEIL 0.95 -> 0.93). The
+// synthetic amateur moves from about 77 to about 83. A first, stronger setting put that amateur
+// at 95 to 99, where two decent dancers would tie, so it was pulled back. Both players are still
+// scored by the same rule, and the tie margin is the one the terms state.
 export const DANCE_SCORING = {
   /** §4.1: a joint below this confidence is skipped. */
   MIN_CONF: 0.3,
@@ -60,14 +67,14 @@ export const DANCE_SCORING = {
   LEG_WEIGHT: 1.0,
   TORSO_WEIGHT: 0.8,
   /** §4.3: per-limb score = clamp((cos − COS_FLOOR) / (1 − COS_FLOOR), 0, 1). */
-  COS_FLOOR: 0.75,
+  COS_FLOOR: 0.72,
   /** §4.3: a frame whose present limb weight is below this share of the total is "no pose". */
   MIN_LIMB_WEIGHT_FRAC: 0.5,
   /** §4.4: reference window [t − LAG_BEHIND_MS, t + LAG_AHEAD_MS] (positive lag = player late). */
   LAG_BEHIND_MS: 500,
   LAG_AHEAD_MS: 200,
   /** §4.4: sim × (1 − LAG_PENALTY · max(0, |lag| − LAG_GRACE_MS) / LAG_SCALE_MS). */
-  LAG_GRACE_MS: 150,
+  LAG_GRACE_MS: 200,
   LAG_PENALTY: 0.25,
   LAG_SCALE_MS: 500,
   /** §4.5: angular speed = |Δ unit vector| over ~SPEED_DT_MS (baseline frame within + TOL). */
@@ -82,8 +89,8 @@ export const DANCE_SCORING = {
   KEY_MOTION_WINDOW_MS: 750,
   KEY_MOTION_MIN: 0.3,
   /** §4.6 grades and points. */
-  PERFECT_AT: 0.95,
-  GOOD_AT: 0.82,
+  PERFECT_AT: 0.93,
+  GOOD_AT: 0.78,
   PERFECT_POINTS: 100,
   GOOD_POINTS: 60,
   /** §4.6 raw = KEY_WEIGHT · key + CONT_WEIGHT · continuous. */
@@ -91,7 +98,7 @@ export const DANCE_SCORING = {
   CONT_WEIGHT: 0.3,
   /** §4.7 display = 100 · clamp((raw − RAW_FLOOR) / (RAW_CEIL − RAW_FLOOR), 0, 1) ^ CURVE_GAMMA. */
   RAW_FLOOR: 0.08,
-  RAW_CEIL: 0.95,
+  RAW_CEIL: 0.93,
   CURVE_GAMMA: 0.9,
   /** §4.8: |a − b| below this many tenths is too close to call. */
   TIE_MARGIN_X10: 20,

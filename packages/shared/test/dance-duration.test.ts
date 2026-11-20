@@ -55,23 +55,25 @@ function danceTerms(r: RoutineData, stake = '5000000') {
 }
 
 /**
- * Pinned on main BEFORE the round length became per routine (every routine was a literal 15 s).
+ * Pinned on main BEFORE the round length became per routine (every routine was a literal 15 s),
+ * and re-pinned on 2026-11-20 when the scoring was made a little more lenient (DANCE_SCORING:
+ * the synthetic amateur went from about 77 to about 83). The routine hashes did not change.
  * Each value is sha256(JSON.stringify(scoreRound(...))) over seeded synthetic players.
  */
 const BASELINE = {
   'wave-pop': {
     sha: '812f15c411edd6269364f0af6b5d25cacba42a2ca953b33fc69c24275d26e454',
-    self: '8135b6d8dff96345e1e66efe68ea27916c56b6ef818d80c304756b849afbf2b6',
-    amateur_vs_still: 'd509156861526880d2d43811d424966c0d2c968203be686df3b08035e95623ec',
-    half_vs_amateur: 'e335856effc5e015a792ba44aa69113a01e802796714ce8c0be7198aedf2be1d',
-    scores: [775, 0, 527, 826, 'coverage_a'],
+    self: '2b76e95b18d11f8e4574cb33d16c13f78cb22730e817fbc72fbf5394d005a203',
+    amateur_vs_still: '3afb8fb92d1eb9e4e5188bdc4d3b6281f43e8c293193ee88c43cc643c2502c2c',
+    half_vs_amateur: '8c48350c91111f1041c5a127c004342934c4f9679203b87ae144df637daa742b',
+    scores: [830, 0, 540, 875, 'coverage_a'],
   },
   'bounce-back': {
     sha: '7cfedcae2fd032a0e490209d4244f212a047ea3fe179929602bab672e0b86fd1',
-    self: '5dda5f3b1525bb2e25a46b1234558ae29fb8e4a57bd4175593e89ee3f33368d5',
-    amateur_vs_still: '4f85d29ebd4ab9381ec2d3b040a2d62b00fc813bc1746f082bcf6f9c753f2dda',
-    half_vs_amateur: 'f8e1e5f3b51ab4d572b1b546aede94917cd49a25d74a82bfe16fe026dfd426f3',
-    scores: [737, 0, 495, 799, 'coverage_a'],
+    self: '9c8bc17ce4390a5d862772df3a4266b0f08781dee507885f2fb5d845e08b226a',
+    amateur_vs_still: '842e65adb7e0487bec56be40b66e2dae2e324e87648c21c029bdf03ae588d5ac',
+    half_vs_amateur: '505a0fffd669e0a6c8c461bcd59f549d73449d277d6da60dba676250a58ecdcd',
+    scores: [798, 0, 529, 872, 'coverage_a'],
   },
 } as const;
 
