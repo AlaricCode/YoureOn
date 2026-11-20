@@ -13,6 +13,7 @@ import {
 } from '../../bets/store';
 import { rulingFooter, type MyResult } from '../../bets/view';
 import {
+  appealReturns,
   appReducer,
   initialApp,
   isOver,
@@ -539,5 +540,35 @@ describe('app event exhaustiveness', () => {
     expect(m.my_party).toBe('A');
     expect(selectRoute(s, m)).toBe('judgeCam');
     expect(selectRoute(s, fromSnapshot(snapshot({ state: 'PAID' })))).toBe('payout');
+  });
+});
+
+describe('a VOID ruling left with Back home, then appealed', () => {
+  it('comes back on screen for the panel, unless a live bet holds it or it already showed', () => {
+    const appealed = fromSnapshot(snapshot({ state: 'APPEALED' }));
+    // Back home on the VOID ruling (RULED): no bet on screen, the appeal brings it back.
+    expect(appealReturns('RULED', appealed, null)).toBe(true);
+    let s = appReducer(signedIn(), { type: 'bet_opened', bet_id: BET });
+    s = appReducer(s, { type: 'bet_dismissed' });
+    s = appReducer(s, { type: 'bet_opened', bet_id: BET }, () => appealed);
+    expect(s.activeBetId).toBe(BET);
+    expect(selectRoute(s, appealed)).toBe('appeal');
+    // Still on screen (the phone never left), a replayed APPEALED, or not my bet: nothing to do.
+    expect(appealReturns('RULED', appealed, BET)).toBe(false);
+    expect(appealReturns('APPEALED', appealed, null)).toBe(false);
+    expect(appealReturns('RULED', { ...appealed, my_party: null }, null)).toBe(false);
+    expect(appealReturns('RULED', fromSnapshot(snapshot({ state: 'VOIDED' })), null)).toBe(false);
+  });
+
+  it('a live bet on screen keeps its place (bet_opened waits behind it)', () => {
+    const other = '00000000-0000-4000-8000-0000000000ff';
+    const live = { ...fromSnapshot(snapshot({ state: 'DRAFTING' })), bet_id: other };
+    const appealed = fromSnapshot(snapshot({ state: 'APPEALED' }));
+    expect(appealReturns('RULED', appealed, other)).toBe(true);
+    let s = appReducer(signedIn(), { type: 'bet_opened', bet_id: other });
+    s = appReducer(s, { type: 'bet_opened', bet_id: BET }, (id) =>
+      id === other ? live : appealed,
+    );
+    expect(s.activeBetId).toBe(other);
   });
 });
