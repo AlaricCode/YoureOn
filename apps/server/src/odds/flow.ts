@@ -1,6 +1,7 @@
-// The odds route bodies (API-CONTRACT §2.19): offer / accept / withdraw, each one transaction under
-// the bet row lock (rules R1–R8 in ./service.ts). Kept apart from ./service.ts, which
-// lock/terms.ts imports, because accepting can recompose the card through lock/terms.ts.
+// The odds route bodies: offer / accept / withdraw, each one transaction under the bet row lock
+// (rules R1–R8 in ./service.ts). Kept apart from ./service.ts, which lock/terms.ts imports,
+// because accepting can recompose the card through lock/terms.ts.
+// Spec: docs/planning/API-CONTRACT.md §2.19.
 import { formatUsd, parseUsd } from '@youre-on/shared/money';
 import {
   oddsReducer,
@@ -279,7 +280,10 @@ export async function acceptOdds(
   return { offer: out.offer, agreed: out.agreed, terms_hash: out.termsHash };
 }
 
-/** POST /v1/bets/:bet_id/odds/:offer_id/withdraw — the author's own offer (either party may dismiss the judge's). */
+/**
+ * POST /v1/bets/:bet_id/odds/:offer_id/withdraw — the author's own offer (either party may
+ * dismiss the judge's).
+ */
 export async function withdrawOdds(
   deps: AppDeps,
   bet0: BetRow,

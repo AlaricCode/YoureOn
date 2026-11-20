@@ -1,4 +1,4 @@
-// "Judge, what odds are fair?" (API-CONTRACT §2.19 POST /v1/bets/:id/odds/suggest, §4.3
+// "Judge, what odds are fair?" (POST /v1/bets/:id/odds/suggest and the voice judge's
 // suggest_odds). The judge's odds, grounded in the performer's own record:
 //
 //   1. the bet as it stands (the card in TERMS_PROPOSED; the typed / spoken claim in DRAFTING)
@@ -12,6 +12,7 @@
 //   6. the suggestion lands as a judge OFFER (odds.offered from 'judge'): both still Accept and
 //      confirm with Face ID. Cached per (bet, card or draft claim, base, stats) for 10 minutes;
 //      asking again while that judge offer is open returns it without a new event.
+// Spec: docs/planning/API-CONTRACT.md §2.19.
 import {
   CATEGORY_BASE_RATE,
   CATEGORY_LABEL,

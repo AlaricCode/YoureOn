@@ -1,10 +1,11 @@
 // The pair's head-to-head record in party terms (A = this bet's challenger), for the GG moment
 // (packages/shared/src/gg.ts PairRecord). Counts come from face/service.ts headToHead (A's view:
-// chain-confirmed settlements plus labelled is_seed history, DATA-MODEL §7.1); the streak from the
-// pair's latest settled outcomes. A bet being conceded is not 'settled' yet (the projector writes
-// that after the payout confirms), so this is the record BEFORE the bet: recordAfter() adds it.
-//
-// After the feat/rivalry-scan merge, h2h carries its own streak: use that instead of pairStreak().
+// chain-confirmed settlements plus labelled is_seed history); the streak from the pair's latest
+// settled outcomes. A bet being conceded is not 'settled' yet (the projector writes that after
+// the payout confirms), so this is the record BEFORE the bet: recordAfter() adds it.
+// headToHead() also returns a streak (over every settled bet, ties broken by id); pairStreak()
+// counts its own (over the latest STREAK_LOOKBACK settled bets, ties broken by created_at).
+// Spec: docs/planning/API-CONTRACT.md §2.12a.
 import { sql } from 'drizzle-orm';
 import type { Db } from '@youre-on/db';
 import { GG_RIVAL_MIN, type PairRecord } from '@youre-on/shared/gg';
@@ -16,7 +17,9 @@ type Reader = Pick<Db, 'select' | 'execute'>;
 /** How many of the pair's latest settled bets the streak looks at. */
 export const STREAK_LOOKBACK = 20;
 
-/** The run of same-winner results ending at the pair's latest settled bet, in this bet's parties. */
+/**
+ * The run of same-winner results ending at the pair's latest settled bet, in this bet's parties.
+ */
 export async function pairStreak(
   db: Reader,
   aId: string,

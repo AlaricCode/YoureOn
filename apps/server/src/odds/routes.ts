@@ -1,16 +1,8 @@
-// Odds routes (API-CONTRACT §2.19; rules in ./service.ts):
-//
-//   POST /v1/bets/:bet_id/odds/offer                 (S, party A or B; TERMS_PROPOSED)
-//     OddsOfferRequest {stakes_usd:{a,b}} | {ratio, favored, base_usd} -> 200 OddsOfferResponse
-//     422 VALIDATION_FAILED {issue} (ODDS_TOO_LONG, STAKE_ABOVE_MAX, …), 409 INSUFFICIENT_FUNDS
-//     {party} (soft check), 409 INVALID_STATE {reason: locked | no_terms | market_bet}
-//   POST /v1/bets/:bet_id/odds/:offer_id/accept      (S, party; {n}) -> 200 OddsOfferResponse
-//     409 INVALID_STATE {reason: not_open | own_offer | stale | already_accepted | no_terms}
-//   POST /v1/bets/:bet_id/odds/:offer_id/withdraw    (S, the author) -> 200 {offer}
-//   POST /v1/bets/:bet_id/odds/suggest               (S, party; DRAFTING: A only)
-//     OddsSuggestRequest -> 200 OddsSuggestResponse {offer, say} (a judge offer)
-//   POST /el/tools/suggest_odds                      the voice judge's webhook (./voice-tool.ts)
-// All odds routes share one per-(bet, user) bucket (TYPED_TERMS_BUCKET, key 'odds').
+// The odds routes: the phones' offer / accept / withdraw (./flow.ts) and the judge's suggestion
+// (./suggest.ts), each a signed request from a party, plus the voice judge's suggest_odds webhook
+// (./voice-tool.ts). The rules are R1–R8 in ./service.ts. The phone routes share one
+// per-(bet, user) bucket (TYPED_TERMS_BUCKET, key 'odds').
+// Spec: docs/planning/API-CONTRACT.md §2.19.
 import type { Context } from 'hono';
 import {
   OddsAcceptRequest,

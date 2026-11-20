@@ -1,7 +1,7 @@
 // What a bet's `resolve` actually put on chain, read from the chain itself and never from
 // Postgres (bets.evidence_hash / ruling_hash are written by the server from the ruling it sent,
-// so comparing against them would only compare the server with itself). Used by
-// GET /v1/bets/:id/settlement (markets/evidence.ts) for its onchain_evidence / onchain_ruling links:
+// so comparing against them would only compare the server with itself). Used for the
+// onchain_evidence / onchain_ruling links of GET /v1/bets/:id/settlement (markets/evidence.ts):
 //   1. the Bet account while it is open after resolve (Resolved / Appealed / Settled): the
 //      evidence_hash / ruling_hash fields the program stored;
 //   2. once finalize + close_bet closed it: the confirmed resolve transaction itself, its escrow

@@ -1,8 +1,8 @@
-// The REPLAY feed for Beat 6 (ARCHITECTURE §7.1 row 6 / §7.2 `gemini_fallback`): when Gemini's
-// prediction-markets API is down or has no usable book at pitch time, the relay can serve ONE
-// RECORDED real round (replay-data.ts: BTC05M2611180240, line 64389.6, settled "no") shifted onto
-// the current 5-minute window, so the whole closer (quote, lock, countdown, settlement, payout on
-// devnet) still runs on real Gemini numbers. It is never mistaken for live data:
+// The REPLAY feed for the Bitcoin closer: when Gemini's prediction-markets API is down or has no
+// usable book at pitch time, the relay can serve ONE RECORDED real round (replay-data.ts:
+// BTC05M2611180240, line 64389.6, settled "no") shifted onto the current 5-minute window, so the
+// whole closer (quote, lock, countdown, settlement, payout on devnet) still runs on real Gemini
+// numbers. It is never mistaken for live data:
 //   - every ticker and symbol is prefixed REPLAY- (REPLAY-BTC05M2611190045, REPLAY-GEMI-…-UP),
 //     so Terms.market, the stage and the phones show it (and the terms_hash commits to it);
 //   - the event title says REPLAY; the settlement record's source_url is replay://gemini/…;

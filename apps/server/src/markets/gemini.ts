@@ -1,14 +1,9 @@
-// Gemini Prediction Markets public REST client (API-CONTRACT §7.3; ARCHITECTURE §… "Gemini";
-// no key, no trading). Shapes are from real responses recorded on 2026-11-18
-// (test/fixtures/gemini-*.json). Only the fields we read are parsed, tolerantly: Gemini adds
-// keys freely, and a strike's `value` key is ABSENT (not null) until the window opens.
-//
-//   discovery   GET /v1/prediction-markets/events?status=active&category=Crypto&limit=200
-//   refresh     GET /v1/prediction-markets/events/{eventTicker}
-//   strike      GET /v1/prediction-markets/events/{eventTicker}/strike   (fallback)
-//   BTC price   GET /v1/pubticker/btcusd   (display only: the Lukka index is WS-only)
-//
-// Every call has a 2 s deadline (§1.7 "Gemini REST 2 s"). `fetch` is injectable for tests.
+// Gemini Prediction Markets public REST client (no key, no trading): event discovery, one event,
+// the strike fallback, and the BTC/USD ticker (display only: the Lukka index is WebSocket-only).
+// Shapes are from real responses recorded on 2026-11-18 (test/fixtures/gemini-btc5m.json). Only
+// the fields we read are parsed, tolerantly: Gemini adds keys freely, and a strike's `value` key
+// is ABSENT (not null) until the window opens. Every call has a 2 s deadline.
+// Spec: docs/planning/API-CONTRACT.md §7.3.
 import { z } from 'zod/v4';
 import type { GeminiMarketSnapshot, GeminiStrike } from '@youre-on/shared/gemini';
 
@@ -232,7 +227,7 @@ export function btcContract(e: RawEvent): RawContract | null {
   return e.contracts.find((c) => /^up$/i.test(c.label)) ?? e.contracts[0] ?? null;
 }
 
-/** §7.3: series BTC05M and `contract.effectiveDate <= now < contract.expiryDate`. */
+/** The live BTC05M contract: `effectiveDate <= now < expiryDate` (the earliest expiry wins). */
 export function pickCurrent(
   events: readonly RawEvent[],
   nowMs: number,
@@ -272,7 +267,7 @@ const STATUSES = new Set<GeminiMarketSnapshot['status']>([
   'invalid',
 ]);
 
-/** A REST event + its BTC contract -> the shared GeminiMarketSnapshot (SCHEMAS §8). */
+/** A REST event + its BTC contract -> the shared GeminiMarketSnapshot. */
 export function toSnapshot(
   event: RawEvent,
   contract: RawContract,

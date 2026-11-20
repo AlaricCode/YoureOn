@@ -1,15 +1,16 @@
-// GET /v1/bets/:bet_id/replay -> 200 ReplayResponse (API-CONTRACT §2.14, SCHEMAS §4.1): the
-// slow-mo replay after a bet, for the stage and the phones' payout screens.
+// GET /v1/bets/:bet_id/replay -> 200 ReplayResponse: the slow-mo replay after a bet, for the stage
+// and the phones' payout screens.
 //
 //   readers   = the snapshot and frame routes' (stage/routes.ts canRead): a party's app session,
-//               or a stage session of the bet's room. Missing and not-yours are both 404.
-//   frames    the moment lists server-relative frame paths: the existing
+//               or a stage session of the bet's room.
+//   frames    the moment lists server-relative frame paths:
 //               GET /v1/bets/:bet_id/attempts/:n/frames/:idx serves them to the same readers.
 //   no-store  a confirmed foul (deps.replayFouls) can arrive after the ruling.
 //
 // why: not_ruled (no ruling yet, or a REDO) · no_winner (VOID, or an appeal upheld a VOID) ·
 // no_frames (a Gemini settlement, a Dance Off, or nothing showable) · purged (the attempt's
 // frames are gone).
+// Spec: docs/planning/API-CONTRACT.md §2.14.
 import { and, desc, eq } from 'drizzle-orm';
 import { attempts, bets } from '@youre-on/db';
 import type { BetSnapshot } from '@youre-on/shared/api';

@@ -1,13 +1,14 @@
-// The BTC 5-minute market relay (API-CONTRACT §2.13, §7.3). One poller serves every client:
-// GET /v1/markets/btc5m/* read its state and never proxy a Gemini call per request (Gemini
-// allows 120 req/min with no headers). REST polling stands in for the §7.3 WebSocket: every
-// `pollMs` (2 s) it refreshes the current event (prices, status) and the BTC/USD ticker; every
-// `discoveryMs` (60 s), and at every contract expiry, it re-discovers the current contract, so a
-// 5-minute rollover is picked up on the first poll after expiry. Budget at the defaults:
-// ~30 event + ~30 ticker + 1 discovery (+ the strike fallback) per minute.
+// The BTC 5-minute market relay. One poller serves every client: GET /v1/markets/btc5m/* read
+// its state and never proxy a Gemini call per request (Gemini allows 120 req/min with no rate
+// headers). REST polling stands in for Gemini's WebSocket feed: every `pollMs` (2 s) it refreshes
+// the current event (prices, status) and the BTC/USD ticker; every `discoveryMs` (60 s), and at
+// every contract expiry, it re-discovers the current contract, so a 5-minute rollover is picked
+// up on the first poll after expiry. Budget at the defaults: ~30 event + ~30 ticker + 1 discovery
+// (+ the strike fallback) per minute.
 //
 // Strike: latched per eventTicker on the first non-null value (event body first, then the
-// /strike fallback once `availableAt` has passed); never quoted without it (STRIKE_PENDING).
+// /strike fallback once `availableAt` has passed); never bound into terms without it.
+// Spec: docs/planning/API-CONTRACT.md §7.3.
 import { FAIR, fairStakes, type FairRefusal, type FairStakesResult } from '@youre-on/shared/gemini';
 import type { GeminiMarketSnapshot } from '@youre-on/shared/gemini';
 import type { MicroUsdc } from '@youre-on/shared/money';
@@ -29,7 +30,7 @@ export const MARKET_POLL_MS = 2_000;
 /** While Gemini keeps failing, the poll backs off (doubling from pollMs) up to this. */
 export const MARKET_BACKOFF_MAX_MS = 16_000;
 export const MARKET_DISCOVERY_MS = 60_000;
-/** §2.13 recommended_lock_by = window start + 90 s. */
+/** MarketCurrent.recommended_lock_by = window start + 90 s. */
 export const RECOMMENDED_LOCK_AFTER_START_MS = 90_000;
 /** Index ticks kept for the stage chart (≈ 10 min at 0.5 Hz). */
 export const RING_SIZE = 300;
@@ -38,7 +39,7 @@ export const NOMINAL_AMOUNT = '5000000' as MicroUsdc;
 
 const STAKE_REASONS: readonly FairRefusal[] = ['STAKE_ABOVE_MAX', 'STAKE_BELOW_MIN'];
 
-/** §2.13 MarketCurrent. `window` is null while no BTC05M contract is live. */
+/** GET /v1/markets/btc5m/current. `window` is null while no BTC05M contract is live. */
 export interface MarketCurrent {
   market: GeminiMarketSnapshot | null;
   window: { start: string; expiry: string } | null;
@@ -80,15 +81,19 @@ export class MarketService {
   private readonly strikes = new Map<string, string>();
   private indexPrice: string | null = null;
   private snap: GeminiMarketSnapshot | null = null;
-  /** The poll in flight and the feed generation it was started under (see setFeed). */
+  /** The poll in flight and the feed generation it was started under. */
   private inFlight: { gen: number; p: Promise<GeminiMarketSnapshot | null> } | null = null;
-  /** Bumped by setFeed: a poll started under an older generation drops its result. */
+  /**
+   * The feed generation, bumped by setFeed. A poll started under an older one is disowned: its
+   * result is dropped, its failure is not counted, and it writes no relay state except a strike
+   * it just fetched (latched under its eventTicker).
+   */
   private gen = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private readonly listeners = new Set<(s: GeminiMarketSnapshot) => void>();
   readonly ring: Array<{ t: string; price: string }> = [];
-  /** Diagnostics (GET /v1/demo/health later). */
+  /** Diagnostics for GET /v1/demo/health. */
   lastOkAt: number | null = null;
   lastError: string | null = null;
   rollovers = 0;
@@ -123,10 +128,9 @@ export class MarketService {
    * so the next poll re-discovers. Bets keep settling from the feed they were quoted on (the
    * routed client routes ticker-scoped calls by ticker). False for a plain client.
    *
-   * A poll of the old feed still in flight is disowned (its result is dropped, its failure
-   * not counted), the backoff resets, and the timer poll is brought forward: the switch exists
-   * for an outage, when the old feed's poll is the one likely to fail. The next refresh() is
-   * a fresh poll of the new feed.
+   * A poll of the old feed still in flight is disowned (see `gen`), the backoff resets, and the
+   * timer poll is brought forward: the switch exists for an outage, when the old feed's poll is
+   * the one likely to fail.
    */
   setFeed(mode: FeedMode): boolean {
     const c = this.o.client as Partial<RoutedClient>;
@@ -223,7 +227,7 @@ export class MarketService {
         if (gen !== this.gen) return this.snap;
         this.lastError = err instanceof Error ? err.message : String(err);
         this.failures++;
-        // the first failure and then every 10th: an outage logs a line a minute or so
+        // the first failure and then every 10th, so a long outage logs a line every few minutes
         if (this.failures === 1 || this.failures % 10 === 0)
           this.o.log.warn('markets.refresh_failed', { err, failures: this.failures });
         return this.snap;
@@ -236,8 +240,8 @@ export class MarketService {
   }
 
   /**
-   * One poll under feed generation `gen`. Every write to the relay state happens only while
-   * `gen` is still current: a poll disowned by setFeed returns without touching it.
+   * One poll under feed generation `gen`: after each await it returns if stale(), before writing
+   * any relay state, except that a strike the /strike fallback fetched is latched before the check.
    */
   private async doRefresh(gen: number): Promise<GeminiMarketSnapshot | null> {
     const stale = () => gen !== this.gen;
@@ -315,7 +319,7 @@ export class MarketService {
       }
       if (stale()) return null;
     }
-    // keep the latch map small: only tickers still listed (plus the current one)
+    // keep the latch map small: past 32 entries, drop every ticker but the current one
     if (this.strikes.size > 32) {
       for (const k of this.strikes.keys()) if (k !== ticker) this.strikes.delete(k);
     }
@@ -342,7 +346,7 @@ export class MarketService {
     return snap;
   }
 
-  /** §2.13 GET /v1/markets/btc5m/current, from relay state only. */
+  /** GET /v1/markets/btc5m/current, from relay state only. */
   current(nowMs: number = this.o.now()): MarketCurrent {
     const snap = this.snap;
     const cur = this.cur;
@@ -381,8 +385,8 @@ export class MarketService {
   }
 
   /**
-   * §2.13 quote preview. A stale snapshot triggers one (shared) refresh before refusing with
-   * QUOTE_STALE (§7.3 "a stale quote triggers a REST refetch").
+   * fairStakes over the relay's snapshot: the quote preview, get_market_odds and the binding
+   * quote. A stale snapshot triggers one (shared) refresh before refusing with QUOTE_STALE.
    */
   async quote(
     amount: MicroUsdc,

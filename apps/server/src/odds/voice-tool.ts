@@ -1,4 +1,4 @@
-// The voice judge's `suggest_odds` webhook tool (API-CONTRACT §4.3):
+// The voice judge's `suggest_odds` webhook tool:
 //
 //   POST /el/tools/suggest_odds   secret header (X-YO-Tool-Secret), like propose_terms
 //     body: ids + {claim, performer: 'A'|'B', attempts: {count, rule}, base_usd: '5'}
@@ -10,6 +10,7 @@
 // dedupe, conversation -> bet binding (WRONG_BET + an audit row). Then odds/suggest.ts
 // suggestOdds(): the same engine as the phone's "Suggest odds" button. The judge speaks `say`
 // itself, so the ODDS_OFFERED cue it leaves is a contextual update (speak:false).
+// Spec: docs/planning/API-CONTRACT.md §4.3.
 import type { Context } from 'hono';
 import { auditLog } from '@youre-on/db';
 import { formatUsd } from '@youre-on/shared/money';

@@ -1,10 +1,11 @@
-// The performer's record the judge's odds are grounded in (API-CONTRACT §2.19, SCHEMAS §3.5
-// PerformerStats): overall W–L, W–L as the performer of THIS kind of challenge (category derived
-// from each final card's claim), recent results, streak, and the head-to-head with this opponent.
-// Settled bets only, including labelled demo history (bets.is_seed -> includes_seed).
+// The performer's record the judge's odds are grounded in (PerformerStats): overall W–L, W–L as
+// the performer of THIS kind of challenge (category derived from each final card's claim), recent
+// results, streak, and the head-to-head with this opponent (face/service.ts headToHead). Settled
+// bets only, including labelled demo history (bets.is_seed -> includes_seed).
 //
 // One query (the performer's last 200 settled bets joined to their final terms), then a pure
 // fold (computeStats) so the rules are unit-testable without a database.
+// Spec: docs/planning/SCHEMAS.md §3.5.
 import { sql } from 'drizzle-orm';
 import {
   CATEGORY_LABEL,
@@ -26,7 +27,7 @@ export type StatsRow = {
   party_a_id: string;
   party_b_id: string;
   title: string | null;
-  /** The final terms (bet_terms_versions.terms), or null (legacy seed rows). */
+  /** The final terms (bet_terms_versions.terms), or null when the bet has none. */
   t: {
     type?: string;
     claim?: string;

@@ -1,22 +1,13 @@
-// Beat 6 on the phone (packages/shared/src/judge/market-terms.ts):
-//
-//   POST /v1/bets/:bet_id/terms/market   (S, party A; DRAFTING | TERMS_PROPOSED)
-//     MarketTermsRequest {side: UP|DOWN, amount_usd} -> the binding quote (markets/quote.ts:
-//     fairStakes over the relay's snapshot, capped by max_stake, strike required) -> the
-//     propose_terms projection for that call (marketTermsArgs) -> the SAME evaluateProposeTerms
-//     and persistEvaluation as /terms/typed and the voice judge (terms.proposed fans out; the
-//     bet records gemini_market_id, a_position, odds_*, quoted_at, pricing_snapshot_id).
-//     -> 200 MarketTermsResponse
-//     -> 409 MARKET_UNAVAILABLE {reason: FairRefusal} when Gemini can't price it; 409
-//        INVALID_STATE after the freeze; 422 VALIDATION_FAILED for a bad side or amount.
-//   Then the normal POST /v1/bets/:bet_id/terms/confirm (a quote older than 30 s is re-quoted
-//   and answered 409 TERMS_HASH_MISMATCH {reason: 'requoted'}), the lock, AWAITING_MARKET, and
-//   the settlement keeper (markets/settlement.ts).
+// "Bet on Bitcoin" on the phone (packages/shared/src/judge/market-terms.ts): A's side and stake go
+// to POST /v1/bets/:bet_id/terms/market, which takes the binding quote (markets/quote.ts) and
+// proposes the terms through the SAME evaluateProposeTerms and persistEvaluation as /terms/typed
+// and the voice judge. Then the normal confirm (a quote older than 30 s is re-quoted and answered
+// 409 TERMS_HASH_MISMATCH {reason: 'requoted'}), the lock, AWAITING_MARKET and the settlement
+// (markets/settlement.ts).
 //
 // Also wires the relay's snapshots into the settlement service (market.tick per waiting bet),
-// as stage/routes.ts wires them into stage.market, and serves the voice judge's
-// POST /el/tools/get_market_odds (markets/voice-tool.ts) and the demo switch
-// POST /v1/demo/gemini {feed: live|replay} (markets/replay.ts; DEMO_MODE + admin key).
+// as stage/routes.ts wires them into stage.market, and serves the bet's settlement evidence, the
+// voice judge's get_market_odds tool and the demo feed switch.
 import { z } from 'zod/v4';
 import { evaluateProposeTerms } from '@youre-on/shared/judge/reply';
 import {
@@ -62,7 +53,7 @@ export const marketBetRoutes: RouteModule = {
     app.post('/el/tools/get_market_odds', getMarketOddsHandler);
 
     // Demo (DEMO_MODE + admin key): switch the relay between live Gemini and the labelled REPLAY
-    // of a recorded round (ARCHITECTURE §7.2 gemini_fallback), then poll once.
+    // of a recorded round (markets/replay.ts), then poll once.
     app.post('/v1/demo/gemini', requireDemo, async (c) => {
       const deps = c.get('deps');
       const body = await readBody(c, z.object({ feed: z.enum(['live', 'replay']) }));

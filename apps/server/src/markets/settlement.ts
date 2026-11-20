@@ -1,52 +1,18 @@
-// Beat 6 settlement: a locked Gemini bet waits for Gemini to settle its BTC 5-minute contract,
-// then a deterministic settlement Ruling goes to deps.onRuling (resolve -> RULED -> finalize), as
-// an attempt ruling does (SCHEMAS §4, §5.2, §8.3, §9.2; API-CONTRACT §7.3; ARCHITECTURE "Gemini").
-//
-//   enterAwaitingMarket()  inside LockService.onLanded's transaction: LOCKED -> AWAITING_MARKET,
-//                          bet.state + judge.cue MARKET_WAITING (speak=false). The phones and
-//                          the stage never see a gemini bet sit in LOCKED.
-//   SettlementService
-//     arm()        fast path: a timer at expiry + 5 s (Gemini settles p50 5.7 s, max 8.8 s after
-//                  expiry), then every 2 s for 2 minutes.
-//     check()      GET /v1/prediction-markets/events/{eventTicker} for THIS bet's contract (never
-//                  the relay's current one: the relay has rolled over by then), classify it:
-//                    pending  -> nothing (retry later; Gemini 5xx / timeouts count as pending)
-//                    settled  -> GeminiSettlementRecord (response_sha256 = sha256 of the exact
-//                                body) -> settlement Ruling (yes -> MET, no -> NOT_MET, mapped
-//                                through yes_party)
-//                    voided / settled on another line -> VOID market_invalid (refund)
-//                  One transaction: the settlement `rulings` row (evidence_canonical = the record,
-//                  rulings_settlement_uq keeps it one per bet), the gemini_markets settlement
-//                  columns (the raw body byte for byte), market.settled + ruling.issued +
-//                  judge.cue MARKET_SETTLED / VOIDED, an audit row. After COMMIT: fan-out, then
-//                  deps.onRuling(bet_id, ruling).
-//                  A contract settles once, so its body is stored once: every later bet on the
-//                  same contract rules on THAT body (same bytes, response_sha256, source_url,
-//                  fetched_at) instead of a fetch of its own, and a concurrent check that fetched
-//                  different bytes retries on the stored ones. Each bet's evidence chain
-//                  (GET /v1/bets/:id/settlement) thus keeps its raw body.
-//     sweep()      keeper task 'market-settlement' (the durable backstop): LOCKED gemini bets ->
-//                  AWAITING_MARKET; AWAITING_MARKET bets past expiry are checked (each at most
-//                  every 10 s), and a settlement ruling that never reached RULED (an RPC failure,
-//                  a restart) is handed to deps.onRuling again (it is idempotent): never while
-//                  a send of it is in flight, first 15 s after the ruling, then with per-bet
-//                  exponential backoff (capped at 5 min, one error line per outage).
-//                  A contract Gemini never settles keeps the bet waiting: the program's
-//                  timeout_refund (anyone, after resolve_deadline = lock + 3600 s) is the backstop.
-//   The resolve deadline (the Bet account's resolve_deadline, read once per bet and cached):
-//                  a decisive ruling is never committed within RESOLVE_DEADLINE_MARGIN_MS of it
-//                  (Gemini settling after the deadline: resolve could never land, while
-//                  market.settled / ruling.issued would already tell everyone who won), and a
-//                  committed one stops being re-sent there, or once resolve fails for good
-//                  (ResolveDeadlinePassed, the bet no longer Locked). Such a bet is left for
-//                  timeout_refund: one market.settlement_after_deadline /
-//                  market.resolve_abandoned error line, no more Gemini or RPC calls for it.
-//     onSnapshot() the relay's 2 s snapshots -> market.tick (persisted, <= 1 Hz per bet) for each
-//                  AWAITING_MARKET bet on that contract, until its expiry: the phones' and the
-//                  stage's live price.
-//
-// Every step is idempotent and safe across two machines (row lock + state re-check + the unique
-// settlement ruling).
+// Settles a Gemini bet (the Bitcoin closer): a locked bet waits in AWAITING_MARKET until Gemini
+// settles its BTC 5-minute contract, then a deterministic settlement Ruling goes to deps.onRuling
+// (resolve -> RULED -> finalize), as an attempt ruling does. arm() polls from just after expiry;
+// the keeper's sweep() is the durable backstop.
+//   - A bet's contract is fetched by its own eventTicker, never the relay's current one (the
+//     relay has rolled over by then).
+//   - A contract settles once: the first bet ruled on it stores the body, and every later bet on
+//     it rules on those same bytes, so each bet's evidence chain keeps its raw body.
+//   - No ruling is committed within RESOLVE_DEADLINE_MARGIN_MS of the Bet's resolve_deadline, or
+//     when the Bet is not Locked: resolve could not land, yet market.settled would announce it.
+//     Nor is one re-sent then, or after a terminal resolve error. The bet is left for the
+//     program's timeout_refund.
+//   - Every step is idempotent and safe across two machines (row lock + state re-check + the
+//     unique settlement ruling).
+// Spec: docs/planning/API-CONTRACT.md §7.3.
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { BetStatus, ESCROW_ERROR__RESOLVE_DEADLINE_PASSED } from '@youre-on/shared/escrow-client';
@@ -76,11 +42,11 @@ import { lifecycleOf } from '../lock/runtime';
 import { loadEnvelope } from '../lock/terms';
 import { cleanDecimal, isoOrNull, RawEvent, toStrike, type RawEventResponse } from './gemini';
 
-/** First settlement check after expiry (spike 05: settled p50 5.66 s, max 8.78 s). */
+/** First settlement check after expiry (Gemini settles p50 5.66 s, max 8.78 s after it). */
 export const SETTLE_FIRST_CHECK_MS = 5_000;
-/** Fast-path poll interval (API-CONTRACT §7.3 "poll that endpoint every 2 s from expiry"). */
+/** Fast-path poll interval once past the settlement band. */
 export const SETTLE_POLL_MS = 2_000;
-/** Inside the settlement band (spike 05: 5.7-8.8 s after expiry) the fast path polls every 1 s. */
+/** Up to expiry + this (Gemini settles 5.7-8.8 s after expiry) the fast path polls every 1 s. */
 export const SETTLE_BAND_MS = 12_000;
 export const SETTLE_BAND_POLL_MS = 1_000;
 /** The fast path stops after this past expiry; the keeper sweep carries on. */
@@ -98,9 +64,9 @@ export const SETTLE_RESEND_MAX_MS = 5 * 60_000;
 export const RESOLVE_DEADLINE_MARGIN_MS = 30_000;
 /** The Bet account read gives up after this (it then counts as unknown). */
 const CHAIN_READ_TIMEOUT_MS = 5_000;
-/** market.tick at most this often per bet (API-CONTRACT §3.4: 1 Hz). */
+/** market.tick at most this often per bet (1 Hz). */
 export const MARKET_TICK_MIN_MS = 1_000;
-/** At most this many bets per sweep. */
+/** Per sweep, at most this many bets entered, checked and re-sent (each). */
 export const SETTLE_BATCH = 10;
 /** The GG window the cue announces when APPEAL_WINDOW_S is unset (= Config.appeal_window_secs). */
 const DEFAULT_GG_SECS = 10;
@@ -163,8 +129,10 @@ async function partyNames(db: Pick<Tx, 'select'>, bet: Pick<BetRow, 'party_a_id'
 }
 
 /**
- * LOCKED -> AWAITING_MARKET for a gemini bet, inside the caller's transaction (after the LOCKED
- * write). Returns the events to fan out after COMMIT; [] when the bet is not LOCKED.
+ * LOCKED -> AWAITING_MARKET for a gemini bet, inside the caller's transaction: the lock's landing
+ * commit (LockService.onLanded, after the LOCKED write, so no client sees a gemini bet sit in
+ * LOCKED) or the sweep's. Returns the events to fan out after COMMIT; [] when the bet is not
+ * LOCKED.
  */
 export async function enterAwaitingMarket(
   tx: Tx,
@@ -404,7 +372,7 @@ export class SettlementService {
       }
       fetchedAt = deps.now();
     }
-    /** When this bet is ruled (= fetchedAt, unless the body is a stored one). */
+    /** A stored body keeps the fetched_at of its first fetch; this bet is still ruled now. */
     const ruledAt = stored ? deps.now() : fetchedAt;
     const contract = resp.event.contracts.find(
       (c) => c.instrumentSymbol === market.instrumentSymbol,
@@ -685,7 +653,15 @@ export class SettlementService {
     this.timers.delete(betId);
   }
 
-  /** Keeper: the durable backstop of the fast path (see the header). */
+  /**
+   * Keeper task 'market-settlement', the durable backstop of the fast path: moves gemini bets
+   * left in LOCKED to AWAITING_MARKET, checks waiting bets past expiry (each at most every
+   * SETTLE_SWEEP_EVERY_MS), and hands a settlement ruling that never reached RULED (an RPC
+   * failure, a restart) to deps.onRuling again, which is idempotent: never while a send of it is
+   * in flight, first SETTLE_RESOLVE_GRACE_MS after the ruling, then with per-bet exponential
+   * backoff. A contract Gemini never settles keeps the bet waiting: the program's timeout_refund
+   * is the backstop.
+   */
   async sweep(nowMs: number): Promise<{ entered: string[]; checked: string[]; resent: string[] }> {
     const deps = this.deps;
     const out = { entered: [] as string[], checked: [] as string[], resent: [] as string[] };
@@ -769,7 +745,10 @@ export class SettlementService {
     return out;
   }
 
-  /** Relay snapshot -> market.tick for each waiting bet on that contract (until its expiry). */
+  /**
+   * Relay snapshot -> market.tick (the phones' and the stage's live price) for each waiting bet on
+   * that contract, until its expiry.
+   */
   onSnapshot(snap: GeminiMarketSnapshot): void {
     const now = this.deps.now();
     for (const [betId, w] of this.watching) {
@@ -815,7 +794,7 @@ export class SettlementService {
   }
 }
 
-/** MARKET_SETTLED (decisive) or VOIDED (refund) for the voice judge (API-CONTRACT §4.5). */
+/** MARKET_SETTLED (decisive) or VOIDED (refund) for the voice judge. */
 export function settlementCue(
   r: Ruling,
   record: {

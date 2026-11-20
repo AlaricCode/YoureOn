@@ -1,18 +1,18 @@
-// The GG moment (packages/shared/src/gg.ts; API-CONTRACT §3.4 bet.gg, §4.5 PAID via): two hooks
-// the PayoutService calls (lock/runtime.ts wires them).
+// The GG moment (packages/shared/src/gg.ts): two hooks the PayoutService calls (lock/runtime.ts
+// wires them).
 //
 //   onConcedeSubmitted  in the commit that moves the bet to CONCEDED: bet.gg {by, winner, to_a,
-//                       to_b, record {before, after}, conceded_at}. The stage stamps "<Loser>: GG",
-//                       ticks the record over and counts the winner's payout up; the phones show
-//                       "<Loser> said GG". A record read that fails gives record null (savepoint),
-//                       never a failed GG.
+//                       to_b, record {before, after}, conceded_at}, all the stage and the phones
+//                       need to play the GG. A record read that fails gives record null, never a
+//                       failed GG.
 //   cueContext          in the commit that moves the bet to PAID: how it got there, for the voiced
-//                       line. concede -> via gg (+ the record after); finalize -> via timeout (+ how
-//                       a spoken review ended: review.closed's reason, or 'lapsed' for a request
-//                       that never closed, e.g. its timer was lost to a restart).
+//                       line. concede -> via gg (+ the record after); finalize -> via timeout
+//                       (+ how a spoken review ended: review.closed's reason, or 'lapsed' for a
+//                       request that never closed, e.g. its timer was lost to a restart).
 //
 // A concede that never lands (revertPayout -> RULED, reason concede_failed) sends no new event:
 // clients drop the GG when bet.state goes RULED from CONCEDED.
+// Spec: docs/planning/API-CONTRACT.md §2.12a.
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { betEvents } from '@youre-on/db';
 import { BetGgPayload, GgRecord, recordAfter, type PairRecord } from '@youre-on/shared/gg';

@@ -1,18 +1,18 @@
-// The voice judge's `get_market_odds` webhook tool (API-CONTRACT §4.3; Beat 6):
+// The voice judge's `get_market_odds` webhook tool, for the Bitcoin closer:
 //
 //   POST /el/tools/get_market_odds   secret header (X-YO-Tool-Secret), like propose_terms
 //     body: ids + {asset: 'BTC', horizon: '5m', a_side: 'YES'|'NO', amount_usd: '5'}
 //     -> 200 {ok: true, odds: "61/39", a: "$6.10", b: "$3.90", line: "$64,389.60",
-//             ends: "02:40 UTC", ends_in_s: 170, lock_within_s: 50}
-//     -> 200 {ok: false, fix: <FairRefusal | AMBIGUOUS | MARKET_NOT_OPEN>, say: "..."}
+//             ends: "02:40 UTC", ends_in_s: 170, lock_within_s: 50, say}
+//     -> 200 {ok: false, fix: <FairRefusal | AMBIGUOUS | INVALID | SLOW_DOWN>, say: "..."}
 //     -> 401 {ok: false, fix: 'UNAUTHORIZED'} for a bad secret (the only non-200)
 //   It reads the relay snapshot and runs fairStakes: a PREVIEW. propose_terms takes the binding
 //   quote. The odds are public market data, so there is no conversation -> bet binding check;
-//   the tool is rate-limited per conversation like the others (§1.7). Replies stay < 300 B.
+//   the tool is rate-limited per conversation like the others. Replies stay < 300 B.
 //
-// Registered by markets/bet-routes.ts. 'get_market_odds' is in packages/shared/src/judge/
-// el-config.ts DEFAULT_WEBHOOK_TOOLS, so scripts/el-agent.ts registers it with the agent (and the
-// persona describes it); an agent synced before that gains it on the next el-agent run.
+// Registered by markets/bet-routes.ts; scripts/el-agent.ts registers it with the agent (it is in
+// DEFAULT_WEBHOOK_TOOLS, packages/shared/src/judge/el-config.ts).
+// Spec: docs/planning/API-CONTRACT.md §4.3.
 import type { Context } from 'hono';
 import { z } from 'zod/v4';
 import { FAIR, type FairRefusal } from '@youre-on/shared/gemini';
@@ -32,8 +32,8 @@ import { maxStakeOf } from './quote';
 import { safeFairStakes } from './service';
 
 /**
- * = voice/tools.ts EL_TOOLS_BUCKET (§1.7: 30/min per conversation, the same 'el/tools' bucket).
- * Not imported: voice/tools.ts imports this module (realWorldReply).
+ * = voice/tools.ts EL_TOOLS_BUCKET (30/min per conversation, the same 'el/tools' bucket). Not
+ * imported: voice/tools.ts imports this module (realWorldReply).
  */
 const EL_TOOLS_BUCKET = { limit: 30, windowMs: 60_000 } as const;
 
@@ -78,9 +78,10 @@ const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 20
 
 /**
  * propose_terms for a real_world bet (voice/tools.ts): the judge says Gemini's split right away
- * instead of "Gemini sets the odds", from the relay's in-memory snapshot (no REST on the webhook
- * path, §4.2). A refusal is answered now, spoken; a stale snapshot keeps the template reply (the
- * sink refetches when it takes the binding quote). Anything else passes through unchanged.
+ * instead of the template's "Gemini sets the odds", from the relay's in-memory snapshot (no Gemini
+ * call before the webhook replies). A refusal is answered now, spoken; a stale snapshot keeps the
+ * template reply (the sink refetches when it takes the binding quote). Anything else passes
+ * through unchanged.
  */
 export function realWorldReply(
   deps: Pick<AppDeps, 'now' | 'env'> & Partial<Pick<AppDeps, 'markets'>>,

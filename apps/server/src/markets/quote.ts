@@ -1,17 +1,8 @@
-// The BINDING quote of a Gemini bet (SCHEMAS §2.6, §8.2, §8.3; DATA-MODEL §5.16).
-//
-//   takeBindingQuote()  fairStakes over the relay's latest snapshot (MarketService.quote: a stale
-//                       snapshot is refetched once over REST), capped by max_stake, then copied
-//                       into a strict Terms.market (MarketRef). Never quotes without the strike.
-//   persistQuote()      inside the terms transaction: upsert the contract (gemini_markets, keyed by
-//                       instrumentSymbol) and store the snapshot it was priced from
-//                       (market_snapshots, with the JCS of the snapshot and its sha256). The bet
-//                       points at both (gemini_market_id, pricing_snapshot_id).
-//   requoteProposal()   the judge-owned proposal of an existing market bet, re-quoted at confirm
-//                       when its quote got too old to lock (MARKET_CONFIRM_MAX_AGE_MS).
-//
-// The quote's `quotedAt` becomes the lock's accept_deadline (unix(quotedAt) + 60 s, ESCROW §5.2),
-// so it is taken as late as possible: when the terms are composed.
+// The BINDING quote of a Gemini bet: fairStakes over the relay's snapshot, bound into the terms
+// (Terms.market) and stored with the exact snapshot it was priced from. Its `quotedAt` becomes the
+// lock's accept_deadline (unix(quotedAt) + 60 s), so it is taken as late as possible: when the
+// terms are composed.
+// Spec: docs/planning/SCHEMAS.md §8.
 import { sql } from 'drizzle-orm';
 import { geminiMarkets, marketSnapshots } from '@youre-on/db';
 import { MAX_STAKE } from '@youre-on/shared/constants';
@@ -27,7 +18,7 @@ import type { AppDeps } from '../context';
 import type { Tx } from '../lock/common';
 import { BTC5M_SERIES } from './gemini';
 
-/** SCHEMAS §2.2: the terms deadline of a market bet = expiry + 10 min (timeout_refund backstop). */
+/** The terms deadline of a market bet = expiry + 10 min (timeout_refund backstop). */
 export const MARKET_DEADLINE_AFTER_EXPIRY_MS = 10 * 60_000;
 
 export interface BindingQuote {
@@ -46,9 +37,9 @@ export type QuoteOutcome = { ok: true; quote: BindingQuote } | { ok: false; reas
 export type QuoteDeps = Pick<AppDeps, 'env'> & Partial<Pick<AppDeps, 'markets'>>;
 
 /**
- * SCHEMAS §2.2 "devnet demo exception": real_world bets need the relay and ALLOW_P2P_REAL_WORLD
- * (unset: follows DEMO_MODE). SOLANA_CLUSTER can only be devnet or localnet (env.ts), so a
- * mainnet escrow never takes one.
+ * The devnet demo exception: real_world bets need the relay and ALLOW_P2P_REAL_WORLD (unset:
+ * follows DEMO_MODE). SOLANA_CLUSTER can only be devnet or localnet (env.ts), so a mainnet escrow
+ * never takes one.
  */
 export function realWorldEnabled(deps: QuoteDeps): boolean {
   return !!deps.markets && (deps.env.ALLOW_P2P_REAL_WORLD ?? deps.env.DEMO_MODE);
@@ -57,6 +48,11 @@ export function realWorldEnabled(deps: QuoteDeps): boolean {
 export const maxStakeOf = (deps: Pick<AppDeps, 'env'>): bigint =>
   deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
 
+/**
+ * fairStakes over the relay's latest snapshot (MarketService.quote refetches a stale one once),
+ * capped by max_stake, copied into a strict Terms.market (MarketRef). Never binds without the
+ * strike.
+ */
 export async function takeBindingQuote(
   deps: QuoteDeps,
   i: { amount: MicroUsdc; side: 'YES' | 'NO' },
@@ -101,7 +97,7 @@ export async function takeBindingQuote(
   };
 }
 
-/** A FairRefusal as the judge's DraftIssue (SCHEMAS §3; spoken via issueSay). */
+/** A FairRefusal as the judge's DraftIssue (spoken via issueSay). */
 export function refusalIssue(reason: FairRefusal): DraftIssue {
   const code: DraftIssue['code'] =
     reason === 'STAKE_ABOVE_MAX' || reason === 'STAKE_BELOW_MIN'
@@ -112,7 +108,11 @@ export function refusalIssue(reason: FairRefusal): DraftIssue {
   return { code, message: `gemini: ${reason}` };
 }
 
-/** Upserts the contract and stores the binding snapshot (inside the caller's transaction). */
+/**
+ * Inside the terms transaction: upserts the contract (gemini_markets, keyed by instrumentSymbol)
+ * and stores the snapshot it was priced from (market_snapshots, with its JCS and sha256). The bet
+ * points at both (gemini_market_id, pricing_snapshot_id).
+ */
 export async function persistQuote(
   tx: Tx,
   q: BindingQuote,
@@ -161,8 +161,9 @@ export async function persistQuote(
 }
 
 /**
- * The judge-owned proposal behind a market bet's terms, for a re-quote: the same side and
- * even-money amount (pot / 2). A server-written claim follows the new contract's expiry.
+ * The judge-owned proposal behind a market bet's terms, for the re-quote at confirm once the
+ * quote is older than MARKET_CONFIRM_MAX_AGE_MS: the same side and even-money amount (pot / 2).
+ * A server-written claim follows the new contract's expiry.
  */
 export function requoteProposal(t: Terms): TermsProposal {
   if (!t.market) throw new Error('requoteProposal: not a market bet');

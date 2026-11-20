@@ -1,24 +1,29 @@
-// Odds between the two parties (API-CONTRACT §2.19; packages/shared/src/odds.ts).
+// Odds between the two parties (packages/shared/src/odds.ts).
 //
 // The terms card stays the only binding record; its stakes.a / stakes.b are the odds. An odds
 // offer is a consent object in the bet's event log (odds.offered / odds.answered / odds.agreed),
 // folded by the shared foldOdds() here, on the phones and on the stage. Rules:
 //   R1 autoOffer()   a composed skill card with unequal stakes that are not yet agreed opens an
 //                    offer (from A for typed terms, from the judge for voice/demo terms), unless
-//                    the open offer already has those stakes; a differing open offer is superseded.
-//                    Equal-stake cards open nothing; market (Gemini) cards are exempt.
-//   R2               offers only in TERMS_PROPOSED (a voice suggest_odds in DRAFTING is the one
-//                    exception: terms_hash null, and accepting it needs TERMS_PROPOSED).
+//                    the open offer already has those stakes; a differing open offer is closed
+//                    as R3 says. Equal-stake cards open nothing; market (Gemini) cards are exempt.
+//   R2               offers only in TERMS_PROPOSED, except the judge's suggestion in DRAFTING
+//                    (voice suggest_odds or A's Suggest button): terms_hash null, and accepting
+//                    it needs TERMS_PROPOSED.
 //   R3 newOffer()    one open offer: your own open offer is superseded (parent kept), anyone
 //                    else's is countered (parent = it).
-//   R4 accept()      an A/B offer: the other party; a judge offer: both, one tap each.
+//   R4 accept        (acceptOdds, ./flow.ts) an A/B offer: the other party; a judge offer: both,
+//                    one tap each.
 //   R5 agree         both accepted: if the card's stakes differ, recompose the card with them (a
 //                    new version and hash, in the same transaction), then odds.agreed + a cue.
-//   R6 withdraw()    the author withdraws an open offer (either party may dismiss the judge's).
+//   R6 withdraw      (withdrawOdds, ./flow.ts) the author withdraws an open offer (either party
+//                    may dismiss the judge's).
 //   R7 oddsGate()    confirm is refused (ODDS_PENDING) while unequal skill stakes are not agreed
 //                    or any offer is open.
-//   R8               after the freeze every odds route answers 409 "Terms are locked in."
+//   R8               after the freeze the phone routes answer 409 "Terms are locked in." and the
+//                    suggest_odds webhook answers 200 {ok: false, fix: 'NOT_DRAFTING'}.
 // Every transaction locks the bet row (lockBet), so concurrent offers / accepts serialize.
+// Spec: docs/planning/API-CONTRACT.md §2.19.
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq, gte, like, sql } from 'drizzle-orm';
 import { auditLog, betEvents, users } from '@youre-on/db';
@@ -45,7 +50,7 @@ import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { fanout, iso, type Tx } from '../lock/common';
 import type { TermsDeps } from '../lock/terms';
 
-/** States after which the terms are frozen (R8). */
+/** The states in which the terms are still open; in any other, assertOddsState throws 409 (R8). */
 const OPEN_STATES: readonly BetState[] = ['DRAFTING', 'TERMS_PROPOSED'];
 
 export const isOddsTerms = (t: Terms): boolean => t.type === 'skill' && t.market === null;
@@ -153,7 +158,10 @@ export async function newOffer(
   return { offer, envs, countered };
 }
 
-/** ODDS_OFFERED / ODDS_COUNTERED for an offer from a phone (the judge did not say it). */
+/**
+ * ODDS_OFFERED / ODDS_COUNTERED for a new offer: spoken when `speak` (an offer from a phone, which
+ * the judge did not say), else only context for a voice judge that already read it back.
+ */
 export function offerCue(
   name: Extract<JudgeCueName, 'ODDS_OFFERED' | 'ODDS_COUNTERED'>,
   offer: OddsOffer,
@@ -220,7 +228,9 @@ export async function oddsGate(tx: Tx, betId: string, t: Terms): Promise<boolean
   return t.stakes.a !== t.stakes.b && !agreedFor(fold, { a: t.stakes.a, b: t.stakes.b });
 }
 
-/** The audit row for a confirm refused ODDS_PENDING (mirrors bets/invite.ts recordInvitePending). */
+/**
+ * The audit row for a confirm refused ODDS_PENDING (mirrors bets/invite.ts recordInvitePending).
+ */
 export async function recordOddsPending(
   tx: Tx,
   o: {
@@ -260,7 +270,7 @@ export async function judgeAwaitsOdds(tx: Tx, betId: string, sinceIso: string): 
   return row !== undefined;
 }
 
-// ---- route bodies -------------------------------------------------------------------------------
+// ---- shared by the route bodies (./flow.ts, ./suggest.ts) ---------------------------------------
 
 export const LOCKED_IN = 'Terms are locked in.';
 

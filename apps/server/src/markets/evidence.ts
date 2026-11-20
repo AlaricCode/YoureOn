@@ -1,6 +1,6 @@
 // GET /v1/bets/:bet_id/settlement (a party's app session, or the stage session of the bet's
 // room): the evidence chain of a Gemini bet, so anyone can check that the money moved on what
-// Gemini said (SCHEMAS §4, §5.2):
+// Gemini said:
 //   Gemini's raw response body --sha256--> record.response_sha256
 //   GeminiSettlementRecord --hashJcs--> evidence_hash  (on chain at resolve)
 //   settlement Ruling (commits to evidence_hash) --hashJcs--> ruling_hash  (on chain at resolve)

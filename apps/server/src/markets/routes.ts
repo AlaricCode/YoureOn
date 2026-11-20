@@ -1,9 +1,7 @@
-// §2.13 Gemini market (Beat 6):
-//   GET /v1/markets/btc5m/current                       -> MarketCurrent
-//   GET /v1/markets/btc5m/quote?amount=<MicroUsdc>&a_side=YES|NO
-//                                                       -> {result: FairStakesResult, snapshot}
-// Bearer (app or stage). Served from the relay (deps.markets); 60/min per caller (§1.7).
-// The quote is a preview only: the binding one is taken inside propose_terms.
+// The Gemini market reads for the Bitcoin closer (current contract, quote preview), for any app
+// or stage session, 60/min per caller. Served from the relay (deps.markets). The quote is a
+// preview only: the binding one is taken when the terms are composed (markets/quote.ts).
+// Spec: docs/planning/API-CONTRACT.md §2.13.
 import { z } from 'zod/v4';
 import { MicroUsdc } from '@youre-on/shared/money';
 import type { RouteModule } from '../context';
