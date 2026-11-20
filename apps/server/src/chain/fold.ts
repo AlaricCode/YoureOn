@@ -1,6 +1,6 @@
-// The pure half of the chain projector (DATA-MODEL §3.5 / §8.1-§8.3, API-CONTRACT §5.4): folds
-// every attributed event of one bet into the projector-owned `bets` columns, diffs that against
-// the row, and decides the offchain state the chain implies ("the chain wins").
+// The pure half of the chain projector: folds every attributed event of one bet into the
+// projector-owned `bets` columns, diffs that against the row, and decides the offchain state the
+// chain implies ("the chain wins").
 //
 // Order-independent by construction: the fold is a function of the SET of events (status = the
 // furthest status reached; each column comes from the event that owns it; final outcome = the
@@ -13,6 +13,8 @@
 //   - binding fields (terms_hash, stakes, mint, party wallets) are never written, only checked.
 // events.rs is the source of truth for event names and fields; there is no BetPaid: money moves
 // in BetConceded / BetFinalized / AppealResolved / BetRefunded / BetCancelled (then BetClosed).
+//
+// Spec: docs/planning/DATA-MODEL.md §3.5.
 import type { BetRow } from '../bets/snapshot';
 import { BetState } from '@youre-on/shared/bet-state';
 import type { ChainEventName, ChainEventPayload } from '@youre-on/shared';
@@ -23,7 +25,7 @@ type PgOutcome = NonNullable<BetRow['outcome']>;
 type PgPayoutVia = NonNullable<BetRow['payout_via']>;
 type EndReason = NonNullable<BetRow['end_reason']>;
 
-/** Postgres onchain_status declaration order (DATA-MODEL §4): compared with < / >=. */
+/** Postgres onchain_status enum declaration order: compared with < / >=. */
 export const STATUS_RANK: Record<PgOnchainStatus, number> = {
   none: 0,
   open: 1,
@@ -38,7 +40,7 @@ export const statusRank = (s: PgOnchainStatus): number => STATUS_RANK[s];
 export const isTerminalStatus = (s: PgOnchainStatus): boolean =>
   statusRank(s) >= STATUS_RANK.settled;
 
-/** SCHEMAS OnchainStatus (Rust variant) -> Postgres (snake_case). */
+/** The shared OnchainStatus (Rust variant) -> Postgres (snake_case). */
 const PG_STATUS: Record<string, Exclude<PgOnchainStatus, 'none'>> = {
   Open: 'open',
   Locked: 'locked',
@@ -72,7 +74,7 @@ export type FoldEvent = {
   [N in ChainEventName]: { id: bigint; name: N; signature: string; data: ChainEventPayload<N> };
 }[ChainEventName];
 
-/** Projector-owned `bets` columns (DATA-MODEL §8.1), as the chain says they are. */
+/** Projector-owned `bets` columns, as the chain says they are. */
 export type ProjectedColumns = Partial<
   Pick<
     BetRow,
@@ -292,8 +294,9 @@ export interface FoldMismatch {
 }
 
 /**
- * The resolve-time outcome the RPC path wrote legitimately changes when the terminal event is an
- * appeal decision or a timeout refund (from Appealed): not a mismatch, just the newer value.
+ * An outcome the RPC path wrote earlier (e.g. at resolve) legitimately changes when the terminal
+ * event is an appeal decision, a timeout refund or a cancel (AppealResolved, BetRefunded,
+ * BetCancelled): not a mismatch, just the newer value.
  */
 const outcomeEvolves = (k: ProjectedKey, fold: ChainFold): boolean =>
   k === 'outcome' &&
@@ -317,7 +320,7 @@ const str = (v: unknown): string | null =>
 /**
  * The write that brings `row` in line with the chain. Monotonic: onchain_status only advances,
  * and a terminal row keeps its status and money columns (a disagreement is reported instead).
- * Clears onchain_pending once the chain reached it (DATA-MODEL §8.2 step 3: chain_ack -> stream).
+ * Clears onchain_pending once the chain reached it (chain_ack -> stream).
  */
 export function diffProjection(row: BetRow, fold: ChainFold): ProjectionDiff {
   const mismatches: FoldMismatch[] = [];
@@ -391,7 +394,7 @@ export function diffProjection(row: BetRow, fold: ChainFold): ProjectionDiff {
   return { patch, status, advanced: status !== row.onchain_status, mismatches };
 }
 
-// ---- the chain wins (DATA-MODEL §8.1 last row, §8.3) -----------------------------------------
+// ---- the chain wins ---------------------------------------------------------------------------
 
 const ORDER = BetState.options;
 const stateRank = (s: BetState) => ORDER.indexOf(s);
@@ -425,7 +428,7 @@ export function terminalFacts(
   };
 }
 
-/** The offchain state an onchain status implies (SCHEMAS §9.2 / DATA-MODEL §5.6 table). */
+/** The offchain state an onchain status implies. */
 export function impliedState(
   status: PgOnchainStatus,
   terminal: Pick<Terminal, 'outcome' | 'from_status'> | null,
@@ -462,9 +465,9 @@ export function impliedState(
 }
 
 /**
- * DATA-MODEL §8.1: state := implied(onchain_status) when the implied state is later in the enum
- * order, or when the row is CANCELLED / EXPIRED while the chain shows locked..settled (the one
- * exception bets_guard allows). Every other terminal state is final. null = leave state alone.
+ * state := implied(onchain_status) when the implied state is later in the enum order, or when the
+ * row is CANCELLED / EXPIRED while the chain shows locked..settled (the one exception bets_guard
+ * allows). Every other terminal state is final. null = leave state alone.
  */
 export function chainWins(
   row: Pick<BetRow, 'state' | 'end_reason'>,

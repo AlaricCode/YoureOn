@@ -1,9 +1,7 @@
-// QuickNode Streams receiver (API-CONTRACT §5, DATA-MODEL §8.2):
+// QuickNode Streams receiver:
 //   POST /webhooks/quicknode   X-QN-Signature HMAC, no bearer auth
 //
-// Ported from Verdict packages/backend/src/routes/webhooks.ts:35-80 (cheap header checks before
-// the HMAC, JSON parsed only after the HMAC over the raw bytes verified, idempotent handler).
-// Ack rules are OURS (API-CONTRACT §5.3), not Verdict's 204/400:
+// Ack rules:
 //   - bad / missing / stale signature → 401 (and an alert: 3 failed retries auto-pause the Stream);
 //   - transient DB error (an allowlist: connection loss, serialization/deadlock, resources,
 //     admin shutdown, lock timeout) → 503 so QuickNode retries (3 × 1 s);
@@ -11,8 +9,11 @@
 //     Stream (stopping every money event). Malformed envelope, wrong program, bad events → 200
 //     with the problem logged. A projector / trigger / integrity failure → 200 with an alert, and
 //     the delivery is stored WITHOUT the projector (apply_error 'projector_failed') so the batch
-//     is not lost (DATA-MODEL §8.2 step 4);
+//     is not lost;
 //   - success → 200 fast (one DB transaction, no RPC calls).
+// Adapted from Verdict's packages/backend/src/routes/webhooks.ts (docs/MERGE-PLAN.md).
+//
+// Spec: docs/planning/API-CONTRACT.md §5.3.
 import type { Context } from 'hono';
 import type { AppEnv, RouteModule } from '../context';
 import { errorBody, HttpError } from '../errors';
@@ -40,7 +41,6 @@ export const QUICKNODE_WEBHOOK_PATH = '/webhooks/quicknode';
 /**
  * A filtered 5-block batch is a few KB (the Stream sends compression none). 1 MiB leaves room
  * for a busy batch; an unfiltered probe (`test_filter --probe`) can be larger and is refused 413.
- * The body is read only after the cheap header checks (precheckQuickNodeHeaders).
  */
 export const QUICKNODE_BODY_LIMIT = 1024 * 1024;
 
@@ -83,8 +83,7 @@ export function createChainRoutes(o: ChainRoutesOptions = {}): RouteModule {
           d.log.error('chain.webhook_unconfigured', { hint: 'set QN_STREAM_SECURITY_TOKEN' });
           throw new HttpError('NOT_FOUND');
         }
-        // Cheap rejection before buffering the body: headers present, timestamp fresh,
-        // signature 64 hex. Only then is the body (≤ QUICKNODE_BODY_LIMIT) read for the HMAC.
+        // Header prechecks first: the body (≤ QUICKNODE_BODY_LIMIT) is read only if they pass.
         const nonce = c.req.header(QN_HEADER_NONCE);
         const timestamp = c.req.header(QN_HEADER_TIMESTAMP);
         const signature = c.req.header(QN_HEADER_SIGNATURE);

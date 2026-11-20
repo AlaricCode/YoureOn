@@ -1,11 +1,9 @@
-// QuickNode Streams webhook authentication (API-CONTRACT §5.3, FINDINGS §3.12, spike 06).
+// QuickNode Streams webhook authentication: an HMAC over nonce ‖ timestamp ‖ body, a timing-safe
+// compare and a timestamp skew window. The HMAC covers the **decompressed** body; we gunzip only
+// when the bytes start with 1f 8b (whatever Content-Encoding says).
+// Adapted from Verdict's packages/backend/src/chain/quicknode.ts (docs/MERGE-PLAN.md).
 //
-// Ported from Verdict packages/backend/src/chain/quicknode.ts (HMAC over the raw body,
-// timing-safe compare, timestamp skew window). Our contract differs in two places, and ours wins:
-//   - the HMAC covers the **decompressed** body; we gunzip only when the bytes start with 1f 8b
-//     (whatever Content-Encoding says);
-//   - X-QN-Timestamp is unix seconds per the spike simulator, but values with > 11 digits are
-//     read as milliseconds (PENDING-KEY: confirm with `test_filter --probe`).
+// Spec: docs/planning/API-CONTRACT.md §5.3.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { gunzip } from 'node:zlib';
@@ -15,13 +13,13 @@ const gunzipAsync = promisify(gunzip);
 export const QN_HEADER_NONCE = 'x-qn-nonce';
 export const QN_HEADER_TIMESTAMP = 'x-qn-timestamp';
 export const QN_HEADER_SIGNATURE = 'x-qn-signature';
-/** Batch headers (spike simulator names; PENDING-KEY). Logged into chain_events.delivery_id. */
+/** Batch headers, logged into chain_events.delivery_id. */
 export const QN_HEADER_BATCH_START = 'batch-start-range';
 export const QN_HEADER_BATCH_END = 'batch-end-range';
 export const QN_HEADER_DATASET = 'stream-dataset';
-/** Reject |now − timestamp| > 300 s (API-CONTRACT §5.3). */
+/** Reject |now − timestamp| > 300 s. */
 export const QN_MAX_SKEW_S = 300;
-/** Optional source-IP allowlist entry (API-CONTRACT §5.3). Not enforced: Fly's proxy rewrites. */
+/** Optional source-IP allowlist entry. Not enforced: Fly's proxy rewrites the source address. */
 export const QN_SOURCE_IP = '141.148.40.227';
 /**
  * Decompression cap. The HMAC covers the decompressed body, so an unauthenticated caller can make
@@ -44,7 +42,9 @@ export interface QuickNodeSigInput {
   nowMs: number;
 }
 
-/** hex HMAC-SHA256(secret, nonce ‖ timestamp ‖ body). Also used by tests and the local simulator. */
+/**
+ * hex HMAC-SHA256(secret, nonce ‖ timestamp ‖ body). Also used by tests and the local simulator.
+ */
 export function quickNodeSignature(
   secret: string,
   nonce: string,
@@ -66,7 +66,9 @@ export async function decompressBody(raw: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await gunzipAsync(raw, { maxOutputLength: QN_MAX_DECOMPRESSED_BYTES }));
 }
 
-/** X-QN-Timestamp → unix ms. Seconds normally; > 11 digits means milliseconds. null if malformed. */
+/**
+ * X-QN-Timestamp → unix ms. Seconds normally; > 11 digits means milliseconds. null if malformed.
+ */
 export function parseQnTimestampMs(ts: string): number | null {
   if (!/^\d{1,16}$/.test(ts)) return null;
   const n = Number(ts);
@@ -88,9 +90,9 @@ export function precheckQuickNodeHeaders(
 }
 
 /**
- * Verifies the X-QN-* headers against the (decompressed) body. The cheap checks (headers present,
- * timestamp fresh) run before the HMAC; the compare is constant-time over equal-length buffers.
- * Returns the decompressed body on success so the caller parses exactly the bytes that were signed.
+ * Verifies the X-QN-* headers against the (decompressed) body: the header prechecks first, then
+ * the HMAC, compared in constant time over equal-length buffers. Returns the decompressed body on
+ * success so the caller parses exactly the bytes that were signed.
  */
 export async function verifyQuickNodeSignature(
   i: QuickNodeSigInput,

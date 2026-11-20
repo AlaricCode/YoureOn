@@ -1,42 +1,9 @@
-// Chain projector (API-CONTRACT §5.4, DATA-MODEL §3.5 / §8.1-§8.3, ESCROW §7.1). Runs inside the
-// webhook's DB transaction (ingest.ts), once per delivery, with every newly stored chain_events
-// row. "The QuickNode Stream carries the program's events and is the source of truth for money
-// moved: it writes the database projection, gates paid/voided states, drives the stage ticker;
-// if the two ever disagree, the chain wins" (ARCHITECTURE).
-//
-// Per delivery:
-//   - Config events: stored only (bet_id NULL), marked applied.
-//   - Orphans (no bets row): apply_error 'unknown_bet' (DATA-MODEL §8.3), never pushed; parked,
-//     so a later copy (rpc_poll / startup sweep) re-folds them if the row appears.
-//   - Bets are locked FOR UPDATE in a stable order (DATA-MODEL §8.2 step 3).
-//
-// Per bet:
-//   1. Attribution (ESCROW §7.1, TM-E5). A bet's events apply only once chain_events holds a
-//      BetCreated whose signature the SERVER sent for it: chain_txs (atomic_lock, or the
-//      sequential create_bet; its signature is recorded at send, before any event can exist), or
-//      bets.pending_sig (the tx sender's own RPC confirm). Until then rows stay 'not_ours' and
-//      are re-folded later, so arrival order does not matter. A BetCreated this projector applied
-//      earlier stays the verified lock (it was matched against a server signature when applied).
-//      Events are then bound to OUR instance of the bet_id (attributeEvents): close_bet frees the
-//      PDA and anyone may create_bet again with the same bet_id (ESCROW §5.1, test G4).
-//   2. Fold (fold.ts): ALL attributed events of the bet (applied earlier + new) -> the
-//      projector-owned columns, the furthest onchain_status, the terminal payout. Pure and
-//      order-independent; duplicates and replays fold to the same projection.
-//   3. Diff + write, inside a SAVEPOINT: only changed columns are written (the LockService /
-//      PayoutService RPC-confirmed writes are left alone when they agree), onchain_status only
-//      advances, onchain_pending clears once the chain reached it (chain_ack -> 'stream'), and
-//      the offchain state moves when the chain is ahead (chain wins: a missed RPC confirm is
-//      reconciled here, e.g. FINALIZED -> PAID, AWAITING_LOCK -> LOCKED, EXPIRED -> LOCKED).
-//      chain_txs.stream_seen_at is stamped; outbox bet_locked / payout rows are queued.
-//      A deterministic failure (CHECK / trigger) rolls back to the savepoint only: that bet's
-//      chain.* events are still pushed, an audit row + alert record the disagreement, and the
-//      next delivery for the bet re-attempts the projection from the full event set. Transient
-//      errors propagate (the webhook answers 503 and QuickNode retries).
-//   4. Fan-out: each new event is appended to bet_events as `chain.<Name>` (gapless seq,
-//      chain_event_id set; the payload carries the signature, so the stage links it to the
-//      Explorer) and applied_at is set. A state move adds `bet.state` and, where the RPC path
-//      would have voiced it, the judge.cue (LOCKED, PAID / VOIDED, EXPIRED). The caller publishes
-//      after COMMIT.
+// Chain projector: turns the escrow's events into the `bets` projection, the chain.* realtime
+// events and the outbox pushes. Runs inside its caller's DB transaction (ingest.ts: a webhook or
+// rpc_poll delivery, or the reconciler's re-fold of parked rows). The QuickNode Stream is the
+// source of truth for money moved: it writes the database projection, catches the bet up when a
+// server RPC confirm is late or missed (e.g. FINALIZED -> PAID) and drives the stage ticker; when
+// the chain and the database disagree, the chain wins.
 //
 // Mismatches between the chain and the row (terms_hash, stakes, wallets, hashes, deadlines) are
 // never a reason to drop a money event: they are written into audit_log ('chain.mismatch') and
@@ -47,6 +14,8 @@
 // its sweep; marking a lock 'confirmed' here would strand its nonce), the finalize timer (the
 // keeper's finalize-due sweep is the durable backstop), token-balance cross-checks (the filter
 // does not forward balances), the appeal panel.
+//
+// Spec: docs/planning/API-CONTRACT.md §5.4.
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { auditLog, bets, chainEvents, chainTxs, outbox, users, type Db } from '@youre-on/db';
 import { ChainEvents, type ChainEventName } from '@youre-on/shared';
@@ -83,13 +52,19 @@ export const APPLY_ERROR = {
    * Re-folded later: the bet's next event, a duplicate copy, or the reconciler's height backfill.
    */
   notOurs: 'not_ours',
-  /** Final: outside our instance of the bet_id (foreign BetCreated, before our lock, after our close). */
+  /**
+   * Final: outside our instance of the bet_id (foreign BetCreated, before our lock, after our
+   * close).
+   */
   notOursLock: 'not_ours_lock',
-  /** Parked: the projector threw a deterministic error; stored by ingest's fallback, re-folded later. */
+  /**
+   * Parked: the projector threw a deterministic error; stored by ingest's fallback, re-folded
+   * later.
+   */
   projectorFailed: 'projector_failed',
   noBetId: 'no_bet_id',
   unknownEvent: 'unknown_event',
-  /** Final: the stored payload does not parse as SCHEMAS ChainEvents.<name>. */
+  /** Final: the stored payload does not parse as the shared ChainEvents.<name> schema. */
   payloadInvalid: 'payload_invalid',
   /**
    * Parked: attributed and already PUSHED (applied_at set, bet_events row exists), but the bets
@@ -121,7 +96,9 @@ export interface InsertedChainEvent {
 export interface Fanout {
   envelope: BetEventEnvelope;
   room_id: string | null;
-  /** Both parties' user channels (the hub dedupes by seq per socket), as lock/common fanout does. */
+  /**
+   * Both parties' user channels (the hub dedupes by seq per socket), as lock/common fanout does.
+   */
   user_ids?: readonly string[];
 }
 
@@ -154,9 +131,9 @@ export type ServerSignatureLookup = (
 
 /**
  * bets.pending_sig while onchain_pending is 'open' / 'locked': the lock signature the tx sender
- * recorded at its own RPC `confirmed` (DATA-MODEL §8.1). Only server-written columns count:
- * create_sig is projector-written FROM chain events, so using it would let an event vouch for
- * itself. A fallback only: the projector clears pending once the Stream echoes the lock.
+ * recorded at its own RPC `confirmed`. Only server-written columns count: create_sig is
+ * projector-written FROM chain events, so using it would let an event vouch for itself. A
+ * fallback only: the projector clears pending once it applies the lock's chain events.
  */
 export async function betsColumnLockSignatures(
   tx: Pick<Tx, 'select'>,
@@ -183,9 +160,9 @@ const addTo = (m: Map<string, Set<string>>, k: string, v: string) => {
 };
 
 /**
- * DATA-MODEL §8.2 step 2: the signature of every atomic_lock (or sequential create_bet) row the
- * server built for the bet, whatever its status (a lock marked expired / failed that landed
- * after all is still ours: the chain decides), plus pending_sig (above).
+ * The signature of every atomic_lock (or sequential create_bet) row the server built for the bet,
+ * whatever its status (a lock marked expired / failed that landed after all is still ours: the
+ * chain decides), plus pending_sig (above).
  */
 export const serverLockSignatures: LockSignatureLookup = async (tx, betIds) => {
   const out = new Map<string, Set<string>>();
@@ -259,7 +236,7 @@ export const serverTxSignatures: ServerSignatureLookup = async (tx, betIds) => {
   return out;
 };
 
-// ---- attribution (ESCROW §5.1 / §7.1) ---------------------------------------------------------
+// ---- attribution ------------------------------------------------------------------------------
 
 /** What attribution needs to know about one chain_events row. */
 export interface AttributionRow {
@@ -300,7 +277,7 @@ const anyOf = (xs: readonly Tri[]): Tri =>
   xs.includes(true) ? true : xs.includes(null) ? null : false;
 
 /**
- * Binds a bet's events to OUR instance of its bet_id (ESCROW §5.1 / §7.1, TM-E5, TM-I1).
+ * Binds a bet's events to OUR instance of its bet_id.
  *
  * `all` is every chain_events row stored for the bet_id; `lock` is the verified BetCreated under
  * our lock signature. Our instance runs from `lock` to our BetClosed (inclusive; terminal + close
@@ -374,7 +351,7 @@ const isChainEventName = (n: string): n is ChainEventName =>
 
 type ChainEventRow = typeof chainEvents.$inferSelect;
 
-/** The stored row as SCHEMAS ChainEvents.<name> (ChainMeta from the columns), or null. */
+/** The stored row as the shared ChainEvents.<name> (ChainMeta from the columns), or null. */
 export function parseStoredEvent(r: ChainEventRow): FoldEvent | null {
   if (!isChainEventName(r.event_name)) return null;
   const parsed = ChainEvents[r.event_name].safeParse({
@@ -391,10 +368,13 @@ export function parseStoredEvent(r: ChainEventRow): FoldEvent | null {
   return { id: r.id, name: r.event_name, signature: r.signature, data: parsed.data } as FoldEvent;
 }
 
+/**
+ * Injectable attribution lookups. With neither set, both sets come from one chain_txs query
+ * (signatureSets); when only one is set, the other defaults to serverLockSignatures /
+ * serverTxSignatures.
+ */
 export interface ChainProjectorOptions {
-  /** Defaults to serverLockSignatures (chain_txs + pending_sig). */
   lockSignatures?: LockSignatureLookup;
-  /** Defaults to serverTxSignatures (chain_txs + pending_sig). */
   serverSignatures?: ServerSignatureLookup;
 }
 
@@ -431,7 +411,7 @@ export function createChainProjector(o: ChainProjectorOptions = {}): ChainProjec
       await setError(tx, unknown, APPLY_ERROR.unknownEvent);
       if (betIds.size === 0) return [];
 
-      // Lock the bets in a stable order (DATA-MODEL §8.2 step 3: SELECT … FOR UPDATE).
+      // SELECT … FOR UPDATE in a stable order (by id): deliveries never deadlock on the bets rows.
       const ids = [...betIds].sort();
       const rows = await tx
         .select()
@@ -489,9 +469,9 @@ export const streamSeenCols = {
 };
 
 /**
- * The Streams lane latency (ARCHITECTURE §6 "Streams: send -> webhook", PENDING-KEY): once per
- * server tx, when its first Stream copy arrives, whether the projector applied it or it was a
- * duplicate of an rpc_poll copy (ingest.ts). The operator reads these to measure the Stream's lag.
+ * The Streams lane latency (send -> webhook): once per server tx, when its first Stream copy
+ * arrives, whether the projector applied it or it was a duplicate of an rpc_poll copy (ingest.ts).
+ * The operator reads these to measure the Stream's lag.
  */
 export function logStreamSeen(log: Logger, seen: readonly StreamSeen[], nowMs: number): void {
   for (const s of seen)
@@ -523,6 +503,28 @@ interface BetInput {
   log: Logger;
 }
 
+/**
+ * Projects one bet (locked FOR UPDATE by the caller) from ALL its attributed events, applied
+ * earlier and new:
+ *   1. Attribution. The events apply only once chain_events holds a BetCreated whose signature
+ *      the SERVER sent: a chain_txs atomic_lock (or sequential create_bet), whose signature is
+ *      recorded at send, before any event can exist, or bets.pending_sig (the tx sender's own RPC
+ *      confirm). Until then the rows stay 'not_ours' and are re-folded later, so arrival order
+ *      does not matter. attributeEvents then binds them to OUR instance of the bet_id.
+ *   2. Fold (fold.ts), diff and write, inside a SAVEPOINT: onchain_status only advances,
+ *      onchain_pending clears once the chain reached it (chain_ack -> 'stream'), and the offchain
+ *      state moves when the chain is ahead, so a missed RPC confirm is reconciled here (e.g.
+ *      FINALIZED -> PAID, AWAITING_LOCK -> LOCKED, EXPIRED -> LOCKED). chain_txs.stream_seen_at is
+ *      stamped and the outbox rows are queued in the same savepoint. A deterministic failure
+ *      (CHECK / trigger) rolls back to the savepoint only: the bet's chain.* events are still
+ *      pushed, an audit row + alert record the disagreement, and the rows are re-folded later
+ *      (APPLY_ERROR.projectionRejected). Transient errors propagate (the webhook answers 503 and
+ *      QuickNode retries).
+ *   3. Fan-out: each new event is appended to bet_events as `chain.<Name>` (gapless seq; the
+ *      payload carries the signature, so the stage links it to the Explorer) and applied_at is
+ *      set. A state move adds `bet.state` and, where the RPC path would have voiced it, the
+ *      judge.cue. The caller publishes after COMMIT.
+ */
 async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
   const { bet, nowMs, log } = i;
   const all = await tx
@@ -705,7 +707,7 @@ async function projectBet(tx: Tx, i: BetInput): Promise<Fanout[]> {
   await tx
     .update(chainEvents)
     .set({
-      // ISO text + cast: a Date param in raw sql is not serialized by drizzle (resolve-due fix)
+      // ISO text + cast: a Date param in raw sql is not serialized by drizzle
       applied_at: sql`coalesce(${chainEvents.applied_at}, ${new Date(nowMs).toISOString()}::timestamptz)`,
       apply_error: rejected ? APPLY_ERROR.projectionRejected : null,
     })
@@ -740,7 +742,10 @@ async function partyNames(tx: Pick<Tx, 'select'>, bet: BetRow) {
 
 const usd = (micro: bigint) => formatUsd(micro.toString());
 
-/** reason strings match the RPC path's, so phones treat both the same (mobile reads it as end_reason). */
+/**
+ * reason strings match the RPC path's, so phones treat both the same (mobile reads it as
+ * end_reason).
+ */
 function reasonFor(move: StateMove, after: BetRow, fold: ChainFold): string | null {
   switch (move.state) {
     case 'RULED':
@@ -826,10 +831,10 @@ async function cueFor(tx: Tx, before: BetRow, after: BetRow, move: StateMove, fo
 }
 
 /**
- * Outbox rows (API-CONTRACT §7.4, DATA-MODEL §5.17) for money the chain just locked or moved,
- * written in the projection's transaction (a rejected write rolls them back with it; the retry
- * queues them again). dedupe_key = {bet_id}:{kind}:{signature}:{user_id}, so a re-fold or a
- * replay is a no-op. Display data only.
+ * Outbox rows for money the chain just locked or moved, written in the projection's transaction
+ * (a rejected write rolls them back with it; the retry queues them again).
+ * dedupe_key = {bet_id}:{kind}:{signature}:{user_id}, so a re-fold or a replay is a no-op.
+ * Display data only.
  */
 async function queuePushes(
   sp: Tx,

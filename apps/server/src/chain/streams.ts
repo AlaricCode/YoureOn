@@ -1,16 +1,14 @@
-// QuickNode Streams intake: turns a verified webhook body (the infra/quicknode/filter.js output,
-// API-CONTRACT §5.2) into ordered, de-duplicated chain_events rows.
-//
-// Ported from Verdict packages/backend/src/chain/streams.ts (envelope validation, per-event
-// schema validation with a `rejected` list, in-batch dedupe, stable ordering). Our contract
-// differs and wins:
-//   - events are emit_cpi! inner instructions, keyed (signature, outer_ix, inner_ix), not
-//     (signature, index);
+// QuickNode Streams intake: turns a verified webhook body (the infra/quicknode/filter.js output)
+// into ordered, de-duplicated chain_events rows.
+//   - events are emit_cpi! inner instructions, keyed (signature, outer_ix, inner_ix);
 //   - the filter forwards raw `eventBase64` (disc ‖ borsh) and the server re-decodes it with the
 //     compiled IDL (decoder.ts), ignoring the filter's `name` hint;
 //   - there is no slot (getBlock objects carry none): order by blockHeight, then txIndex, then
 //     (outerIx, innerIx), then delivery order;
 //   - undecodable-but-attributed events are still stored (with apply_error) for the audit trail.
+// Adapted from Verdict's packages/backend/src/chain/streams.ts (docs/MERGE-PLAN.md).
+//
+// Spec: docs/planning/API-CONTRACT.md §5.2.
 import { getBase58Encoder } from '@solana/kit';
 import { z } from 'zod/v4';
 import { ChainEvents, chainEventDedupKey, Signature, type ChainEventName } from '@youre-on/shared';
@@ -63,7 +61,7 @@ export class StreamPayloadError extends Error {
   }
 }
 
-/** One event ready for `INSERT INTO chain_events` (DATA-MODEL §5.9). */
+/** One event ready for `INSERT INTO chain_events`. */
 export interface ParsedChainEvent {
   signature: string;
   outer_ix: number;
@@ -79,7 +77,7 @@ export interface ParsedChainEvent {
   bet_id: string | null;
   payload: Record<string, unknown>;
   raw_b64: string;
-  /** Set when the bytes are ours but can't be decoded or don't match SCHEMAS §10.2. */
+  /** Set when the bytes are ours but can't be decoded or don't match the ChainEvents schema. */
   apply_error: string | null;
 }
 
@@ -100,11 +98,11 @@ const knownChainEvent = (name: string): name is ChainEventName =>
   Object.prototype.hasOwnProperty.call(ChainEvents, name);
 
 /**
- * Validates a decoded payload against SCHEMAS ChainEvents.<name> (with a placeholder ChainMeta,
- * since the meta is added at fan-out). Returns null if valid, else a short reason.
+ * Validates a decoded payload against the shared ChainEvents.<name> schema (with a placeholder
+ * ChainMeta, since the meta is added at fan-out). Returns null if valid, else a short reason.
  */
 export function payloadSchemaError(name: string, payload: Record<string, unknown>): string | null {
-  if (isConfigEvent(name)) return null; // store-only; no SCHEMAS shape
+  if (isConfigEvent(name)) return null; // store-only; no ChainEvents schema
   if (!knownChainEvent(name)) return `unknown event ${name}`;
   const r = ChainEvents[name].safeParse({
     signature: '1'.repeat(64),
@@ -238,7 +236,7 @@ export function parseStreamDelivery(body: unknown): StreamBatch {
   return batch;
 }
 
-// ---- rpc_poll (DATA-MODEL §8.3 "Gaps": the reconciler's getTransaction copy) -----------------
+// ---- rpc_poll (the reconciler's getTransaction copy) -----------------------------------------
 
 /** One confirmed transaction as getTransaction (encoding json) returns it, normalized. */
 export interface RpcTransaction {
@@ -250,7 +248,9 @@ export interface RpcTransaction {
   blockTime: number | null;
   /** meta.err (null = success). */
   err: unknown;
-  /** Static keys, then meta.loadedAddresses.writable, then .readonly (the runtime's index order). */
+  /**
+   * Static keys, then meta.loadedAddresses.writable, then .readonly (the runtime's index order).
+   */
   accountKeys: readonly string[];
   innerInstructions: readonly {
     index: number;
@@ -261,13 +261,12 @@ export interface RpcTransaction {
 const b58 = getBase58Encoder();
 
 /**
- * The rpc_poll twin of infra/quicknode/filter.js (ESCROW §7.1 rules 1-5) over one getTransaction
- * result: drop a failed tx; take INNER instructions of ESCROW_ID whose first account is the
- * event-authority PDA and whose data starts with the Anchor event tag; never top-level ones. The
- * events then go through the same envelope parser as a Stream delivery, so a row has the same
- * dedup key (signature, outer_ix, inner_ix) and payload whichever source stores it first. `slot`
- * is set, block_height when the client fetched it; tx_index stays null (a later Stream copy
- * backfills both, ingest.ts).
+ * The rpc_poll twin of infra/quicknode/filter.js over one getTransaction result: drop a failed
+ * tx; take INNER instructions of ESCROW_ID whose first account is the event-authority PDA and
+ * whose data starts with the Anchor event tag; never top-level ones. The events then go through
+ * the same envelope parser as a Stream delivery, so a row has the same dedup key (signature,
+ * outer_ix, inner_ix) and payload whichever source stores it first. `slot` is set, block_height
+ * when the client fetched it; tx_index stays null (a later Stream copy backfills both, ingest.ts).
  */
 export function eventsFromRpcTransaction(tx: RpcTransaction, eventAuthority: string): StreamBatch {
   if (tx.err !== null && tx.err !== undefined) return parseStreamDelivery(null);

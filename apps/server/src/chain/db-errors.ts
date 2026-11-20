@@ -1,6 +1,8 @@
-// Which database errors a retry can fix (API-CONTRACT §5.3 ack rules). Shared by the webhook route
-// (503 vs 200) and the projector (a per-bet savepoint rethrows transient errors so the whole
-// delivery is retried, and contains deterministic ones so one bad bet cannot sink the batch).
+// Which database errors a retry can fix. Shared by the webhook route (503 vs 200) and the projector
+// (a per-bet savepoint rethrows transient errors so the whole delivery is retried, and contains
+// deterministic ones so one bad bet cannot sink the batch).
+//
+// Spec: docs/planning/API-CONTRACT.md §5.3.
 
 /** Every `code` on an error and its `cause` chain (Drizzle wraps postgres.js errors). */
 function errorCodes(e: unknown): string[] {

@@ -1,8 +1,8 @@
-// Server-side Solana plumbing for the money path (beats 2-4): keys, an injectable chain client,
+// Server-side Solana plumbing for the money path: keys, an injectable chain client,
 // build -> simulate -> rebuild with a CU margin, send with preflight ON and confirm by polling
-// getSignatureStatuses (~400 ms; signatureSubscribe is cut), and small account readers.
-// Ported from scripts/lib/chain.ts + scripts/lib/nonce.ts (the deploy/smoke scripts), with the
-// RPC behind `ChainClient` so tests run the same code against LiteSVM or a fake.
+// getSignatureStatuses (every ~400 ms; no signatureSubscribe), and small account readers.
+// The RPC sits behind `ChainClient`, so tests run the same code against LiteSVM or a fake; the
+// deploy / smoke scripts have their own counterparts (scripts/lib/chain.ts, scripts/lib/nonce.ts).
 //
 // Safety rails:
 //   - rpcChainClient refuses mainnet-beta (genesis hash) before the first write;
@@ -109,7 +109,7 @@ export interface ChainClient {
   signatureStatus(sig: string, o?: { searchHistory?: boolean }): Promise<SigStatus | null>;
   blockHeight(): Promise<bigint>;
   getAccount(addr: Address): Promise<RawAccount | null>;
-  /** Sum of every token account of `owner` for `mint` (API-CONTRACT §2.14). */
+  /** Sum of every token account of `owner` for `mint`. */
   tokenBalanceByOwner(owner: Address, mint: Address): Promise<bigint>;
   lamports(addr: Address): Promise<bigint>;
   /**
@@ -149,7 +149,9 @@ export interface MemcmpFilter {
 
 /** The RPC rejected the tx at preflight (nothing landed, no fee). */
 export class PreflightError extends Error {
-  /** The recent blockhash of the rejected tx, when the caller knows it (BlockhashNotFound retries). */
+  /**
+   * The recent blockhash of the rejected tx, when the caller knows it (BlockhashNotFound retries).
+   */
   blockhash?: string;
   constructor(
     message: string,
@@ -299,7 +301,9 @@ const NETWORK_ERROR_CODES = new Set([
   'UND_ERR_CLOSED',
 ]);
 
-/** A fetch-level network failure (`TypeError: fetch failed` with a socket code in its cause chain). */
+/**
+ * A fetch-level network failure (`TypeError: fetch failed` with a socket code in its cause chain).
+ */
 export function isNetworkError(e: unknown): boolean {
   for (let cur: unknown = e, depth = 0; cur && depth < 5; depth++) {
     const code = (cur as { code?: unknown }).code;
@@ -805,9 +809,8 @@ export function rpcChainClient(
       return value;
     },
     async transaction(sig) {
-      // Devnet carries v1 transactions: version 0 would fail with -32015 on those (DATA-MODEL
-      // §8.3). Our own txs are v0, so an RPC that rejects the `1` parameter is retried with 0
-      // (and remembered).
+      // Devnet carries v1 transactions: version 0 would fail with -32015 on those. Our own txs
+      // are v0, so an RPC that rejects the `1` parameter is retried with 0 (and remembered).
       const get = (v: 0 | 1) =>
         poll
           .getTransaction(sig as Signature, {
@@ -897,7 +900,10 @@ export interface ServerKeys {
   judge: KeyPairSigner | null;
   appeal: KeyPairSigner | null;
   treasury: KeyPairSigner | null;
-  /** Custodial demo parties (LOCK_SIGNER=server, cp1-drive). The phones import the same seeds (D-A). */
+  /**
+   * Custodial demo parties (LOCK_SIGNER=server, scripts/cp1-drive.ts). The phones import the same
+   * seeds.
+   */
   demoA: KeyPairSigner | null;
   demoB: KeyPairSigner | null;
 }
@@ -936,7 +942,9 @@ export interface ChainRuntime {
   cuPrice?: bigint;
 }
 
-/** From env; null when the RPC or the fee payer is not configured (chain features answer 503-ish). */
+/**
+ * From env; null when the RPC or the fee payer is not configured (chain features answer 503-ish).
+ */
 export async function chainRuntimeFromEnv(env: Env): Promise<ChainRuntime | null> {
   if (!env.SOLANA_DEVNET_RPC) return null;
   const keys = await loadServerKeys(env);
@@ -955,7 +963,7 @@ export async function chainRuntimeFromEnv(env: Env): Promise<ChainRuntime | null
 // ---------------------------------------------------------------------------------------------
 // Transactions
 
-/** Ceiling of simulated units × 1.3, and at least simulated + 10k (ESCROW §10.1). */
+/** Ceiling of simulated units × 1.3, at least simulated + 10k, at most the 1.4M CU tx maximum. */
 export function cuWithMargin(simulated: bigint): number {
   const u = Number(simulated);
   return Math.min(1_400_000, Math.max(Math.ceil(u * 1.3), u + 10_000));
@@ -1095,7 +1103,7 @@ export interface SendOptions {
   timeoutMs?: number;
   /** Blockhash txs: give up once the chain passes this height. */
   lastValidBlockHeight?: bigint | null;
-  /** First seen at `processed` (the payout animation, SCHEMAS §9.2). */
+  /** First seen at `processed` (the payout animation). */
   onProcessed?: (atMs: number) => void;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -1252,7 +1260,7 @@ export function heightOnce(client: ChainClient): () => Promise<bigint> {
 // ---------------------------------------------------------------------------------------------
 // Readers
 
-/** Nonce-pool account k = createWithSeed(fee payer, "yo-nonce-<k>", System) (ESCROW §5.0.1). */
+/** Nonce-pool account k = createWithSeed(fee payer, "yo-nonce-<k>", System). */
 export function poolAddress(feePayer: Address, k: number): Promise<Address> {
   return createAddressWithSeed({
     baseAddress: feePayer,

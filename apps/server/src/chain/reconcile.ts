@@ -1,21 +1,13 @@
-// Boot reconcile (DATA-MODEL §5.20 "Boot reconcile and sweep", ARCHITECTURE §1 "every timer is a
-// DB row first"): the first keeper pass after a (re)start, before the regular sweeps, re-checks
-// everything a restart can leave half-done against the chain and fixes it, then logs one summary
-// line and the boot health line:
-//
-//   - 'sent' atomic locks (landed -> LOCKED; unseen -> re-broadcast; dead at expires_at ->
-//     EXPIRED + revoke) and 'advancing' nonces                      LockService.sweep
-//   - 'sent' resolve / concede / finalize rows; RULED bets past the appeal window; CONCEDED /
-//     FINALIZED bets with no payout in flight                        PayoutService.finalizeDue
-//   - JUDGING bets whose decisive ruling never reached the chain   resolveDue (deps.onRuling)
-//   - 'sent' appeal / resolve_appeal rows; APPEALED bets whose panel died with the restart
-//                                                                    AppealService.sweep
-//   - 'sent' timeout_refund rows; bets past resolve_deadline        RefundService.sweep
-//   - and an audit: every post-lock, non-terminal bet against its Bet account; a mismatch the
-//     sweeps cannot explain is logged as chain.boot_anomaly (and listed in the summary).
+// Boot reconcile: the first keeper pass after a (re)start, before the regular sweeps, runs every
+// sweep that settles what a restart can leave half-done (sent locks and nonces, payouts and
+// finalize, rulings that never reached the chain, appeals, timeout refunds), then audits up to 50
+// post-lock, non-terminal bets against their Bet accounts: a mismatch the sweeps cannot explain is
+// logged as chain.boot_anomaly. It ends with one summary line and the boot health line.
 //
 // Every step is the same idempotent sweep the keeper runs every few seconds, so running this
 // again (or concurrently with another machine during a deploy) is harmless.
+//
+// Spec: docs/planning/ARCHITECTURE.md §1.3.
 import { inArray, sql } from 'drizzle-orm';
 import { bets, chainTxs } from '@youre-on/db';
 import type { BetState } from '@youre-on/shared/bet-state';

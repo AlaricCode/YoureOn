@@ -1,13 +1,15 @@
-// Server-side builders for an escrow Bet's exits (ESCROW §5.2): the instructions of
+// Server-side builders for an escrow Bet's exits: the instructions of
 // [ATA creates, timeout_refund | finalize | cancel_open_bet, close_bet] (or a lone close_bet) for
-// one Bet, paid by the fee payer, plus what the exit will pay. The server port of
-// scripts/lib/crank.ts over the injectable ChainClient (so LiteSVM tests run it), used by the
-// timeout-refund and orphan sweeps (src/payout/refund.ts). Which exit is due comes from the
-// shared table (packages/shared/src/chain/exits.ts).
+// one Bet, paid by the fee payer, plus what the exit will pay. Used by the timeout-refund and
+// orphan sweeps (src/payout/refund.ts); which exit is due comes from the shared table
+// (packages/shared/src/chain/exits.ts). scripts/lib/crank.ts builds the same exits for the CLI
+// crank; this version runs over the injectable ChainClient, so LiteSVM tests run it.
 //
-// Payouts go only to the parties' ATAs for the bet's mint (the program enforces I1); a missing ATA
-// is created idempotently by the fee payer, and only for a side that receives something. Rent
-// always goes to bet.rent_payer (P8).
+// Payouts go only to the parties' ATAs for the bet's mint (the program accepts nothing but the
+// party's own token accounts for that mint); a missing ATA is created idempotently by the fee
+// payer, and only for a side that receives something. Rent always goes to bet.rent_payer.
+//
+// Spec: docs/planning/ESCROW-PROGRAM.md §5.2.
 import { getBase58Decoder, type Address, type Instruction, type KeyPairSigner } from '@solana/kit';
 import {
   findAssociatedTokenPda,
@@ -105,7 +107,7 @@ export async function planExit(
       }),
     );
   };
-  // A side that receives 0 may be omitted (ESCROW §5.2 payout set); never pay its ATA rent.
+  // A side that receives 0 may be omitted from the payout accounts; never pay its ATA rent.
   const payA = payout ? payout.to_a > 0n : false;
   const payB = payout ? payout.to_b > 0n : false;
   if (payA) await createIfMissing(bet.partyA, aTok);

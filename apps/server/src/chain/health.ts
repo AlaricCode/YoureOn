@@ -7,6 +7,8 @@
 //
 // Read-only. RPC reads run in parallel and each is time-boxed by the transport (src/chain/tx.ts),
 // so the report answers within a few seconds even when the RPC is in trouble (that is a warning).
+//
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 import { and, asc, desc, eq, inArray, lt, lte, sql } from 'drizzle-orm';
 import { address, type Address } from '@solana/kit';
 import { bets, chainEvents, chainTxs, noncePool } from '@youre-on/db';
@@ -118,7 +120,7 @@ export interface ChainHealthReport {
   toggles: DemoTogglesView;
   /** The judge's vision calls since boot (judge/stats.ts; the warm-up counts). */
   judge_llm: JudgeHealth;
-  /** = judge_llm.last_ok_at (API-CONTRACT §2.17 `llm_last_ok`). */
+  /** = judge_llm.last_ok_at, under the field name the API contract gives it. */
   llm_last_ok: string | null;
   /** Camera checks (judge/camera-checks.ts): kill switch, SAM config, last SAM ok / fail + ms. */
   checks: ChecksHealth;
@@ -401,7 +403,7 @@ export async function chainHealth(
           'critical',
           `JUDGE_AUTHORITY_SECRET_KEY is ${rt.keys.judge.address}, Config.judge_authority is ${c.judgeAuthority}: every resolve fails (NotJudge).`,
         );
-      // Beat 5 only: an appeal without the key is decided but never paid by resolve_appeal;
+      // Appeals only: an appeal without the key is decided but never paid by resolve_appeal;
       // timeout_refund returns both stakes after appeal_resolve_secs (300 s).
       if (!rt.keys.appeal)
         warn(
@@ -672,7 +674,7 @@ export const PANEL_KEY_NAMES = {
 } as const satisfies Record<(typeof PANEL_SEATS)[number], keyof Env>;
 
 /**
- * Beat 5: with the live LLM, a panel seat whose vendor has no key abstains on every appeal. Two
+ * The appeal panel: with the live LLM, a seat whose vendor has no key abstains on every appeal. Two
  * agreeing votes decide, so with two seats keyless no appeal can ever flip a ruling ("upheld, no
  * majority" every time). Warn-level (the first ruling does not need the panel). The mock LLM
  * answers every seat, so it is not flagged.

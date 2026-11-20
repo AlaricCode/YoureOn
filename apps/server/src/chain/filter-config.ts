@@ -1,6 +1,8 @@
 // The CONFIG block of infra/quicknode/filter.js, generated from the compiled escrow IDL and the
-// pinned ESCROW_ID (API-CONTRACT §5.1 "filter.js generated from the escrow IDL", ESCROW §7.1).
-// infra/quicknode/build-filter.ts writes it; test/chain-unit.test.ts fails on drift.
+// pinned ESCROW_ID. infra/quicknode/build-filter.ts writes it; test/chain-unit.test.ts fails on
+// drift.
+//
+// Spec: docs/planning/ESCROW-PROGRAM.md §7.1.
 import { getProgramDerivedAddress, type Address } from '@solana/kit';
 import { ESCROW_ID, EVENT_AUTHORITY_SEED } from '@youre-on/shared/chain/constants';
 import { EVENT_IX_TAG_LE, IDL_EVENTS } from './decoder';
@@ -8,7 +10,7 @@ import { EVENT_IX_TAG_LE, IDL_EVENTS } from './decoder';
 export interface FilterConfig {
   /** ESCROW_ID. The filter matches inner instructions to exactly this program. */
   programId: string;
-  /** Anchor event-cpi authority PDA ["__event_authority"]: the first account of every emit_cpi! ix. */
+  /** Anchor event-cpi authority PDA ["__event_authority"]: first account of every emit_cpi! ix. */
   eventAuthority: string;
   /** Anchor EVENT_IX_TAG, little-endian bytes. */
   eventIxTag: number[];

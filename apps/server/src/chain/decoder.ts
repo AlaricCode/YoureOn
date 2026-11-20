@@ -1,15 +1,15 @@
-// Escrow event decoder (ESCROW §7.1–§7.2, DATA-MODEL §5.9 `payload`).
-//
-// Decodes `disc(8) ‖ borsh` event bytes with the IDL **compiled into the server**
-// (packages/shared/idl/escrow.json, imported at build time, never fetched at runtime). The
-// Stream filter's `name` is only a routing hint: this decoder looks the discriminator up again
+// Escrow event decoder. Decodes `disc(8) ‖ borsh` event bytes with the IDL **compiled into the
+// server** (packages/shared/idl/escrow.json, imported at build time, never fetched at runtime).
+// The Stream filter's `name` is only a routing hint: this decoder looks the discriminator up again
 // and ignores it.
 //
-// Payload encoding (DATA-MODEL §5.9): u64 → decimal string, Pubkey → base58, [u8;32] → hex,
-// bet_id [u8;16] → UUID string, i64/u32 → number, bool → boolean, enums → Rust variant name.
+// Payload encoding: u64 → decimal string, Pubkey → base58, [u8;32] → hex, bet_id [u8;16] → UUID
+// string, i64/u32 → number, bool → boolean, enums → Rust variant name.
 //
-// The RPC fallback (DATA-MODEL §8.3, `rpc_poll`) must reuse decodeEventBytes so both sources
+// The rpc_poll fallback decodes through the same decodeEventBytes (streams.ts), so both sources
 // produce identical rows for the same (signature, outer_ix, inner_ix).
+//
+// Spec: docs/planning/DATA-MODEL.md §5.9.
 import { getAddressDecoder } from '@solana/kit';
 import { bytesToBetId } from '@youre-on/shared';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
@@ -179,7 +179,7 @@ function readDefined(r: Reader, name: string, field: string): unknown {
 export interface DecodedEvent {
   /** IDL event name, from the discriminator (never from the filter's hint). */
   name: string;
-  /** DATA-MODEL §5.9 `payload` (no ChainMeta). */
+  /** The chain_events `payload` (no ChainMeta). */
   payload: Record<string, unknown>;
 }
 

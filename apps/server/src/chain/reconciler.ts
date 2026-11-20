@@ -1,53 +1,19 @@
-// Stream-gap reconciler (DATA-MODEL §8.3 "Gaps", ARCHITECTURE §3 "Background loops" / data flow,
-// API-CONTRACT §5.4 "Reconciler"): on every keeper tick, transactions the SERVER sent whose
-// escrow events the QuickNode Stream has not delivered within the fallback delay
-// (rpcPollFallbackMs) are fetched with getTransaction and ingested as source 'rpc_poll', through
-// the same decoder rules (streams.ts eventsFromRpcTransaction = filter.js rules 1-5) and the same
-// projector.
-//
-// The fallback delay: RPC_POLL_FALLBACK_MS, else 30 s when a Stream is configured
-// (QN_STREAM_SECURITY_TOKEN set), else STREAM_FALLBACK_MS (5 s). With a Stream, 5 s is shorter
-// than its normal lag (dataset batches, elastic batching, delivery; whether the Solana dataset
-// trails at confirmed or finalized is unmeasured until the key run): rpc_poll would store every
-// server-tx event first, every chain.* event would say observed_via 'rpc_poll', and the Stream's
-// copies would only dedupe. Without a Stream nothing else will come, so 5 s.
+// Stream-gap reconciler: on every keeper tick, transactions the SERVER sent whose escrow events
+// the QuickNode Stream has not delivered within the fallback delay (rpcPollFallbackMs) are fetched
+// with getTransaction and ingested as source 'rpc_poll', through the same decoder rules
+// (streams.ts eventsFromRpcTransaction mirrors filter.js) and the same projector.
 //
 // rpc_poll is a DEGRADED mode. The Stream stays the normal source: its copy stamps
 // chain_txs.stream_seen_at (then the tx is never polled), whichever copy arrives second is a
 // dedupe no-op (a late Stream copy backfills the block position, ingest.ts), and every chain.*
 // event says which source observed it (observed_via), so the stage can tell them apart. Without a
-// Stream at all (the QuickNode key is pending, a paused or out-of-credits Stream) this keeps the
-// projection (onchain_status, chain_ack, payouts, the chain-wins reconcile of missed confirms) and
-// the stage's chain ticker working.
+// Stream at all (none configured, or a paused or out-of-credits Stream) this keeps the projection
+// (onchain_status, chain_ack, payouts, the chain-wins reconcile of missed confirms) and the
+// stage's chain ticker working. Anything the server did not send (a permissionless finalize /
+// timeout_refund by someone else) arrives only through the Stream: nothing here lists a bet's
+// signatures (getSignaturesForAddress).
 //
-// Bounded: only server-sent txs (chain_txs with a signature and a sent_at, never nonce advances;
-// any status, since a lock marked expired / failed that landed after all is still ours), sent
-// between the fallback delay and RPC_POLL_MAX_AGE_MS ago, with no chain_events row yet, at most
-// RPC_POLL_BATCH getTransaction calls per tick, and a per-signature backoff (excluded in SQL, so
-// backed-off rows never starve newer ones). The keeper runs its tasks one after another, so a
-// pass must stay short even when the RPC throttles: the calls go over the client's low-retry
-// poll RPC (tx.ts POLL_RPC_ATTEMPTS), a pass stops polling after RPC_POLL_BUDGET_MS (wall clock),
-// and the first 429 / 5xx ends it (the rest waits for the next tick, the rate limit is left to
-// the lock and payout confirms). Anything the server did not send (a permissionless
-// finalize / timeout_refund by someone else) only arrives through the Stream (the startup sweep
-// over getSignaturesForAddress(bet_pda) is not built).
-//
-// Oldest first: each tx is its own delivery, and the projector fans a delivery out in arrival
-// order, so polling in send order keeps the chain.* events of one bet in chain order.
-//
-// Second pass, fillHeights: getTransaction has no block height, so rpc_poll asks getBlock for it,
-// best effort. A row left without one (getBlock failed) cannot be ordered against Stream rows
-// (which carry a height but no slot), and a contested bet (someone else's finalize + close came
-// through the Stream) parks such events as 'not_ours' (projector attributeEvents: order unknown).
-// For bets with parked rows, the heights of their slot-only rows are fetched again (blockHeightAt,
-// same budget, HEIGHT_BATCH slots per tick, per-slot backoff) and the bets re-folded, so a payout
-// of ours is never dropped for want of a block height.
-//
-// Third pass, retryRejected: bets whose projection is parked ('projection_rejected' /
-// 'projector_failed': a CHECK, trigger or projector bug refused the bets write) are re-folded
-// every REFOLD_RETRY_MS for REFOLD_MAX_AGE_MS, so a fix by hand or a redeploy completes them even
-// when no later event will ever arrive. A retry that is still rejected only logs (the first
-// rejection was audited).
+// Spec: docs/planning/DATA-MODEL.md §8.3.
 import {
   and,
   asc,
@@ -75,7 +41,12 @@ import { APPLY_ERROR, createChainProjector, type ChainProjector } from './projec
 import { eventsFromRpcTransaction } from './streams';
 import { isRetriableRpcError, type ChainRuntime } from './tx';
 
-/** The default rpc_poll delay while a Stream is configured (see the header). */
+/**
+ * The default rpc_poll delay while a Stream is configured. STREAM_FALLBACK_MS (5 s) is shorter
+ * than the Stream's normal lag (dataset batches, elastic batching, delivery): rpc_poll would store
+ * every server-tx event first, every chain.* event would say observed_via 'rpc_poll', and the
+ * Stream's copies would only dedupe. Without a Stream nothing else will come, so 5 s.
+ */
 export const RPC_POLL_FALLBACK_WITH_STREAM_MS = 30_000;
 
 /**
@@ -184,6 +155,20 @@ export class StreamGapReconciler {
     return out;
   }
 
+  /**
+   * Fetches the server txs the Stream has not delivered. Bounded: only server-sent txs (chain_txs
+   * with a signature and a sent_at, never nonce advances; any status, since a lock marked expired /
+   * failed that landed after all is still ours), sent between the fallback delay and maxAge ago,
+   * with no chain_events row yet, at most `batch` getTransaction calls per tick, and a
+   * per-signature backoff (excluded in SQL, so backed-off rows never starve newer ones). The
+   * keeper runs its tasks one after another, so a pass must stay short even when the RPC
+   * throttles: the calls go over the client's low-retry poll RPC (tx.ts POLL_RPC_ATTEMPTS),
+   * polling stops when the wall-clock budget runs out, and the first 429 / 5xx ends it (the rest
+   * waits for the next tick, the rate limit is left to the lock and payout confirms).
+   *
+   * Oldest first: each tx is its own delivery, and the projector fans a delivery out in arrival
+   * order, so polling in send order keeps the chain.* events of one bet in chain order.
+   */
   private async fillGaps(
     deps: Deps,
     rt: ChainRuntime | null,
@@ -235,8 +220,8 @@ export class StreamGapReconciler {
           this.defer(sig, nowMs, fallback);
           continue;
         }
-        // A failed tx emits nothing the projector may use (filter rule 1); the tx's own service
-        // settles its row. Keep it out of the way.
+        // A failed tx emits nothing the projector may use (the filter drops it too); the tx's own
+        // service settles its row. Keep it out of the way.
         const events = eventsFromRpcTransaction(tx, await this.eventAuthority()).events;
         if (events.length === 0) {
           this.backoff.set(sig, { at: nowMs + maxAge, delay: BACKOFF_MAX_MS });
@@ -283,8 +268,13 @@ export class StreamGapReconciler {
   }
 
   /**
-   * Block heights rpc_poll could not read, for bets with parked ('not_ours') rows: getBlock again,
-   * store the height on every row of that slot, re-fold the bets' parked rows (see the header).
+   * getTransaction has no block height, so rpc_poll asks getBlock for it, best effort. A row left
+   * without one cannot be ordered against Stream rows (which carry a height but no slot), and a
+   * contested bet (someone else's finalize + close came through the Stream) parks such events as
+   * 'not_ours' (projector attributeEvents: order unknown). So, for bets with parked rows, this
+   * asks getBlock again, stores the height on every row of that slot and re-folds the bets' parked
+   * rows (HEIGHT_BATCH slots per tick, a per-slot backoff, the pass's budget): a payout of ours is
+   * never dropped for want of a block height.
    */
   private async fillHeights(
     deps: Deps,
@@ -386,7 +376,12 @@ export class StreamGapReconciler {
     this.slotBackoff.set(slot, { at: nowMs + delay, delay });
   }
 
-  /** Re-folds bets whose projection is parked as rejected / failed (see the header). */
+  /**
+   * Re-folds bets whose projection is parked ('projection_rejected' / 'projector_failed': a CHECK,
+   * trigger or projector bug refused the bets write) every REFOLD_RETRY_MS for REFOLD_MAX_AGE_MS,
+   * so a fix by hand or a redeploy completes them even when no later event will ever arrive. A
+   * retry that is still rejected only logs (the first rejection was audited).
+   */
   async retryRejected(deps: Deps, nowMs: number): Promise<number> {
     const every = this.o.refoldRetryMs ?? REFOLD_RETRY_MS;
     const maxAge = this.o.refoldMaxAgeMs ?? REFOLD_MAX_AGE_MS;

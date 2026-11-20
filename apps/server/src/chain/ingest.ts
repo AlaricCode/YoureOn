@@ -1,17 +1,17 @@
-// Webhook ingest, one DB transaction per delivery (DATA-MODEL §8.2, API-CONTRACT §5.3–§5.4).
+// Webhook ingest, one DB transaction per delivery:
 //
 //   INSERT INTO chain_events … ON CONFLICT (signature, outer_ix, inner_ix) DO NOTHING RETURNING …
 //   projector.apply(tx, inserted)         (same transaction)
 //   COMMIT, then publish the chain.* envelopes to the WS hub.
 //
-// Duplicates alone produce an empty RETURNING, so a replayed delivery is a cheap no-op (§8.3),
-// with two exceptions: a duplicate of a PARKED row (REFOLDABLE_ERRORS: 'not_ours' = no server
-// lock signature matched yet, 'unknown_bet' = no bets row yet, 'projector_failed' = stored by the
-// deterministic-failure fallback, 'projection_rejected' = the bets write was refused) is handed
-// to the projector again, so a later copy of the same event un-parks it; and a Stream copy of a
-// row rpc_poll stored first backfills its block position and chain_txs.stream_seen_at (and logs
-// chain.stream_seen after COMMIT, so the Streams latency is measured whichever copy came first).
+// Duplicates alone produce an empty RETURNING, so a replayed delivery is a cheap no-op, with two
+// exceptions (storedDuplicates): a duplicate of a PARKED row goes back to the projector, so a later
+// copy of the same event un-parks it; and a Stream copy of a row rpc_poll stored first backfills
+// its block position and chain_txs.stream_seen_at (chain.stream_seen is logged after COMMIT, so the
+// Streams latency is measured whichever copy came first).
 // No RPC calls happen in here: the ack budget is p95 ≤ 150 ms.
+//
+// Spec: docs/planning/DATA-MODEL.md §8.2.
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { chainEvents, chainTxs } from '@youre-on/db';
 import type { Logger } from '../log';
@@ -187,11 +187,10 @@ async function storedDuplicates(
 }
 
 /**
- * Re-folds the parked rows (REFOLDABLE_ERRORS) of these bets inside the caller's transaction, e.g.
- * from a transaction that records a lock signature, so a Stream delivery that beat the signature
- * write is applied at once. (The LockService records chain_txs.signature before it sends, so on
- * the normal path nothing is ever parked for a server lock.) Publish the returned fanout after
- * COMMIT with publishFanout.
+ * Re-folds the parked rows (REFOLDABLE_ERRORS) of these bets inside the caller's transaction (the
+ * reconciler's height backfill and retry pass). The LockService records chain_txs.signature before
+ * it sends, so on the normal path nothing is ever parked for a server lock. Publish the returned
+ * fanout after COMMIT with publishFanout.
  */
 export async function refoldParkedInTx(
   tx: Tx,
@@ -221,11 +220,11 @@ export async function refoldParkedInTx(
 }
 
 /**
- * Fallback after a deterministic projector failure (DATA-MODEL §8.2 step 4: mismatches get a 2xx
- * and an audit row, never a retry). Stores the delivery WITHOUT the projector, one row per
- * statement so a single bad row cannot drop the rest; rows that decoded get apply_error
- * 'projector_failed'. Returns how many rows were newly stored and how many failed to store.
- * Transient errors are rethrown so the caller can still answer 503.
+ * Fallback after a deterministic projector failure (a mismatch gets a 2xx and an audit row, never
+ * a retry). Stores the delivery WITHOUT the projector, one row per statement so a single bad row
+ * cannot drop the rest; rows that decoded get apply_error 'projector_failed'. Returns how many
+ * rows were newly stored and how many failed to store. Transient errors are rethrown so the
+ * caller can still answer 503.
  */
 export async function storeUnprojected(
   deps: Pick<AppDeps, 'db' | 'now'>,
