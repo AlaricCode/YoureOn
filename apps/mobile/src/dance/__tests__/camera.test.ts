@@ -43,10 +43,14 @@ describe('the native camera (source audit: it only runs on a device)', () => {
       'engine.setFacing(front: value == "front")',
     );
     expect(engine).toContain('wantsFront.get() ? .front : .back');
-    expect(engine).toContain('position: wanted)');
-    expect(engine).toMatch(
-      /position: wanted\)\s*\n\s*\?\? AVCaptureDevice\.default\([^)]*position: \.back\)/,
+    // the widest front camera first, the back one if there is none
+    expect(engine).toContain('.builtInUltraWideCamera, for: .video, position: .front)');
+    expect(engine).toContain(
+      '?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)',
     );
+    // not zoomed in: Center Stage off, the widest format, minimum zoom
+    expect(engine).toContain('AVCaptureDevice.isCenterStageEnabled = false');
+    expect(engine).toContain('device.videoZoomFactor = device.minAvailableVideoZoomFactor');
   });
 
   it('never mirrors the frames it scores, records and sends, whichever camera', () => {
