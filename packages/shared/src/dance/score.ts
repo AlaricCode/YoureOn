@@ -53,11 +53,12 @@ export const DANCE_SCORER_VERSION = 'dance-score@1' as const;
  * 60–90, the better of two always wins). Changing any value is a new scorer_version.
  */
 // Tuned a little more lenient on 2026-11-20 (two real dancers scored in the 30s on a round they
-// plainly danced): a limb counts from a wider angle (COS_FLOOR 0.75 -> 0.68, about 47 degrees),
-// being a beat late costs less (LAG_GRACE_MS 150 -> 220), the key-move grades are easier
-// (PERFECT 0.95 -> 0.92, GOOD 0.82 -> 0.75) and the display curve reaches the top sooner
-// (RAW_CEIL 0.95 -> 0.9, CURVE_GAMMA 0.9 -> 0.85). Who wins is unchanged in kind: both players
-// are scored by the same rule, and the tie margin is the one the terms state.
+// plainly danced): a limb counts from a slightly wider angle (COS_FLOOR 0.75 -> 0.72), being late
+// costs a little less (LAG_GRACE_MS 150 -> 200), the key-move grades are easier (PERFECT 0.95 ->
+// 0.93, GOOD 0.82 -> 0.78) and the display curve tops out sooner (RAW_CEIL 0.95 -> 0.93). The
+// synthetic amateur moves from about 77 to about 83. A first, stronger setting put that amateur
+// at 95 to 99, where two decent dancers would tie, so it was pulled back. Both players are still
+// scored by the same rule, and the tie margin is the one the terms state.
 export const DANCE_SCORING = {
   /** §4.1: a joint below this confidence is skipped. */
   MIN_CONF: 0.3,
