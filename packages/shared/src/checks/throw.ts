@@ -191,7 +191,15 @@ export function throwOutcome(i: {
     const bw = bin[2] - bin[0];
     const bh = bin[3] - bin[1];
     if (bw <= 0 || bh <= 0) continue;
-    const moved = extent(pts) >= THROW.MOVED * bw;
+    // Measured against the target, not the picture: when the camera pans, everything in the
+    // room slides across the frame together (seen on a real throw: the bin's box moved 90 px,
+    // and so did the bottles on the counter, which then looked like moving objects). Only the
+    // ball changes its place relative to the bin.
+    const rel = pts.map((q) => {
+      const b = bins[q.f] as Box;
+      return { ...q, cx: q.cx - b[0], cy: q.cy - b[1] };
+    });
+    const moved = extent(rel) >= THROW.MOVED * bw;
     const arrived = first.f >= THROW.ARRIVED_AFTER;
     // Part of the room: there from the start and never moved (a roll of paper towel, a mug).
     if (!moved && !arrived) continue;
@@ -211,29 +219,33 @@ export function throwOutcome(i: {
     // or at the mouth, but the throw had already missed. Only after the flight (its biggest
     // step): a ball held low and still before the throw is not at rest on the floor.
     if (moved && pts.length > THROW.REST_FRAMES) {
-      let flight = 1;
-      let far = 0;
-      for (let k = 1; k < pts.length; k++) {
-        const a = pts[k - 1] as Point;
-        const b = pts[k] as Point;
-        const d = Math.hypot(b.cx - a.cx, b.cy - a.cy);
-        if (d > far) {
-          far = d;
-          flight = k;
-        }
-      }
       let run: Point[] = [];
       let rest: Point[] = [];
-      for (let k = flight; k < pts.length; k++) {
+      // The rest must be somewhere it TRAVELLED to (it landed there): a ball held low and still
+      // before the throw has no travel behind it. What it does after the rest does not matter
+      // (on a real throw the pick-up was a bigger movement than the throw had been).
+      const travelledTo = (k: number): boolean => {
+        const here = rel[k] as Point;
+        for (let m = 0; m < k; m++) {
+          const then = rel[m] as Point;
+          if (Math.hypot(here.cx - then.cx, here.cy - then.cy) >= THROW.MOVED * bw) return true;
+        }
+        return false;
+      };
+      for (let k = 1; k < pts.length; k++) {
         const q = pts[k] as Point;
+        const r = rel[k] as Point;
+        const prevK = run.length ? k - 1 : -1;
         const prevPt = run.at(-1);
+        const prevRel = prevK >= 0 ? (rel[prevK] as Point) : undefined;
         const still =
           prevPt !== undefined &&
+          prevRel !== undefined &&
           q.f === prevPt.f + 1 &&
-          Math.hypot(q.cx - prevPt.cx, q.cy - prevPt.cy) <= THROW.REST_STEP * bw;
+          Math.hypot(r.cx - prevRel.cx, r.cy - prevRel.cy) <= THROW.REST_STEP * bw;
         if (!outside(q)) run = [];
         else if (still) run.push(q);
-        else run = [q];
+        else run = travelledTo(k) ? [q] : [];
         if (run.length > rest.length) rest = [...run];
       }
       if (rest.length >= THROW.REST_FRAMES) {

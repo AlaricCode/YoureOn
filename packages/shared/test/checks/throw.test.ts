@@ -201,6 +201,86 @@ describe('throwOutcome: a miss that was picked up afterwards', () => {
   });
 });
 
+describe('throwOutcome: a panning camera (bet dbaa018a)', () => {
+  /** The bin's box on each frame as SAM reported it: the camera swung 90 px to the right. */
+  const BINS: [number, number, number, number][] = [
+    [601, 813, 720, 1068],
+    [594, 811, 720, 1066],
+    [578, 807, 720, 1060],
+    [572, 805, 720, 1056],
+    [565, 802, 720, 1051],
+    [557, 798, 720, 1044],
+    [549, 792, 716, 1036],
+    [537, 785, 701, 1026],
+    [527, 781, 687, 1019],
+    [519, 779, 677, 1015],
+    [513, 774, 668, 1011],
+    [511, 773, 666, 1010],
+  ];
+  const panningTarget: Frames = BINS.map((box, index) => ({
+    index,
+    objects: [
+      { id: 0, score: 0.95, box_xyxy: box, box_all_xyxy: box, components: 1, mask_area: 1000 },
+    ],
+  }));
+
+  it('missed, lay beside the bin, then picked up (a bigger move than the throw) -> out', () => {
+    // the ruling had been a retake: the room's own things "moved" with the pan and were "still
+    // in view", and the pick-up, not the throw, was the track's biggest step
+    const out = throwOutcome({
+      n: 12,
+      target: panningTarget,
+      object: frames(12, {
+        // on the counter: they slide across the picture with the camera, by about 95 px
+        0: [
+          [0, 271, 560],
+          [1, 264, 559],
+          [2, 251, 558],
+          [3, 245, 558],
+          [4, 239, 556],
+          [6, 220, 552],
+          [7, 207, 548],
+          [8, 195, 545],
+          [9, 187, 545],
+          [10, 179, 545],
+          [11, 176, 545],
+        ],
+        4: [
+          [6, 262, 554],
+          [7, 249, 551],
+          [8, 238, 548],
+          [9, 229, 548],
+          [10, 222, 546],
+          [11, 219, 547],
+        ],
+        // the ball: lands left of the bin, lies there, and is carried to the mouth
+        3: [
+          [3, 424, 801],
+          [4, 439, 962],
+          [5, 412, 960],
+          [6, 402, 956],
+          [9, 597, 846],
+        ],
+      }),
+    });
+    expect(out.call).toBe('out');
+    expect(out.why).toBe('came_to_rest_outside');
+    expect(out.frames).toEqual([4, 5, 6]);
+  });
+
+  it('only the room sliding with the pan: nothing moved', () => {
+    const out = throwOutcome({
+      n: 12,
+      target: panningTarget,
+      object: frames(12, {
+        0: BINS.map((b, f) => [f, b[0] - 330, b[1] - 250] as const),
+      }),
+    });
+    expect(out.call).toBe('unknown');
+    expect(out.why).not.toBe('still_in_view');
+  });
+});
+
 describe('throwOutcome: off the picture', () => {
   const BIN = [500, 700, 640, 920] as const;
   const SIZE = { w: 720, h: 1280 };
