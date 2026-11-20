@@ -1,190 +1,211 @@
 # You're On
 
-**Bet your friends on anything you can film. An AI judge rules, the loser's GG settles it, and a
-Solana escrow pays out in USDC.**
+**Bet your friends on anything you can film. AI judges the video, a Solana escrow pays the winner
+in USDC, and nobody sees any crypto.**
 
-Friends bet each other all the time, and it all runs on trust: who said what, whether that flip
-counted, who still owes $5. You're On is an iPhone app that makes the bet enforceable. You point
-your phone at a friend to challenge them and say the bet out loud. A voice judge turns it into
-precise terms, and both of you confirm on your own phone with Face ID. Both stakes then move into
-an escrow on Solana in one transaction. A judge-cam iPhone (or, with just two phones, the
-non-performer's own) films the attempt, Claude rules on the frames, and the loser says GG (or
-stays silent for 10 seconds) and the winner is paid. Nobody sees
-crypto: money shows in dollars, there are no seed phrases, and the server pays every fee. Built
-for UBC 2026 (Consumer Applications track, Best use of Solana; ElevenLabs, QuickNode Streams and
-Gemini Prediction Markets bounties).
+Every friend group has a bet that never got paid. You're On is an iPhone app that makes the
+handshake enforceable. Point your phone at a friend, say _"Jarvis, I bet him $5 he can't land a
+bottle flip,"_ and both of you confirm with Face ID. Both stakes lock into a Solana escrow in one
+transaction, a phone films the attempt, and AI judges rule on frames from the clip. The loser swipes
+GG, or the appeal window runs out, and the winner is paid. Back up the trash talk with receipts.
 
-|                   |                                                                                                                                                   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Live server       | https://youre-on.fly.dev (Fly app `youre-on`, devnet)                                                                                             |
-| Stage (projector) | https://youre-on.fly.dev/stage/ (needs a stage key, see [`docs/runbook.md`](docs/runbook.md))                                                     |
-| Escrow program    | [`BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp`](https://explorer.solana.com/address/BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp?cluster=devnet) |
-| Submission docs   | [`docs/devpost.md`](docs/devpost.md), [`docs/pitch.md`](docs/pitch.md), [`docs/runbook.md`](docs/runbook.md)                                      |
-| Measured numbers  | [`docs/measurements.md`](docs/measurements.md)                                                                                                    |
-| Specs (behaviour) | [`docs/planning/`](docs/planning/) (API-CONTRACT, DATA-MODEL, SCHEMAS, ARCHITECTURE, ESCROW-PROGRAM, TASKS, TRACEABILITY)                         |
+|                   |                                                                                                                                                                                                                                                    |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Escrow program    | [`BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp`](https://explorer.solana.com/address/BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp?cluster=devnet)                                                                                                  |
+| Live server       | https://youre-on.fly.dev (Solana devnet)                                                                                                                                                                                                           |
+| Stage (projector) | https://youre-on.fly.dev/stage/ (needs a room code and stage key, see [`docs/runbook.md`](docs/runbook.md))                                                                                                                                        |
+| Built with        | Solana (Anchor, SPL Token / USDC, durable nonces), QuickNode Streams, Anthropic Claude, Meta SAM 3.1 on Modal, Apple Vision, Apple Speech, InsightFace MobileFaceNet, Expo / React Native, Node.js / Hono, PostgreSQL (Neon), Fly.io, Vite + React |
 
-## Status, honestly
+Built at UBC 2026.
 
-This README describes the code at the head of this branch. What is live, what is built but not yet
-run live, and what is not built:
+## Contents
 
-| Status                        | What                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Live on devnet**            | The escrow program (12 instructions, deployed). The server on Fly with Neon Postgres. The atomic lock, the live Claude ruling, GG and finalize payouts, the timeout-refund keeper. 10/10 live soak runs on 2026-11-18 (5 finalize, 5 GG). The Gemini BTC 5-minute closer (Beat 6), run end to end on a real Gemini round. The Beat 5 appeal (`appeal`, the panel, `resolve_appeal`), run end to end on devnet. See [measurements](docs/measurements.md). |
-| **Built, waiting on a key**   | The ElevenLabs voice judge (ElevenLabs key pending: the agent is defined as code but not yet created on ElevenLabs). The QuickNode Stream (QuickNode key pending: the filter, config and receiver are built; until the Stream exists the server runs on its `rpc_poll` fallback and a public devnet RPC).                                                                                                                                                |
-| **Built, waiting on a build** | The iPhone app (Expo SDK 58). Its logic is unit-tested in Node (955 tests) and smoke-tested on the iOS Simulator with Maestro, but the signed iPhone build is pending (Apple developer account / EAS). So face scan, Face ID signing and the judge cam have not yet run on a real iPhone.                                                                                                                                                                |
-| **Built, not yet run live**   | The three-model appeal panel with all three vendors: on devnet only the Claude seat had a key, so the other two abstained and the ruling stood. A panel that can overturn needs `OPENAI_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` on the server.                                                                                                                                                                                                       |
-| **Not built**                 | The spoken hearing of Beat 5 (two 10 s turns, then a hearing ruling). The appeal itself is built and live (above); the panel votes are voiced on the stage once the ElevenLabs key is set.                                                                                                                                                                                                                                                               |
+- [How a bet works](#how-a-bet-works)
+- [What makes it different](#what-makes-it-different)
+- [Architecture](#architecture)
+- [The escrow on Solana](#the-escrow-on-solana)
+- [The AI judge](#the-ai-judge)
+- [Dance Off](#dance-off)
+- [On-chain events with QuickNode Streams](#on-chain-events-with-quicknode-streams)
+- [Faces and privacy](#faces-and-privacy)
+- [Status, honestly](#status-honestly)
+- [Run it yourself](#run-it-yourself)
+- [Repo layout](#repo-layout)
 
-## The demo: six beats
+## How a bet works
 
-The demo runs on the team's own iPhones plus a laptop driving the stage view. Judges don't install
-anything.
+1. **Challenge by face.** Take a photo of your friend. The phone turns their face into an embedding
+   on the device, and the server matches it only against opted-in people in the same room. Their
+   phone gets the invite. A face match only addresses the challenge; it never authorizes anything.
+2. **Say the bet.** "Jarvis, …" is heard on the phone by Apple's on-device speech recognizer. The
+   sentence goes to the server, where Claude Haiku 5.5 turns it into exact terms: who performs,
+   what counts as a win and the edge cases (the phone reads the stake from the sentence). Both
+   phones show the same terms card, and
+   the server hashes those terms (SHA-256 of canonical JSON).
+3. **Lock it in.** Each person swipes up and passes Face ID on their own phone. Both signatures go
+   into one Solana transaction, so both stakes move into escrow together, or nothing moves.
+4. **The attempt.** The non-performer's phone (or a third "judge cam" phone) films it. Claude
+   Sonnet 5.5 and Meta SAM 3.1 judge frames from the clip in parallel. The judge key commits the
+   ruling on chain, with the clip's hash and the hashes of the exact frames the judges saw.
+5. **Settle.** The loser swipes GG and the winner is paid at once, or the appeal window closes (20 s on
+   devnet) and the program pays the ruling. The loser can instead tap "I appeal!" to send the same
+   frames to a blind appeal panel.
 
-| #   | Beat                  | What happens                                                                                                                                                                                                                                                    | Status                                                                                                          |
-| --- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 1   | **Challenge by face** | A points the camera at B. The phone computes a face embedding on the device; the server matches it only against opted-in members of the same room. "Challenge B?" B's phone shows the invite. A match only addresses the challenge.                             | Built and tested; not yet on an iPhone. Fallback: challenge from the room list.                                 |
-| 2   | **Terms by voice**    | A says "Bet you $5 you can't land a bottle flip." The ElevenLabs voice judge asks one or two edge-case questions and reads the terms back. The server composes the binding terms and their SHA-256; the terms card appears on both phones.                      | Built and tested against a fake ElevenLabs; key pending. Fallback: "Type it instead" (same server path).        |
-| 3   | **Lock it in**        | Each person holds to confirm and passes Face ID on their own phone. Both signatures go into one durable-nonce transaction, so both stakes move into escrow together, or nothing moves. The stage shows the lock with an Explorer link.                          | Live on devnet: confirm to LOCKED in 4.0–4.6 s. Phone signing pending the iPhone build.                         |
-| 4   | **The attempt**       | The judge cam (or, with two phones, the non-performer's phone) films the flip. Claude rules on 12 frames, 8 of them on the landing, plus a sharp landing crop and two checks; disagree and it's a REDO. Loser taps GG, or `finalize`.                           | Live on devnet: ruling 2.8–4.0 s, full bet 18–28 s.                                                             |
-| 5   | **Dispute**           | The loser taps "I appeal!" (Face ID) inside the 10 s window. Claude, GPT and Gemini vote independently on the same frames, never seeing the ruling; two agreeing votes decide, anything else upholds the ruling. The appeal key pays out with `resolve_appeal`. | Live on devnet (2026-11-18): appeal, panel, `resolve_appeal`. A vendor with no key abstains. Hearing not built. |
-| 6   | **The closer**        | "Bitcoin's up by the end of this pitch." The bet locks at the start of the pitch on Gemini's live 5-minute BTC contract, with stakes set from its odds. Gemini's settled result, hashed on chain as evidence, pays the winner at the end.                       | Built and tested offline; live run pending.                                                                     |
+Other features: **Dance Off** (scored on the phone with Apple Vision body pose), **odds** (unequal
+stakes up to 10:1, with a "suggest odds" that the code computes from your record), **double or
+nothing**, **call it off** (both agree and both are refunded), and a shared **lobby**, so scanning
+anyone who has the app open challenges them directly.
+
+## What makes it different
+
+- **Nothing moves until both of you agree, and then both stakes move in one transaction.** The
+  lock is one durable-nonce transaction with three signatures from two phones and our fee payer.
+- **The AI decides who won, never where the money goes.** The program pays out only to the two
+  players. There is no admin withdrawal, and every live state has an exit that anyone can trigger
+  after its deadline, so funds can't get stuck even if our server goes down.
+- **A language model can't say "they made it" on its own.** For a throw, SAM 3.1's track decides
+  whether it went in. For other camera bets, a "made it" call only stands if SAM's checks back it
+  up; otherwise it's a redo.
+- **Invisible crypto.** No wallet setup, seed phrase or SOL. The server pays every fee and fronts
+  the rent, which comes back when the bet closes. Balances show in dollars.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph Phones["Team iPhones (apps/mobile, Expo SDK 58)"]
-    A["Phone A: challenger, hosts the voice judge, wallet"]
-    B["Phone B: opponent, wallet"]
-    J["Judge cam (optional third phone; else the non-performer's phone): films the attempt"]
+  subgraph Phones["iPhones (apps/mobile, Expo SDK 58)"]
+    A["Phone A: challenger"]
+    B["Phone B: opponent"]
+    J["Recording phone: non-performer or judge cam"]
   end
-  subgraph Fly["Fly.io app youre-on (one machine, dfw)"]
+  subgraph Fly["Fly.io (one always-on machine)"]
     S["Server (apps/server, Hono on Node)"]
+    ST["Stage page (apps/stage), served at /stage"]
   end
   DB[("Neon Postgres (packages/db)")]
-  EL["ElevenLabs Agents Platform"]
-  AI["Anthropic Claude Sonnet 5.5 (vision ruling)"]
-  G["Gemini Prediction Markets API"]
+  C["Anthropic Claude: Haiku 5.5 terms, Opus 5.5 check spec, Sonnet 5.5 ruling"]
+  SAM["Meta SAM 3.1 on Modal (services/sam3)"]
   RPC["Solana devnet RPC"]
-  P["Escrow program (Anchor)"]
-  Q["QuickNode Stream: solana-devnet, block"]
-  ST["Stage page (apps/stage) on the projector laptop"]
+  P["Escrow program (programs/escrow, Anchor)"]
+  Q["QuickNode Stream (solana-devnet, block)"]
 
-  A <-->|"WebRTC voice"| EL
-  EL -->|"webhook tools /el/tools/*"| S
   A <-->|"HTTPS + WebSocket"| S
   B <-->|"HTTPS + WebSocket"| S
-  J -->|"12 frames + landing crop, hashes"| S
+  J -->|"clip hash, 12 frames + landing crop"| S
   S <--> DB
-  S -->|"frames + terms"| AI
-  S -->|"REST poll every 2 s"| G
-  S -->|"fee-paid txs, status polling"| RPC
+  S -->|"terms, frames"| C
+  S -->|"frames + object prompts"| SAM
+  S -->|"fee-paid transactions"| RPC
   RPC --> P
   P -->|"emit_cpi! events"| Q
-  Q -->|"POST /webhooks/quicknode, HMAC"| S
-  S -.->|"rpc_poll fallback: getTransaction"| RPC
-  S -->|"served at /stage, WebSocket"| ST
+  Q -->|"HMAC-signed webhook"| S
+  S -.->|"rpc_poll fallback"| RPC
+  S -->|"WebSocket"| ST
 ```
 
-| Component       | Path              | What it is                                                                                                                                                                                                         |
-| --------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Mobile app      | `apps/mobile`     | Expo SDK 58, iOS only. Signup, rooms, face enrollment and scan, the voice judge session, terms card, hold + Face ID signing with a device signing policy, judge cam, GG, payout.                                   |
-| Server          | `apps/server`     | Hono on Node (tsx). Auth, rooms, bets, WebSocket hub, ElevenLabs tools, judge pipeline, LockService + nonce pool, payouts, Gemini relay and settlement, QuickNode receiver and projector, keeper sweeps, demo ops. |
-| Stage view      | `apps/stage`      | Vite + React page for the projector, served by the server at `/stage`.                                                                                                                                             |
-| Shared contract | `packages/shared` | zod schemas for every wire shape, JCS hashing, chain constants and pins, the escrow IDL and Codama client, the atomic-lock builder, the device signing policy, Gemini fair stakes.                                 |
-| Database        | `packages/db`     | Drizzle schema and SQL migrations 0000–0007 for Postgres.                                                                                                                                                          |
-| Escrow          | `programs/escrow` | Anchor 1.2.2 program, 12 instructions, Rust LiteSVM test matrix.                                                                                                                                                   |
-| Streams         | `infra/quicknode` | The Streams filter (generated from the IDL), the Stream config and fixtures.                                                                                                                                       |
+| Part           | Path              | What it is                                                                                                                                                                                   |
+| -------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iPhone app     | `apps/mobile`     | Expo SDK 58 / React Native 0.88, iOS (iPhone and iPad). Two custom Swift Expo modules: `modules/wake-word` ("Jarvis") and `modules/dance-pose` (Vision body pose).                           |
+| Server         | `apps/server`     | Hono on Node. Auth, rooms, bets, WebSocket hub, terms, judge pipeline, lock service and nonce pool, payouts, appeals, QuickNode receiver, keeper sweeps.                                     |
+| Stage          | `apps/stage`      | Vite + React page for the projector: the live bet, the ruling, mirrored phones and an on-chain ticker with Explorer links.                                                                   |
+| Shared         | `packages/shared` | The contract all four parts share: zod schemas, canonical JSON (JCS) hashing, the escrow IDL and Codama `@solana/kit` client, the lock builder, the device signing policy, the dance scorer. |
+| Database       | `packages/db`     | Drizzle schema and SQL migrations 0000–0009.                                                                                                                                                 |
+| Escrow         | `programs/escrow` | Anchor 1.2.2 program, 12 instructions, Rust LiteSVM test matrix.                                                                                                                             |
+| SAM 3.1        | `services/sam3`   | Modal app serving `facebook/sam3.1` on an A10G / L4 GPU behind a bearer token.                                                                                                               |
+| Streams filter | `infra/quicknode` | The Stream's JavaScript filter (generated from the IDL), the Stream config and fixtures.                                                                                                     |
 
-**Two lanes, one rule.** The server's own confirmation (it polls `getSignatureStatuses` for every
-transaction it sends) makes the phones feel instant. The program's `emit_cpi!` events, delivered by
-the QuickNode Stream (or by the `rpc_poll` fallback), are folded into the database's on-chain
-projection, drive the stage's on-chain ticker, and reconcile any confirmation the server missed. If
-the two ever disagree, the chain wins. Full design: [`docs/planning/ARCHITECTURE.md`](docs/planning/ARCHITECTURE.md).
+**Two lanes, one rule.** The server polls the status of every transaction it sends, so the phones
+update right away. The program's events, delivered by the QuickNode Stream, are folded into the
+database's on-chain record, drive the stage ticker, and catch any confirmation the server missed.
+If the two ever disagree, the chain wins. Full design:
+[`docs/planning/ARCHITECTURE.md`](docs/planning/ARCHITECTURE.md).
 
-## How it uses Solana
+## The escrow on Solana
 
-Every bet is escrowed and settled by our Anchor program on Solana devnet. The program, not our
-server, decides where money can go.
+The program, not our server, decides where money can go.
 
-| Item                                | Value                                                                                                                                             |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Escrow program ID                   | [`BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp`](https://explorer.solana.com/address/BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp?cluster=devnet) |
-| Config PDA (`["config"]`)           | [`FYF8BZaszwttYxSsnXXdtf75YQUhAMwYDNK73eNzDoz`](https://explorer.solana.com/address/FYF8BZaszwttYxSsnXXdtf75YQUhAMwYDNK73eNzDoz?cluster=devnet)   |
-| Event-authority PDA                 | `2R3N7HdDrqP4nteeBL88v7EESXabbcrLCPasi88F5i7m` (`["__event_authority"]`; signs every `emit_cpi!` event)                                           |
-| USDC mint (Circle devnet)           | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`                                                                                                    |
-| Server fee payer = nonce authority  | `ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8` (pinned in `packages/shared/src/chain/constants.ts`; phones refuse any other)                      |
-| Durable-nonce pool                  | 5 accounts at `createWithSeed(fee payer, "yo-nonce-0" … "yo-nonce-4")`, so phones verify a nonce offline                                          |
-| IDL and client                      | `packages/shared/idl/escrow.json`; Codama-generated `@solana/kit` client in `packages/shared/src/chain/generated/`                                |
-| Toolchain                           | Anchor 1.2.2, Rust 1.89.0, Agave 4.1.2, platform-tools v1.57, sBPF v3                                                                             |
-| Demo Config (`scripts/lib/demo.ts`) | `max_stake` $20 per side, appeal window 10 s, accept deadline ≤ 600 s, resolve deadline 3,600 s, appeal resolve 300 s                             |
+| Account                                 | Address                                                                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Escrow program                          | [`BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp`](https://explorer.solana.com/address/BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp?cluster=devnet) |
+| Config PDA `["config"]`                 | [`FYF8BZaszwttYxSsnXXdtf75YQUhAMwYDNK73eNzDoz`](https://explorer.solana.com/address/FYF8BZaszwttYxSsnXXdtf75YQUhAMwYDNK73eNzDoz?cluster=devnet)   |
+| Event authority `["__event_authority"]` | `2R3N7HdDrqP4nteeBL88v7EESXabbcrLCPasi88F5i7m` (signs every `emit_cpi!` event)                                                                    |
+| USDC mint (Circle devnet)               | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`                                                                                                    |
+| Fee payer and nonce authority           | `ADEMopwqe6cVs9cEyMSbK1pGsJgnyBc3zkC3Wsqf9pQ8` (pinned in the app; phones refuse any other)                                                       |
 
-**Sample transactions (devnet, 2026-11-18):**
+Live Config: $20 maximum stake per side, a 20 s appeal window, up to 600 s to accept, 3,600 s to
+rule, and 300 s to settle an appeal. Each bet copies its deadlines and its judge and appeal keys
+when it is created, so a config change never touches a live bet.
 
-| What                                          | Transaction                                                                                                                                                   |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Atomic lock (`create_bet` + `accept_bet`)     | [`3Dq7rQ9h…HgU9q`](https://explorer.solana.com/tx/3Dq7rQ9h1b1PdVEwfEsQzqT9C2Lc9GXz73zWbqG4eysTJ1bj3CTJyK3E5A4dDfYkKBoLAHWzQmFT51GwmXrHgU9q?cluster=devnet)    |
-| `resolve` (judge key, evidence + ruling hash) | [`4LLGESFA…cTsKVvft`](https://explorer.solana.com/tx/4LLGESFAjhRXZ79AgcCBvUuxB4fp91iduMRfshCRR1vAyHy1J637kkBUQBiwybJUgJ2vEx8EvNrCdFkbcTsKVvft?cluster=devnet) |
-| `finalize` + `close_bet` (payout)             | [`3AzeFcB9…KUhUFg`](https://explorer.solana.com/tx/3AzeFcB97yfdUWDeM4VCodbb7n8ktgo6MHkkxgJU27dt2vC9c53uscZdA85ZMgppc8fzEdfPncNaWrbPdGKUhUFg?cluster=devnet)   |
-| `timeout_refund` + `close_bet` (keeper)       | [`2dvcUpmF…C2JxmXzx`](https://explorer.solana.com/tx/2dvcUpmFNiE76aRqRoGCUKrLTAYywAfFSkuZnkEQKP6CVyTVYnHMj53HXa2egLnY42U7sQqhgoLq5WqFC2JxmXzx?cluster=devnet) |
+### Instructions
 
-### The 12 instructions
+| Instruction                          | Signed by                                                       | What it does                                                                                                 |
+| ------------------------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `initialize_config`, `update_config` | the upgrade authority, then the admin                           | Judge and appeal keys, stake cap, deadlines, allowed mints, pause.                                           |
+| `create_bet`                         | A + fee payer                                                   | Open: A's stake into the vault, with B, both stakes, the terms hash and the accept deadline.                 |
+| `accept_bet`                         | B + fee payer                                                   | Open → Locked: B's stake. Fails unless B passes the same terms hash, both stakes and A's key.                |
+| `cancel_open_bet`                    | A, B or the judge key                                           | Open → Cancelled: refunds A.                                                                                 |
+| `resolve`                            | the bet's judge key                                             | Locked → Resolved: outcome (A, B, split or refund) plus evidence and ruling hashes; opens the appeal window. |
+| `concede`                            | the loser                                                       | Resolved → Settled: GG, pays out at once.                                                                    |
+| `appeal`                             | the loser (either side on a split or refund), inside the window | Resolved → Appealed: freezes the payout for the appeal key.                                                  |
+| `resolve_appeal`                     | the bet's appeal key                                            | Appealed → Settled: the final outcome plus an appeal ruling hash.                                            |
+| `finalize`                           | anyone, after the appeal window                                 | Resolved → Settled: pays the ruling.                                                                         |
+| `timeout_refund`                     | anyone, after that state's deadline                             | Open, Locked or Appealed → Refunded: every stake goes back to whoever put it in.                             |
+| `close_bet`                          | anyone                                                          | Closes a finished bet and returns the rent to the fee payer.                                                 |
 
-| Instruction         | Signed by                                      | State change                            | What it does                                                                                                           |
-| ------------------- | ---------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `initialize_config` | admin (deployer)                               | → Config                                | Judge and appeal keys, `max_stake`, deadlines, allowed mints.                                                          |
-| `update_config`     | admin                                          | Config                                  | Changes apply to new bets only: each Bet snapshots its judge and appeal keys.                                          |
-| `create_bet`        | A + fee payer                                  | → Open                                  | A's stake into the vault. Stores B, both stakes, the terms hash, the accept deadline, and the fee payer as rent payer. |
-| `accept_bet`        | B                                              | Open → Locked                           | B's stake. B passes the terms hash, both stakes and A's key they saw; any mismatch fails.                              |
-| `cancel_open_bet`   | A, B or the bet's judge key                    | Open → Cancelled                        | Refunds A.                                                                                                             |
-| `resolve`           | the bet's judge key, before `resolve_deadline` | Locked → Resolved                       | Outcome `PartyA` / `PartyB` / `Split` / `Refund`, plus `evidence_hash` and `ruling_hash`; opens the appeal window.     |
-| `concede`           | the loser                                      | Resolved → Settled                      | GG: pays out at once.                                                                                                  |
-| `appeal`            | the loser, before `appeal_deadline`            | Resolved → Appealed                     | Freezes the payout for the appeal key.                                                                                 |
-| `resolve_appeal`    | the bet's appeal key                           | Appealed → Settled                      | Final outcome plus `appeal_ruling_hash`.                                                                               |
-| `finalize`          | anyone, at or after `appeal_deadline`          | Resolved → Settled                      | Pays out the ruling once the window closes.                                                                            |
-| `timeout_refund`    | anyone, after that status's deadline           | Open / Locked / Appealed → Refunded     | Each side gets its own stake back. The server's keeper and `scripts/crank.ts` send it.                                 |
-| `close_bet`         | anyone                                         | Settled / Refunded / Cancelled → closed | Returns the Bet and vault rent to the stored rent payer.                                                               |
+### Why the money is safe
 
-### What makes the escrow safe
+- **One payout path.** Each bet is a `Bet` PDA (`["bet", bet_id]`) that owns a USDC vault PDA
+  (`["vault", bet_id]`). Every way a bet can end pays through one `transfer_checked` path, signed
+  by the Bet PDA, to token accounts owned by the two players and no one else. The judge key picks
+  an outcome, never a destination.
+- **Always an exit.** There is no admin withdrawal. Every live state has an instruction anyone can
+  send after its deadline (`timeout_refund` or `finalize`), and pausing only blocks creating and
+  accepting bets, never an exit. The server's keeper sends these itself, and `scripts/crank.ts` lets anyone else.
+- **Terms on chain.** The program stores `sha256(JCS(terms))`, and `accept_bet` checks that B
+  agreed to exactly those terms. The ruling hash commits to the SHA-256 of every frame the model
+  saw, and the evidence hash is the recording phone's SHA-256 of the whole clip.
+- **Mint checks.** Only allowlisted mints with 6 decimals (today, devnet USDC only). Token-2022
+  mints may carry no extensions except metadata, so tricks like a closable mint are refused.
+- **Events can't be forged.** Every state change emits one Anchor event with `emit_cpi!`, as an
+  inner instruction signed by the program's event-authority PDA (12 event types).
 
-- **SPL vault PDAs.** Each bet is a `Bet` PDA (`["bet", bet_id]`) that owns an SPL token vault PDA
-  (`["vault", bet_id]`) holding Circle devnet USDC. All five terminal instructions pay out through
-  one `payout()` path with `transfer_checked`, signed by the Bet PDA, and only to the two parties'
-  own token accounts. Classic SPL Token or Token-2022 (with an extension allowlist that rejects
-  `MintCloseAuthority`).
-- **Invariants.** Stakes are capped by Config; the terms hash is immutable after the lock; there is
-  no admin withdrawal; every live status has a permissionless exit (`timeout_refund` or
-  `finalize`), and pause never blocks an exit. The server's judge and appeal keys choose an
-  outcome, never a destination.
-- **The atomic durable-nonce lock.** When both people have seen the same terms card, the server
-  builds one v0 transaction, `[AdvanceNonceAccount, SetComputeUnitLimit, create_bet, accept_bet]`,
-  on a leased nonce from the pool, simulates it, and stores the exact message bytes. It needs
-  **three signers**: A (for `create_bet`), B (for `accept_bet`) and the server's fee payer, which
-  is also the nonce authority. Each phone signs those exact bytes after hold + Face ID; the server
-  submits once, with preflight on, when the second authorization arrives. The durable nonce means
-  the transaction does not expire while people decide (the program's `accept_deadline` bounds it
-  instead), and a decline or an expiry advances the nonce, so the signatures become useless.
-  Measured on local Agave: 1,001 bytes of the 1,232-byte limit, 46,791–67,791 CU, and 3 × 5,000
-  lamports of signature fees, all paid by the server.
-- **Phones check before they sign.** The device signing policy (`packages/shared/src/device-policy.ts`)
-  decodes the message on the phone and refuses anything that is not exactly the expected program,
-  instructions, stakes, terms hash, fee payer and nonce account, before Face ID is ever asked.
-- **Events.** Every state change emits exactly one Anchor event with `emit_cpi!` (12 event types,
-  from `ConfigInitialized` to `BetClosed`). The event is an inner instruction signed by the
-  program's event-authority PDA, so no other program can forge one, and it survives log
-  truncation. The QuickNode Stream filters on exactly that.
-- **Fees are invisible.** The server pays every fee and fronts the rent, which `close_bet` returns.
-  Party wallets hold 0 SOL. Balances show in dollars.
-- **Terms on chain.** The program stores `sha256(JCS(Terms))`. A ruling's hash commits to the
-  SHA-256 of every frame the model saw; a Gemini bet's evidence hash commits to Gemini's exact
-  response body.
+### The atomic lock
 
-**Demo-key disclosure.** For the demo, phones A and B import the server's two custodial demo keys
-(`demo-a`, `demo-b`) through a one-time QR (`POST /v1/auth/demo-claim`), so a rehearsal can also be
-driven without phones (`LOCK_SIGNER=server`, `scripts/cp1-drive.ts`). In the product each phone
-generates its own key, and it never leaves the device. The upgrade authority is the deployer key:
-a disclosed devnet trust assumption.
+When both people have seen the same terms card, the server builds one v0 transaction on a durable
+nonce leased from a pool of five:
+
+```
+[AdvanceNonceAccount, SetComputeUnitLimit, create_bet, accept_bet]
+```
+
+It needs three signers: A, B and the fee payer, which is also the nonce authority.
+
+- **Phones check before they sign.** Each phone decodes the exact message bytes and runs the device
+  signing policy ([`packages/shared/src/device-policy.ts`](packages/shared/src/device-policy.ts))
+  before Face ID is ever asked. The policy checks the program ID, mint, fee payer, signer set,
+  instruction order, nonce account, the PDAs (re-derived on the phone), the stakes, and the terms
+  hash, which it recomputes from the card it showed.
+- **Signing.** The phone signs with an ed25519 key it generated itself, kept in the iOS Keychain
+  (this device only, never backed up), and only after Face ID (or the device passcode, if Face ID
+  is unavailable). There is no seed phrase.
+- **One submission.** The server checks each signature against the stored bytes. When the second
+  one arrives, it co-signs as fee payer and submits once, with preflight on.
+- **No expiry while people decide.** A durable nonce does not expire the way a blockhash does; the
+  program's accept deadline bounds the bet instead. A decline or a timeout advances the nonce, so
+  the collected signatures become useless.
+
+A live lock on devnet is 989 bytes (of 1,232), uses 46,640 compute units and costs 15,000 lamports,
+all paid by the server. From the second confirm to LOCKED took 4.0–4.6 s on devnet
+([`docs/measurements.md`](docs/measurements.md)).
+
+**Sample transactions (devnet):**
+[atomic lock](https://explorer.solana.com/tx/3Dq7rQ9h1b1PdVEwfEsQzqT9C2Lc9GXz73zWbqG4eysTJ1bj3CTJyK3E5A4dDfYkKBoLAHWzQmFT51GwmXrHgU9q?cluster=devnet)
+·
+[resolve](https://explorer.solana.com/tx/4LLGESFAjhRXZ79AgcCBvUuxB4fp91iduMRfshCRR1vAyHy1J637kkBUQBiwybJUgJ2vEx8EvNrCdFkbcTsKVvft?cluster=devnet)
+·
+[finalize + close](https://explorer.solana.com/tx/3AzeFcB97yfdUWDeM4VCodbb7n8ktgo6MHkkxgJU27dt2vC9c53uscZdA85ZMgppc8fzEdfPncNaWrbPdGKUhUFg?cluster=devnet)
+·
+[timeout refund + close](https://explorer.solana.com/tx/2dvcUpmFNiE76aRqRoGCUKrLTAYywAfFSkuZnkEQKP6CVyTVYnHMj53HXa2egLnY42U7sQqhgoLq5WqFC2JxmXzx?cluster=devnet)
 
 ### Reproducible build
 
@@ -196,297 +217,208 @@ cargo build-sbf --arch v3 --tools-version v1.57 \
   --manifest-path programs/escrow/Cargo.toml --sbf-out-dir /tmp/yo-escrow
 shasum -a 256 /tmp/yo-escrow/escrow.so
 # 826f0874b350743c8f6fcd99f2bd57bc472b618e8a5846593fb26e9843b9e67a  (446,552 bytes)
-```
 
-`anchor build` (Anchor 1.2.2 defaults to `--arch v3 --tools-version v1.57`) gives the same bytes in
-`target/deploy/escrow.so`, and a clean rebuild in a different directory matched it byte for byte.
-The on-chain program data hashes to the same value; to check it yourself:
-
-```sh
 solana program dump --url devnet BL3gwTBcftGQFdPNp7rZiAyDojkSusdAJ2dzNvFouwcp onchain.so
-shasum -a 256 onchain.so
+shasum -a 256 onchain.so   # same hash
 ```
 
-The program keypair is not in the repo, so a fresh `anchor build` creates a random one. Never run
-`anchor keys sync` or `anchor deploy` from a fresh build; upgrades go through the deployer key.
-
-## ElevenLabs
-
-| Product                | How we use it                                                                                                                                                                                                                                                                                                        | Status                                       |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| **Agents Platform**    | The voice judge. One conversation per bet on A's phone over WebRTC (`@elevenlabs/react-native` 1.2.38 + LiveKit), on speakerphone. The agent's LLM (Claude Haiku 5.5, served by ElevenLabs) asks the edge-case questions; TTS model `eleven_v4_turbo`.                                                               | Built; ElevenLabs key pending                |
-| Webhook (server) tools | `propose_terms` and `confirm_terms` at `/el/tools/:name`, authenticated by a workspace secret sent as `X-YO-Tool-Secret`. `get_market_odds` (Beat 6) has a live handler and is registered with `el-agent --tools=…`.                                                                                                 | Built; tested end to end against a fake      |
-| Client tools           | `request_attempt` (arms the judge cam, or with two phones A's own camera), `show_terms_card`, `cue` (gavel, drumroll, buzzer, cheer on the stage). They run on A's phone.                                                                                                                                            | Built                                        |
-| Conversation tokens    | `POST /v1/voice/tokens` mints a token server-side (`GET /v1/convai/conversation/token`), so the API key never reaches a phone. Spend-guarded: it calls out only with `ALLOW_SPEND=true`.                                                                                                                             | Built                                        |
-| Agent as code          | `npm run el-agent` creates or updates the workspace secret, the tools and the private agent, found by name and PATCHed only where they differ (a second run is a no-op). `--check-openapi` validates every body against ElevenLabs' public OpenAPI document.                                                         | Built; never run against ElevenLabs (no key) |
-| Text to Speech (stage) | Rulings and payouts in the judge's voice (left to A's phone in a bet its voice judge hosts), each appeal-panel vote in its own voice (`POST /v1/text-to-speech/{voice_id}`, `eleven_v4_turbo`). The clip URL comes in a `stage.voice` frame; with none within 800 ms the stage says the line in the browser's voice. | Built; on once the key is set                |
-| Sound Effects          | The stage cues (gavel, drumroll, buzzer, cheer), generated once at boot and played by the projector. `SFX_PROVIDER=auto` (the default) turns them on with the key; without it the stage synthesizes its sounds.                                                                                                      | Built; on once the key is set                |
-| Scribe STT             | REST client behind `STT_PROVIDER` (default mock). Not in the demo path: the hearing it was for is not built.                                                                                                                                                                                                         | Built, unused in the demo                    |
-
-**How a session runs.** A's phone asks for the mic, gets a conversation token from our server and
-starts the session with the bet's dynamic variables. Every tool call is bound to its bet
-(`conversation_id → voice_sessions → bet_id`; a mismatch answers `WRONG_BET`). `propose_terms`
-hands the bet to the same evaluation core the typed form uses: the guardrail prefilter, the stake
-cap, and the server-composed Terms with their hash. Server results (LOCKED, a ruling, PAID) come
-back to the phone as `judge.cue` events, and the phone injects them into the conversation
-(`sendUserMessage("[EVENT] …")`) so the judge announces them. A spoken "accept" is theatre only:
-the judge never moves money and never authorizes a lock.
-
-**Transcript relay to the stage.** A's phone relays the session's final lines to
-`POST /v1/bets/:bet_id/voice/lines`; the server turns them into `judge.line` / `party.line` bet
-events, which the stage shows as live captions and B's phone shows as subtitles. The `cue` client
-tool goes through `POST /v1/bets/:bet_id/cues` to the stage laptop, because audio played on A's
-phone would stop its mic.
-
-**The judge on the projector.** After each ruling, payout and appeal vote, the server composes
-the line the stage speaks (`packages/shared/src/stage-voice.ts`), generates it with ElevenLabs Text
-to Speech and sends its URL to the room's stage only (`stage.voice`). The stage fetches the clip
-with its bearer (`GET /v1/stage/tts/:clip_id`) and plays it. Clips are cached by
-`sha256(voice, model, text)`, so a repeated line is free. Without the key (or with
-`STAGE_TTS=off`) no frame comes, and after 800 ms the stage speaks the same words with the
-browser's `speechSynthesis`: the ruling is heard in the hall either way. One judge at a time:
-once A's phone has relayed a `judge.line` for a bet, the voice judge is hosting it and says the
-ruling and payout itself, so for that bet the projector says neither (no clip, no browser voice)
-and voices only the appeal votes. Rulings from the stored `CACHED_RULING` verdict are labelled
-"replay ruling" on screen.
-
-**To switch it on** (needs the key): `npm run el-agent -- --check-openapi`, then set
-`ELEVENLABS_API_KEY`, `ELEVENLABS_TOOL_SECRET` and the printed `ELEVENLABS_AGENT_ID` as Fly
-secrets. `GET /v1/demo/voice` says whether the judge is on. Until then A's phone offers "Type it
-instead", which runs the same server path.
-
-## QuickNode Streams
-
-| Setting     | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Network     | `solana-devnet`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Dataset     | `block`, batches of 5 with elastic batching, region `usa_east`. Our events are `emit_cpi!` inner instructions, and the block dataset carries inner instructions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Filter      | [`infra/quicknode/filter.js`](infra/quicknode/filter.js), generated from the escrow IDL by `build-filter.ts` (a test fails if it drifts). For each transaction in the batch: (1) drop it if `meta.err` is set; (2) keep an **inner** instruction only if its program (resolved through the account keys and loaded addresses) is our escrow, its data starts with Anchor's event-instruction tag, and its first account is our event-authority PDA, so only our program can have emitted it; (3) never decode top-level instructions; (4) no `Program data:` log parsing. It forwards `{signature, blockHeight, parentSlot, blockTime, txIndex, outerIx, innerIx, eventBase64}`, and returns `null` (nothing sent) for a batch with no escrow events. Plain ES5: no BigInt, `atob`, `TextDecoder` or `Buffer`. |
-| Destination | Webhook `POST https://youre-on.fly.dev/webhooks/quicknode`. The server checks `X-QN-Signature` = hex HMAC-SHA256(token, `X-QN-Nonce` + `X-QN-Timestamp` + body) in constant time, with a 300 s timestamp window, then re-decodes every event with the IDL compiled into the server (the filter's name is only a hint), stores it idempotently in `chain_events` keyed by `(signature, outer_ix, inner_ix)`, and folds it into the bet in the same database transaction. A bad signature gets 401, a transient database error 503 (so QuickNode retries), everything else 200.                                                                                                                                                                                                                                  |
-| Why         | It is the source of truth for "money moved". The projector updates each bet's on-chain status and payout, moves the bet forward when the chain is ahead of the server (a missed confirmation), and pushes `chain.*` events to both phones and the stage ticker, each with its Explorer link. The stage header says "via QuickNode Streams" only when the Stream delivered the event.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-
-**Fallback: `rpc_poll`.** If the Stream has not delivered a server-sent transaction's events within
-30 s (5 s when no Stream is configured), the keeper fetches it with `getTransaction` and ingests it
-as source `rpc_poll` through the same decoder rules and the same projector. Every `chain.*` event
-says which source saw it (`observed_via`), whichever copy arrives second is a no-op, and a late
-Stream copy fills in the block position. The poll is bounded: server-sent transactions only, 10
-per tick, a 2 s budget, and it stops at the first 429.
-
-**Status.** The QuickNode key is pending, so the Stream has not been created and today the live
-server runs on `rpc_poll`. Creating it is one command: `npm run qn-stream -- create --fly-app
-youre-on` picks the HMAC token, sets the Fly secret, probes the webhook with a signed delivery,
-and only then activates the Stream (3 failed deliveries would auto-pause it). Offline, the whole
-path is tested: HMAC fixtures, real LiteSVM escrow transactions through `filter.js` → webhook →
-projector, and a mimic program that emits our `BetFinalized` under its own ID, which the filter
-forwards 0 times.
-
-## Gemini Prediction Markets
-
-The closer bets on Gemini's 5-minute Bitcoin market (series `BTC05M`). Public market data only:
-no key, no account, no trading. "Gemini" here is the exchange, not Google's model.
-
-| Endpoint (`https://api.gemini.com`)                                         | Use                                                                                                                      |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `GET /v1/prediction-markets/events?status=active&category=Crypto&limit=200` | Discovery every 60 s and at each expiry: the current `BTC05M` contract, its `instrumentSymbol` used exactly as returned. |
-| `GET /v1/prediction-markets/events/{eventTicker}`                           | Prices and status every 2 s; settlement (status, side, value), whose raw body becomes the evidence.                      |
-| `GET /v1/prediction-markets/events/{eventTicker}/strike`                    | Strike fallback, latched on its first value.                                                                             |
-| `GET /v1/pubticker/btcusd`                                                  | BTC/USD for the chart (display only).                                                                                    |
-
-One server-side relay polls Gemini for every client (REST polling every 2 s stands in for the
-WebSocket) and fans the snapshots out to the phones and the stage.
-
-**Fair stakes from the live odds.** `fairStakes` (`packages/shared/src/gemini.ts`) takes the mid of
-the best bid and ask (or the last trade, if the spread is wider than 0.30 and the trade is inside
-it). If you take "Up" at 62%, you put in 62% of the pot and your friend puts in 38%, rounded to
-whole cents so the two add up exactly. It refuses with a reason rather than quote a bad price: no
-two-sided book, a price outside 5–95%, a snapshot older than 5 s, under 120 s to expiry, a
-missing strike, or a stake over the $20 cap. The binding quote is taken when the terms are
-composed (the voice judge's `propose_terms`, or "Bet on Bitcoin" on A's phone), and the contract,
-strike, price and quote time go into the Terms, so their hash is locked on chain.
-Both signatures must land within 60 s of the quote (`accept_deadline = quotedAt + 60 s`).
-
-**Settlement evidence, hashed on chain.** At expiry + 5 s (then every 2 s, plus a keeper sweep) the
-server fetches this bet's own contract. Once Gemini says settled:
-
-```
-Gemini's raw response body --sha256--> record.response_sha256
-GeminiSettlementRecord     --JCS sha256--> evidence_hash   (on chain at resolve)
-settlement Ruling          --JCS sha256--> ruling_hash     (on chain at resolve)
-```
-
-The judge key sends `resolve` with both hashes, then the usual GG or `finalize`. A voided or
-mismatched contract refunds both. `GET /v1/bets/:bet_id/settlement` returns the whole chain, with
-the on-chain hashes read from the chain itself (the Bet account, or the resolve transaction once
-the account is closed), never from our database. The server runs the shared `verifySettlement`
-over exactly what it returns, and anyone holding the response can run it again. The stage re-runs
-it too and says on the projector whether the chain checks out; that part arrives with the stage
-port now being merged (the stage deployed from `edc3613` does not show it yet).
-
-**REPLAY feed.** If Gemini is down or has no usable book at pitch time, `POST /v1/demo/gemini
-{"feed":"replay"}` serves one recorded real round (`BTC05M2611180240`) shifted onto the current
-window. Every ticker is prefixed `REPLAY-`, so the stage, the phones and the terms hash all show
-it. In a product, peer-to-peer money bets stay skill-only, and real-world bets would route each side
-to Gemini's regulated market; this devnet demo uses our escrow with Gemini as the oracle.
+Toolchain: Anchor 1.2.2, Rust 1.89.0, Agave 4.1.2, platform-tools v1.57, sBPF v3. The program
+keypair is not in the repo, so never run `anchor keys sync` or `anchor deploy` from a fresh
+build; upgrades go through the deployer key ([`scripts/deploy-devnet.md`](scripts/deploy-devnet.md)).
 
 ## The AI judge
 
-- **Ruling (Beat 4).** The phone that films samples 12 frames (4 spread over the clip, 8 packed
-  into its last 1.2 s, where the bottle lands; ≤ 512 px JPEG) plus one landing crop: the last
-  frame again, the middle 80 % of the picture at full resolution (1024 × 576 from the 720p clip),
-  so the taped cap is readable from 1–2 m. It uploads them with their SHA-256s
-  (`packages/shared/src/judge/frames.ts` is the one sampler for the phone, the server's limits and
-  `npm run judge-eval`). The server makes one structured-output call to Claude Sonnet 5.5
-  (`JUDGE_MODEL`, 10 s deadline), with the landing frames and the crop labelled. Next to its
-  verdict the model reports two narrow observations (cap tape visible on top, bottle upright at
-  rest); if they disagree with the verdict, the ruling is REDO. Confidence below 0.8 is REDO, a
-  model failure is REDO, and a third REDO voids the bet and refunds both. The ruling's hash
-  commits to the frame hashes. The server still takes 8–12 frames with no crop (older builds,
-  `cp1-drive --frames`).
-- **Who films.** The room's judge cam, a third iPhone signed in as a second device of the
-  non-performer with Profile → Judge cam on. With only two phones, leave it off: the
-  non-performer's own phone films (`recorder: 'self'`). Start sits on the non-performer's phone,
-  and the voice judge's `request_attempt` arms A's phone when B performs. The performer's phone
-  never films its own attempt, and the recording has no audio track, so it never touches the mic
-  the voice judge holds.
-- **Terms (Beat 2).** The voice judge's persona, guardrails and `propose_terms` schema live in
-  `packages/shared/src/judge`. Guardrails: 18+ at signup, the $20 on-chain stake cap, and a keyword
-  prefilter that refuses dangerous, illegal, alcohol/drug, self-harm or minor-related challenges.
-- **`CACHED_RULING=true`** rules from a stored verdict with no model call (model
-  `cache/demo-bottle@1`); it still commits to the hashes of the frames actually uploaded. On the
-  demo server it is also a runtime switch, `POST /v1/demo/toggles {"cached_ruling": true}`, read
-  per ruling (no restart); the env value is the boot default.
-- **Demo-day valves** (admin key, `docs/runbook.md`): `POST /v1/demo/warmup` makes one live judge
-  call on a stored JPEG and checks the RPC, the Gemini relay and voice readiness (no bet, no money,
-  one per 10 s); `GET /v1/demo/health` reports the judge's last success and failure and its
-  latency; `POST /v1/demo/seed-h2h` seeds the 4-7 head-to-head history the face match shows
-  (labelled `is_seed`, kept by the demo reset), plus optional category records (e.g. Jake 10–2
-  on bottle flips) for the judge's odds.
-- **Odds.** Friends can agree on odds: unequal stakes (at most 10:1, each within the max) in the
-  terms' `stakes.a` / `stakes.b`, no new hashed field. One side offers ("Jake offers 3 to 1: your
-  $5 to win $20"), the other accepts or counters; both still hold to lock the card. "Judge, what
-  odds are fair?" (or Suggest odds) proposes odds grounded in the performer's settled record on
-  that kind of bet and the head-to-head; the numbers are computed in code, a model only words
-  the sentence, and it is only an offer (`apps/server/src/odds`, API-CONTRACT §2.19).
-- **Spend guard.** Every paid provider refuses to start without `ALLOW_SPEND=true`, and under
-  `NODE_ENV=production` the mock LLM refuses every call, so a misconfigured deploy cannot issue fake
-  rulings.
+**When the terms are written.** Claude Haiku 5.5 turns the spoken or typed sentence into
+structured terms. A deterministic prefilter refuses dangerous, illegal, alcohol or drug,
+self-harm and minor-related challenges, and the $20 stake cap applies. Then Claude Opus 5.5
+compiles the terms into a **check spec**: which objects SAM 3.1 should find on camera and what
+has to be true of them.
 
-## Privacy by design
+**When the attempt is filmed.** The recording phone films 720p with no audio and reports the clip's
+SHA-256 plus 12 frames at the clip's full resolution: 3 from early in the clip, then 9 spread over
+its last 2.7 s to cover the release, the flight and the landing. It adds a sharp crop of the
+landing. Each frame is hashed. Two judges then run in parallel:
 
-- **Face data is opt-in.** The phone turns a selfie into an embedding on the device (InsightFace
-  `w600k_mbf`); face images never leave the phone. The server stores one embedding per opted-in
-  user, encrypted with AES-256-GCM, and matches only against current members of the caller's room.
-  No confident match stores nothing. A match only addresses a challenge and never authorizes
-  anything. You can turn it off or hard-delete it at any time; an hourly job deletes it 180 days
-  after last use, 30 days after you turn it off, or on 2026-12-31. Nothing biometric goes on chain.
-- **Face ID is separate.** It stays in the Secure Enclave; the app learns only success or failure.
-- **Voice.** No voiceprints. Only transcripts are kept.
-- **Why.** Texas CUBI and Illinois BIPA treat face embeddings as biometric identifiers, and the
-  finals are in Texas. This is not legal advice.
+- **Claude Sonnet 5.5** returns a structured verdict with its confidence and any rule that was
+  broken (for example, stepping over the line).
+- **SAM 3.1**, self-hosted on Modal, segments and tracks the objects the check spec names. A
+  shared evaluator scores the spec's checks on SAM's masks.
 
-## Setup
+**How the two combine.**
 
-Prerequisites: Node 22.4+, Docker or Podman, and for the escrow Rust 1.89, Agave 4.1.2 and Anchor
-1.2.2. iOS builds need a Mac with Xcode, or EAS ([`docs/IOS-BUILD.md`](docs/IOS-BUILD.md)).
+| Bet                                           | Who decides                                                                                                                                                                                                               |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A throw at a target (a paper ball into a bin) | SAM's track alone decides in or out ([`packages/shared/src/checks/throw.ts`](packages/shared/src/checks/throw.ts)). Claude only reports a broken rule, which makes it a loss. If the track loses the object, it's a redo. |
+| Any other camera bet                          | Claude's verdict decides, but a "made it" call only stands if SAM's checks back it up: a failed or unconfirmed check turns it into a redo. So do confidence under 0.8 and a model failure.                                |
+| Both                                          | The third attempt that ends without a clear result voids the bet and refunds both sides.                                                                                                                                  |
 
-### Local development
+The judge key then sends `resolve` with the clip hash as evidence and a ruling hash that commits to
+every frame hash. If SAM is down or slow, a throw is a redo; for other bets its checks are skipped
+rather than counted against the player.
+
+**Appeals.** The loser taps "I appeal!" (with Face ID) inside the window. The appeal panel is built
+for three seats from different providers (Claude Opus 5.5, GPT and Gemini). Each votes on the same
+frames without seeing the original ruling. A seat that times out (8 s) or has confidence under 0.6
+abstains. Two agreeing votes decide; anything else upholds the ruling. The appeal key settles with
+`resolve_appeal`. In the current deployment only the Claude seat has a key, so a ruling can't be
+overturned yet.
+
+**Spend guard.** Every paid model API refuses to start without `ALLOW_SPEND=true`, and in
+production the mock model refuses every call, so a misconfigured server can't issue fake rulings.
+
+## Dance Off
+
+"Jarvis, dance off" opens a round. Both dancers follow a reference routine shown on B's phone (or beside the camera when B's phone is offline),
+while the recording phone films them with its front camera.
+
+- **On the phone.** A custom Swift module ([`apps/mobile/modules/dance-pose`](apps/mobile/modules/dance-pose))
+  captures 720p at 30 fps and runs Apple Vision body pose on its frames: 19 joints per person. It
+  tells the two dancers apart by face, falling back to left and right.
+- **Scoring.** A deterministic TypeScript scorer ([`packages/shared/src/dance/score.ts`](packages/shared/src/dance/score.ts))
+  compares each dancer's limbs to the routine. The server re-scores the round from the uploaded
+  poses and never trusts the phone's score. A finish within 2 points is a tie, and both are
+  refunded.
+- **Claude only checks the round was valid** (both danced the whole time, nobody swapped sides, no
+  third person) and writes the announcer's line. It never picks the winner.
+- **Routines.** Three are built in: "Bye Bye Bye" (32.6 s) and two 15 s routines. The reference
+  poses come from the same Vision request, run on the source video by
+  [`tools/dance-ref`](tools/dance-ref), and SAM 3.1 produced the routine's silhouette video.
+
+## On-chain events with QuickNode Streams
+
+A QuickNode Stream on Solana devnet (`block` dataset) runs the filter in
+[`infra/quicknode/filter.js`](infra/quicknode/filter.js), which is generated from the escrow IDL
+(a test fails if it drifts). It keeps an instruction only if it is an **inner** instruction of a
+successful transaction, from our program, carrying Anchor's event tag, whose first account is our
+event-authority PDA. Only our program can sign as that PDA, so no other program can forge one of
+our events. Top-level instructions and logs are never parsed.
+
+The Stream posts matches to `POST /webhooks/quicknode`. The server checks the HMAC-SHA256
+signature in constant time with a 300 s timestamp window, re-decodes every event with the IDL,
+stores it once (unique on signature and instruction position), folds it into the bet, and pushes
+it over WebSockets to both phones and the stage. The stage ticker says "via QuickNode Streams"
+only when the Stream delivered the events it shows.
+
+**Fallback.** If the Stream hasn't delivered a transaction the server sent within 30 s, the
+server fetches it with `getTransaction` and runs it through the same decoder and the same
+projector (bounded: 10 per tick, 2 s budget, stops on a 429 or 5xx). Whichever copy arrives second is a
+no-op. Transactions the server didn't send itself are seen only through the Stream. Run the Stream with `npm run qn-stream -- …` (`reset-start`, `resume`, `pause`).
+
+## Faces and privacy
+
+- **On the phone.** Google ML Kit finds the face and InsightFace MobileFaceNet (`w600k_mbf`, via
+  TFLite) turns it into an embedding on the device. The photo is deleted after the scan.
+- **On the server.** Face matching is opt-in. The server stores one embedding per opted-in user,
+  encrypted with AES-256-GCM, and compares a scan only with current members of the caller's room.
+  It returns a person or nothing, never a score.
+- **Deleted on a schedule.** An hourly job deletes an embedding 180 days after it was last used, 30
+  days after you turn face matching off, or on 2026-12-31, whichever comes first. You can delete
+  it yourself at any time. Nothing biometric goes on chain.
+- **Face ID is separate.** It stays in the Secure Enclave; the app only learns pass or fail.
+
+## Status, honestly
+
+| What                                       | Status                                                                                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Escrow, server, database                   | Live on devnet, Fly.io and Neon.                                                                                                                                           |
+| Phone signing                              | Live: the phones sign every lock themselves (`LOCK_SIGNER=phones`). The iPhone app is installed on the team's phones from Xcode; it is not on TestFlight or the App Store. |
+| Claude + SAM 3.1 judging                   | Live, with camera checks on. SAM runs on a Modal GPU that scales to zero, so the server warms it when a bet is confirmed.                                                  |
+| Dance Off, GG, finalize, refunds, call off | Live.                                                                                                                                                                      |
+| QuickNode Stream                           | Created and wired up. It is paused between sessions to save trial credits; while paused, the RPC fallback delivers events about 30 s later.                                |
+| Appeal panel                               | The appeal itself is live. Only the Claude seat has a key, so a ruling can't be overturned until `OPENAI_API_KEY` and `GOOGLE_GENERATIVE_AI_API_KEY` are set.              |
+| Funding                                    | Devnet USDC from Circle's faucet. A new wallet starts at $0, and an operator tops it up (`npm run fund -- --wallet <pubkey>`).                                             |
+| Trust assumptions                          | The program is upgradeable by a single deployer key, which is also the Config admin. Face embeddings travel over TLS without an extra sealed layer.                        |
+| Built, not in the demo                     | An ElevenLabs voice judge (build with `EXPO_PUBLIC_VOICE=on`) and a Gemini Bitcoin prediction-market bet (`EXPO_PUBLIC_MARKET=on`). Both are off in the demo build.        |
+
+Measured numbers live in [`docs/measurements.md`](docs/measurements.md).
+
+## Run it yourself
+
+Prerequisites: Node 22.4+, Docker (or Podman), and for the escrow Rust 1.89, Agave 4.1.2 and
+Anchor 1.2.2. The iPhone app needs a Mac with Xcode ([`docs/IOS-BUILD.md`](docs/IOS-BUILD.md)).
 
 ```sh
 npm ci
-docker compose up -d db                      # Postgres 17 on :54329 (or podman-compose)
+docker compose up -d db                      # Postgres 17 on :54329
 export DATABASE_URL=postgres://yo:yo@localhost:54329/youre_on
-
 npm run db:migrate -w packages/db            # the server does not migrate on boot
-cp .env.example apps/server/.env             # fill in values; names only in git
-npm run dev -w @youre-on/server              # http://127.0.0.1:8080, reads apps/server/.env
-npm run dev -w @youre-on/stage               # Vite dev server for the stage page
-cd apps/mobile && npx expo run:ios --device  # local Xcode dev build
+cp .env.example apps/server/.env             # fill in values; only names are in git
+npm run dev -w @youre-on/server              # http://localhost:8080
+npm run dev -w @youre-on/stage               # the stage page (Vite)
 ```
 
-Without keys the server runs on offline mocks (`LLM_PROVIDER` and `STT_PROVIDER` default to
-`mock`; `SFX_PROVIDER=auto` is the mock until `ELEVENLABS_API_KEY` is set); any `live` mode needs
-`ALLOW_SPEND=true`. The stage's ElevenLabs voice is on exactly when the key and `ALLOW_SPEND=true`
-are set (`STAGE_TTS=off` turns it off). Without `SOLANA_DEVNET_RPC` and
-`FEE_PAYER_SECRET_KEY` there is no chain, and the health report says so. Every env var name is in
-[`.env.example`](.env.example); values never go in git.
+Without API keys the server runs on offline mocks, and any live provider needs `ALLOW_SPEND=true`.
+Without `SOLANA_DEVNET_RPC` and `FEE_PAYER_SECRET_KEY` there is no chain (with `DEMO_MODE=true`,
+`GET /v1/demo/health` with the admin key says so).
+
+**iPhone app.** The face model is not committed: `scripts/face-model.sh` rebuilds it from the
+official InsightFace release. Then build a Release app and install it on every plugged-in iPhone,
+signed with a free Apple Personal Team (installs expire after 7 days; full steps in
+[`docs/IOS-BUILD.md`](docs/IOS-BUILD.md)):
+
+```sh
+cd apps/mobile
+echo 'EXPO_PUBLIC_API_URL=https://youre-on.fly.dev' > .env.local
+export APPLE_TEAM_ID=<your team id> IOS_BUNDLE_ID=dev.youreon.app.<yourname>
+CI=1 npx expo prebuild -p ios --clean --no-install && (cd ios && pod install)
+scripts/usb-install.sh
+```
+
+**SAM 3.1.** `modal deploy services/sam3/modal_app.py`, after approval for the gated `facebook/sam3.1`
+weights on Hugging Face. Then set `SAM3_URL`, `SAM3_API_TOKEN` and `CHECKS_ENABLED=true` on the
+server.
+
+**Deploy.** One always-on Fly machine runs the server and serves the stage
+([`fly.toml`](fly.toml), [`apps/server/Dockerfile`](apps/server/Dockerfile)), backed by Neon
+Postgres. The escrow deploy is in [`scripts/deploy-devnet.md`](scripts/deploy-devnet.md), and the
+demo-day runbook is [`docs/runbook.md`](docs/runbook.md).
 
 ### Tests
 
 ```sh
 npm run typecheck && npx eslint . && npm run format:check
 npm test                                     # every workspace; DB suites skip without DATABASE_URL
-
-# The server's LiteSVM suites and the escrow suites load the built program:
-#   programs/escrow/target/deploy/escrow.so  (anchor build, or the cargo build-sbf line above)
-npm test -w @youre-on/server                 # with DATABASE_URL set
-npm run test:escrow -w @youre-on/shared      # TS client on LiteSVM
+npm run test:escrow -w @youre-on/shared      # TS client on LiteSVM (needs the built escrow.so)
 (cd programs/escrow && cargo test)           # Rust LiteSVM matrix
-npm run test:validator -w @youre-on/shared   # local Agave validator (atomic-lock timing, fees)
-npm run e2e:local                            # deploy scripts + smoke against a throwaway validator
 ```
 
-| Suite                         | Command                                   | Count                                                                 |
-| ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
-| Server                        | `npm test -w @youre-on/server`            | 810 (with `DATABASE_URL`)                                             |
-| Mobile                        | `npm test -w @youre-on/mobile`            | 954, 1 skipped (the face-model test also skips without the `.tflite`) |
-| Shared                        | `npm test -w @youre-on/shared`            | 295                                                                   |
-| Database                      | `npm test -w @youre-on/db`                | 30                                                                    |
-| Escrow, TS client (LiteSVM)   | `npm run test:escrow -w @youre-on/shared` | 23, 1 skipped (the E3 mimic test needs `build-mimic.sh`)              |
-| Escrow, Rust matrix (LiteSVM) | `cargo test` in `programs/escrow`         | 167                                                                   |
-| Stage                         | `npm test -w @youre-on/stage`             | 172 (8 need `DATABASE_URL`)                                           |
+| Suite                       | Tests                                 |
+| --------------------------- | ------------------------------------- |
+| Server                      | 1,072 (with `DATABASE_URL`)           |
+| iPhone app (logic, in Node) | 2,078, 1 skipped                      |
+| Shared                      | 623                                   |
+| Stage                       | 340 (8 need `DATABASE_URL`)           |
+| Database                    | 32 (with `DATABASE_URL`)              |
+| Escrow, TS client (LiteSVM) | 23, 1 skipped                         |
+| Escrow, Rust (LiteSVM)      | 169 (167 in the matrix, 2 unit tests) |
 
-CI (`.github/workflows/ci.yml`) runs typecheck, lint, format, migrations and every workspace's
-tests on Postgres, gitleaks, then `anchor build`, the Codama check, the TS LiteSVM suite and
-`cargo test`.
-
-### Deploy (Fly + Neon)
-
-- **Server and stage:** one always-on Fly machine (`fly.toml`, app `youre-on`, region `dfw`). The
-  Docker image (`apps/server/Dockerfile`) builds the stage too, so the server serves it at
-  `/stage`. Non-secret config is in `fly.toml [env]`; keys and URLs are Fly secrets
-  (`fly secrets import`, see [`scripts/deploy-devnet.md`](scripts/deploy-devnet.md) step 8).
-- **Database:** Neon Postgres. The app uses the pooled URL (`DATABASE_URL`); migrations run from a
-  laptop over `DATABASE_URL_DIRECT`, never from Fly.
-- **Escrow:** [`scripts/deploy-devnet.md`](scripts/deploy-devnet.md): keys, deploy, `init-config`,
-  `check-config`, the nonce pool, funding, smoke.
-- **Demo day:** [`docs/runbook.md`](docs/runbook.md).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs typecheck, lint, format,
+migrations and every workspace's tests on Postgres, gitleaks over the full history, then
+`anchor build`, the Codama client check, the TS LiteSVM suite and `cargo test`.
 
 ## Repo layout
 
 ```
-apps/mobile        Expo iOS app
-apps/server        Hono server (also serves the stage at /stage)
-apps/stage         stage view for the projector
-packages/shared    zod contract, JCS hashing, chain pins, escrow IDL + client, device policy
-packages/db        Drizzle schema and SQL migrations 0000-0007
+apps/mobile        iPhone app (Expo), with Swift modules for "Jarvis" and dance pose
+apps/server        Hono server; also serves the stage at /stage
+apps/stage         projector page
+packages/shared    shared contract: zod schemas, JCS hashing, IDL + client, signing policy, dance scorer
+packages/db        Drizzle schema and SQL migrations
 programs/escrow    Anchor escrow program and its LiteSVM matrix
-infra/quicknode    Streams filter (generated from the IDL), stream config, fixtures
-scripts            deploy, demo-check, crank, cp1-drive, el-agent, qn-stream, fund, face model
-docs/planning      the specs (source of truth for behaviour)
-docs/reference     Verdict's specs, kept as design reference
+services/sam3      SAM 3.1 on Modal
+infra/quicknode    Streams filter (generated from the IDL), Stream config, fixtures
+tools/dance-ref    Swift CLI that extracts a routine's poses from a reference video
+scripts            deploy, fund, crank, cp1-drive (a full bet without phones), qn-stream, face model
+docs               runbook, measurements, iOS build, pitch, and the specs in docs/planning
 ```
-
-## Prior work
-
-Two prototypes of this idea were written on 2026-11-07/08, before the build window, and the
-organizers confirmed that reusing that work is allowed. Alaric's prototype ("Verdict") is in this
-repo's history on `main`, and its specs are in `docs/reference/verdict/`. Logan's prototype
-("You're On") was imported as the base on 2026-11-14, together with the Phase 0 planning docs in
-`docs/planning/`. [`docs/MERGE-PLAN.md`](docs/MERGE-PLAN.md) lists what was kept, ported and
-dropped. The face model is not committed: `scripts/face-model.sh` rebuilds it from the official
-InsightFace release.
 
 ## Team
 
-<!-- TODO before submission: full names, roles and links, as the team wants them shown. -->
-
-- **Logan**: lead engineer.
-- **Alaric**: Verdict, the consent-first settlement model, the design system.
-- **Eva**: the consent-before-capture enroll flow.
+- Logan Staples
+- Alaric
+- Eva Stevanovic
 
 ## License
 
-<!-- TODO before submission: confirm the license with the team. -->
-
-MIT; see [`LICENSE`](LICENSE). The face-model weights are InsightFace's, licensed for
-non-commercial research only.
+MIT; see [`LICENSE`](LICENSE). The InsightFace face-model weights are not MIT: they are licensed
+for non-commercial research only.
