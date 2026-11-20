@@ -520,6 +520,8 @@ ALLOW_SPEND=                    # true allows any *_PROVIDER=live; never set in 
 LLM_PROVIDER=                   # mock (default) | live: Anthropic + OpenAI + Google judge/panel calls
 STT_PROVIDER=                   # mock (default) | live: ElevenLabs Scribe (hearing turn B)
 SFX_PROVIDER=                   # auto (default: live with ELEVENLABS_API_KEY + ALLOW_SPEND, else mock) | mock | live: ElevenLabs Sound Effects (stage cues)
+STAGE_SFX_PREWARM=              # true = generate the four cue clips at every boot (costs credits per deploy). Default false: on first use
+TERMS_MODEL=                    # Anthropic model that structures a typed or spoken sentence into terms (default claude-haiku-5-5)
 # --- Solana / QuickNode (secret)
 SOLANA_DEVNET_RPC=
 SOLANA_DEVNET_WS=

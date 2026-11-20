@@ -16,7 +16,7 @@
 // Native-free apart from expo-video (lazily, for a clip), expo-audio and expo-keep-awake (both
 // through importSafely), so a binary missing any of them loses that part, not the screen.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
-import type { RoutineData } from '@youre-on/shared/dance/routine';
+import { routineDisplayTitle, type RoutineData } from '@youre-on/shared/dance/routine';
 import type { Terms } from '@youre-on/shared/terms';
 import { useEffect, useMemo, useState } from 'react';
 import { StatusBar, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
@@ -216,7 +216,7 @@ function Display({
       {phase === 'waiting' || phase === 'done' ? (
         <View style={styles.top} pointerEvents="none">
           <Text style={styles.title} numberOfLines={1}>
-            {routine.title}
+            {routineDisplayTitle(routine)}
           </Text>
           <View style={styles.versus}>
             <Text style={[styles.name, { color: PLAYER_TINT.A }]} numberOfLines={1}>

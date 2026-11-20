@@ -9,7 +9,13 @@
 //   failure_criteria      []
 import { formatUsd } from '../money';
 import type { Terms } from '../terms';
-import { getRoutine, routineSeconds, routineSha256, type RoutineData } from './routine';
+import {
+  getRoutine,
+  routineDisplayTitle,
+  routineSeconds,
+  routineSha256,
+  type RoutineData,
+} from './routine';
 import { DANCE_SCORING } from './score';
 
 export const DANCE_TERMS_TYPE = 'dance_off' as const;
@@ -23,10 +29,10 @@ export const isDanceOff = (t: Pick<Terms, 'type'>): boolean => t.type === DANCE_
 
 /** "Dance Off: Wave Pop, 15 seconds, higher match score wins, $5 each" (the routine's length). */
 export const danceClaim = (
-  r: Pick<RoutineData, 'title' | 'duration_ms'>,
+  r: Pick<RoutineData, 'id' | 'title' | 'duration_ms'>,
   stakeMicro: string,
 ): string =>
-  `Dance Off: ${r.title}, ${routineSeconds(r)} seconds, higher match score wins, ` +
+  `Dance Off: ${routineDisplayTitle(r)}, ${routineSeconds(r)} seconds, higher match score wins, ` +
   `${formatUsd(stakeMicro)} each`;
 
 /** "Routine wave-pop v1 sha256:812f15c411edd626". */

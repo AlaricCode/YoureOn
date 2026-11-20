@@ -149,6 +149,22 @@ export function getRoutine(id: string): RoutineData | null {
   return null;
 }
 
+/**
+ * Routines that are called something else on screen than in their data. A routine's `title` is
+ * part of routine_sha256, which is bound into every bet locked on it and checked on both the
+ * phone and the server: changing it THERE would make every build that still carries the old data
+ * refuse the routine ('sha_mismatch'). So a rename is a display name here; the id, the version
+ * and the hash stay exactly what they were.
+ */
+const DISPLAY_TITLES: Readonly<Record<string, string>> = {
+  // Named for the song it is danced to.
+  'bye-bye-shuffle': 'Bye Bye Bye',
+};
+
+/** What a routine is called on screen and in a bet's claim: its display name, else its title. */
+export const routineDisplayTitle = (r: Pick<RoutineData, 'id' | 'title'>): string =>
+  DISPLAY_TITLES[r.id] ?? r.title;
+
 /** The round length in whole seconds, as the Terms text and the UI say it ("15 seconds"). */
 export const routineSeconds = (r: Pick<RoutineData, 'duration_ms'>): number =>
   Math.round(r.duration_ms / 1000);

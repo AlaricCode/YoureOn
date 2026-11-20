@@ -10,7 +10,12 @@
 //            ▲          ▲  ▲                  │ refused / error          │ failed
 //            └─close────┘  └── routine / stake / note ◀────────────────────┘
 import { danceClaim, isDanceOff, parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
-import { ROUTINES, getRoutine, routineSeconds } from '@youre-on/shared/dance/routine';
+import {
+  ROUTINES,
+  getRoutine,
+  routineDisplayTitle,
+  routineSeconds,
+} from '@youre-on/shared/dance/routine';
 import { DANCE_STAKES_USD } from '@youre-on/shared/judge/dance-terms';
 import { parseUsd } from '@youre-on/shared/money';
 import type { TermsEnvelope } from '@youre-on/shared/terms';
@@ -41,7 +46,7 @@ export interface DanceRoutineChoice {
  */
 export const DANCE_ROUTINE_CHOICES: readonly DanceRoutineChoice[] = ROUTINES.map((r) => ({
   id: r.id,
-  title: r.title,
+  title: routineDisplayTitle(r),
   song: r.song,
   bpm: r.bpm,
   seconds: routineSeconds(r),

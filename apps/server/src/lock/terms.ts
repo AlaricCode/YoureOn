@@ -21,6 +21,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { auditLog, bets, betTermsVersions } from '@youre-on/db';
 import { ACCEPT_WINDOW_SKILL_SECS, QUOTE_TTL_SECS } from '@youre-on/shared/constants';
 import { ESCROW_ID } from '@youre-on/shared/chain/constants';
+import { routineDisplayTitle } from '@youre-on/shared/dance/routine';
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import { formatUsd } from '@youre-on/shared/money';
 import {
@@ -150,7 +151,9 @@ export function presentationOf(t: Terms): TermsPresentation {
   // DANCE-OFF §1: the card is titled by the routine ("Dance Off: Wave Pop"), not the long claim.
   const dance = t.type === 'dance_off' ? parseDanceTermsRoutine(t) : null;
   return {
-    title: titleOf(dance !== null && dance.ok ? `Dance Off: ${dance.routine.title}` : t.claim),
+    title: titleOf(
+      dance !== null && dance.ok ? `Dance Off: ${routineDisplayTitle(dance.routine)}` : t.claim,
+    ),
     readback: readbackSay(proposalOf(t), {
       a: t.party_a.display_name,
       b: t.party_b.display_name,

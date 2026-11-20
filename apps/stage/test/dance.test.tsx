@@ -311,14 +311,16 @@ describe('each routine has its own length', () => {
   it('the label and the panels say 33 seconds for bye-bye-shuffle, 15 for wave-pop', () => {
     expect(danceRoutineLabel(at('framing').bet)).toBe(`${WAVE_POP.title} · 15 seconds`);
     const { bet, now } = long('framing');
-    expect(danceRoutineOf(bet)).toMatchObject({ id: LONG.id, title: LONG.title, seconds: 33 });
-    expect(danceRoutineLabel(bet)).toBe('Bye Bye Shuffle · 33 seconds');
+    // the name on screen, not the data's title (shared routineDisplayTitle)
+    expect(LONG.title).toBe('Bye Bye Shuffle');
+    expect(danceRoutineOf(bet)).toMatchObject({ id: LONG.id, title: 'Bye Bye Bye', seconds: 33 });
+    expect(danceRoutineLabel(bet)).toBe('Bye Bye Bye · 33 seconds');
     const framing = text(renderToString(<BetCard bet={bet} now={now} />));
     expect(framing).toContain('>33 seconds<');
     expect(framing).not.toContain('15 seconds');
     const terms = long('terms');
     expect(text(renderToString(<BetCard bet={terms.bet} now={terms.now} />))).toContain(
-      'Bye Bye Shuffle: 33 seconds, side by side, 11 key moves',
+      'Bye Bye Bye: 33 seconds, side by side, 11 key moves',
     );
   });
 
