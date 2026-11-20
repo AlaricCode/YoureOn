@@ -261,8 +261,11 @@ const VOICE_ENABLED = process.env.EXPO_PUBLIC_VOICE === 'on';
  * On, every phone joins the one live lobby room by itself and a code is the "Private room" option.
  */
 const LOBBY_ENABLED = process.env.EXPO_PUBLIC_LOBBY !== 'off';
-/** EXPO_PUBLIC_MARKET=off hides "Bet on Bitcoin" (the server refuses it without the Gemini relay). */
-const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET !== 'off';
+/**
+ * "Bet on Bitcoin" (the market closer) is out of the app: only EXPO_PUBLIC_MARKET=on brings it
+ * back. The code stays so a market bet already in someone's history still opens.
+ */
+const MARKET_ENABLED = process.env.EXPO_PUBLIC_MARKET === 'on';
 /** A voice SDK that throws while it loads falls back to typed terms (the boundary below). */
 const JudgeVoice = lazy(() => importSafely(() => import('../voice/JudgeVoice')));
 /** How long A's judge session outlives its bet: the closing [EVENT] line, spoken (§4.5). */

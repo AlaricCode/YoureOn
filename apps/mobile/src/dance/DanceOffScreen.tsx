@@ -43,7 +43,13 @@ import { appDocumentsUri, readFileBytes } from './fs';
 import { nowMs, useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
 import { DANCE_CAMERA, guideSides, previewMirrored } from './model/camera';
 import type { LiveStore } from './model/liveStore';
-import { attemptCountIn, framingProgress, type RoundState } from './model/round';
+import {
+  attemptCountIn,
+  autoStartLeftMs,
+  autoStartNumeral,
+  framingProgress,
+  type RoundState,
+} from './model/round';
 import { serverIsoToLocalMs } from './model/schedule';
 import { createSimPoseSource, SIM_FRAME_MS, type SimPoseSource } from './model/simRound';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
@@ -185,7 +191,7 @@ function FramingFooter({
       : camera === 'error'
         ? dt(DANCE_COPY.cameraError)
         : ready
-          ? dt(DANCE_COPY.ready)
+          ? dt(DANCE_COPY.holdStill)
           : reason
             ? dt(FRAMING_COPY[reason])
             : dt(DANCE_COPY.findingYou);
@@ -432,14 +438,21 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     );
   }
 
-  // Both dancers in position and held there: the round starts by itself. They are standing in
-  // front of the camera, not at the phone. Start is still there, and a failed start (no attempt
-  // could be opened) is not retried until the framing is lost and found again.
+  // Both dancers in position and held there: a countdown they can read from where they stand,
+  // and the round starts by itself when it runs out (model/round AUTO_START_MS). They are in
+  // front of the camera, not at the phone. Anyone leaving the frame ends the count (the round is
+  // back to `framing`) and it starts over once they are both in place again. Start is still
+  // there, and a failed start is not retried until the framing is lost and found again.
   const framedAndHeld = state.phase === 'ready';
-  const engineStart = engine.start;
+  const autoNow = useFrameClock(framedAndHeld, 10);
+  const autoLeft = autoStartLeftMs(state, autoNow);
+  const autoDue = autoLeft !== null && autoLeft <= 0;
+  const engineStart = useRef(engine.start);
+  engineStart.current = engine.start;
   useEffect(() => {
-    if (framedAndHeld) engineStart();
-  }, [framedAndHeld, engineStart]);
+    if (autoDue) engineStart.current();
+  }, [autoDue]);
+  const autoCount = autoStartNumeral(autoLeft);
 
   const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
   // The selfie camera's preview is a mirror image; the sample round has no camera to mirror.
@@ -508,7 +521,22 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
         camera={camera}
         mirrored={mirrored}
         cameraOverlay={
-          <FramingGuide store={engine.store} names={names} visible={framing} mirrored={mirrored} />
+          <>
+            <FramingGuide
+              store={engine.store}
+              names={names}
+              visible={framing}
+              mirrored={mirrored}
+            />
+            {autoCount !== null ? (
+              <View style={styles.autoCount} pointerEvents="none" testID="dance-auto-count">
+                <Text style={styles.autoLabel}>{dt(DANCE_COPY.startingIn)}</Text>
+                <Text style={styles.autoNumeral} allowFontScaling={false}>
+                  {autoCount}
+                </Text>
+              </View>
+            ) : null}
+          </>
         }
         debug={settings.debugOverlay}
         syncOffsetMs={settings.syncOffsetMs}
@@ -600,6 +628,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   guideName: { ...type.heading },
+  autoCount: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  autoLabel: { ...type.heading, color: palette.text },
+  autoNumeral: {
+    ...type.moment,
+    fontSize: 132,
+    lineHeight: 148,
+    letterSpacing: -4,
+    color: palette.accent,
+  },
   noCamera: { alignItems: 'center', justifyContent: 'center', backgroundColor: palette.surface },
   noCameraText: { ...type.labelMedium, color: palette.textSecondary },
   resultBody: { paddingHorizontal: space.page, paddingVertical: space.x3, gap: space.x4 },
