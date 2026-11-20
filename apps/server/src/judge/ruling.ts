@@ -215,7 +215,8 @@ export const THROW_MODEL = 'sam3.1/throw-track@1';
  *   in  + a rule broken  -> NOT_MET    "The paper ball went in, but <the rule>, so it does not count."
  *   out                  -> NOT_MET    "The paper ball missed the bin." (+ the rule, when broken)
  *
- * The tracker cannot say (it lost the object, or there was no reply):
+ * The tracker has nothing to go on (no reply, no target, or no object that moved; a track it
+ * lost still gets its best call, `guess`):
  *   a rule broken        -> NOT_MET    "<the rule>, so it does not count." (a broken rule loses
  *                                      on its own, wherever the object went)
  *   otherwise            -> UNCLEAR    a retake: "The tracker could not follow the paper ball to
@@ -228,6 +229,8 @@ export function decideThrow(
     why: string;
     frames: number[];
     last_seen: number | null;
+    /** The tracker's best call where no firm rule fit (shared checks/throw). */
+    guess?: boolean | undefined;
   } | null,
   labels: { object: string; target: string },
 ): Judged {
@@ -285,7 +288,8 @@ export function decideThrow(
     ...base,
     verdict: {
       claim_result: claim,
-      confidence: 0.92,
+      // a best call still stands (REDO_BELOW is 0.8): the point of it is that there is no retake
+      confidence: track.guess ? 0.85 : 0.92,
       reason: reason.slice(0, 280),
       cited_frames: track.frames.slice(-4),
       contested: false,
