@@ -14,7 +14,7 @@
 // (evaluateProposeTerms + proposeTermsReply). Party lines come from the fixture; each clarifying
 // question (a judge turn ending in "?" without a tool call) gets the next scripted answer.
 //
-// The LLM settings mirror the agent (FINDINGS §3.8): claude-haiku-5-5, AGENT_MAX_TOKENS, no
+// The LLM settings mirror the agent: claude-haiku-5-5, AGENT_MAX_TOKENS, no
 // temperature (Claude 5.x rejects non-default sampling), thinking disabled at effort low. This is
 // the Anthropic API, not ElevenLabs' serving of the model, so latency numbers from it are not the
 // voice latency (D1-J2 measures that).

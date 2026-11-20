@@ -670,7 +670,7 @@ export const AttemptStartedExtra = z.object({ recorder_device_id: Uuid, go_at: I
 // ---------------------------------------------------------------------------------------
 
 export const WS_PATH = '/v1/ws';
-/** Server ping interval (FINDINGS §3.13). */
+/** Server ping interval. */
 export const WS_HEARTBEAT_MS = 20_000;
 /** `hello` must arrive within this, or the server closes with 4401. */
 export const WS_HELLO_TIMEOUT_MS = 5_000;

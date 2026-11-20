@@ -1,5 +1,5 @@
-// ed25519 verification of device-key signatures (@noble/ed25519 3.2.0 + @noble/hashes 2.4.0,
-// FINDINGS §3.4) and small encoding helpers.
+// ed25519 verification of device-key signatures (@noble/ed25519 3.2.0 + @noble/hashes 2.4.0)
+// and small encoding helpers.
 import { randomBytes } from 'node:crypto';
 import * as ed from '@noble/ed25519';
 import { sha256, sha512 } from '@noble/hashes/sha2.js';

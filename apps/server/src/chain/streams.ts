@@ -1,9 +1,8 @@
 // QuickNode Streams intake: turns a verified webhook body (the infra/quicknode/filter.js output,
 // API-CONTRACT §5.2) into ordered, de-duplicated chain_events rows.
 //
-// Ported from Verdict packages/backend/src/chain/streams.ts (envelope validation, per-event
-// schema validation with a `rejected` list, in-batch dedupe, stable ordering). Our contract
-// differs and wins:
+// Envelope validation, per-event schema validation with a `rejected` list, in-batch dedupe,
+// stable ordering. Contract details:
 //   - events are emit_cpi! inner instructions, keyed (signature, outer_ix, inner_ix), not
 //     (signature, index);
 //   - the filter forwards raw `eventBase64` (disc ‖ borsh) and the server re-decodes it with the

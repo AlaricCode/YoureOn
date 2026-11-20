@@ -13,7 +13,7 @@ export const MAX_SKIP_MS = 60_000;
 /** GET /v1/bets/:id before the contract's expiry (+ Gemini's ~6 s to settle) and after it. */
 export const SETTLE_SLOW_POLL_MS = 3_000;
 export const SETTLE_FAST_POLL_MS = 1_000;
-/** Gemini settles 5.7-8.8 s after expiry (spike 05): poll fast from here on. */
+/** Gemini settles 5.7-8.8 s after expiry (measured): poll fast from here on. */
 export const SETTLE_FAST_AFTER_MS = 4_000;
 /** A 429 without a usable Retry-After waits this; any Retry-After is capped at MAX_RETRY_AFTER_MS. */
 export const DEFAULT_RETRY_AFTER_MS = 2_000;

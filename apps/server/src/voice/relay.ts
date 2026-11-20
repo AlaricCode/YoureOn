@@ -5,7 +5,7 @@
 //        evidence) and B's captions. 202 VoiceLinesResponse.
 //   POST /v1/bets/:bet_id/cues         (S, A)  the `cue` client tool (§4.4) -> a `stage.cue`
 //        control frame to the bet's room; the stage laptop plays the clip (A's phone never plays
-//        audio: it would stop mic capture, FINDINGS §4 / LiveKit #286). 202 StageCueResponse.
+//        audio: it would stop mic capture, LiveKit #286). 202 StageCueResponse.
 //
 // Lines:
 //   - Idem: (bet, utterance_id, final). A repeat inside this process is counted, not re-emitted

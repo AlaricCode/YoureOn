@@ -1,10 +1,8 @@
-Status: DRAFT — Phase 0 planning written 2026-11-08 (before the build window). Re-author into the repo during the window; if committed verbatim, commit it as 'docs: import Phase 0 planning (written pre-window)'.
-
 # SCHEMAS — shared types for You're On (`packages/shared`)
 
-The source of truth for every JSON shape that crosses a process boundary: mobile ↔ server, server ↔ LLMs, server ↔ stage view, chain → server. Each schema becomes a Zod schema in `packages/shared/src/` during the window.
+The source of truth for every JSON shape that crosses a process boundary: mobile ↔ server, server ↔ LLMs, server ↔ stage view, chain → server. Each schema becomes a Zod schema in `packages/shared/src/`.
 
-**At a glance (2026-11-08)**
+**At a glance**
 
 - **Binding record.** `Terms` (§2) is the only binding record. `terms_hash = sha256(JCS(Terms))` goes onchain, and the terms code is its first 8 hex chars.
 - **Lock = one transaction (D3, §9, §9.4).**
@@ -16,7 +14,7 @@ The source of truth for every JSON shape that crosses a process boundary: mobile
 - **Realtime (§10).** `tx.*` events and `PendingTx` carry a `TxKind` (`atomic_lock`, `nonce_advance`, …). New event: `terms.authorize_request`.
 - **Open items.** Every one is resolved (§12.3).
 
-The code blocks were type-checked (TS strict) and run against every JSON example in this doc (`zod@4.6.7`, `canonicalize@5.1.0`) in a throwaway scratch folder. They are a spec: re-author them in the repo, don't paste.
+The code blocks were type-checked (TS strict) and run against every JSON example in this doc (`zod@4.6.7`, `canonicalize@5.1.0`) in a throwaway scratch folder. They are a spec; don't paste them into the repo.
 
 Contents: [0 Conventions](#0-conventions) · [1 Primitives](#1-primitives) · [2 Terms](#2-terms-binding) · [3 Negotiation](#3-negotiation-termsproposal-termsdraft-clarifications-refusals) · [4 Evidence](#4-evidence) · [5 Ruling](#5-ruling) · [6 Hearing](#6-hearing) · [7 Appeals](#7-appeals) · [8 Gemini](#8-gemini-market-snapshot-and-fair-stakes) · [9 BetState](#9-betstate-offchain-state-machine) · [10 Realtime](#10-realtime-events) · [11 Versioning](#11-versioning) · [12 Decisions and open items](#12-proposed-changes-cross-doc-decisions-and-open-items) · [Changelog](#changelog)
 
@@ -33,7 +31,7 @@ Contents: [0 Conventions](#0-conventions) · [1 Primitives](#1-primitives) · [2
 | Timestamps | UTC. Offchain: exactly the `Date#toISOString()` format `YYYY-MM-DDTHH:mm:ss.sssZ`. Onchain and chain-event payloads: unix seconds (`i64`, a JSON number). Convert with `Math.floor(Date.parse(iso) / 1000)`. |
 | IDs | `bet_id` is a UUIDv4: lowercase and hyphenated in JSON and Postgres, the same 16 bytes onchain (`[u8; 16]`). Other ids (`ruling_id`, `hearing_id`, …) are UUIDv4 and offchain only. |
 | Hashes | 32 bytes: lowercase hex offchain (`Hex32`), `[u8; 32]` onchain. Hash with `sha256` from `@noble/hashes`, which is pure JS, so the same code runs on React Native and Node. |
-| Pubkeys | Base58 strings, validated with `isAddress` from `@solana/kit` (confirmed: spike 07, `@solana/kit` 8.6.0 + a Codama client). Never shown to users. |
+| Pubkeys | Base58 strings, validated with `isAddress` from `@solana/kit` (confirmed with `@solana/kit` 8.6.0 + a Codama client). Never shown to users. |
 | Free text | Normalize anything a person or the judge says before validating it: NFC, then collapse whitespace runs to one space, then trim. Schemas **reject** text that isn't normalized instead of fixing it silently, so the bytes we hash are exactly the bytes we validated. |
 | Biometrics | No schema in `packages/shared` carries face data. Embeddings live only in the face module: encrypted at rest, never logged, never in events, never onchain. `avatar_url` is a separate opt-in profile photo, never the enrollment selfie. |
 | Users never see crypto | Pubkeys, hashes and signatures appear in payloads for the stage view's explorer links and for verification. The phone UI shows names, dollars and states only. One exception, from brief 5f: the terms card shows the first 8 hex chars of `terms_hash` as a "terms code", so both people can see they are authorizing the same thing. |
@@ -58,11 +56,11 @@ export const ACCEPT_WINDOW_SKILL_SECS = 300;         // create_bet accept_deadli
 export const QUOTE_TTL_SECS = 60;                    // create_bet accept_deadline arg for gemini bets = unix(quotedAt) + this
 export const LOCK_SIGNATURE_MAX_SECS = 600;          // device policy: lock accept_deadline ≤ device now + this (= Config.accept_deadline_secs); with a durable nonce it is the only bound on a held lock signature
 export const LOCK_SUBMIT_MARGIN_SECS = 5;            // the server never submits a lock within 5 s of accept_deadline: it revokes instead (a lock that fails onchain burns both signatures)
-export const NONCE_POOL_SIZE = 5;                    // durable-nonce accounts, authority = server fee payer (FINDINGS §3.7)
+export const NONCE_POOL_SIZE = 5;                    // durable-nonce accounts, authority = server fee payer
 export const NONCE_SEED_MAX = 16;                    // pool addresses = createWithSeed(fee payer, `yo-nonce-${k}`, System), k < 16 (ESCROW §5.0.1)
 export const MAX_LOCK_REBUILDS = 1;                  // after lock_failed: re-propose the same terms under a new bet_id once, then stop
-export const HELD_SIGNATURE_MAX_SECS = 30;           // LOCK_MODE=sequential only: B authorized first → re-prompt B if create_bet hasn't confirmed by then (blockhash ~36 s, spike 07)
-export const STREAM_FALLBACK_MS = 5_000;             // RPC-confirmed tx with no Streams event after this → rpc_poll (spike 06: Streams latency est. 1–2.5 s, unmeasured until the key run)
+export const HELD_SIGNATURE_MAX_SECS = 30;           // LOCK_MODE=sequential only: B authorized first → re-prompt B if create_bet hasn't confirmed by then (blockhash ~36 s)
+export const STREAM_FALLBACK_MS = 5_000;             // RPC-confirmed tx with no Streams event after this → rpc_poll (Streams latency est. 1–2.5 s, unmeasured until the key run)
 ```
 
 ### 0.2 Who produces and who consumes each schema
@@ -145,7 +143,7 @@ export function formatUsd(s: MicroUsdc): string {
 | Display | `formatUsd` | No floats anywhere in money formatting. |
 | Input | `parseUsd` | Voice/typed amounts are always whole cents. `Stake` (§2) also requires whole cents in `[MIN_STAKE, MAX_STAKE]`. |
 
-Devnet USDC: Circle's devnet mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` on classic SPL Token (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`), 6 decimals, freeze authority set (confirmed: spike 07, read onchain).
+Devnet USDC: Circle's devnet mint `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` on classic SPL Token (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`), 6 decimals, freeze authority set (confirmed: read onchain).
 
 ### 1.2 Party, ids, time, hashes, keys, text
 
@@ -203,7 +201,7 @@ Notes:
 ```ts
 export const UserRef = z.object({
   user_id: Uuid,                    // offchain account id (Postgres users.id)
-  pubkey: Pubkey,                   // device-generated wallet keypair (confirmed: spike 07)
+  pubkey: Pubkey,                   // device-generated wallet keypair (confirmed)
   display_name: DisplayName,
   avatar_url: z.url().nullable(),   // opt-in profile photo; never the enrollment selfie
 });
@@ -357,7 +355,7 @@ All fields below are **binding** (they are inside `Terms`, so they are in `terms
 | `evidence_source` | judge | `camera` for `skill` and `dance_off`, `gemini` ⇔ `real_world`. |
 | `market` | server | Required iff `real_world`. Copied from a `GeminiMarketSnapshot`, never typed by the LLM. See §2.6 and §8. |
 | `stakes` | server | `{a, b, currency: 'USDC'}`, micro-USDC strings. Skill: `a = amount`, `b = amount_b ?? amount` (odds: unequal stakes agreed on both phones, at most 10:1, §3.5). Dance off: `a = b = amount` (even money, no odds). Real world: fair split of `pot = 2 × amount` (§8). Each side is checked against `MAX_STAKE`. |
-| `deadline` | server | Whole-second UTC. Skill: attempt done by `created_at + 10 min` (or + the judge's `deadline_minutes`, ≤ 45), rounded to the nearest whole minute. Real world: `market.expiry + 10 min` (confirmed: spike 05: `resolvedAt` is 5.5–8.8 s after expiry over 173 contracts, and the REST side is visible by ~T+9 s; spike 05 also recommends expiry + 10 min). It is an offchain term, not an onchain deadline. The onchain `resolve_deadline` is `locked_at + Config.resolve_deadline_secs` (3600 s demo, ESCROW §5.2), so the server enforces `deadline + RESOLVE_GRACE_SECS ≤ created_at + resolve_deadline_secs`. That always leaves ≥ 10 min for judging, REDOs and the hearing (§9.3). |
+| `deadline` | server | Whole-second UTC. Skill: attempt done by `created_at + 10 min` (or + the judge's `deadline_minutes`, ≤ 45), rounded to the nearest whole minute. Real world: `market.expiry + 10 min` (confirmed: `resolvedAt` is 5.5–8.8 s after expiry over 173 contracts, and the REST side is visible by ~T+9 s). It is an offchain term, not an onchain deadline. The onchain `resolve_deadline` is `locked_at + Config.resolve_deadline_secs` (3600 s demo, ESCROW §5.2), so the server enforces `deadline + RESOLVE_GRACE_SECS ≤ created_at + resolve_deadline_secs`. That always leaves ≥ 10 min for judging, REDOs and the hearing (§9.3). |
 | `created_at` | server | When the terms were finalized (the instant `terms_hash` is computed). |
 
 **Presentation-only (not hashed):** title, read-back text, dollar strings, odds string, avatars, user ids, `room_id`, transcripts of the negotiation, the judge's voice audio. They live in `TermsPresentation` / `TermsDraft`.
@@ -502,8 +500,8 @@ These fields differ from §2.5. A says "Bitcoin's up by the end of this pitch", 
 }
 ```
 
-- Ticker shapes come from spike 05 samples (event `BTC05M2611072140`, instrument `GEMI-BTC05M2611072140-UP`, contract ticker `UP`). Always copy them from the API; never build them by hand.
-- `strike.value` is `null` until `availableAt` (the start of the 5-minute window). A bet on a contract whose window hasn't opened yet binds to "the reference price Gemini captures at `availableAt`". That is still unambiguous, because Gemini settles it. For the **current** window the server quotes only once the strike is known (`STRIKE_PENDING`, §8.2). Spike 05 (confirmed) saw the strike arrive on the WS `contractStatus` frame 4–6 s into the window, on REST `/strike` after 14–22 s, and still `null` in the discovery list after 44 s. Never take the strike from the discovery list.
+- Ticker shapes come from observed samples (event `BTC05M2611072140`, instrument `GEMI-BTC05M2611072140-UP`, contract ticker `UP`). Always copy them from the API; never build them by hand.
+- `strike.value` is `null` until `availableAt` (the start of the 5-minute window). A bet on a contract whose window hasn't opened yet binds to "the reference price Gemini captures at `availableAt`". That is still unambiguous, because Gemini settles it. For the **current** window the server quotes only once the strike is known (`STRIKE_PENDING`, §8.2). Confirmed: the strike arrives on the WS `contractStatus` frame 4–6 s into the window, on REST `/strike` after 14–22 s, and still `null` in the discovery list after 44 s. Never take the strike from the discovery list.
 - **`priceAtLock` is the price when the terms are finalized (`quotedAt`, when the server builds the lock), not when the second party authorizes.** The quote expires after `QUOTE_TTL_SECS` (60 s), which is enforced onchain through the `accept_deadline` argument of `create_bet` (§8.3). The name is kept from the baseline; see §12.
 
 ### 2.7 Dance Off variant
@@ -527,7 +525,7 @@ These fields differ from §2.5. A says "Bitcoin's up by the end of this pitch", 
 
 The judge owns the semantic fields. The server owns ids, parties, escrow, money math, market data and time. The judge's one terms tool, `propose_terms`, carries only judge-owned fields, and the server composes `Terms`.
 
-- **No `ask_clarification` tool** (D6, FINDINGS §3.10). The agent asks its ≤ 2 edge-case questions in speech, and the agreed answers arrive as `edge_cases` in the next `propose_terms` call.
+- **No `ask_clarification` tool** (D6). The agent asks its ≤ 2 edge-case questions in speech, and the agreed answers arrive as `edge_cases` in the next `propose_terms` call.
 - **Wire params ≠ `TermsProposal`.** The tool's `request_body_schema` is the LLM-facing projection in API-CONTRACT §4.3 (`amount_usd`, `performer: 'none'`, `market_side`, `deadline_minutes: 0`), because the ElevenLabs schema subset has no `pattern`, ranges or nullable enums. The server maps it deterministically into `TermsProposal`, then validates.
 
 ```ts
@@ -643,7 +641,7 @@ export const TermsStepOutput = z.discriminatedUnion('kind', [
 Notes:
 - **Two clarifications at most.** After the 2nd answer the judge must propose and fill any remaining gaps with stated defaults, which become `edge_cases` the judge "asked" itself.
   - **ElevenLabs Agent path (v1):** the limit lives in the agent prompt and in `propose_terms`'s advisory `next` (API-CONTRACT §4.1, §4.3). There is no tool call to reject, and `TermsDraft.clarifications` is `[]`.
-  - **Speech Engine fallback only** (Claude on our server, FINDINGS §3.10; API-CONTRACT §7.1): `ClarificationQuestion`, `ClarificationAsk`, `TermsStepOutput.ask`, `TermsDraft.clarifications` and the `terms.question` event are produced here. `index` ∈ {1, 2}, and the server rejects a 3rd `ask`. The draft example above is a fallback-path draft.
+  - **Speech Engine fallback only** (Claude on our server; API-CONTRACT §7.1): `ClarificationQuestion`, `ClarificationAsk`, `TermsStepOutput.ask`, `TermsDraft.clarifications` and the `terms.question` event are produced here. `index` ∈ {1, 2}, and the server rejects a 3rd `ask`. The draft example above is a fallback-path draft.
 - **The answer becomes an edge case:** `{question, answer: <crisp rule>, asked_by: 'judge'}`. `ClarificationAnswer.answer` is the normalized transcript. The edge case answer is the judge's rewording, and both parties hear that wording in the read-back, then see it on the terms card they authorize on their own phones. The spoken read-back (and any spoken "accept") is not binding. Only the on-phone authorization is (§9).
 - **Refusals** are produced by the server's guardrail check on every `propose_terms` call (and every `TermsStepOutput` in the fallback). A synchronous keyword prefilter returns the `GuardrailRefusal` inline as the tool result, so the agent speaks the `quip`. The LLM guardrail runs asynchronously and fails closed before the lock; a late refusal arrives as `terms.refused` plus `judge.cue REFUSED` (API-CONTRACT §4.3, §7.1). The bet goes to `CANCELLED` with `reason = 'refused:<category>'`. `minors` covers challenges that involve minors; the 18+ check itself happens at signup, not here. `other` is for anything else unsafe, plus harassment and non-consensual dares.
 - **Over-cap amounts are not refusals.** "$50" yields `DraftIssue STAKE_ABOVE_MAX` and the judge counter-proposes the max ("Max is $20. $20 it is?").
@@ -713,7 +711,7 @@ export const CameraEvidence = z.strictObject({
   clip_sha256: Hex32,                      // = evidence_hash. The phone hashes the clip at record end; the server re-hashes the uploaded bytes and flags a mismatch (DATA-MODEL §9)
   clip_bytes: z.number().int().positive(),
   mime: z.enum(['video/mp4', 'video/quicktime']),
-  duration_ms: z.number().int().positive().max(30_000),   // = DATA-MODEL attempts CHECK; spike 02 caps one try at 6 s (5 tries ≈ 30 s)
+  duration_ms: z.number().int().positive().max(30_000),   // = DATA-MODEL attempts CHECK; one try is capped at 6 s (5 tries ≈ 30 s)
   recorded_by: Party,                      // whose device recorded; the demo judge-cam iPhone is a device of A (devices.role 'judge_cam', API-CONTRACT §2.9); with two phones, the non-performer's own phone ('self')
   recorded_at: IsoUtc,
   frames: z.array(EvidenceFrame).min(1).max(24),   // D10: 12 per try (8..12 accepted), 8 of them in the last ~1.2 s, + one landing crop
@@ -745,8 +743,8 @@ export const GeminiSettlementRecord = z.strictObject({
 | `gemini` | `hashJcs(GeminiSettlementRecord)`. The record contains `bet_id` and `terms_hash`, so it is per bet, not per market (DATA-MODEL stores it on the settlement `rulings` row). |
 | `camera`, `type: 'dance_off'` | `hashJcs(DanceEvidence)` (§4.2). Stored as `attempts.evidence_canonical = jcs(DanceEvidence)`. |
 
-- Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: spike 02: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). Since D10 the build uses expo-video-thumbnails and the shared sampler `packages/shared/src/judge/frames.ts` (12 frames: 4 spread over the clip, 8 in its last ~1.2 s; plus the landing crop); the server labels the frames inside the landing window and the crop in the prompt. `landing_crop` is optional, so 8-frame records from earlier builds still parse, and an absent flag is not part of the JCS bytes. `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (spike 02 estimate).
-- The settlement record is built from the **event details endpoint** (`GET /v1/prediction-markets/events/{eventTicker}`). Confirmed by spike 05: `resolutionSide` shows there ~7.5–8.7 s after expiry, while `recently-settled` lags 26–36 s. `response_sha256` pins the exact body. What an `invalid` contract looks like is still unseen (0 of 173).
+- Clips are stored in object storage (key in Postgres, not in the schema). Frames are extracted **on the phone** (confirmed: expo-video `generateThumbnailsAsync` at 512 px JPEG, uploaded before the clip; the server's static ffmpeg is the fallback when a clip arrives without frames). Since D10 the build uses expo-video-thumbnails and the shared sampler `packages/shared/src/judge/frames.ts` (12 frames: 4 spread over the clip, 8 in its last ~1.2 s; plus the landing crop); the server labels the frames inside the landing window and the crop in the prompt. `landing_crop` is optional, so 8-frame records from earlier builds still parse, and an absent flag is not part of the JCS bytes. `frames[i].sha256` lets a reviewer check that the frames the model saw came from the evidence. Recording: 720p H.264 at ~5 Mbps keeps a 30 s clip at ~19 MB, under DATA-MODEL's 25 MB cap (estimate).
+- The settlement record is built from the **event details endpoint** (`GET /v1/prediction-markets/events/{eventTicker}`). Confirmed: `resolutionSide` shows there ~7.5–8.7 s after expiry, while `recently-settled` lags 26–36 s. `response_sha256` pins the exact body. What an `invalid` contract looks like is still unseen (0 of 173).
 
 ### 4.1 ReplayMoment (the slow-mo replay)
 
@@ -1013,15 +1011,15 @@ export const OnchainOutcome = z.enum(['PartyA', 'PartyB', 'Split', 'Refund']);  
 
 `ruling_hash = hashJcs(ruling) = 997ce27843ff323b7f7f8816f9eff0d0044a485a43c5625512a8967f82755daa` (canonical JCS: 1,173 bytes).
 
-- **Recomputed 2026-11-08** after `frame_hashes` was added (O3, D7). Python JCS (`json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False)`), Node `JSON.stringify` over sorted keys, and `sha256sum` agree.
-- **Obsolete values:** `437beeee…60ae` (2026-11-07) and `2ec295ad…6b95`.
+- **Recomputed** after `frame_hashes` was added (O3, D7). Python JCS (`json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False)`), Node `JSON.stringify` over sorted keys, and `sha256sum` agree.
+- **Obsolete values:** `437beeee…60ae` and `2ec295ad…6b95`.
 - **Placeholders:**
   - `evidence_hash` is `sha256("example clip bytes")`;
   - `frame_hashes[k]` is `sha256("example frame k")`, for k = 0..7;
   - the model id is illustrative.
 
   Command: `for k in 0 1 2 3 4 5 6 7; do printf 'example frame %s' $k | sha256sum; done`.
-- **Model candidates:** spike 02's are `claude-haiku-5-5` with thinking off, or `claude-opus-5-5` at low effort. Its accuracy eval is pending a key.
+- **Model candidates:** `claude-haiku-5-5` with thinking off, or `claude-opus-5-5` at low effort. The accuracy eval is pending a key.
 
 | Field | Notes |
 |---|---|
@@ -1037,7 +1035,7 @@ export const OnchainOutcome = z.enum(['PartyA', 'PartyB', 'Split', 'Refund']);  
 
 `ruling_hash` commits to the clip through `evidence_hash` **and** to the exact frames the model saw through `frame_hashes` (O3 adopted, D7). The frames come from `CameraEvidence.frames[]`, which is stored (DATA-MODEL `attempts.frame_hashes`) and sent with `attempt.evidence`.
 
-**Multi-try bets:** a `best_of 3` bet is one recording with up to 3 tries, and the model judges the whole set (~8 frames per try, at most 24). **Alternative if spike 02 shows multi-try clips judge poorly:** one recording per try, with a per-try verdict that the server folds through `attempts.rule`. `Ruling` stays the bet-level record either way.
+**Multi-try bets:** a `best_of 3` bet is one recording with up to 3 tries, and the model judges the whole set (~8 frames per try, at most 24). **Alternative if multi-try clips judge poorly:** one recording per try, with a per-try verdict that the server folds through `attempts.rule`. `Ruling` stays the bet-level record either way.
 
 ### 5.3 Mapping to onchain Outcome, losers, payouts
 
@@ -1140,7 +1138,7 @@ export const HearingRuling = z
     checkFrames(r, ctx);   // the hearing judge sees the same frames as the disputed attempt ruling
   });
 // A HearingRuling has no void_reason key: outcome VOID in a hearing always means 'undecidable'.
-// Its key set gained frame_hashes (via RulingCore) on 2026-11-08, so the §6 example hash was recomputed.
+// Its key set gained frame_hashes (via RulingCore), so the §6 example hash was recomputed.
 ```
 
 ```json
@@ -1206,7 +1204,7 @@ export const HearingRuling = z
   All of it lands in `ruling_hash`, while no transcript text goes onchain.
 - A non-decisive hearing verdict is `VOID` (`toHearingOutcome`) → `resolve(Refund)` (§5.3). There is no second hearing. Either party may still appeal the Refund (§5.3 loser table).
 - This example's `ruling_hash = hashJcs(…) = a7721bbc9d1aebe51401ecfa0ebceda9f8845413517c60dabd406aea68fdd368` (canonical JCS: 1,670 bytes).
-  - It was recomputed on 2026-11-08 after `frame_hashes` was added, using the same three methods as §5.2. The frames are the same 8 as §5.2.
+  - It was recomputed after `frame_hashes` was added, using the same three methods as §5.2. The frames are the same 8 as §5.2.
   - The old value `38ceec24…7865` is obsolete.
   - §7 uses this hash as `original_ruling_hash`.
 - B's turn in this example is "It ended standing up. Pay me." (`fcc0bf64…ab58`). `transcript_sha256` is the SHA-256 of the normalized transcript's UTF-8 bytes. It is not JCS, because it hashes a plain string.
@@ -1215,7 +1213,7 @@ export const HearingRuling = z
 
 ## 7. Appeals
 
-A loser (§5.3: the non-winner of `PartyA`/`PartyB`, or either party of a `Refund`) files `appeal` onchain within the window (10 s demo). Then three providers vote **independently and in parallel** on the same inputs: the terms, the same frames, and the hearing transcripts if there was a hearing. They do **not** see the original ruling or each other's votes (no anchoring). Each vote has a timeout of 8 s (spike 02 estimates the panel's wall time at 2–5 s; real latency is pending a key). Spike 02's panel: `claude-opus-5-5` (low effort), `gpt-6.1-terra` and `gemini-3.8-flash`, which map to `anthropic`, `openai` and `google`.
+A loser (§5.3: the non-winner of `PartyA`/`PartyB`, or either party of a `Refund`) files `appeal` onchain within the window (10 s demo). Then three providers vote **independently and in parallel** on the same inputs: the terms, the same frames, and the hearing transcripts if there was a hearing. They do **not** see the original ruling or each other's votes (no anchoring). Each vote has a timeout of 8 s (the panel's wall time is estimated at 2–5 s; real latency is pending a key). The panel: `claude-opus-5-5` (low effort), `gpt-6.1-terra` and `gemini-3.8-flash`, which map to `anthropic`, `openai` and `google`.
 
 ```ts
 // packages/shared/src/appeal.ts
@@ -1266,7 +1264,7 @@ export function decideAppeal(original: z.infer<typeof Appealable>, votes: { coun
 }
 ```
 
-**Rule:** a decisive majority is 2 or more `counted_as` votes for the same side, and it decides (confirm or flip). **Anything else, including a tie or no majority, upholds the original ruling** (D7; O7). The appellant carries the burden, and an appeal can never turn a decided bet into a refund, so appeals can't be used to grief a winner. An appeal of a `VOID` (Refund) ruling becomes a win only with a 2-vote majority; otherwise the Refund stands. A vote is `ABSTAIN` if the provider errored or timed out, said `REDO`, or had confidence < 0.6. (Conflict noted: spike 02's impact notes say "a tie or two abstentions means REDO". That is rejected, because after `resolve` the bet is `Appealed` onchain and can't be re-attempted. The only exits are `resolve_appeal` or `timeout_refund`.) Gemini bets: the UI offers no "I appeal!", because the settlement is deterministic. If an appeal lands anyway (the program allows it), the panel votes with the `GeminiSettlementRecord` as its evidence, and the same rules apply.
+**Rule:** a decisive majority is 2 or more `counted_as` votes for the same side, and it decides (confirm or flip). **Anything else, including a tie or no majority, upholds the original ruling** (D7; O7). The appellant carries the burden, and an appeal can never turn a decided bet into a refund, so appeals can't be used to grief a winner. An appeal of a `VOID` (Refund) ruling becomes a win only with a 2-vote majority; otherwise the Refund stands. A vote is `ABSTAIN` if the provider errored or timed out, said `REDO`, or had confidence < 0.6. (A tie or two abstentions does not mean REDO, because after `resolve` the bet is `Appealed` onchain and can't be re-attempted. The only exits are `resolve_appeal` or `timeout_refund`.) Gemini bets: the UI offers no "I appeal!", because the settlement is deterministic. If an appeal lands anyway (the program allows it), the panel votes with the `GeminiSettlementRecord` as its evidence, and the same rules apply.
 
 | Tally (A / B / abstain), original = B_WINS | Final | `decided_by` | `flipped` |
 |---|---|---|---|
@@ -1316,7 +1314,7 @@ export function decideAppeal(original: z.infer<typeof Appealable>, votes: { coun
 }
 ```
 
-(Model ids are illustrative; pick them during the window. `original_ruling_hash` is the hash of the §6 `HearingRuling` example.)
+(Model ids are illustrative. `original_ruling_hash` is the hash of the §6 `HearingRuling` example.)
 
 ---
 
@@ -1366,7 +1364,7 @@ export type GeminiMarketSnapshot = z.infer<typeof GeminiMarketSnapshot>;
 }
 ```
 
-Spike 05 observations from 2026-11-07 (confirmed: spike 05 Verification, which corrected some numbers):
+Observations (confirmed):
 - The next contract to open shows **placeholder levels of 0.01 bid / 0.99 ask**, which mean "no quote". Contracts further out show ~0.49/0.50 with a `null` strike. Real two-sided quotes appear 5–7 s after the window opens.
 - Median spread per 30 s bucket is **0.09–0.22**.
 - **Market makers pull their quotes at T−120 s** (3 of 4 windows). After that the book is placeholders or lopsided, and 0% of seconds have a usable quote. This is why `MIN_TTE_MS` is 120 s (§8.2).
@@ -1377,7 +1375,7 @@ Spike 05 observations from 2026-11-07 (confirmed: spike 05 Verification, which c
 
 ### 8.2 FairStakes
 
-If A takes YES at probability `p`, A stakes `pot·p` and B stakes `pot·(1−p)`. Integer math only. This matches spike 05's `lib/fair.ts`.
+If A takes YES at probability `p`, A stakes `pot·p` and B stakes `pot·(1−p)`. Integer math only.
 
 ```ts
 export function decimalToPpm(s: string): bigint {                 // "0.5800" → 580000n
@@ -1393,7 +1391,7 @@ export const FAIR = {
   MIN_PCT: 5n,                // p must be in [0.05, 0.95] after rounding
   MAX_PCT: 95n,
   STALE_MS: 5_000,            // observedAt older than this → refetch REST, else refuse
-  MIN_TTE_MS: 120_000,        // quote >= 120 s before expiry: makers pull quotes at T-120 s (confirmed: spike 05)
+  MIN_TTE_MS: 120_000,        // quote >= 120 s before expiry: makers pull quotes at T-120 s (confirmed)
   QUOTE_TTL_MS: 60_000,       // both authorizations within 60 s of quotedAt (create_bet accept_deadline arg = quotedAt + 60 s)
 } as const;
 export const pctFromPrice = (p: string): bigint => divRoundHalfUp(decimalToPpm(p), 10_000n);
@@ -1455,8 +1453,8 @@ export function fairStakes(snap: GeminiMarketSnapshot, amount: MicroUsdc, aSide:
 | Rounding stakes | The YES stake rounds half-up to whole cents. **NO gets the remainder** (`pot − yes`). | `a + b = pot` exactly; dollars display exactly. |
 | p guard | Refuse unless 0.05 ≤ p ≤ 0.95. | Lopsided markets make degenerate stakes. The judge suggests the next contract. |
 | Stale guard | `observedAt` > 5 s old → refetch over REST. If it's still stale or REST fails, refuse. | WS is quiet between changes (§8.1). |
-| Expiry guard | ≥ 120 s to expiry at quote time. | Makers pull quotes at T−120 s (spike 05). Lopsided-refusal risk grows from ~0.1% at W+1:00 to ~18% at W+3:00, so the closer should **lock by about W+1:30** (spike 05 estimate). |
-| Strike guard | Inside the current window, refuse until `strike.value` is known (`STRIKE_PENDING`). | The bet must bind a concrete strike. Spike 05 saw the WS strike 4–6 s into the window. |
+| Expiry guard | ≥ 120 s to expiry at quote time. | Makers pull quotes at T−120 s. Lopsided-refusal risk grows from ~0.1% at W+1:00 to ~18% at W+3:00, so the closer should **lock by about W+1:30** (estimate). |
+| Strike guard | Inside the current window, refuse until `strike.value` is known (`STRIKE_PENDING`). | The bet must bind a concrete strike. The WS strike arrives 4–6 s into the window. |
 | Cap guard | Both sides must be in `[MIN_STAKE, MAX_STAKE]`. For example, $20 at 62/38 means A would stake $24.80, so the judge offers a smaller amount that fits (e.g. $16 → $19.84 / $12.16). | `max_stake` is per side onchain. |
 
 Worked: bid 0.5800, ask 0.6600 → mid 0.62 → `amount` $5, pot $10, A takes YES → **A $6.20, B $3.80**. If A takes NO, it's A $3.80, B $6.20. An odd case: mid 0.615 → 0.62; `amount` $3.33, pot $6.66, YES = 4.1292 → $4.13, NO = $2.53.
@@ -1465,14 +1463,14 @@ Worked: bid 0.5800, ask 0.6600 → mid 0.62 → `amount` $5, pot $10, A takes YE
 
 - The quote is taken when the judge finalizes the terms. `priceAtLock`, `priceSource`, `quotedAt` and the stakes are bound into `terms_hash`, and A deposits at `create_bet`.
 - For Gemini bets the server builds the lock with `accept_deadline = unix(quotedAt) + QUOTE_TTL_SECS` (60) as the `create_bet` argument (ESCROW §5.2). Both authorizations must land before `expires_at` (= `quotedAt` + 55 s). If they don't, the server never submits (a late submit would fail preflight anyway), advances the nonce, and nothing has moved. The bet goes `EXPIRED` (`quote_expired`), and the judge re-quotes as a **new** `bet_id`. *Sequential fallback:* a late `accept_bet` fails onchain and the server submits `timeout_refund` to return A's stake.
-- Settlement (confirmed: spike 05): the WS `contractStatus` frame flips to `Settled` 5.7–8.3 s after expiry. It carries no outcome, so on that frame the server GETs `/v1/prediction-markets/events/{eventTicker}`. As a fallback it also polls that endpoint every 2 s from expiry. When the contract has `status: settled` and `resolutionSide`, the server builds a `GeminiSettlementRecord` and a settlement `Ruling`, then calls `resolve`. On `invalid`, the Ruling is `VOID / market_invalid` → `resolve(Refund)`. With no settlement by `resolve_deadline`, `timeout_refund` (anyone) applies. Top-of-hour (:00) expiries settle slower (p50 7.8 s, max 8.8 s), so avoid them in the demo.
-- **Payout timing for the closer.** `resolve` opens the normal appeal window (10 s demo). Money moves when the loser taps GG (`concede`) or at `finalize` after the window, so the payout lands ~T+17–20 s after expiry, not ~T+9 s. Spike 05 flagged this. The program has no per-bet window override, by decision (D7; §12.3 O6).
+- Settlement (confirmed): the WS `contractStatus` frame flips to `Settled` 5.7–8.3 s after expiry. It carries no outcome, so on that frame the server GETs `/v1/prediction-markets/events/{eventTicker}`. As a fallback it also polls that endpoint every 2 s from expiry. When the contract has `status: settled` and `resolutionSide`, the server builds a `GeminiSettlementRecord` and a settlement `Ruling`, then calls `resolve`. On `invalid`, the Ruling is `VOID / market_invalid` → `resolve(Refund)`. With no settlement by `resolve_deadline`, `timeout_refund` (anyone) applies. Top-of-hour (:00) expiries settle slower (p50 7.8 s, max 8.8 s), so avoid them in the demo.
+- **Payout timing for the closer.** `resolve` opens the normal appeal window (10 s demo). Money moves when the loser taps GG (`concede`) or at `finalize` after the window, so the payout lands ~T+17–20 s after expiry, not ~T+9 s. The program has no per-bet window override, by decision (D7; §12.3 O6).
 
 ---
 
 ## 9. BetState (offchain state machine)
 
-There is **no handshake** (brief amendment of 2026-11-07, lead-engineer amendment of the same day). Face identification only finds and addresses B (DATA-MODEL §7.2), and a face match never authorizes anything. Agreement happens on each party's **own** phone, and the lock is **one transaction** (D3, 2026-11-08; ESCROW §5.0.1):
+There is **no handshake** (brief amendment, lead-engineer amendment). Face identification only finds and addresses B (DATA-MODEL §7.2), and a face match never authorizes anything. Agreement happens on each party's **own** phone, and the lock is **one transaction** (D3; ESCROW §5.0.1):
 
 1. **One card, one message.** After the judge's read-back, the server freezes the Terms and builds and simulates one lock transaction: `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]` on a durable nonce from its pool. Both phones show the same terms card and receive the same `AuthorizeRequest`, with the same message bytes. The card shows:
    - the claim, criteria and edge cases;
@@ -1497,7 +1495,7 @@ export const TxKind = z.enum(['atomic_lock', 'create_bet', 'accept_bet', 'cancel
 // 'create_bet' / 'accept_bet' alone: LOCK_MODE=sequential only. 'nonce_advance' = a fee-payer-only revoke.
 // Every other value is that escrow instruction (terminal ones carry a bundled close_bet).
 
-export const AuthorizeRequest = z.object({   // server → both phones (same payload) with the terms card; spike 3b measured 1,997 B
+export const AuthorizeRequest = z.object({   // server → both phones (same payload) with the terms card; measured 1,997 B
   bet_id: BetId,
   lock_request_id: Uuid,                     // = DATA-MODEL chain_txs.id of this build; any rebuild gets a new id
   kind: TxKind.extract(['atomic_lock', 'create_bet', 'accept_bet']),   // cross-checked: the phone derives the kind from its own UI (ESCROW §5.0.2)
@@ -1515,7 +1513,7 @@ export const PartyAuthorization = z.object({   // phone → server after hold + 
   terms_hash: Hex32,                 // what the phone recomputed from the displayed Terms and checked in the message
   method: AuthorizationMethod,
   authorized_at: IsoUtc,             // device clock at Face ID success; the server also stores its receive time
-  ms_since_auth_success: z.number().int().nonnegative().max(60_000),   // latency metric (FINDINGS §6 step 12)
+  ms_since_auth_success: z.number().int().nonnegative().max(60_000),   // latency metric
   message_sha256: Hex32,             // sha256 of the message bytes the phone signed
   party_signature: Signature,        // base58 ed25519 over those bytes (same encoding as a tx signature)
 });
@@ -1571,14 +1569,14 @@ stateDiagram-v2
 `chain_ack` (in `bet.state`) is `none` | `rpc` | `stream`.
 
 - **Money-out terminal states are entered only on the chain event.** These are `PAID`, `VOIDED`, `EXPIRED` with a deposit, and `CANCELLED` with a deposit. That is "the webhook is the source of truth for money moved".
-  - If no Streams event arrives within `STREAM_FALLBACK_MS` (5 s) of the server's own confirmation, an `rpc_poll` fallback fetches the transaction. It uses `getTransaction` with `maxSupportedTransactionVersion: 1`, because devnet carries v1 transactions (confirmed: spike 06).
-  - Spike 06 estimates Streams at 1–2.5 s, so 5 s is ≥ 2× that; the real number is pending a key.
+  - If no Streams event arrives within `STREAM_FALLBACK_MS` (5 s) of the server's own confirmation, an `rpc_poll` fallback fetches the transaction. It uses `getTransaction` with `maxSupportedTransactionVersion: 1`, because devnet carries v1 transactions (confirmed).
+  - Streams is estimated at 1–2.5 s, so 5 s is ≥ 2× that; the real number is pending a key.
   - Under the atomic lock, no pre-lock end state moves money: nothing was deposited.
 - **Non-terminal states that track a chain status** (`LOCKED`, `RULED`, `APPEALED`) may be entered on the server's own `confirmed` RPC result, with `chain_ack: 'rpc'`. They are upgraded to `stream` when the event arrives.
   - `AWAITING_LOCK` is entered when the server sends the lock; under the sequential fallback, on `create_bet`'s confirm.
   - This keeps second authorization → lock confirmed under 2 s whatever the Streams latency (ESCROW §8.4: ~0.70–1.39 s from Face ID success, E; local Agave p50 406–407 ms from the server receiving the second signature, M).
 - **`CONCEDED`, `FINALIZED` and `APPEAL_RESOLVED` are the "payout pending" states.**
-  - The phones play the payout animation and haptics when the payout transaction reaches **`processed`** on the server's own `signatureSubscribe` (`pending_tx.rpc_processed_at` set). That is the only trigger that meets the < 1 s target. Spike 06's correction: `confirmed` plus the cellular hops comes to ~1.0–1.6 s, while `processed` is ~0.2–0.6 s after send.
+  - The phones play the payout animation and haptics when the payout transaction reaches **`processed`** on the server's own `signatureSubscribe` (`pending_tx.rpc_processed_at` set). That is the only trigger that meets the < 1 s target. `confirmed` plus the cellular hops comes to ~1.0–1.6 s, while `processed` is ~0.2–0.6 s after send.
   - The server simulated the transaction before sending, and `confirmed` follows ~0.4 s later (`rpc_confirmed_at`). If it hasn't confirmed within 5 s, or it fails, the UI reverts.
   - `PAID`/`VOIDED` follow on the Streams event. DATA-MODEL §8.4 shows the same rule from the DB side.
 
@@ -1610,7 +1608,7 @@ stateDiagram-v2
 - **Either order:** the first signature, A's or B's, is verified and held. The second submits the lock, so B-first is no longer special and takes one confirmation. *Sequential fallback:* the server holds B's signed `accept_bet` and re-prompts B if `create_bet` hasn't confirmed within `HELD_SIGNATURE_MAX_SECS` (30 s).
 - **Decline:** either party's terms card has a "Decline" button (`PartyDecline`), which needs no Face ID. It works until the second signature, including for a party who has already signed. Atomic: nothing is onchain, so the server advances the nonce and the bet goes `CANCELLED` (`declined`). *Sequential fallback:* after `create_bet` lands, the server sends `cancel_open_bet` signed by the judge key, and the bet becomes `CANCELLED` on `BetCancelled`.
 - **Deadline sweep:** this happens server-side. The server revokes expired locks, and it submits `timeout_refund` as soon as that becomes valid. `timeout_refund` is permissionless, so anyone could, but the fee payer does it.
-- **`lock_bet`** is **not** an LLM tool (D6, FINDINGS §3.10; O5). Only the phones sign. The server pushes the lock result to A's phone, which calls `sendUserMessage("[EVENT] …")` so the judge voices "both stakes locked". The judge tells both parties to authorize on their phones; a spoken "accept" is theatre only.
+- **`lock_bet`** is **not** an LLM tool (D6; O5). Only the phones sign. The server pushes the lock result to A's phone, which calls `sendUserMessage("[EVENT] …")` so the judge voices "both stakes locked". The judge tells both parties to authorize on their phones; a spoken "accept" is theatre only.
 
 ### 9.3 Timers (demo config; must match ESCROW `Config` §3.1)
 
@@ -1768,7 +1766,7 @@ export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
 }
 ```
 
-(`outer_ix: 2` because the transaction is `[SetComputeUnitLimit, SetComputeUnitPrice, resolve]`. `slot` is `null` because a Streams block payload doesn't carry it (spike 06); check with `test_filter --probe` whether Streams adds one. The `judge` key is a deterministic example key. The envelope's `ts` is the ISO server emit time; the payload's `ts` is the Rust event field, in unix seconds.)
+(`outer_ix: 2` because the transaction is `[SetComputeUnitLimit, SetComputeUnitPrice, resolve]`. `slot` is `null` because a Streams block payload doesn't carry it; check with `test_filter --probe` whether Streams adds one. The `judge` key is a deterministic example key. The envelope's `ts` is the ISO server emit time; the payload's `ts` is the Rust event field, in unix seconds.)
 
 | Rule | Detail |
 |---|---|
@@ -1781,7 +1779,7 @@ export type RealtimeEvent = z.infer<typeof RealtimeEvent>;
 | Privacy | No face data, no raw audio and no auth tokens in any payload. `frame_urls` are signed and expire after 10 min. `terms.authorize_request` carries an unsigned message only. Party signatures never appear in any event. |
 | Lock display | The stage view never displays a `bet_id` before `LOCKED`, which limits squats (ESCROW TM-I1). It shows the lock as **one transaction** with 3 signatures. |
 
-**Extensions owned by API-CONTRACT §3.4** (non-breaking per §11 rule 4; they join this union when `realtime.ts` is re-authored, with payload types from `packages/shared/src/api.ts`):
+**Extensions owned by API-CONTRACT §3.4** (non-breaking per §11 rule 4; they join this union when `realtime.ts` is updated, with payload types from `packages/shared/src/api.ts`):
 
 | `type` | Payload | Why |
 |---|---|---|
@@ -1806,7 +1804,7 @@ ESCROW §7.2 owns the event structs. These schemas copy them field for field: th
 // packages/shared/src/chain-events.ts
 const ChainMeta = {                                   // added by the webhook decoder, not part of the Anchor event
   signature: Signature,
-  slot: z.number().int().nonnegative().nullable(),   // getBlock objects have no slot field (spike 06); rpc_poll always has it
+  slot: z.number().int().nonnegative().nullable(),   // getBlock objects have no slot field; rpc_poll always has it
   block_height: z.number().int().nonnegative().nullable(),   // Streams block dataset carries blockHeight; getTransaction doesn't
   outer_ix: z.number().int().nonnegative(),          // index of the top-level instruction in the tx
   inner_ix: z.number().int().nonnegative(),          // index of the emit_cpi! self-CPI in meta.innerInstructions[outer_ix]
@@ -1874,7 +1872,7 @@ Rust → JSON mapping, applied in the webhook decoder (`chain-codec.ts`, §0.3):
 | `enum Outcome` / `enum BetStatus` | variant name string (`'PartyB'`, `'Settled'`) |
 | field names | snake_case exactly as in Rust. Codama/Anchor TS clients camelCase them, so map explicitly (§0.3). |
 
-The Streams filter recognizes our events as `emit_cpi!` **inner instructions**, per ESCROW §7.1. Each must meet three conditions: the program ID is `ESCROW_ID`, the data starts with Anchor's event-ix tag, and the first account is the event-authority PDA. Failed transactions are dropped. The 8 bytes after the tag are `sha256("event:<EventName>")[..8]` and select the struct. The `Program data:` log path is disabled in production. Confirmed by spike 06: `emit!` events were lost when the logs were truncated at ~10 KB, while `emit_cpi!` events decoded from `meta.innerInstructions` in the Streams **block** dataset. Whether `programs_with_logs` carries inner instructions is unknown, so use `block`.
+The Streams filter recognizes our events as `emit_cpi!` **inner instructions**, per ESCROW §7.1. Each must meet three conditions: the program ID is `ESCROW_ID`, the data starts with Anchor's event-ix tag, and the first account is the event-authority PDA. Failed transactions are dropped. The 8 bytes after the tag are `sha256("event:<EventName>")[..8]` and select the struct. The `Program data:` log path is disabled in production. Confirmed: `emit!` events were lost when the logs were truncated at ~10 KB, while `emit_cpi!` events decoded from `meta.innerInstructions` in the Streams **block** dataset. Whether `programs_with_logs` carries inner instructions is unknown, so use `block`.
 
 ---
 
@@ -1890,17 +1888,17 @@ The Streams filter recognizes our events as `emit_cpi!` **inner instructions**, 
    *Dance Off (2026-11-18), the same precedent:* `Terms.type` gained `'dance_off'` with its own refinement branch (§2.7), and the `Ruling` refinement allows `void_reason: 'undecidable'` when `model === 'rule/dance-off@1'`. No field, limit or normalization changed, every terms_hash and ruling_hash that ever validated still validates and hashes the same (the golden vectors are untouched), and only previously-rejected records became valid. `undecidable` already exists in the pg `void_reason` enum, so no migration. Phones and the stage must run a build that knows `dance_off` (an older build rejects the envelope, so it cannot lock one).
 5. **Onchain:** the Bet account carries `version: u8 = 1`. A program redeploy with a new layout gets a new program id. `Terms.escrow.program_id` makes old terms unmistakably bound to the old program.
 6. **Test vectors** live in `packages/shared/test/vectors/`, as `{name, input, canonical, hash}` JSON. The first is `terms-v1-001`, the §2.5 example with hash `05860f0a…f998f`. Add:
-   - the §5.2 ruling (`997ce278…5daa`) and the §6 hearing ruling (`a7721bbc…d368`), both recomputed 2026-11-08 with `frame_hashes`;
+   - the §5.2 ruling (`997ce278…5daa`) and the §6 hearing ruling (`a7721bbc…d368`), both recomputed with `frame_hashes`;
    - one vector each for NFC, key order, an extra key and a non-normalized string (the last two must throw);
    - one `atomic_lock` device-policy fixture per DP row (ESCROW §9.2).
 
-   CI runs them on Node. Run them once on Hermes in the app too, because `String#normalize` and `isWellFormed` must behave identically there. Verify this on the first dev build: the spikes ran only legacy Hermes v0.13 on a desktop. The phone path needs no `crypto.subtle`, because noble does the hashing and signing (FINDINGS §2.3; RNQC only if Kit signers run on the phone).
+   CI runs them on Node. Run them once on Hermes in the app too, because `String#normalize` and `isWellFormed` must behave identically there. Verify this on the first dev build: so far they have run only on legacy Hermes v0.13 on a desktop. The phone path needs no `crypto.subtle`, because noble does the hashing and signing (RNQC only if Kit signers run on the phone).
 
 ---
 
 ## 12. Proposed changes, cross-doc decisions and open items
 
-### 12.1 This doc's proposals: resolved in the consistency pass (2026-11-07)
+### 12.1 This doc's proposals: resolved
 
 | # | Proposal | Resolution |
 |---|---|---|
@@ -1923,12 +1921,12 @@ The Streams filter recognizes our events as `emit_cpi!` **inner instructions**, 
 | X7 | `create_bet` takes an `accept_deadline: i64` argument: skill +300 s, gemini `quotedAt` + 60 s, capped by `Config.accept_deadline_secs` (600). Then `resolve_deadline = locked_at + 3600`, `appeal_deadline = resolved_at + 10`, and `appeal_resolve_deadline = appealed_at + 300`. | §9.3, ESCROW §5.2 |
 | X8 | `close_bet` closes the Bet and vault (ESCROW P8). DATA-MODEL P4's "keep the Bet as a receipt" is **rejected**: the baseline returns rent on close, and the terminal events plus Postgres are the receipt. | §9.2 |
 | X9 | Payout math uses `V = vault.amount` (excess → B for Refund, split for Split). The DB CHECK tolerates excess. | §5.3, DATA-MODEL §6.2 |
-| X10 | The payout animation fires when the payout tx is **`processed`** on the server's own subscription (changed in the second pass, per spike 06's correction). `LOCKED`/`RULED` advance on RPC `confirmed`. `PAID`/`VOIDED`/`EXPIRED`/`CANCELLED` come only from the chain event (Streams, or `rpc_poll` after 5 s). | §9.2, DATA-MODEL §8.4, ESCROW §8.4 |
+| X10 | The payout animation fires when the payout tx is **`processed`** on the server's own subscription. `LOCKED`/`RULED` advance on RPC `confirmed`. `PAID`/`VOIDED`/`EXPIRED`/`CANCELLED` come only from the chain event (Streams, or `rpc_poll` after 5 s). | §9.2, DATA-MODEL §8.4, ESCROW §8.4 |
 | X11 | Names and enum casing follow §0.3. | §0.3 |
 | X12 | The Gemini settlement record is per bet (it contains `bet_id`) and is stored on the settlement `rulings` row (`rulings.evidence_canonical`). | §4, DATA-MODEL §5.13 |
 | X13 | Authorization vocabulary everywhere. State `AWAITING_AUTHORIZATIONS`; realtime `terms.authorized` / `terms.declined`; `AuthorizationMethod = faceid_hold \| passcode_hold`; DB `bets.a_authorized_at`, `a_authorization_method`, `b_authorized_at`, `b_authorization_method`. No handshake state, field, enum, table or test remains in any doc. | §9, DATA-MODEL §4, §5.6 |
-| X14 | **Changed 2026-11-08 (D3).** The lock is ONE transaction, `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]`, on a durable nonce from a 5-account server pool (fee payer = nonce authority).<br>• It is built and simulated at read-back. Both phones sign the same bytes in either order.<br>• The server submits once, at the second authorization, with preflight on.<br>• Decline, expiry, a terms edit or a failed lock advance the nonce.<br>• `accept_deadline ≤ now + 600` bounds every lock signature.<br>• The device policy allows `AdvanceNonceAccount` only as ix 0 of an `atomic_lock`. Every other kind keeps "exactly one escrow instruction" and rejects nonces.<br>DATA-MODEL keeps one `chain_txs` row (kind `atomic_lock`) with both signatures, plus `nonce_pool`. `LOCK_MODE=sequential` (two txs, `HELD_SIGNATURE_MAX_SECS`) is the fallback only. | §9, §9.4, ESCROW §5.0.1–§5.0.3, §8.4, DATA-MODEL §5.8, §5.20 |
-| X15 | `ChainMeta.slot` is nullable and `block_height` was added, because getBlock payloads have no slot (spike 06). The dedup key stays `(signature, outer_ix, inner_ix)`. | §10.2, DATA-MODEL §5.9 |
+| X14 | **Changed (D3).** The lock is ONE transaction, `[AdvanceNonceAccount, ComputeBudget…, create_bet, accept_bet]`, on a durable nonce from a 5-account server pool (fee payer = nonce authority).<br>• It is built and simulated at read-back. Both phones sign the same bytes in either order.<br>• The server submits once, at the second authorization, with preflight on.<br>• Decline, expiry, a terms edit or a failed lock advance the nonce.<br>• `accept_deadline ≤ now + 600` bounds every lock signature.<br>• The device policy allows `AdvanceNonceAccount` only as ix 0 of an `atomic_lock`. Every other kind keeps "exactly one escrow instruction" and rejects nonces.<br>DATA-MODEL keeps one `chain_txs` row (kind `atomic_lock`) with both signatures, plus `nonce_pool`. `LOCK_MODE=sequential` (two txs, `HELD_SIGNATURE_MAX_SECS`) is the fallback only. | §9, §9.4, ESCROW §5.0.1–§5.0.3, §8.4, DATA-MODEL §5.8, §5.20 |
+| X15 | `ChainMeta.slot` is nullable and `block_height` was added, because getBlock payloads have no slot. The dedup key stays `(signature, outer_ix, inner_ix)`. | §10.2, DATA-MODEL §5.9 |
 | X16 | Clip limits are ≤ 30 s and ≤ 24 frames in both `CameraEvidence` and DATA-MODEL `attempts`. | §4, DATA-MODEL §5.12 |
 | X17 | Gemini guards: quote ≥ 120 s before expiry, and wait for the strike inside the current window. Settlement triggers on the WS `Settled` frame and is confirmed by REST. Offchain market status values are Gemini's own (`approved \| active \| closed \| under_review \| settled \| invalid`), in Zod and Postgres. | §8, DATA-MODEL §4 |
 | X18 | Rulings commit to the frames the model saw. `frame_hashes` is in `RulingCore` (`Ruling`, `HearingRuling`) and in `AppealResult`; it is `[]` for gemini (O3, D7). DATA-MODEL `rulings.frame_hashes` mirrors it. | §5.2, §6, §7, DATA-MODEL §5.13 |
@@ -1941,7 +1939,7 @@ Earlier decisions, unchanged:
 - The fair price is the mid with a 0.30 spread cap and a last-in-spread fallback. Placeholders 0.01/0.99 count as no quote. Stakes are whole cents and NO takes the remainder (§8).
 - Vault = PDA `["vault", bet_id]` in all three docs (§1.2).
 
-### 12.3 Open items for the lead engineer: all resolved (2026-11-08)
+### 12.3 Open items for the lead engineer: all resolved
 
 Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-line rationale given.
 
@@ -1950,76 +1948,32 @@ Resolved by the lead engineer's decisions D2, D3, D6 and D7, or with the one-lin
 | O1 | Is adding `VOID` to the baseline's offchain outcome enum OK? | **Yes** (X3) | Without it, REDO would have to mean both "retry" and "refund", and `resolve(Refund)` needs a hashable record. |
 | O2 | Should a `Refund`/`Split` ruling be appealable by either party, or be final with an immediate `finalize`? | **Appealable by either party** (X4, ESCROW P5) | Neither side won, either may disagree, and an undecidable hearing should still reach the panel. |
 | O3 | Should `Ruling` commit to the frames the model saw? | **Adopted (D7).** `frame_hashes` is in `RulingCore` (so `Ruling` and `HearingRuling`) and in `AppealResult` (X18). The §5.2 and §6 example hashes are recomputed (`997ce278…5daa`, `a7721bbc…d368`). | The clip hash alone can't show which frames were sampled and sent. The record must bind exactly what each model judged. |
-| O4 | ~~Payout animation on RPC confirm vs on the Streams event~~ | **Resolved by spike 06:** fire on `processed` (X10) | — |
-| O5 | Brief 5d's `lock_bet` tool no longer locks anything. Rename or drop it? | **Dropped as an LLM tool** (D6, FINDINGS §3.10; `issue_ruling` likewise). The server pushes lock results to A's phone, which voices them with `sendUserMessage("[EVENT] …")`. | Only the phones sign, and an LLM-callable "lock" could announce a lock the chain hasn't confirmed. |
-| O6 | Should `create_bet` take a per-bet `appeal_window_secs` for oracle bets? | **No (D7).** Keep 10 s, show the GG prompt (no "I appeal!" on gemini bets), and the server finalizes at `appeal_deadline + 1 s`. | One program constant. GG is the instant path. Otherwise the payout lands ~T+17–20 s after expiry (FINDINGS §4). |
-| O7 | Spike 02 suggests a tied or abstaining panel means REDO. | **Rejected (D7): no majority upholds the original ruling** (§7) | After `appeal` the bet is `Appealed` onchain, so a re-attempt is impossible. |
-| O8 | Allow the passcode fallback (`passcode_hold`) when Face ID fails, or require Face ID only? | **Allowed and recorded (D2).** Detection, because `authenticateAsync` doesn't say which method succeeded (FINDINGS §7):<br>• first call `authenticateAsync({disableDeviceFallback: true})`; success → `faceid_hold`;<br>• on `user_fallback` or `lockout`, call again with the fallback allowed; success → `passcode_hold`.<br>This is ESTIMATED; check it on the device (FINDINGS §6 step 8). | Stage lights or a lockout must not end Beat 3. Passcode adds ~3–5 s (E). `passcode_hold` means "the fallback prompt succeeded". |
+| O4 | ~~Payout animation on RPC confirm vs on the Streams event~~ | **Resolved:** fire on `processed` (X10) | — |
+| O5 | Brief 5d's `lock_bet` tool no longer locks anything. Rename or drop it? | **Dropped as an LLM tool** (D6; `issue_ruling` likewise). The server pushes lock results to A's phone, which voices them with `sendUserMessage("[EVENT] …")`. | Only the phones sign, and an LLM-callable "lock" could announce a lock the chain hasn't confirmed. |
+| O6 | Should `create_bet` take a per-bet `appeal_window_secs` for oracle bets? | **No (D7).** Keep 10 s, show the GG prompt (no "I appeal!" on gemini bets), and the server finalizes at `appeal_deadline + 1 s`. | One program constant. GG is the instant path. Otherwise the payout lands ~T+17–20 s after expiry. |
+| O7 | Should a tied or abstaining panel mean REDO? | **Rejected (D7): no majority upholds the original ruling** (§7) | After `appeal` the bet is `Appealed` onchain, so a re-attempt is impossible. |
+| O8 | Allow the passcode fallback (`passcode_hold`) when Face ID fails, or require Face ID only? | **Allowed and recorded (D2).** Detection, because `authenticateAsync` doesn't say which method succeeded:<br>• first call `authenticateAsync({disableDeviceFallback: true})`; success → `faceid_hold`;<br>• on `user_fallback` or `lockout`, call again with the fallback allowed; success → `passcode_hold`.<br>This is ESTIMATED; check it on the device. | Stage lights or a lockout must not end Beat 3. Passcode adds ~3–5 s (E). `passcode_hold` means "the fallback prompt succeeded". |
 | O9 | B authorized first and A's `create_bet` is late: re-prompt B, or pre-sign B's `accept_bet` on a durable nonce? | **Superseded by D3:** the atomic lock (§9.4). The order doesn't matter: one tx, one confirmation. | — |
 | — | `MAX_REDOS` (D7) | **2, then `HEARING`** (unchanged, §5.2) | — |
 
-### 12.4 Status vs spike FINDINGS (each spike's Verification section wins)
+### 12.4 Verification status
 
-| Item | Spike | Status |
-|---|---|---|
-| Devnet USDC mint (classic SPL, 6 dp), `@solana/kit` 8.6.0 + Codama, device keypair wallet, Face ID at each authorization, blockhash ~36 s | 07 | **Confirmed** |
-| Atomic one-tx lock on a durable nonce (D3); both phones sign the same bytes; doomed lock with preflight on costs 0 and keeps the nonce | 3b | **Measured** in LiteSVM (21/21) and on local Agave 4.1.2 (20/20). Devnet, phone and real-program CU/size are pending (FINDINGS §6 steps 5, 8, 12, 13). |
-| `AuthorizeRequest` size; phone-side policy + sign cost | 3b | 1,997 B (M). Hermes v0.13 desktop: warm 5.6–5.8 + 8.6–8.9 ms (M). iPhone pending. |
-| Hermes `normalize` / `isWellFormed`; real Face ID-gated signing latency on an iPhone | 07 | Pending: no phone run yet |
-| Frames extracted on the device, ~8 per try, final frames included | 02 | **Confirmed** |
-| Vision model id, accuracy, per-vote latency (8 s timeout) | 02 | Pending key |
-| Placeholders, spread, staleness, bookTicker `E` in ns, settlement endpoint and lag, ticker shapes, quotes pulled at T−120 s | 05 | **Confirmed** (numbers updated in §8) |
-| Shape of a voided (`invalid`) contract | 05 | Unseen (0 of 173) |
-| `emit_cpi!` events in the block dataset's inner instructions; the log path is lossy | 06 | **Confirmed** |
-| Streams send → webhook latency (`STREAM_FALLBACK_MS`), slot field in the payload | 06 | Pending key |
-| ElevenLabs STT for hearing transcripts, tool-call payload limits | 04 | Pending key. Spike 04 asks for tool responses under 300 bytes. |
+| Item | Status |
+|---|---|
+| Devnet USDC mint (classic SPL, 6 dp), `@solana/kit` 8.6.0 + Codama, device keypair wallet, Face ID at each authorization, blockhash ~36 s | **Confirmed** |
+| Atomic one-tx lock on a durable nonce (D3); both phones sign the same bytes; doomed lock with preflight on costs 0 and keeps the nonce | **Measured** in LiteSVM (21/21) and on local Agave 4.1.2 (20/20). Devnet, phone and real-program CU/size are pending. |
+| `AuthorizeRequest` size; phone-side policy + sign cost | 1,997 B (M). Hermes v0.13 desktop: warm 5.6–5.8 + 8.6–8.9 ms (M). iPhone pending. |
+| Hermes `normalize` / `isWellFormed`; real Face ID-gated signing latency on an iPhone | Pending: no phone run yet |
+| Frames extracted on the device, ~8 per try, final frames included | **Confirmed** |
+| Vision model id, accuracy, per-vote latency (8 s timeout) | Pending key |
+| Placeholders, spread, staleness, bookTicker `E` in ns, settlement endpoint and lag, ticker shapes, quotes pulled at T−120 s | **Confirmed** (numbers updated in §8) |
+| Shape of a voided (`invalid`) contract | Unseen (0 of 173) |
+| `emit_cpi!` events in the block dataset's inner instructions; the log path is lossy | **Confirmed** |
+| Streams send → webhook latency (`STREAM_FALLBACK_MS`), slot field in the payload | Pending key |
+| ElevenLabs STT for hearing transcripts, tool-call payload limits | Pending key. Tool responses should stay under 300 bytes. |
 
 ## Changelog
 
-- **2026-11-07, cross-doc consistency pass** (an editor reconciled SCHEMAS, ESCROW-PROGRAM and DATA-MODEL against the brief):
-  - **Handshake.** Removed it, per the brief amendment. `AWAITING_ACCEPTS`/`AWAITING_HANDSHAKE` became `AWAITING_CONFIRMS`/`AWAITING_LOCK`; `REFUNDED` became `VOIDED`. Rewrote §9: diagram, state table, timers, a naming-trap note, and the `lock_bet` note. Renamed the realtime event `terms.accepted` to `terms.confirmed`.
-  - **VOID.** Added `VOID` and `VoidReason`; `Ruling` gained `void_reason`, and `market_invalid` moved from `redo_reason` to `void_reason`. Added `toHearingOutcome`; a hearing can no longer return REDO. `AppealVote.outcome` excludes VOID. `AppealResult` uses `Appealable` (A_WINS | B_WINS | VOID). Rewrote the §5.3 mapping and loser tables to match ESCROW P5.
-  - **Hashes.** Recomputed the §5.2 ruling hash to `437beeee…60ae`. Verified the §6 hearing hash `38ceec24…7865` unchanged.
-  - **Payouts.** The payout table and `payout()` now use `V = vault.amount`, as ESCROW `compute_payout` does.
-  - **Chain events.** Rewrote §10.2 to mirror ESCROW §7.2 field for field (`ts`, flat `to_a`/`to_b`, `final_status`, `BetClosed`). The dedup key is now `(signature, outer_ix, inner_ix)`. Updated the realtime example. The filter description now uses `emit_cpi!` inner instructions.
-  - **Enums and deadlines.** `OnchainStatus` has all 7 variants, and `Instruction` gained `close_bet`. Deadlines are aligned to ESCROW: the `accept_deadline` argument, 3600 s resolve and 300 s appeal-resolve windows. `deadline_minutes` max went from 60 to 45 with `RESOLVE_GRACE_SECS`, and new constants were added.
-  - **Mapping.** Added §0.3 (name and enum mapping) and the terms-code exception.
-  - Resolved P1–P5 (§12.1) and added the cross-doc decisions X1–X12 and open items O1–O5.
-- **2026-11-07, second consistency pass** (the lead-engineer amendment, plus spike FINDINGS; each spike's Verification section wins):
-  - **Authorization, not handshake.** Renamed `AWAITING_CONFIRMS` to `AWAITING_AUTHORIZATIONS` (Zod and Postgres, same position). Renamed `terms.confirmed` to `terms.authorized {party, method, authorized_at}` and added `terms.declined`. Added `AuthorizationMethod` (`faceid_hold | passcode_hold`), `PartyAuthorization` and `PartyDecline` (§9). Rewrote the §9 intro: a face match only addresses B; each party's hold + Face ID signs their own deposit; the lock is two transactions with the unsigned message fetched at hold start and no durable nonce (spike 07). Added `HELD_SIGNATURE_MAX_SECS` (30 s; blockhash ~36 s measured) and the decline path (judge-key `cancel_open_bet`). Changed "confirm" to "authorize" throughout.
-  - **Payout trigger.** The animation now fires on the payout tx's `processed` (spike 06 correction: `confirmed` + cellular misses < 1 s). Added `PendingTx.rpc_processed_at`. X10 updated; O4 resolved.
-  - **Chain meta.** `ChainMeta.slot` is nullable and `block_height` was added (getBlock has no slot, spike 06). Updated the realtime example. The filter note is marked confirmed.
-  - **Gemini.** `FAIR.MIN_TTE_MS` went from 90 s to 120 s (makers pull quotes at T−120). Added the `STRIKE_PENDING` guard. The §8.1 observations, §8.3 settlement trigger (WS `Settled` + REST), §2.2 deadline note and §4 settlement lag now use spike 05 numbers. Added the lock-by-W+1:30 guidance and the closer payout-timing note (O6).
-  - **Evidence.** `CameraEvidence.duration_ms` max went from 45 s to 30 s, to match DATA-MODEL. On-device frame extraction is marked confirmed (spike 02).
-  - **Markers.** Every "(confirm vs FINDINGS)" became confirmed or pending in place, and §12.4 became a status table. Added X13–X17 and O6–O9, and noted the spike 02 panel conflict (tie → REDO, rejected).
-  - Re-verified in a scratch folder: all TS blocks type-check together (TS 5.9, zod 4.6.7), every JSON example parses, and the hashes are unchanged (`05860f0a…f998f`, `437beeee…60ae`, `38ceec24…7865`).
-- **2026-11-08, atomic lock (D3) + open items (D7, D2, D6)**. Sources: FINDINGS §2.1, §2.3, §3.7, §3.10, §7, and spike 3b including its Verification.
-  - **Header.** Status line updated; added an "At a glance" summary.
-  - **§0.1.** New constants: `LOCK_SIGNATURE_MAX_SECS` (600), `LOCK_SUBMIT_MARGIN_SECS` (5), `NONCE_POOL_SIZE` (5), `NONCE_SEED_MAX` (16), `MAX_LOCK_REBUILDS` (1). `HELD_SIGNATURE_MAX_SECS` is now sequential-only.
-  - **§9 rewritten for the one-transaction lock.**
-    - New schemas: `LockMode`, `TxKind` (= DATA-MODEL `tx_kind`) and `AuthorizeRequest` (the same message bytes to both phones). `PartyAuthorization` gained `lock_request_id` and `ms_since_auth_success`; `PartyDecline` gained `lock_request_id`.
-    - Diagram, state table and bullets: `AWAITING_LOCK` is transient (atomic) or Open (sequential). `LOCKED` is entered on the lock tx's RPC confirm. Decline, expiry, terms change and `lock_failed` all advance the nonce. "B authorizes first" is replaced by "either order".
-    - `lock_bet` is not an LLM tool.
-    - Timers: lock window and signature validity added; held signature is sequential-only.
-    - `PendingTx.ix` → `PendingTx.kind: TxKind`.
-    - New **§9.4**: both-signatures handling (which party signed first, storage, idempotency, stale builds, second-signature submit, preflight failure → `lock_failed` and re-propose under a new `bet_id`, decline, expiry, fate-unknown revoke, crash recovery, stage-view "one lock transaction").
-  - **§2.3 / §2.6 / §8.3.** The phone checks both hash args in the lock message. `priceAtLock` is taken at lock build. A late gemini lock is never submitted (nonce advanced, `EXPIRED`); `timeout_refund` only under the sequential fallback.
-  - **O3 adopted (D7).** `frame_hashes` added to `RulingCore` (`Ruling`, `HearingRuling`) and `AppealResult`, plus a `checkFrames` refinement. Example hashes recomputed and cross-checked three ways (Python JCS, Node, `sha256sum`); a Zod 4.6.7 runtime parse also matched.
-    - §5.2: `437beeee…60ae` → `997ce27843ff323b7f7f8816f9eff0d0044a485a43c5625512a8967f82755daa`;
-    - §6: `38ceec24…7865` → `a7721bbc9d1aebe51401ecfa0ebceda9f8845413517c60dabd406aea68fdd368`;
-    - §7 `original_ruling_hash`, the §10.1 example and the §11 vectors updated;
-    - the Terms hash `05860f0a…f998f` is unchanged.
-  - **§10.** New event `terms.authorize_request`. `terms.authorized` gained `count`. `tx.*` events carry `kind: TxKind`. New privacy and lock-display rules (no party signatures in events; no `bet_id` on stage before LOCKED). §10.2 notes `BetCreated` + `BetAccepted` under one signature.
-  - **§11.** Updated test vectors; corrected the stale Hermes/RNQC note (noble needs no `crypto.subtle`).
-  - **§12.** X1 and X14 rewritten (atomic); added X18 (`frame_hashes`) and X19 (`TxKind`). §12.3: **O1–O9 all resolved** with rationale (O3 adopted; O5 dropped per D6; O6 and O7 per D7; O8 with a two-call detection; O9 superseded by D3; `MAX_REDOS` = 2 confirmed). §12.4 adds the 3b rows.
-  - **Verification.** All 20 TS blocks type-check together (TS 5.9.3 strict, zod 4.6.7, kit 8.6.0, noble 2.4.0; `canonicalize` stubbed) in a scratch folder outside the repo.
-  - **Naming aligned** with API-CONTRACT and TASKS, which were drafted in parallel: the lock's tx kind is `atomic_lock` (SCHEMAS `TxKind` = DATA-MODEL `tx_kind`), and the signed payload field is `message_b64`.
-- **2026-11-08, cross-doc consistency pass** (all eight planning docs checked against D1–D7 and FINDINGS; ownership: SCHEMAS types, ESCROW onchain, DATA-MODEL tables, API-CONTRACT endpoints/events/tools):
-  - **§3.** No `ask_clarification` tool (D6): clarifications are spoken, and answers arrive as `edge_cases`. `ClarificationQuestion`/`ClarificationAsk`/`TermsStepOutput.ask`/`terms.question` are produced only by the Speech Engine fallback. The `propose_terms` wire params are API-CONTRACT §4.3's projection, mapped into `TermsProposal`. Guardrail: inline keyword prefilter + async LLM check that fails closed.
-  - **§4.** `recorded_by` documented for the judge-cam iPhone (a device of A, `devices.role 'judge_cam'`).
-  - **§9 / §9.4.** The stale-build rejection is the API error code `STALE_LOCK_REQUEST`.
-  - **§10.1.** `market.tick` comment corrected (1 Hz per gemini bet; the stage chart uses `stage.market`). Added the table of API-owned extensions (`tx.sign_request` for concede/appeal only, `judge.cue`, `hearing.turn_open`, `bet.invite_answered`, `attempt.started` fields) and the unsequenced control frames. The lock push stays `terms.authorize_request` with `AuthorizeRequest`.
-  - Re-verified the §5.2 ruling hash independently (Python JCS, 1,173 B → `997ce278…5daa`; frame and clip placeholders match their commands). No TS code changed except comments.
 - **2026-11-18, D10 judge inputs** (branch `feat/attempt-capture`): **§4** `EvidenceFrame.landing_crop` (optional `true`; at most one, last), the `frames` comment (12 + the crop), and `recorded_by` for the two-phone fallback (`recorder:'self'`, API-CONTRACT §2.9). No hash vector changes: the field is absent on every existing record.
 - **2026-11-18 (Beat 5 appeal built).** §7: `AppealVote.outcome` is `voteOutcome` (no 0.8 floor; the 0.6 floor is `countVote`'s), and the built decision timing (all three votes in; the result is unchanged). Shared helpers `voteOutcome`, `appellantsOf`, `PANEL_SEATS`, `PANEL_VOTE_TIMEOUT_MS`; API types `AppealSubmitted`, `DemoAppealRequest`.
 - **2026-11-18 (stage voice, from API-CONTRACT §3.1 / §4.5).** §10.1: the control frames gain `stage.voice` (stage sessions only) and `stage.cue.audio_url?`; the `judge.cue` row says the stage voices `PAID` / the payout `VOIDED` too (not A's phone only). Docs only: the shared `WsServerControlFrame` already had both.

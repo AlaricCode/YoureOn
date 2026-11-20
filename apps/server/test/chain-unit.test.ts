@@ -2,9 +2,7 @@
 // gzip), the IDL decoder, the delivery parser (dedupe, ordering, rejections), and
 // infra/quicknode/filter.js run in a sandbox on getBlock fixtures (emit_cpi! decode + the
 // ESCROW §7.1 attribution rules).
-//
-// Ported from Verdict packages/backend/test/streams.test.ts (filter-in-a-vm, decode parity,
-// HMAC cases), re-targeted at OUR contract (API-CONTRACT §5).
+// Targets API-CONTRACT §5.
 import { readFileSync } from 'node:fs';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';

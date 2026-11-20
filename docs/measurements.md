@@ -64,8 +64,8 @@ under it. On every lock the executed CU equalled the simulated CU.
   `Computational budget exceeded`, depending on where the meter runs out. It costs 0 lamports and
   the nonce is unchanged. Run 1: cap 61,790 against a need of 61,791. Run 2: cap 58,790 against
   67,791. Run 3: cap 58,790 against 63,291.
-- **Highest lock CU seen: 67,791** (simulated, fresh `bet_id`, run 2). The spike's "a 60k cap
-  failed 1 in 20" still holds: 1 lock in 50 went over 60k in run 1.
+- **Highest lock CU seen: 67,791** (simulated, fresh `bet_id`, run 2). A 60k cap is still too
+  low: 1 lock in 50 went over 60k in run 1.
 - **Floor.** Use **75,000** (67,791 + 10%) until devnet numbers exist. The suite now uses it
   (`CU_FLOOR`). The per-lock rule (simulated × 1.3) already covers every observed `bet_id`; the
   floor only protects against an unlucky id that simulation didn't see.
@@ -76,7 +76,7 @@ under it. On every lock the executed CU equalled the simulated CU.
 
 **1,001 B** of 1,232. This is the full form `[AdvanceNonce, SetComputeUnitLimit,
 SetComputeUnitPrice, create_bet, accept_bet]`, v0 with no ALT, 3 signatures and 16 unique keys.
-The estimate was ~990–1,005 B (FINDINGS §2.3), which leaves 231 B of headroom. LiteSVM and
+The estimate was ~990–1,005 B, which leaves 231 B of headroom. LiteSVM and
 Agave give the same value.
 
 ### N1 / N10: fees on local Agave

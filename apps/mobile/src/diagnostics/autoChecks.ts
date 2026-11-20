@@ -95,7 +95,7 @@ const gestureHandler: CheckBody = async () => {
 const notifications: CheckBody = async () => {
   const N = await importSafely(() => import('expo-notifications'));
   const p = await N.getPermissionsAsync();
-  return `permission=${p.status} (local notifications are the P0 path, FINDINGS §3.14)`;
+  return `permission=${p.status} (local notifications are the P0 path)`;
 };
 
 // Read-only on purpose: diagnostics must never mint a wallet. A key created here would survive a

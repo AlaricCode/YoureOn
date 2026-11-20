@@ -73,7 +73,7 @@ export const isAcceptedFaceModel = (m: FaceModelRef): boolean =>
   ACCEPTED_FACE_MODELS.some((a) => a.name === m.name && a.version === m.version && a.dim === m.dim);
 
 // ---------------------------------------------------------------------------------------
-// Match rule (API-CONTRACT §2.4; DATA-MODEL §7.2; FINDINGS §3.2 spike 01)
+// Match rule (API-CONTRACT §2.4; DATA-MODEL §7.2)
 // ---------------------------------------------------------------------------------------
 
 /** Accept the top candidate only at cosine >= this... */

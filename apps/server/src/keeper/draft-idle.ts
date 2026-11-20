@@ -1,10 +1,9 @@
 // Keeper task `draft-idle`: SCHEMAS §9.3 "Draft idle: 5 min since the last negotiation event
 // → EXPIRED" (server-enforced; TASKS D2-J1 "a draft idle for 5 minutes expires").
-// Ported from Verdict packages/backend/src/persistence/housekeeping.ts (a throttled keeper
-// task that expires stale records). Here it is a Postgres sweep over `bets`, not a JSON store.
+// A throttled keeper task that expires stale records: a Postgres sweep over `bets`.
 //
 // Why: a challenge nobody answers would otherwise hold `pair_busy` and a slot of the 3-open-bets
-// cap forever (bets/routes.ts PRE_LOCK_STATES; docs/STATUS-D0.md "No idle-draft sweeper").
+// cap forever (bets/routes.ts PRE_LOCK_STATES).
 //
 // Scope: the negotiation phase only, DRAFTING and TERMS_PROPOSED (both list "EXPIRED (idle 5 min)"
 // as an exit in the SCHEMAS §9.2 state table). Nothing is built or signed

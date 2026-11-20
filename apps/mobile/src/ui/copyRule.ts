@@ -1,5 +1,4 @@
-// The copy rule as a reusable checker. Ported from Verdict app/test/support/copy_rule.dart
-// (expectCopyRule) and verdict-spec.md §6.3-§6.4 / docs/CONTRACTS.md §12.12:
+// The copy rule as a reusable checker:
 //   1. UI copy (labels, errors) is 1-3 words, never a sentence, no trailing period.
 //   2. Nothing sits directly below a label in a smaller style (no subtitles, helper text, captions).
 //   3. No emoji anywhere.
@@ -7,7 +6,7 @@
 // "wallet address", "transaction" or base58 string on a party screen. The terms code (8 hex chars)
 // is the one allowed hash fragment (SCHEMAS §0).
 //
-// Our contracts win over Verdict's rule where they name exact copy: those strings are listed in
+// Our contracts win over rule 1 where they name exact copy: those strings are listed in
 // CONTRACT_COPY and may only be used with role 'contract'. Data (names, claims, amounts, the terms
 // code) uses role 'data': exempt from the word limit, still no emoji and no addresses.
 //
@@ -76,7 +75,7 @@ export const CONTRACT_COPY: readonly { readonly template: string; readonly sourc
   },
 ];
 
-// Verdict's ranges (pictographs, misc symbols + dingbats, mahjong..enclosed, VS16), plus keycaps,
+// The emoji ranges (pictographs, misc symbols + dingbats, mahjong..enclosed, VS16), plus keycaps,
 // ZWJ sequences and the few emoji outside those blocks (watch, hourglass, media, stars, squares).
 const EMOJI =
   /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}\u{20E3}\u{200D}\u{231A}\u{231B}\u{23E9}-\u{23FA}\u{2B05}-\u{2B07}\u{2B1B}\u{2B1C}\u{2B50}\u{2B55}\u{3030}\u{303D}]/u;
@@ -172,7 +171,7 @@ export function assertCopy(text: string, role: CopyRole = 'label'): void {
 }
 
 // ---------------------------------------------------------------------------------------
-// Screen-level check (Verdict rule 2): no smaller text directly below a label
+// Screen-level check (rule 2): no smaller text directly below a label
 // ---------------------------------------------------------------------------------------
 
 export type Rect = {

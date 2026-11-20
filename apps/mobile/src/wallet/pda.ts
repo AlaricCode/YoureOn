@@ -1,5 +1,5 @@
 // Program-derived addresses computed with noble + @noble/hashes only. Kit's getProgramDerivedAddress
-// throws SUBTLE_CRYPTO__DIGEST_UNIMPLEMENTED on Hermes (FINDINGS §7), so the phone re-derives the
+// throws SUBTLE_CRYPTO__DIGEST_UNIMPLEMENTED on Hermes, so the phone re-derives the
 // Bet / vault / Config PDAs for the device signing policy with this helper (ESCROW §5.0.2). Tests
 // cross-check it against @solana/kit in Node.
 //

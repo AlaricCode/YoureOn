@@ -1,9 +1,9 @@
-// Wallet key custody and authorization (TASKS D0-M3, FINDINGS §3.4, ARCHITECTURE §2.4 "Wallet seed").
+// Wallet key custody and authorization (TASKS D0-M3, ARCHITECTURE §2.4 "Wallet seed").
 //
 // - The seed is 32 CSPRNG bytes from getRandomValues (never getRandomBytes, never noble keygen()).
 // - It lives in the Keychain via SecureStore with WHEN_UNLOCKED_THIS_DEVICE_ONLY and WITHOUT
 //   requireAuthentication (that flag is .biometryCurrentSet: Face ID re-enrol = wallet loss, no passcode
-//   fallback, a prompt on every read, and a double prompt next to authenticateAsync; FINDINGS §7).
+//   fallback, a prompt on every read, and a double prompt next to authenticateAsync).
 // - The public key is a separate item, so app start never reads the seed and never prompts.
 // - authorize(messageBytes, prompt): LocalAuthentication -> read seed -> sign with noble -> wipe seed.
 // - authorizeTransaction(policyRequest, prompt): signs a server-built Solana message only if the
@@ -122,7 +122,7 @@ export type Wallet = {
   getPublicKey(): Promise<string | null>;
   /** Returns the existing wallet, or creates one. Never overwrites an existing seed. */
   ensureWallet(): Promise<{ publicKey: string; created: boolean }>;
-  /** Stores a provisioned seed (custodial demo accounts, FINDINGS §3.4). The input buffer is wiped. */
+  /** Stores a provisioned seed (custodial demo accounts). The input buffer is wiped. */
   importSeed(
     seed: Uint8Array,
     options: { replaceExisting: boolean },

@@ -2,9 +2,9 @@ YOU'RE ON - Project brief for Claude Code
 UBC 2026 Hackathon - Consumer Applications track
 Working name: You're On
 
-(Copy of the brief the lead engineer gave Claude Code on 2026-11-07.)
+(Copy of the brief the lead engineer gave Claude Code.)
 
->>> AMENDMENT 2026-11-07 (lead engineer decision) — NO HANDSHAKE.
+>>> AMENDMENT (lead engineer decision) — NO HANDSHAKE.
 >>> Face identification is ONLY used to find/address the person you want to
 >>> challenge and send them the request. The agreement/authorization happens
 >>> on each user's OWN phone: both phones show the final terms card, and each
@@ -22,15 +22,6 @@ READ THIS FIRST - TIMING RULE
   hackathon window: Fri Nov 13, 2026 12:00 PM CST (18:00 UTC) to
   Fri Nov 20, 2026 12:00 PM CST (18:00 UTC). The repo must be public, and
   judges can see the commit history.
-- Step 1: run `date -u` to check the current time.
-- BEFORE the window opens: do PHASE 0 only (section 9): planning docs and
-  throwaway feasibility spikes. Do NOT create the submission repo and do NOT
-  write product code. Spike code lives in a separate folder outside the
-  submission repo (e.g. ~/youre-on-spikes/) and nothing from it gets copied
-  into the real repo.
-- AFTER the window opens: start PHASE 1 in a fresh repo.
-- If the user explicitly tells you to start the real build early anyway,
-  remind them of this rule once, then follow their instruction.
 
 ============================================================
 1. THE PRODUCT
@@ -311,33 +302,6 @@ Thu: README + architecture diagram + bounty sections; record the 2-3 minute
      demo video; Devpost answers; rehearse.
 Fri morning: final fixes; submit before 12 PM CST.
 Sponsor office hours run Nov 16-19, so have something to show by Monday.
-
-============================================================
-9. PHASE 0 - BEFORE THE WINDOW OPENS (do this now)
-============================================================
-In a throwaway folder OUTSIDE the submission repo, run quick feasibility
-spikes and write the results to FINDINGS.md (latency, accuracy, gotchas,
-recommended library for each):
-1. On-device face detection + embedding match between three faces on real
-   phones (Expo development build).
-2. Vision-model judging of a bottle flip from about 8 frames: accuracy and
-   latency.
-3. (DROPPED 2026-11-07 — handshake replaced by on-phone authorization, see
-   5f. Replacement check: Face ID-gated device key signing latency on iOS.)
-4. ElevenLabs Agent with one server tool: round-trip latency on a phone over
-   cellular.
-5. Gemini: list active events, find the current BTC 5-minute UP contract,
-   subscribe to its live price, and find where settlement results appear.
-6. QuickNode Stream on Solana devnet filtered to a test program -> webhook
-   latency.
-
-Also draft these as documents (not code): architecture diagram, data model,
-API contract, Terms/Ruling schemas, and a task breakdown for the build plan.
-
-Then give the user a checklist of accounts and API keys to set up now:
-Apple Developer (for TestFlight), Expo/EAS, Anthropic, ElevenLabs, QuickNode,
-two other LLM providers for the appeals panel, hosting, Postgres, and a
-Gemini account (only needed for trading; market data is public).
 
 ============================================================
 10. HOW TO WORK

@@ -448,7 +448,7 @@ Not in index.ts (diagnostics loads it lazily): apps/mobile/src/dance/DanceCalibr
 - The sync-sweep test only asserts how the scores are ordered (a positive offset beats a negative one, and the best offset is ≥ 0), not one exact best offset.
 - The live meter and popups depend on 30 Hz onPoses reaching JS without trouble, and the reference skeleton redraws at 30 fps. This has not been measured on a real phone, and the HDMI mirroring latency is unknown. The sync offset stepper and sweep exist to calibrate for it.
 - The camera panel is not mirrored, so A shows on the left of the screen, as the contract's 'A = left in the image' says. Dancers who watch the display may find it unintuitive; the guide names which side is which.
-- The haptics on the beat and at GO are probably silent while the camera runs (FINDINGS §4), so the screen also flashes each beat.
+- The haptics on the beat and at GO are probably silent while the camera runs, so the screen also flashes each beat.
 - The music-only path (media.audio without video) loads expo-audio's createAudioPlayer lazily at the count-in. It is untested, and every routine's media is null today.
 - In calibration, Solo mode duplicates a single dancer into both slots so the tracker starts. Framing is bypassed with a forced start (a `force` flag on the 'start' event).
 - Settings are stored in a JSON file in the documents directory (dance-settings.json), not SecureStore. Sessions also need the file system, and these are not secrets.

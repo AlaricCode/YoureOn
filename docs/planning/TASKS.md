@@ -1,12 +1,10 @@
-Status: DRAFT — Phase 0 planning written 2026-11-08 (before the build window). Re-author into the repo during the window; if committed verbatim, commit it as 'docs: import Phase 0 planning (written pre-window)'.
-
 # TASKS — 7-day build breakdown (`youre-on`)
 
-This doc covers who builds what, when, in what order, and how we know each piece works. It runs from now (Phase 0, Sun Nov 8) to submission (Fri Nov 20, 12:00 CST) and finals (Sat Nov 21). It follows BRIEF §8 (amended), re-planned for the atomic lock (D3) and for the risks in FINDINGS §4. The specs it schedules are ESCROW-PROGRAM ("ESCROW"), SCHEMAS and DATA-MODEL. Versions and pins come from FINDINGS §3; this doc cites them and does not repeat them.
+This doc covers who builds what, when, in what order, and how we know each piece works. It runs to submission (Fri Nov 20, 12:00 CST) and finals (Sat Nov 21). It follows BRIEF §8 (amended), re-planned for the atomic lock (D3). The specs it schedules are ESCROW-PROGRAM ("ESCROW"), SCHEMAS and DATA-MODEL.
 
 ## Summary (one screen)
 
-**Rules.** No repo and no product code before **Fri Nov 13 12:00 CST [18:00 UTC]**; check `date -u` first. Until then the only work is human setup and throwaway spikes in `youre-on-spikes/`. Times are CST (UTC−6), with UTC in brackets.
+**Rules.** Times are CST (UTC−6), with UTC in brackets.
 
 **Workstreams (§1)**
 - **L, Lead:** the escrow program, devnet operations, the chain side of the server (device signing policy, LockService and nonce pool, Streams, payouts), the server skeleton and infra, and CI.
@@ -36,7 +34,7 @@ Every later beat depends on Sunday's checkpoint.
 
 | Risk | Handled in |
 |---|---|
-| iOS native build | P-04, P-06, D0-M2 |
+| iOS native build | P-04, D0-M2 |
 | EAS build queue | §4.0 |
 | Streams credits | P-13, D5-L2 |
 | Devnet SOL | P-09 |
@@ -45,14 +43,14 @@ Every later beat depends on Sunday's checkpoint.
 
 **Cut line (§5.2).** Drop in this order: P2 → APNs → hardening tests → sequential fallback → real seed history → head-to-head → stage polish → hearing push-to-talk → live panel → live closer. The live paths of Beats 1–4 are never cut.
 
-**Spec status (§10).** The D3/D7 spec edits were applied in Phase 0 (2026-11-08): every planning doc now describes the atomic lock and rulings that commit to frame hashes. The planning README (`youre-on-planning/README.md`) lists the open questions for the lead. `TRACEABILITY.md` maps every BRIEF requirement to its spec and task (§10.2 item 16).
+**Spec status (§10).** The D3/D7 spec edits are applied: every planning doc now describes the atomic lock and rulings that commit to frame hashes. The planning README (`README.md`) lists the open questions for the lead.
 
 ---
 
 ## 0. Conventions
 
 - **IDs:**
-  - `P-nn`: before the window.
+  - `P-nn`: human setup (§2).
   - `K-nn`: Friday kickoff.
   - `Dd-Xn`: window tasks, where d = day 0 (Fri 13) to 7 (Fri 20) and X = L (Lead), M (E2), J (E3) or X (whole team).
   - `T-*`: tests (§6).
@@ -75,11 +73,10 @@ Every later beat depends on Sunday's checkpoint.
 - **Est h** = focused hours, not counting EAS queue time.
 - **DoD** = a check that someone other than the author can run. Every number measured in the window goes into `docs/measurements.md` in the repo.
 - **PENDING** = still needs a key, a phone, SOL or an external schedule.
-- **Official docs first (BRIEF §10).** Before writing against an external API (ElevenLabs, QuickNode, Gemini via `developer.gemini.com/llms.txt`, Anthropic/OpenAI/Google, Anchor, Expo), read its official docs and cite the page in the PR description. Never guess an endpoint, field or flag; FINDINGS records only what Phase 0 checked.
-- **Traceability.** `TRACEABILITY.md` maps every BRIEF requirement to its spec section and the task that proves it. A task change that drops a requirement updates that matrix in the same PR.
+- **Official docs first (BRIEF §10).** Before writing against an external API (ElevenLabs, QuickNode, Gemini via `developer.gemini.com/llms.txt`, Anthropic/OpenAI/Google, Anchor, Expo), read its official docs and cite the page in the PR description. Never guess an endpoint, field or flag.
 - **Assumptions:**
   - about 11 focused hours per person per day, Sat–Thu;
-  - 4 iPhones: A, B, the judge cam, and one non-demo phone for the Face ID reset test (FINDINGS §3.15);
+  - 4 iPhones: A, B, the judge cam, and one non-demo phone for the Face ID reset test;
   - availability Mon–Thu (classes, jobs) is PENDING, collected in P-15.
 
 ---
@@ -99,8 +96,8 @@ Every later beat depends on Sunday's checkpoint.
 
 - **One toolchain per person.** The three streams map to Rust/Solana, React Native/iOS native, and LLM/voice/web. Each person reads one set of docs and holds one set of accounts. The only contract between streams is the set of Zod schemas in `packages/shared` (SCHEMAS), so all three can start on Friday in parallel.
 - **One owner for the money path.** The program, the device signing policy, LockService and the payout builders must agree byte for byte (ESCROW §5.0, Threat model TM-S). Keeping them with one person keeps the security risk with the lead engineer.
-- **One owner for the iOS build path.** It is FINDINGS risk #1: no Mac, EAS only, and the native stack has never been built together. One owner serializes native dependency changes and EAS builds (§4.0).
-- **E3 produces the bounty evidence.** E3 owns the AI side of all three sponsor integrations plus the stage view and the video. The person who films the evidence (FINDINGS §3.10 ElevenLabs list, the Streams ticker, the Gemini chart) also builds it.
+- **One owner for the iOS build path.** It is the top risk: no Mac, EAS only, and the native stack has never been built together. One owner serializes native dependency changes and EAS builds (§4.0).
+- **E3 produces the bounty evidence.** E3 owns the AI side of all three sponsor integrations plus the stage view and the video. The person who films the evidence (the ElevenLabs list, the Streams ticker, the Gemini chart) also builds it.
 - **The server skeleton goes to L on Friday** (2.5 h), because LockService and Streams are the heaviest server parts. E2 and E3 add their own routes in their own folders.
 
 ### 1.3 How to rebalance
@@ -122,39 +119,32 @@ Every later beat depends on Sunday's checkpoint.
 
 ---
 
-## 2. Before the window (Sun Nov 8 → Fri Nov 13 12:00 CST)
+## 2. Human setup
 
-- No repo and no product code before the window opens.
-- Spikes are allowed. They are throwaway and live in `youre-on-spikes/`.
 - Anything that costs money is the lead's call (BRIEF §10).
-- Sources: FINDINGS §1 (human to-dos), §5 (costs) and §6 (pending steps).
 
 ### 2.1 Human to-dos
 
 | ID | To-do | Owner | Due CST [UTC] | Done when |
 |---|---|---|---|---|
-| P-01 | Enroll in the **Apple Developer Program as an Individual** ($99/yr; Individual avoids needing a D-U-N-S number) (FINDINGS §3.15, §5). Everything iOS depends on this. | L | **Sun Nov 8 12:00 [18:00]** | Apple confirms the membership (processing time PENDING) |
-| P-02 | **Device inventory.** List the 4 iPhones: A, B, judge cam, non-demo test phone. Each needs iOS ≥ 16.4, Face ID, a passcode set (never remove it), Low Power Mode off, and cellular data on. Note each phone's carrier; two different carriers give a hotspot fallback. | ALL | Sun Nov 8 21:00 [Mon 03:00] | Table posted in the team chat |
-| P-03 | Create the Expo account and team org. Decide **EAS Starter** ($19, priority queue) vs Free (15 iOS builds, 90+ min queue at peak). | L decides, E2 sets up | Mon Nov 9 21:00 [Tue 03:00] | `eas whoami` works for E2; plan recorded |
-| P-04 | **As soon as P-01 clears**, run `eas device:create` for **every** iPhone (all 4), then turn on Developer Mode on each. Apple can take 24–72 h to process a new device, and ad hoc builds only install on devices registered before the build (FINDINGS §3.15). | E2 + each phone owner | Within 2 h of P-01; **latest Tue Nov 10 12:00 [18:00]** | `eas device:list` shows 4 devices |
-| P-05 | Spike iOS builds (Phase 0, throwaway): the 01-face app with the 3b test screen added (one build instead of two), and the 04-elevenlabs app (run `eas build:configure` first; there is no Mac). Run FINDINGS §6 steps 7–10. | E2 (builds), E3 (steps 9–10) | Builds Wed Nov 11; results Thu Nov 12 21:00 [Fri 03:00] | Results added to the spike sections; each PENDING-PHONE item closed or re-flagged |
-| P-06 | **Recommended:** one combined throwaway spike build with the whole native stack: VisionCamera/ML Kit/fast-tflite, expo-camera/expo-video, LiveKit/ElevenLabs and LocalAuthentication/SecureStore, at the pins in FINDINGS §3.1–3.3 and §3.10. It shows the stack compiles together before Friday's build #1. | E2 | Thu Nov 12 21:00 [Fri 03:00] | The build installs and launches on one iPhone; any failure noted with its fix |
-| P-07 | **Accounts and keys** (see the list below this table). | L (paid and infra), E3 (AI keys) | AI keys by **Tue Nov 10** (spike runs); the rest by Thu Nov 12 | Each key is in the vault and in `youre-on-spikes/.env`, never committed |
-| P-08 | Copy `youre-on-spikes/.env.example` to `.env` and fill it in as keys arrive. | Whoever gets each key | Rolling | Spike harnesses read the keys |
-| P-09 | **Devnet SOL, funded by a human** (see the notes below this table). | ALL | Spike SOL by Tue Nov 10; 10 SOL by Thu Nov 12 21:00 | `solana balance` checked on each address |
-| P-10 | **Devnet USDC.** The Circle faucet gives 20 USDC per 2 h per address, behind a reCAPTCHA. Aim for about $400 (20 claims) across the funding wallet and one more team address, at about 4 claims a day Sun–Thu. | E2, E3 | Thu Nov 12 | ≥ 400 USDC across team addresses |
-| P-11 | **Film the 20 judge-cam clips** per the spike 02 protocol (see the notes below this table). | E3 + a helper | **Tue Nov 10 21:00 [Wed 03:00]** | 20 files + manifest rows in place, so P-12 step 2 can run |
-| P-12 | Run the PENDING spike measurements as keys and SOL arrive (FINDINGS §6; owners below this table). | As listed | Thu Nov 12 21:00 [Fri 03:00] | Each step's numbers in its spike section; FINDINGS §2.1 labels updated |
-| P-13 | **Decisions to close** (see the list below this table). | L | Thu Nov 12 21:00 | Decisions written into the kickoff notes |
-| P-14 | **Collect schedules:** sponsor office hours Nov 16–19 (times, format, which sponsors attend); finals logistics (pitch slot time, AV, venue connectivity); the Devpost form fields; the event's rule on commits after the deadline. | E3 | Wed Nov 11 | Dates in the team calendar; PENDING items in this doc updated |
-| P-15 | **Skills and availability survey.** Each person rates themselves on RN/iOS, Rust/Anchor, TS server, LLM/prompting, React web and video editing, and gives their hours per day Mon–Thu. Confirm or swap the split (§1.3). | L | Sun Nov 8 21:00 [Mon 03:00] | Split confirmed |
-| P-16 | **Pre-reading** (see the list below this table). | ALL | Thu Nov 12 | — |
-| P-17 | **Stage laptop:** check that it plays avc1 video; run the Gemini CORS snippet (FINDINGS §6 step 14) in its browser; install OBS; get an HDMI adapter; test it on the phone hotspot. | E3 | Thu Nov 12 | Checklist ticked |
-| P-18 | **Gear:** a tripod or clamp for the judge cam, the demo bottle(s) with a coloured label and taped cap, chargers and battery packs, and a hotspot on a second carrier. | E2 | Thu Nov 12 | Packed |
+| P-01 | Enroll in the **Apple Developer Program as an Individual** ($99/yr; Individual avoids needing a D-U-N-S number). Everything iOS depends on this. | L | — | Apple confirms the membership (processing time PENDING) |
+| P-02 | **Device inventory.** List the 4 iPhones: A, B, judge cam, non-demo test phone. Each needs iOS ≥ 16.4, Face ID, a passcode set (never remove it), Low Power Mode off, and cellular data on. Note each phone's carrier; two different carriers give a hotspot fallback. | ALL | — | Table posted in the team chat |
+| P-03 | Create the Expo account and team org. Decide **EAS Starter** ($19, priority queue) vs Free (15 iOS builds, 90+ min queue at peak). | L decides, E2 sets up | — | `eas whoami` works for E2; plan recorded |
+| P-04 | **As soon as P-01 clears**, run `eas device:create` for **every** iPhone (all 4), then turn on Developer Mode on each. Apple can take 24–72 h to process a new device, and ad hoc builds only install on devices registered before the build. | E2 + each phone owner | Within 2 h of P-01 | `eas device:list` shows 4 devices |
+| P-07 | **Accounts and keys** (see the list below this table). | L (paid and infra), E3 (AI keys) | — | Each key is in the vault, never committed |
+| P-09 | **Devnet SOL, funded by a human** (see the notes below this table). | ALL | — | `solana balance` checked on each address |
+| P-10 | **Devnet USDC.** The Circle faucet gives 20 USDC per 2 h per address, behind a reCAPTCHA. Aim for about $400 (20 claims) across the funding wallet and one more team address. | E2, E3 | — | ≥ 400 USDC across team addresses |
+| P-11 | **Film the 20 judge-cam clips** (see the notes below this table). | E3 + a helper | — | 20 files + manifest rows in place |
+| P-13 | **Decisions to close** (see the list below this table). | L | — | Decisions written into the kickoff notes |
+| P-14 | **Collect schedules:** sponsor office hours Nov 16–19 (times, format, which sponsors attend); finals logistics (pitch slot time, AV, venue connectivity); the Devpost form fields; the event's rule on commits after the deadline. | E3 | — | Dates in the team calendar; PENDING items in this doc updated |
+| P-15 | **Skills and availability survey.** Each person rates themselves on RN/iOS, Rust/Anchor, TS server, LLM/prompting, React web and video editing, and gives their hours per day Mon–Thu. Confirm or swap the split (§1.3). | L | — | Split confirmed |
+| P-16 | **Pre-reading** (see the list below this table). | ALL | — | — |
+| P-17 | **Stage laptop:** check that it plays avc1 video; run the Gemini CORS snippet in its browser; install OBS; get an HDMI adapter; test it on the phone hotspot. | E3 | — | Checklist ticked |
+| P-18 | **Gear:** a tripod or clamp for the judge cam, the demo bottle(s) with a coloured label and taped cap, chargers and battery packs, and a hotspot on a second carrier. | E2 | — | Packed |
 
 **P-07 accounts and keys:**
 - Anthropic.
-- ElevenLabs: Creator ($11 the first month) or sponsor credits. The free tier is 15 min/month, enough for the Phase-0 key run but not for build week.
+- ElevenLabs: Creator ($11 the first month) or sponsor credits. The free tier is 15 min/month, not enough for build week.
 - QuickNode: the Build plan ($49), or ration the free trial (see P-13).
 - OpenAI.
 - Google AI Studio.
@@ -167,13 +157,12 @@ Every later beat depends on Sunday's checkpoint.
 **P-09 devnet SOL:**
 - Use faucet.solana.com in a browser. It allows 2 requests per 8 h (more with a GitHub login), and its terms say AI agents must not use it. The RPC faucet is closed (HTTP 410).
 - Spread the requests across all three people and across the days. Collect the SOL in a human-held **team funding wallet**, whose keypair lives outside any repo.
-- **Spike runs, by Tue Nov 10:** 1.5 SOL to the spike wallets for FINDINGS §6 step 5 (1 SOL to the spike 6 payer, 0.5 SOL to the spike 7 fee payer).
-- **The window, by Thu Nov 12:** at least **10 SOL** in the funding wallet. That covers:
+- **For the build:** at least **10 SOL** in the funding wallet. That covers:
   - deploys and upgrades, at least 5 SOL;
   - the fee payer, 0.5–2 SOL;
   - the nonce pool, about 0.0053 SOL.
 
-  Sources: ESCROW §10.2 and FINDINGS §5.
+  Source: ESCROW §10.2.
 
 **P-11 judge-cam clips:**
 - **Setup:** a tripod or clamp, landscape, 1–1.5 m from the landing spot. Use a bottle with a coloured label and taped cap, against a contrasting background.
@@ -182,36 +171,26 @@ Every later beat depends on Sunday's checkpoint.
   - 8 successes;
   - 8 failures: 4 cap landings, 2 side, 2 tip-over;
   - 4 ambiguous: blocked view, cut off early, base out of frame, dark.
-- **Delivery:** AirDrop the files to `02-vision-judge/clips/` and add a row per clip to `clips/MANIFEST.md` (FINDINGS §6 step 0).
-
-**P-12 measurement owners (FINDINGS §6 step numbers):**
-- E3:
-  - step 1, the ElevenLabs latency matrix;
-  - steps 2 (vision eval) and 3 (appeals panel), after P-11;
-  - step 16, the legal re-read (about 10 minutes).
-- L: steps 4 (QuickNode probe and billing), 5 (devnet transaction latency), 6 (Stream → webhook latency) and 11 (webhook → phone display).
-- E2 and E3: steps 7–10, through P-05.
-- Step 14 (Gemini at the pitch hour) must run on a Saturday, so it moves to Sat Nov 14 (D1-J4).
+- **Delivery:** AirDrop the files and add a row per clip to the clip manifest.
 
 **P-13 decisions to close:**
 - EAS plan.
 - QuickNode: the Build plan, or ration the free trial. The trial covers about 22 Stream-hours, and its credits are shared with the RPC.
 - ElevenLabs plan.
-- Voice LLM, after step 1.
-- Judge model, Haiku 5.5 or Opus-low, after step 2.
-- Camera stack, provisionally, from P-06.
+- Voice LLM.
+- Judge model, Haiku 5.5 or Opus-low.
+- Camera stack, provisionally.
 - Repo name and licence.
 
 **P-16 pre-reading:**
-- L: all of ESCROW; DATA-MODEL §5.8–5.9 and §8; FINDINGS §3.5–3.7 and §3.12.
-- E2: FINDINGS §3.1–3.4, §3.14–3.15 and §7; spike 3b §(d).
-- E3: SCHEMAS §2–8; FINDINGS §3.8–3.11; the spike 04 and 05 sections.
+- L: all of ESCROW; DATA-MODEL §5.8–5.9 and §8.
+- E3: SCHEMAS §2–8.
 
 ### 2.2 Key gates: the latest arrival before a window task slips
 
 | Needed by | Key or resource | Latest arrival (CST) | If it's late |
 |---|---|---|---|
-| D0-L3 server | Fly + Neon accounts | Fri 12:00 | Run on a local Postgres with a quick tunnel (development only, FINDINGS §3.13) |
+| D0-L3 server | Fly + Neon accounts | Fri 12:00 | Run on a local Postgres with a quick tunnel (development only) |
 | D0-J2 agent and tools | ElevenLabs key | Fri 18:00 | E3 builds the tool handlers and Zod checks against recorded fixtures first, and the agent on Sat morning |
 | D1-L3 devnet deploy | ≥ 5 SOL for the deployer + 0.5 SOL for the fee payer | Sat 09:00 | Tests stay on LiteSVM, and Saturday's checkpoint fails. All three humans work the faucet (P-09). |
 | D1-L4 Stream | QuickNode key | Sat 12:00 | The server's `signatureSubscribe` fast lane carries the UX; the Stream follows on Sun morning |
@@ -228,11 +207,10 @@ Every later beat depends on Sunday's checkpoint.
 | # | CST [UTC] | Step | Owner |
 |---|---|---|---|
 | K-00 | 11:30 [17:30] | Team call. Skim §1–§4 of this doc and confirm the P-13 decisions. **Nobody touches git yet.** | ALL |
-| K-01 | 12:00 [18:00] | Check that `date -u` reads ≥ 18:00. Create the **public** GitHub repo `youre-on`, fresh: empty, no template, nothing from `youre-on-spikes/`. Add E2 and E3. Protect `main`: PR + CI required, no force-push, no deletion. Turn on secret scanning and push protection. | L |
+| K-01 | 12:00 [18:00] | Check that `date -u` reads ≥ 18:00. Create the **public** GitHub repo `youre-on`, fresh: empty, no template. Add E2 and E3. Protect `main`: PR + CI required, no force-push, no deletion. Turn on secret scanning and push protection. | L |
 | K-02 | 12:05 | Each person clones the repo to `ubc26/youre-on/`, sets `git config user.name`/`user.email` to their own GitHub identity, and installs the gitleaks pre-commit hook. | ALL |
 | K-03 | 12:10 | Commit `chore: initial commit` (contents below this table). | L |
-| K-04 | 12:15 | Commit `docs: import Phase 0 planning (written pre-window)`: copy `youre-on-planning/*.md` verbatim into `docs/planning/`. Do **not** copy the spike folder (its code or its FINDINGS file). | L |
-| K-05 | 12:20–13:00 | Review the imported specs together. The D3/D7 edits are already in them (§10.1), so nothing is re-applied. A change found in review lands as its own `docs(<doc>): …` commit, reviewed by the other two. | L (ESCROW, DATA-MODEL, API-CONTRACT); E3 (SCHEMAS); E2 (ARCHITECTURE app sections) |
+| K-05 | 12:20–13:00 | Review the specs together. The D3/D7 edits are already in them (§10.1), so nothing is re-applied. A change found in review lands as its own `docs(<doc>): …` commit, reviewed by the other two. | L (ESCROW, DATA-MODEL, API-CONTRACT); E3 (SCHEMAS); E2 (ARCHITECTURE app sections) |
 | K-06 | 12:20–13:30 | Monorepo scaffold, as parallel PRs (split below this table). | ALL |
 | K-07 | 13:30 | CI in `.github/workflows/ci.yml` (jobs below this table). | L |
 | K-08 | 13:45 | Set up secrets handling (rules below this table). | L |
@@ -247,11 +225,11 @@ Every later beat depends on Sunday's checkpoint.
 
 **K-06 scaffold split:**
 - **L:**
-  - root `package.json` with **npm workspaces** (the FINDINGS install recipes use npm and `npm dedupe`);
+  - root `package.json` with **npm workspaces**;
   - `tsconfig.base.json` (strict), `.nvmrc` (Node 22), Prettier/ESLint;
   - `apps/server` (Hono, `/health`), `packages/shared`, `packages/db`;
   - `programs/escrow` via `anchor init`: Anchor 1.2.2, no nested `.git`; the template pins Rust 1.89.0; set `NO_DNA=1`.
-- **E2:** `apps/mobile` via create-expo-app for SDK 58. Delete the nested `.git`, `.claude/settings.json` and `AGENTS.md` that it creates (FINDINGS §7).
+- **E2:** `apps/mobile` via create-expo-app for SDK 58. Delete the nested `.git`, `.claude/settings.json` and `AGENTS.md` that it creates.
 - **E3:** `apps/stage` (Vite + React + TS), and Zod in `packages/shared`.
 
 **K-07 CI jobs:**
@@ -287,11 +265,11 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
 4. **Merging.** Merge PRs with a rebase or a merge commit, **never a squash**: squashing would hide the incremental history judges look at. Each person commits as themselves.
 5. **Tests ship with code.** An escrow instruction lands together with its matrix rows. A schema lands together with its test vectors. A red `main` means stop and fix.
 6. **Generated code gets its own commit.** The IDL and the Codama client go in `chore(shared): regenerate escrow client from IDL`.
-7. **No spike code.** Nothing is pasted from `youre-on-spikes/`; re-author it from the specs. The planning docs enter the repo only through the K-04 commit and the spec-edit commits.
+7. **Specs first.** Code is written from the specs. A spec change lands as its own `docs(<doc>): …` commit.
 8. **No secrets.** gitleaks runs locally and in CI, plus GitHub push protection. `.env` files and keypairs are never committed.
 9. **Binaries.** The only binaries in git are the face model (13.6 MB, with its licence note) and short fallback clips. Video masters stay out of git.
-   - The face model is **regenerated in the window** by a committed script (D0-M2), never copied from `youre-on-spikes/`.
-   - The 20 judge-cam eval clips (P-11) were filmed before the window. They are test data, not code: keep them out of git (object storage or a local path the eval reads), and list them in the README's "Built during the window" section (ARCHITECTURE §9 item 15).
+   - The face model is generated by a committed script (D0-M2).
+   - The 20 judge-cam eval clips (P-11) are test data, not code: keep them out of git (object storage or a local path the eval reads).
 10. **Tags.** Tag each passed checkpoint `cp-d0`…`cp-d6`, then tag `submission` (§8.4).
 11. **The README moves with the code (BRIEF §10).** A PR that lands a feature with a §8.1 README row (program IDs, Solana, Streams config, ElevenLabs, Gemini, privacy, guardrails, setup) updates that section in the same PR, even if only a stub with the real values. Thursday (D6) finishes the prose; it does not start it.
 
@@ -325,11 +303,11 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
   - Over cellular, use `expo start --tunnel`. Only the JS bundle goes through the tunnel; app ↔ server traffic still goes over cellular.
   - Take latency-target numbers on **preview** builds (release JS). Dev-mode JS is slower.
 - Ad hoc builds install only on devices registered before the build. A phone added late goes through TestFlight internal instead.
-- Optional (P2): add `expo-updates` in build #1 so JS can be pushed over the air to preview builds. This was not verified in Phase 0.
+- Optional (P2): add `expo-updates` in build #1 so JS can be pushed over the air to preview builds. This is unverified.
 
 ### 4.1 D0: Fri Nov 13, 12:00–24:00 CST [18:00 Fri – 06:00 Sat UTC]
 
-**Goal:** scaffold; escrow skeleton + tests; Expo app with auth + wallet; server skeleton (BRIEF §8). Also **queue build #1 with the whole native stack by 16:00**: it is the top risk in FINDINGS.
+**Goal:** scaffold; escrow skeleton + tests; Expo app with auth + wallet; server skeleton (BRIEF §8). Also **queue build #1 with the whole native stack by 16:00**: it is the top risk.
 
 | ID | Task | Owner | Depends on | h | P | Definition of done | Beat |
 |---|---|---|---|---|---|---|---|
@@ -337,9 +315,9 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
 | D0-L2 | `create_bet` and `accept_bet` with every check (I2, I3, I15–I17, P3, P9, P10), `emit_cpi!` on each; generate the program keypair (gitignored) and run `anchor keys sync` | L | D0-L1 | 3 | P0 | Rows B1–B12, B15–B20, B22 and A1–A12 green; IDL generated locally | B3 |
 | D0-L3 | Server skeleton: Hono, zod-validated env, `/health`, WebSocket hub (per-bet rooms, ping every 20 s, client reconnect). Drizzle on Neon: pooled URL for the app, direct URL for migrations, 60 s keepalive. Migration 0001 with `users`, `devices`, `rooms`, `room_members`, `bets` (core columns), `bet_events`, `audit_log`. Deploy to Fly `dfw` with `auto_stop_machines="off"`, `min_machines_running=1`. | L | K-06, P-07 | 2.5 | P0 | From an iPhone on cellular, `https://<app>.fly.dev/health` returns 200 and a WebSocket echo round trip is logged; `drizzle-kit migrate` applied | ALL |
 | D0-M1 | `apps/mobile` config: SDK 58 pins, dev client, `expo-build-properties` with iOS 16.4, bundle ID, one usage string each for camera, mic and Face ID, `eas init`, `eas.json` with development/preview/production profiles | E2 | K-06, P-03 | 1.5 | P0 | `npx expo-doctor` clean; `eas.json` committed | ALL |
-| D0-M2 | Install **the whole native stack at once** (FINDINGS §3.1–3.3, §3.10 pins; checklist below this table), add a diagnostics screen, and queue **EAS build #1** by 16:00 CST | E2 | D0-M1, P-04 | 2.5 | P0 | Build #1 installs on A, B and the judge cam, and every diagnostics check is green (list below this table) | B1–B4 |
+| D0-M2 | Install **the whole native stack at once** (checklist below this table), add a diagnostics screen, and queue **EAS build #1** by 16:00 CST | E2 | D0-M1, P-04 | 2.5 | P0 | Build #1 installs on A, B and the judge cam, and every diagnostics check is green (list below this table) | B1–B4 |
 | D0-M3 | Wallet module (behaviour below this table) | E2 | D0-M1 | 3 | P0 | Node tests: signatures verify; the noble PDA helper matches Kit's derivation for 20 `bet_id`s | B3 |
-| D0-M4 | Login and signup shell: `POST /v1/auth/challenge` → `/v1/auth/signup` or `/v1/auth/session` (API-CONTRACT §1.3). A separate device auth key (not the wallet key) signs the challenge, and an existing key is accepted after a reinstall (FINDINGS §7). The signup placeholder collects a name and the 18+ attestation. | E2 | D0-L3, D0-M3 | 1.5 | P0 | Tests: a valid signature gets a session; a replayed nonce or the wrong key gets 401; a signup without the 18+ attestation gets `AGE_REQUIRED` (BRIEF 5c guardrail) | ALL |
+| D0-M4 | Login and signup shell: `POST /v1/auth/challenge` → `/v1/auth/signup` or `/v1/auth/session` (API-CONTRACT §1.3). A separate device auth key (not the wallet key) signs the challenge, and an existing key is accepted after a reinstall. The signup placeholder collects a name and the 18+ attestation. | E2 | D0-L3, D0-M3 | 1.5 | P0 | Tests: a valid signature gets a session; a replayed nonce or the wrong key gets 401; a signup without the 18+ attestation gets `AGE_REQUIRED` (BRIEF 5c guardrail) | ALL |
 | D0-J1 | `packages/shared` schemas per SCHEMAS (list below this table), with JCS hashing through `canonicalize` and the test vectors from SCHEMAS §11 (rule 6) | E3 | K-06 | 4 | P0 | CI checks below this table pass | B2–B5 |
 | D0-J2 | ElevenLabs agent as code, in `scripts/el-agent.ts` (create or update; settings below this table), plus `POST /v1/voice/tokens`, which mints a conversation token (API-CONTRACT §2.6) | E3 | D0-L3, P-07 | 2.5 | P0 | A second run of the script is a no-op; a desktop test conversation reaches `POST /el/tools/propose_terms` on Fly, with `bet_id` and `conversation_id` filled in | B2 |
 | D0-J3 | Judge persona; `propose_terms` tool schema = the LLM-facing projection in API-CONTRACT §4.3, mapped server-side into `TermsProposal`; guardrail refusal rules (SCHEMAS §3, BRIEF 5c); 12 spoken-bet fixtures, including 4 refusals (one per BRIEF 5c category: `dangerous`, `alcohol_drugs`, `self_harm`, `minors`) and 2 that need clarification | E3 | D0-J1 | 2 | P0 | The fixture run gives a valid `TermsProposal` for 8/8 benign bets and a PG-13 quip refusal with the right `RefusalCategory` for 4/4 unsafe ones, with ≤ 2 clarifying questions each | B2 |
@@ -350,7 +328,7 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
 - Install `face-detector` and apply its iOS `performanceMode` patch with patch-package.
 - Keep both LiveKit packages out of `expo install`.
 - Install `react-dom@19.3.0`, then run `npm dedupe`.
-- **Face model, re-made in the window (timing rule).** Commit `scripts/face-model.sh`: download InsightFace `buffalo_s` from the official model zoo, convert `w600k_mbf` with `onnx2tf==2.6.9 -b 1` (fp32; FINDINGS §3.2), and print the sha256. Spike 01 found the conversion deterministic (its file is `ca17b05a…`), so a matching hash proves the pipeline. Commit the `.tflite` with its non-commercial licence note. Never copy the spike's file.
+- **Face model.** Commit `scripts/face-model.sh`: download InsightFace `buffalo_s` from the official model zoo, convert `w600k_mbf` with `onnx2tf==2.6.9 -b 1` (fp32), and print the sha256. The conversion is deterministic (`ca17b05a…`), so a matching hash proves the pipeline. Commit the `.tflite` with its non-commercial licence note.
 
 **D0-M2 diagnostics that must be green:**
 - VisionCamera preview;
@@ -370,7 +348,7 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
   2. Read the seed.
   3. Sign with noble.
   4. Wipe the seed.
-- Recording the method: the first prompt passes `disableDeviceFallback: true`. On `user_fallback`, prompt again with the passcode allowed and record `passcode_hold` (FINDINGS §7). This is E: check it on a device.
+- Recording the method: the first prompt passes `disableDeviceFallback: true`. On `user_fallback`, prompt again with the passcode allowed and record `passcode_hold`. This is E: check it on a device.
 - PDAs are derived with a noble helper, which is pre-warmed when the terms card mounts.
 
 **D0-J1 schemas:**
@@ -381,14 +359,14 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
 
 **D0-J1 CI checks:**
 - `terms-v1-001` still hashes to `05860f0a…f998f`.
-- The §5.2 ruling vector hashes to `997ce278…5daa` and the §6 hearing vector to `a7721bbc…d368` (recomputed in SCHEMAS on 2026-11-08).
+- The §5.2 ruling vector hashes to `997ce278…5daa` and the §6 hearing vector to `a7721bbc…d368` (recomputed in SCHEMAS).
 - The NFC, key-order, extra-key and non-normalized vectors behave as specified (the last two must throw).
 
 **D0-J2 agent settings:**
-- LLM: `claude-haiku-5-5`, or the winner of FINDINGS §6 step 1.
+- LLM: `claude-haiku-5-5`, or the winner of D1-J2.
 - Temperature omitted and the backup LLM disabled.
 - `pre_tool_speech: force` on `propose_terms`.
-- TTS, ASR and turn settings per FINDINGS §3.10, with `bursting_enabled:false`.
+- TTS, ASR and turn settings, with `bursting_enabled:false`.
 - Webhook tools point at the Fly URL and authenticate with a secret header.
 - The client tools are declared.
 - Set the agent's data-retention setting and record it for the README privacy section (ARCHITECTURE §6.7 PENDING; DATA-MODEL §10).
@@ -404,19 +382,19 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
 | D1-L1 | The remaining instructions: `cancel_open_bet`, `resolve`, `concede`, `appeal`, `resolve_appeal`, `finalize`, `timeout_refund`, `close_bet`. One `payout()`/`compute_payout`; one event per state change. | L | D0-L2 | 5 | P0 | The P0 terminal, math and event rows of §6.2 green. Third-party payout attempts K7, RA7 and F6 fail. `vault.amount == 0` is asserted after every terminal instruction. | B3–B6 |
 | D1-L2 | Atomic lock tests ESCROW §9.2 N1–N16 (§6.3): TS LiteSVM for the composition, and local Agave 4.1.2 for the nonce and fee behaviour (N10, N11) | L | D1-L1 | 1.5 | P0 | All those N rows green; CU min and max recorded in the PR | B3 |
 | D1-L3 | Devnet deploy (ESCROW §10.3 steps 1–8; details below this table) | L | D1-L1, P-09 | 1.5 | P0 | Program ID, Config PDA and Explorer links in the README; `scripts/check-config.ts` prints the demo values read from devnet | B3 |
-| D1-L4 | The QuickNode Stream and its receiver (FINDINGS §3.12; details below this table) | L | D1-L3, D0-L3, P-07 | 3 | P0 | Every smoke-run event lands in `chain_events` exactly once; E5 and E6 green; the Stream is paused after the session; the filter source and `scripts/qn-stream.ts` (create, pause, activate, reset `start_range`) are committed, and the README Streams stub links both (§3.2 rule 11) | B3, B4 |
-| D1-L5 | `scripts/smoke-devnet.ts`, plus a debug "Run smoke" button. It runs create → accept as **one atomic transaction** signed with the custodial demo keys, then `resolve`, then `[finalize, close_bet]`. The phones and the stage join the bet's WebSocket room. | L | D1-L3, D1-L4, D1-L6 | 1 | P0 | Tapping "Run smoke" on a phone shows LOCKED → RULED → PAID on both phones, driven by Stream events; devnet send → processed/confirmed logged (FINDINGS §6 step 5, in the repo); both party wallets hold 0 lamports before and after (the fee payer paid every fee and the rent; BRIEF 5b) | B3, B4 |
-| D1-L6 | `scripts/fund.ts`, the devnet USDC float (the "top-up job" of ARCHITECTURE §2.3 and ESCROW §10.2; the user-facing top-up flow stays P2). It moves the pre-window faucet USDC (P-10) into `TREASURY`, creates each party's USDC ATA with the fee payer as payer, and tops up A's and B's device wallets and the custodial demo wallets to $40 each (SETUP-CHECKLIST C2, KP6, KP8). | L | D1-L3, P-10 | 1 | P0 | Before Sun 09:00, A's and B's phone wallets each hold ≥ $40 devnet USDC and 0 SOL; balances logged | B3 |
-| D1-M1 | Fix forward from build #1. Queue build #2 only if native dependencies changed. **Decide the camera stack** (FINDINGS §3.3 open question): one stack, or VisionCamera plus expo-camera opened one after the other. | E2 | D0-M2 | 2 | P0 | The decision is recorded; both camera uses work five times in one app session without a crash | B1, B4 |
-| D1-M2 | Authorization matrix in the real app (FINDINGS §6 step 8; what to log below this table) | E2 | D0-M2, D0-M3 | 2 | P0 | Pass: warm sign < 30 ms; cold < 300 ms; Face ID p50 < 1.5 s; the passcode fallback works | B3 |
-| D1-M3 | Face pipeline smoke test in the app (FINDINGS §3.2): still → resize → landmarks → warp to 112×112 → embed. Compute the cosine between each pair of teammates and time each stage. | E2 | D0-M2 | 2.5 | P0 | Each teammate's genuine score ≥ 0.30; every other pair of teammates scores < 0.30 with a top1−top2 margin ≥ 0.05; on-device stage timings logged | B1 |
+| D1-L4 | The QuickNode Stream and its receiver (details below this table) | L | D1-L3, D0-L3, P-07 | 3 | P0 | Every smoke-run event lands in `chain_events` exactly once; E5 and E6 green; the Stream is paused after the session; the filter source and `scripts/qn-stream.ts` (create, pause, activate, reset `start_range`) are committed, and the README Streams stub links both (§3.2 rule 11) | B3, B4 |
+| D1-L5 | `scripts/smoke-devnet.ts`, plus a debug "Run smoke" button. It runs create → accept as **one atomic transaction** signed with the custodial demo keys, then `resolve`, then `[finalize, close_bet]`. The phones and the stage join the bet's WebSocket room. | L | D1-L3, D1-L4, D1-L6 | 1 | P0 | Tapping "Run smoke" on a phone shows LOCKED → RULED → PAID on both phones, driven by Stream events; devnet send → processed/confirmed logged; both party wallets hold 0 lamports before and after (the fee payer paid every fee and the rent; BRIEF 5b) | B3, B4 |
+| D1-L6 | `scripts/fund.ts`, the devnet USDC float (the "top-up job" of ARCHITECTURE §2.3 and ESCROW §10.2; the user-facing top-up flow stays P2). It moves the faucet USDC (P-10) into `TREASURY`, creates each party's USDC ATA with the fee payer as payer, and tops up A's and B's device wallets and the custodial demo wallets to $40 each (SETUP-CHECKLIST C2, KP6, KP8). | L | D1-L3, P-10 | 1 | P0 | Before Sun 09:00, A's and B's phone wallets each hold ≥ $40 devnet USDC and 0 SOL; balances logged | B3 |
+| D1-M1 | Fix forward from build #1. Queue build #2 only if native dependencies changed. **Decide the camera stack**: one stack, or VisionCamera plus expo-camera opened one after the other. | E2 | D0-M2 | 2 | P0 | The decision is recorded; both camera uses work five times in one app session without a crash | B1, B4 |
+| D1-M2 | Authorization matrix in the real app (what to log below this table) | E2 | D0-M2, D0-M3 | 2 | P0 | Pass: warm sign < 30 ms; cold < 300 ms; Face ID p50 < 1.5 s; the passcode fallback works | B3 |
+| D1-M3 | Face pipeline smoke test in the app: still → resize → landmarks → warp to 112×112 → embed. Compute the cosine between each pair of teammates and time each stage. | E2 | D0-M2 | 2.5 | P0 | Each teammate's genuine score ≥ 0.30; every other pair of teammates scores < 0.30 with a top1−top2 margin ≥ 0.05; on-device stage timings logged | B1 |
 | D1-M4 | WebSocket client: reconnects and keeps B's app in the foreground. B gets a full-screen challenge with a haptic, and a local-notification fallback whose "View terms" action opens the app. Run the SCHEMAS §11 (rule 6) vectors on Hermes. | E2 | D0-L3, D0-J1 | 2.5 | P0 | 10/10 server pushes buzz B's foreground app within 1 s; the vectors are byte-identical on Hermes | B1, B2 |
-| D1-M5 | `HoldToConfirm`: 800 ms, `maxDistance` 24, Reanimated ring, the haptics map from 3b §(d) | E2 | D0-M2 | 2 | P0 | Releasing early springs back with no Face ID prompt; a full hold opens Face ID; the VoiceOver action works | B3 |
+| D1-M5 | `HoldToConfirm`: 800 ms, `maxDistance` 24, Reanimated ring, a haptics map | E2 | D0-M2 | 2 | P0 | Releasing early springs back with no Face ID prompt; a full hold opens Face ID; the VoiceOver action works | B3 |
 | D1-M6 | Room and challenge screens (minimal): join a room by code (QR scan is polish); the member list with presence; "Challenge" from the list (`challenge_method:'list'`, which is also ARCHITECTURE §7.2's `face_pick_list` fallback); B's invite card with Accept / Decline (Accept is **not** an authorization, API-CONTRACT §2.5) | E2 | D0-J4, D1-M4 | 1 | P0 | On two phones over cellular, A challenges B from the list and B's full-screen invite appears < 1 s; B's Decline cancels the bet on both phones | B1, B2 |
 | D1-J1 | Terms tools (behaviour below this table) | E3 | D0-J1, D0-J2 | 3 | P0 | Desktop voice run: the terms reach the stage < 1 s after the tool call; handler p50 < 5 ms; a replayed call gets the same response | B2 |
-| D1-J2 | Voice latency with the repo's agent (FINDINGS §6 step 1, if not done before the window). Pick the voice LLM among Haiku 5.5, Haiku 4.5 and `gemini-3.5-flash`; `check-llm-usage` shows which model actually served. | E3 | D0-J2, P-07 | 1.5 | P0 | End of speech → first audio p50/p95 logged for pre-tool and post-tool turns; the model choice committed (PENDING-KEY until then) | B2 |
-| D1-J3 | Gemini market service core (FINDINGS §3.11), re-authored from the spike: discovery every 60 s, one WebSocket, strike latch, fair stakes in integer cents, refusals, index ring buffer. Exposes `GET /v1/markets/btc5m/current` (API-CONTRACT §2.13). | E3 | D0-L3 | 3 | P1 | The endpoint returns the current contract, its strike, p and the stakes for a $10 pot; it refuses at T−120 s; 30 minutes of running accept no stale quote | B6 |
-| D1-J4 | Gemini rehearsal at the expected pitch hour, on a Saturday (FINDINGS §6 step 14) | E3 | D1-J3 | 1 | P1 | Liquidity and spread logged for 3 consecutive contracts in `docs/measurements.md` | B6 |
+| D1-J2 | Voice latency with the repo's agent. Pick the voice LLM among Haiku 5.5, Haiku 4.5 and `gemini-3.5-flash`; `check-llm-usage` shows which model actually served. | E3 | D0-J2, P-07 | 1.5 | P0 | End of speech → first audio p50/p95 logged for pre-tool and post-tool turns; the model choice committed (PENDING-KEY until then) | B2 |
+| D1-J3 | Gemini market service core: discovery every 60 s, one WebSocket, strike latch, fair stakes in integer cents, refusals, index ring buffer. Exposes `GET /v1/markets/btc5m/current` (API-CONTRACT §2.13). | E3 | D0-L3 | 3 | P1 | The endpoint returns the current contract, its strike, p and the stakes for a $10 pot; it refuses at T−120 s; 30 minutes of running accept no stale quote | B6 |
+| D1-J4 | Gemini rehearsal at the expected pitch hour, on a Saturday | E3 | D1-J3 | 1 | P1 | Liquidity and spread logged for 3 consecutive contracts in `docs/measurements.md` | B6 |
 | D1-J5 | Stage ticker v0: subscribes to a bet's room and lists its escrow events with Explorer links, plus the terms JSON | E3 | D0-L3, D1-L4 | 2 | P0 | During the smoke run every event appears with a working Explorer link | B3, B4 |
 
 **D1-L3 deploy details:**
@@ -459,10 +437,10 @@ If the `escrow` job takes more than 20 minutes to set up, ship it on Saturday, a
 | ID | Task | Owner | Depends on | h | P | Definition of done | Beat |
 |---|---|---|---|---|---|---|---|
 | D2-L1 | Device signing policy in `packages/shared/src/chain/signing-policy.ts`: ESCROW §5.0 in full, plus the D3 atomic exception (rules below this table) | L | D1-L3 | 3 | P0 | A13 and ESCROW DP1–DP16 (§6.4) green in CI; the clean atomic message signs | B3 |
-| D2-L2 | **LockService, atomic** (FINDINGS §3.7; steps below this table) | L | D2-L1, D1-J1 | 4 | P0 | On devnet: A-first and B-first both lock. A decline after one signature leaves no Bet and an advanced nonce. A message mutated by the server is caught by its own byte compare. ESCROW N17 (concurrent signatures, crash recovery, expiry) green. | B3 |
+| D2-L2 | **LockService, atomic** (steps below this table) | L | D2-L1, D1-J1 | 4 | P0 | On devnet: A-first and B-first both lock. A decline after one signature leaves no Bet and an advanced nonce. A message mutated by the server is caught by its own byte compare. ESCROW N17 (concurrent signatures, crash recovery, expiry) green. | B3 |
 | D2-L3 | Fast lane: `signatureSubscribe` at processed and confirmed → push. If no Stream event arrives within `STREAM_FALLBACK_MS`, fall back to `rpc_poll`. Write `chain_txs.rpc_processed_at` and log t_recv, t_preflight, t_send, t_processed and t_confirmed. | L | D2-L2 | 1.5 | P0 | All five timestamps logged for every lock | B3, B4 |
 | D2-L4 | Integration on the phones with E2 and E3; fix forward | L | all D2 | 2.5 | P0 | The checkpoint passes | B2, B3 |
-| D2-M1 | Terms card on both phones, per 3b §(d) (contents below this table) | E2 | D0-J1, D1-J1 | 3 | P0 | Both phones and the stage show the same terms code; Decline sends `PartyDecline` with no Face ID | B2, B3 |
+| D2-M1 | Terms card on both phones (contents below this table) | E2 | D0-J1, D1-J1 | 3 | P0 | Both phones and the stage show the same terms code; Decline sends `PartyDecline` with no Face ID | B2, B3 |
 | D2-M2 | Authorization flow (steps below this table) | E2 | D2-M1, D1-M5, D2-L1, D2-L2 | 3 | P0 | 10/10 locks on Wi-Fi in either order; a tampered message disables the hold and shows a visible error | B3 |
 | D2-M3 | ElevenLabs session on A's phone, built with E3 (behaviour below this table) | E2 | D0-M2, D0-J2 | 3 | P0 | 5 sessions in a row start on cellular, each logging its ICE candidate type; the judge voices the "locked" `[EVENT]` within 1.5 s of the push | B2, B3 |
 | D2-M4 | Lock-flow edge UX: accept countdown; expiry ("Nothing moved"); passcode-fallback copy; after a nonce revoke, a "terms changed, review again" re-request | E2 | D2-M2 | 1.5 | P0 | Each edge reproduced once on a device | B3 |
@@ -508,7 +486,7 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 - Speakerphone.
 - `sendUserActivity` during silent stretches.
 - Server pushes are relayed to the agent with `sendUserMessage("[EVENT] …")`.
-- Before the terms card: **mute, don't end**, the session, and stop the face-scan camera (FINDINGS §4 B3 haptics row).
+- Before the terms card: **mute, don't end**, the session, and stop the face-scan camera.
 
 **D2-J4 ruling-service skeleton:**
 - `POST /v1/bets/:bet_id/attempts/:n/frames` (API-CONTRACT §2.9).
@@ -524,7 +502,7 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 |---|---|---|---|---|---|---|---|
 | D3-L1 | Resolve and payout services, plus the balance reads (ESCROW §8.3; flow below this table) | L | D2-L3 | 4.5 | P0 | On devnet: the GG path pays the winner with a haptic at processed; with no GG, `finalize` lands at +1 s; the standalone fallback works | B4 |
 | D3-L2 | Deadline sweeper (`timeout_refund` as soon as it is valid) is P0; `scripts/crank.ts` is P1 | L | D1-L1 | 1.5 | P0 / P1 | A Locked bet past `resolve_deadline` refunds by itself; CR1 green | B4 |
-| D3-L3 | Latency runs (FINDINGS §6 steps 12–13) with E2 (runs below this table) | L, E2 | D2 checkpoint, D3-L1 | 2 | P0 | Second authorization → LOCKED p50 < 2 s in both orders; payout visible < 1 s at processed; numbers recorded | B3, B4 |
+| D3-L3 | Latency runs with E2 (runs below this table) | L, E2 | D2 checkpoint, D3-L1 | 2 | P0 | Second authorization → LOCKED p50 < 2 s in both orders; payout visible < 1 s at processed; numbers recorded | B3, B4 |
 | D3-L4 | Office hours: QuickNode, and Solana if present (§7) | L | D2 checkpoint | 1.5 | P1 | Answers in `docs/sponsor-notes.md`; follow-ups filed as issues | ALL |
 | D3-L5 | Integration and review | L | — | 2 | P0 | — | — |
 | D3-M1 | Judge-cam mode (steps below this table) | E2 | D1-M1, D2-J4 | 4 | P0 | 10 recordings: 12 frames + the landing crop each (D10), and the client hash equals the server's recomputed hash 10/10; frame upload p50 < 1 s on cellular | B4 |
@@ -563,7 +541,7 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 
 **D3-M3 face enrollment flow** (API-CONTRACT §2.2):
 1. Offered right after signup as a skippable step (BRIEF §1 "signup is a selfie"; BRIEF 5e "opt-in only").
-2. A consent e-signature screen showing `GET /v1/face/consent` text `face-consent-v1` (purpose, retention, deletion, no sale; ARCHITECTURE §6.7). E2 writes the v1 text; a teammate checks it against the FINDINGS §6 step 16 legal re-read.
+2. A consent e-signature screen showing `GET /v1/face/consent` text `face-consent-v1` (purpose, retention, deletion, no sale; ARCHITECTURE §6.7). E2 writes the v1 text; a teammate checks it against a legal re-read.
 3. Liveness: a blink or a head turn, with the same `trackingId` throughout.
 4. 3 stills across poses.
 5. The embedding only (never an image) goes, sealed, to `POST /v1/face/enrollment`. The server re-encrypts it with AES-256-GCM using a per-row nonce and never logs it.
@@ -594,7 +572,7 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 | D4-M4 | Gemini closer UI: the terms card shows "$6.20 vs $3.80 at 62/38", an awaiting-market screen, and the GG prompt | E2 | D4-L2 | 1 | P1 | Beat 6 is readable on both phones | B6 |
 | D4-M5 | Queue preview build #4 by 14:00 | E2 | — | 0.5 | P0 | On all demo phones by 21:00 | ALL |
 | D4-J1 | Hearing: `open_hearing`; turns of 10 s + 2 s grace; B's audio through ElevenLabs STT; `HearingRuling` from Opus 5.5 at medium effort, given the frames, both transcripts and the terms; an undecidable hearing → VOID → `Refund`. Also `POST /v1/demo/bets/:bet_id/force-hearing` (trigger `'demo'`, SCHEMAS §6), so the pitch's "contested shot" is deterministic. | E3 | D3-J1 | 3.5 | P1 | A contested clip produces a HearingRuling that cites frames, voiced on A's phone; `hearing.opened` → verdict voiced takes ≤ 30 s wall time (BRIEF §1 "30-second hearing"; logged n=5, Opus latency PENDING-KEY) | B5 |
-| D4-J2 | Appeals panel (FINDINGS §3.9): Opus-low, `gpt-6.1-terra` and `gemini-3.8-flash` in parallel, 8 s timeout each. A timeout, error, REDO vote or confidence < 0.6 is an abstention. Majority decides; anything else upholds the original. Votes stream to the stage and are voiced. | E3 | D0-J1, P-07 | 3 | P1 | A panel run on 5 clips logs wall-time p50; a unit test shows no majority → the original stands | B5 |
+| D4-J2 | Appeals panel: Opus-low, `gpt-6.1-terra` and `gemini-3.8-flash` in parallel, 8 s timeout each. A timeout, error, REDO vote or confidence < 0.6 is an abstention. Majority decides; anything else upholds the original. Votes stream to the stage and are voiced. | E3 | D0-J1, P-07 | 3 | P1 | A panel run on 5 clips logs wall-time p50; a unit test shows no majority → the original stands | B5 |
 | D4-J3 | Closer flow (details below this table) | E3 | D1-J3, D4-L2 | 3 | P1 | Saying "Bitcoin's up by the end of this pitch" produces a 62/38-style terms card within one 5-minute window | B6 |
 | D4-J4 | Stage: Gemini chart from the server's own ring buffer, plus countdown; appeal votes; hearing transcript; the Sound Effects gavel plays on the stage laptop | E3 | D3-J4 | 2 | P1 | Beats 5 and 6 are visible on stage | B5, B6 |
 
@@ -619,19 +597,19 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 
 | ID | Task | Owner | Depends on | h | P | Definition of done | Beat |
 |---|---|---|---|---|---|---|---|
-| D5-L1 | Demo-mode server: `DEMO_MODE` timers; custodial demo accounts (server-generated seeds, AES-GCM, one-time QR provisioning, disclosed in the README; FINDINGS §3.4) with their seed avatars (DATA-MODEL §11); replay of recorded webhook payloads to the stage ticker; the rest of API-CONTRACT §2.17: `reset`, `lock-mode`, `toggles` (`cached_ruling`, `gemini_fallback`, `voice_fallback`, `face_pick_list`), `stream/{pause\|activate\|reset-start}`, `warmup`, `health` | L | D4-L4 | 4 | P1 | The stage replays a recorded Stream session; a reinstalled phone gets its demo account back from the QR; every `/v1/demo/*` route returns 404 with `DEMO_MODE=false` and works with it on; `/v1/demo/health` reports fee-payer SOL, the nonce pool, the Stream and the Gemini WS | ALL |
+| D5-L1 | Demo-mode server: `DEMO_MODE` timers; custodial demo accounts (server-generated seeds, AES-GCM, one-time QR provisioning, disclosed in the README) with their seed avatars (DATA-MODEL §11); replay of recorded webhook payloads to the stage ticker; the rest of API-CONTRACT §2.17: `reset`, `lock-mode`, `toggles` (`cached_ruling`, `gemini_fallback`, `voice_fallback`, `face_pick_list`), `stream/{pause\|activate\|reset-start}`, `warmup`, `health` | L | D4-L4 | 4 | P1 | The stage replays a recorded Stream session; a reinstalled phone gets its demo account back from the QR; every `/v1/demo/*` route returns 404 with `DEMO_MODE=false` and works with it on; `/v1/demo/health` reports fee-payer SOL, the nonce pool, the Stream and the Gemini WS | ALL |
 | D5-L2 | Ops runbook `docs/runbook.md` (contents below this table) | L | — | 2 | P0 | The runbook is followed once from a cold start | ALL |
 | D5-L3 | Bug-bash fixes, P0 first | L | — | 4 | P0 | All P0 bugs closed | ALL |
 | D5-M1 | Release candidate build #5 at 09:00 (preview or TestFlight internal) | E2 | — | 1 | P0 | Installed on every phone by 13:00 | ALL |
 | D5-M2 | UX polish: dollars everywhere, a bet-history list (`GET /v1/me/bets`), an opt-in profile photo (`POST /v1/me/avatar`, never the enrollment selfie), empty and error states, Face ID failure → passcode copy, reconnect banner, onboarding selfie flow, haptic timing | E2 | — | 4 | P0 | Checklist ticked in the PR, plus a **crypto-copy audit** (Consumer track: hide crypto complexity): a walk through every party screen and a grep of the copy strings find no "SOL", "lamports", "gas", "seed phrase", "wallet address", "transaction" or base58 string. The terms code is the one allowed hash fragment (SCHEMAS §0). | ALL |
 | D5-M3 | Real-user test: 3–5 people from outside the team, on the team's phones. Use the consent screen, and delete their enrollments afterwards. | E2 | D5-M1 | 2 | P1 | Observation notes written; top 5 issues filed | ALL |
-| D5-M4 | APNs remote push (FINDINGS §6 step 15) | E2 | P-01 | 1.5 | P1 | A killed app still receives the challenge push | B1 |
+| D5-M4 | APNs remote push | E2 | P-01 | 1.5 | P1 | A killed app still receives the challenge push | B1 |
 | D5-M5 | Bug bash | E2 | — | 3 | P0 | — | ALL |
 | D5-J1 | Stage demo mode: a "play fallback" toggle per beat, seeded profiles, big-screen layout | E3 | D4-J4 | 3 | P1 | Each beat's fallback plays from one keypress, labelled **REPLAY** on screen (ARCHITECTURE §7.1) | ALL |
 | D5-J2 | Fallback recordings (§6.7), right after R1 | E3, E2 | D5-X1 | 2 | P1 | 6 beats + H2H recorded, each ≤ 40 s | ALL |
 | D5-J3 | Devpost answers draft (§8.3); video script and shot list (§8.2) | E3 | — | 2 | P0 | Draft in `docs/devpost.md`; the script times at ≤ 2:50 | SUB |
 | D5-J4 | Bug bash; film 10 more clips at the rehearsal spot under stage-like light and re-run T-JDG | E3 | — | 3 | P0 | Still 0 wrong winners on the new clips | B4 |
-| D5-J5 | ElevenLabs post-call webhook (HMAC check) stores transcripts as evidence (bounty proof, FINDINGS §3.10) | E3 | D0-J2 | 1 | P1 | Transcript objects in storage, with their hash in `voice_sessions` | B2 |
+| D5-J5 | ElevenLabs post-call webhook (HMAC check) stores transcripts as evidence (bounty proof) | E3 | D0-J2 | 1 | P1 | Transcript objects in storage, with their hash in `voice_sessions` | B2 |
 | D5-X1 | **Rehearsal R1, 19:00 CST [01:00 UTC]**, then a debrief (§6.6) | ALL | D4 checkpoint, D5-X2 | 2 | P0 | A timed run fits in 5:00; every failure logged | ALL |
 | D5-X2 | **Finals pitch run-of-show and Q&A prep** (BRIEF §2: 5 min pitch + 2 min Q&A), written before R1. Contents below this table. | L owns; ALL | D4 checkpoint | 1.5 | P0 | `docs/pitch.md` exists and R1 runs from it; every judging criterion maps to a pitch moment; the Q&A drill in R1 uses its question list | ALL |
 
@@ -688,7 +666,7 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
   - demo wallets funded;
   - the Stream active with its `start_range` reset;
   - Neon warm;
-  - a Claude warm-up call 10 minutes before the pitch (FINDINGS §3.8).
+  - a Claude warm-up call 10 minutes before the pitch.
 - **Gemini timing (§6.6):** start the pitch W+0:06 to W+1:00 after a 5-minute UTC boundary; avoid an expiry on the hour; lock the BTC bet by W+1:30.
 
 ---
@@ -751,9 +729,9 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 | T-WH | Streams filter and webhook: E2–E6 on LiteSVM fixtures, plus forged and replayed deliveries | L | D1-L4 | As ESCROW §9.2 |
 | T-SH | Shared-schema vectors on Node (CI) and on Hermes | E3, E2 | D0-J1, D1-M4 | Byte-identical hashes |
 | T-SMK | Devnet smoke script: create → accept → resolve → `[finalize, close_bet]`, plus all events seen by the webhook | L | D1-L5, D6-L2, D7 | Exit 0, with all 5 events in `chain_events`; both party wallets hold 0 lamports throughout (BRIEF 5b) |
-| T-JDG | Judge eval on the filmed clips: the spike run (P-12), then in the repo (D3-J2), then 10 more clips at the rehearsal spot (D5-J4) | E3 | as listed | **0 wrong winners**. REDO ≤ 25% of decisive clips is a proposed bar (FINDINGS sets none). Latency per §6.5. |
-| T-FACE | 3-person phone test (FINDINGS §6 step 7 protocol; scenarios below this table) | E2 | D1-M3 (smoke), D4-M1 (full) | 0 wrong-person; strangers never match; threshold T set from team data, and never below the highest stranger score plus a margin |
-| T-AUTH | Authorization matrix (FINDINGS §6 step 8) | E2 | D1-M2 | As D1-M2 |
+| T-JDG | Judge eval on the filmed clips: in the repo (D3-J2), then 10 more clips at the rehearsal spot (D5-J4) | E3 | as listed | **0 wrong winners**. REDO ≤ 25% of decisive clips is a proposed bar. Latency per §6.5. |
+| T-FACE | 3-person phone test (scenarios below this table) | E2 | D1-M3 (smoke), D4-M1 (full) | 0 wrong-person; strangers never match; threshold T set from team data, and never below the highest stranger score plus a margin |
+| T-AUTH | Authorization matrix | E2 | D1-M2 | As D1-M2 |
 | T-LAT | One measurement per BRIEF §6 target (§6.5) | per row | D2–D4 | All targets pass, or a mitigation is recorded |
 | T-CELL | Cellular: every checkpoint runs with Wi-Fi off; R1 and R2 also run with the stage laptop on a hotspot from another carrier; one run somewhere crowded (campus) to imitate venue congestion; log ICE candidate types | ALL | §5.1, §6.6 | No beat depends on Wi-Fi |
 | T-REH | Rehearsals (§6.6) | ALL | Wed/Thu/Fri | R3 clean |
@@ -784,26 +762,26 @@ There is error copy for a policy refusal, a Face ID cancel and a timeout.
 
 BRIEF §5a requires a test of a payout to a third party, which must fail. Rows K7, RA7 and F6 cover it (P0), and CPI1(a) adds the CPI case (P1).
 
-### 6.3 Atomic lock tests (ESCROW §9.2 N1–N17; FINDINGS §3.6–3.7)
+### 6.3 Atomic lock tests (ESCROW §9.2 N1–N17)
 
-The cases live in ESCROW §9.2 (added 2026-11-08); this section only schedules them. Earlier drafts of this doc used AT1–AT10, mapped here so old notes stay readable.
+The cases live in ESCROW §9.2; this section only schedules them.
 
-| ESCROW row | Case (short) | Was |
-|---|---|---|
-| N1 | Clean lock, 3 signers; `BetCreated` + `BetAccepted` in one tx | AT1 |
-| N2 | Only A signed | AT4 |
-| N3 | `accept_bet` fails inside the tx; nothing moves | AT2 |
-| N4 | Reversed order → `AccountNotInitialized` | AT3 |
-| N5 | Still valid after 300 blockhash expiries (durable nonce) | — |
-| N6 | Revoke after one or both signatures | AT5 |
-| N7 | Two bets on one nonce value | AT8 |
-| N8 | Submitted at `accept_deadline` → preflight rejects, nonce kept | AT10 |
-| N9 | Replay a landed lock | — |
-| N10 | Doomed lock, preflight on vs `skipPreflight` (local Agave) | AT6 |
-| N11 | CU across ≥ 50 `bet_id`s; the × 1.3 rule | AT7 |
-| N12 | Wire size ≤ 1,232 B | AT9 |
-| N13–N16 | Squat, paused, balance drop, terms edited after A signed | — |
-| N17 | LockService: concurrent signatures, crash recovery, expiry (scheduled in D2-L2) | — |
+| ESCROW row | Case (short) |
+|---|---|
+| N1 | Clean lock, 3 signers; `BetCreated` + `BetAccepted` in one tx |
+| N2 | Only A signed |
+| N3 | `accept_bet` fails inside the tx; nothing moves |
+| N4 | Reversed order → `AccountNotInitialized` |
+| N5 | Still valid after 300 blockhash expiries (durable nonce) |
+| N6 | Revoke after one or both signatures |
+| N7 | Two bets on one nonce value |
+| N8 | Submitted at `accept_deadline` → preflight rejects, nonce kept |
+| N9 | Replay a landed lock |
+| N10 | Doomed lock, preflight on vs `skipPreflight` (local Agave) |
+| N11 | CU across ≥ 50 `bet_id`s; the × 1.3 rule |
+| N12 | Wire size ≤ 1,232 B |
+| N13–N16 | Squat, paused, balance drop, terms edited after A signed |
+| N17 | LockService: concurrent signatures, crash recovery, expiry (scheduled in D2-L2) |
 
 ### 6.4 Device-policy tests (ESCROW §9.2 A13 + DP1–DP16; run in CI and once on a device)
 
@@ -811,18 +789,16 @@ ESCROW §9.2 owns the rows. This plan adds two rows on top:
 
 | ID | Case | Expect | P |
 |---|---|---|---|
-| A13, DP1–DP16 | ESCROW §9.2 (DP13 = the four gaps spike 3b's harness accepted) | As ESCROW | P0 |
+| A13, DP1–DP16 | ESCROW §9.2 | As ESCROW | P0 |
 | DP-HERMES | The whole suite on Hermes, from a hidden diagnostics screen | Same results as on Node | P0 |
 | DP-FUZZ | 1,000 random instruction insertions and mutations of the clean lock (DP1) | Only the unmodified message signs | P1 |
-
-Earlier draft IDs: DP1→DP1, DP2→DP2+DP3, DP3→DP4+DP5, DP4→DP6, DP5→DP7, DP6→DP8, DP7→DP12, DP8→DP13, DP9→DP14, DP10→A13+DP16, DP11→DP-HERMES, DP12→DP-FUZZ.
 
 ### 6.5 Latency per target (BRIEF §6; all PENDING until measured; record in `docs/measurements.md`)
 
 | Target | Clock (start → stop) | Instrumentation | n | Pass | Owner, when |
 |---|---|---|---|---|---|
 | Face match < 1 s | Shutter tap → "Challenge Jake?" rendered | Per-stage ms: capture, resize, detect, warp, embed, RTT | 30 (3 people × 10, at 1 m) | p50 < 1 s; p90 reported | E2, D4 |
-| Judge first audio < 1.5 s | End of the party's speech → first agent audio (`getOutputVolume` onset) | App timing, as in the spike 04 harness | 10 pre-tool + 10 post-tool | Pre-tool p50 < 1.5 s; post-tool p50 reported, with filler lines as the mitigation | E3, D2 |
+| Judge first audio < 1.5 s | End of the party's speech → first agent audio (`getOutputVolume` onset) | App timing | 10 pre-tool + 10 post-tool | Pre-tool p50 < 1.5 s; post-tool p50 reported, with filler lines as the mitigation | E3, D2 |
 | Second authorization → lock < 2 s | Face ID success of the second party → LOCKED on **both** phones | Phone sends `ms_since_auth_success` (SCHEMAS `PartyAuthorization`); server logs t_recv/t_preflight/t_send/t_processed/t_confirmed | 10 A-first + 10 B-first | p50 < 2 s in both orders | L + E2, D3-L3 |
 | Attempt → ruling < 4 s | Bottle at rest → first audio that states the outcome (the stinger counts), the same clock as ARCHITECTURE §4. Rest time = the STOP tap minus the tail read off the clip timeline; STOP → audio is also logged. | Server and app timestamps, clip timeline | 10 | p50 < 4 s from rest (tail ≤ 1.0 s) | E3, D3 |
 | Payout visible < 1 s | Loser's Face ID success at GG (or the finalize send) → the winner's haptic | Push at processed (SCHEMAS X10) | 10 | p50 < 1 s | L + E2, D3-L3 |
@@ -838,7 +814,7 @@ Earlier draft IDs: DP1→DP1, DP2→DP2+DP3, DP3→DP4+DP5, DP4→DP6, DP5→DP7
 | R4 | Fri 07:30 [13:30] | Short form of Beats 1–4 | Smoke result |
 | Finals | Sat Nov 21, before the slot | Smoke run plus the Gemini window check | — |
 
-**Beat 6 timing.** The pitch line is "Bitcoin's up by the end of this pitch". The bet has to be **locked early**: quotes are only usable until about T−120 s, so in practice lock by W+1:30. It then **settles as the closer**: the payout lands at the loser's GG tap, or ~T+17–20 s after expiry (FINDINGS §4 B6 rows; SCHEMAS O6). Script the pitch to open with the BTC bet, and start it W+0:06 to W+1:00 after a 5-minute UTC boundary.
+**Beat 6 timing.** The pitch line is "Bitcoin's up by the end of this pitch". The bet has to be **locked early**: quotes are only usable until about T−120 s, so in practice lock by W+1:30. It then **settles as the closer**: the payout lands at the loser's GG tap, or ~T+17–20 s after expiry (SCHEMAS O6). Script the pitch to open with the BTC bet, and start it W+0:06 to W+1:00 after a 5-minute UTC boundary.
 
 ### 6.7 Fallback recordings (demo mode)
 
@@ -880,17 +856,17 @@ ARCHITECTURE §9 is the README skeleton and fixes the heading order; this table 
 | What it is + demo video link | 3 lines, the video link, a screenshot | E3 | — |
 | Architecture | Mermaid diagram of apps, server, program, Stream, ElevenLabs, Gemini, LLMs; one request trace (Beat 3) | L | ARCHITECTURE |
 | Solana | **Program ID, Config PDA, Explorer links**, the "how we use Solana" paragraph, the atomic lock, fee sponsorship, devnet USDC | L | ESCROW §11, §10.2 |
-| QuickNode Streams | Network, dataset, filter logic, destination, and **why** (bounty requirement); the two-lane design | L | FINDINGS §3.12 |
-| ElevenLabs | **Which products we used and how**: Agent (WebRTC), webhook and client tools, TTS, STT for the hearing, Voice Design, Sound Effects gavel, post-call webhooks | E3 | FINDINGS §3.10 |
-| Gemini Prediction Markets | Endpoints and the WebSocket, fair-stakes math, strike latch, settlement path; no trading | E3 | FINDINGS §3.11 |
-| AI judge | Models per job, the REDO rule, hearing, panel rule, the eval table (0 wrong winners), refusal guardrails | E3 | FINDINGS §3.8–3.9 |
-| Privacy and biometrics | Opt-in consent, embeddings only, encrypted at rest, room-scoped matching, delete, retention; Texas CUBI and Illinois BIPA; nothing biometric onchain | E2 | FINDINGS §7, DATA-MODEL §10 |
+| QuickNode Streams | Network, dataset, filter logic, destination, and **why** (bounty requirement); the two-lane design | L | — |
+| ElevenLabs | **Which products we used and how**: Agent (WebRTC), webhook and client tools, TTS, STT for the hearing, Voice Design, Sound Effects gavel, post-call webhooks | E3 | — |
+| Gemini Prediction Markets | Endpoints and the WebSocket, fair-stakes math, strike latch, settlement path; no trading | E3 | — |
+| AI judge | Models per job, the REDO rule, hearing, panel rule, the eval table (0 wrong winners), refusal guardrails | E3 | — |
+| Privacy and biometrics | Opt-in consent, embeddings only, encrypted at rest, room-scoped matching, delete, retention; Texas CUBI and Illinois BIPA; nothing biometric onchain | E2 | DATA-MODEL §10 |
 | Guardrails | 18+, the $20 stake cap, skill-only P2P money bets, refusals | E2 | BRIEF 5c |
 | Trust assumptions and residual risks | Upgrade authority, judge keys choose outcomes but not destinations, USDC freeze authority, custodial demo accounts | L | ESCROW §1.2 |
-| Setup | Prerequisites with versions; `.env`; running each app; deploying the program; creating the Stream; provisioning the agent; EAS builds | L, E2, E3 | FINDINGS §3 |
-| Demo mode and accounts | Seeded accounts, fallbacks labelled "REPLAY" (ARCHITECTURE §7.1), custodial demo seeds disclosed | L | FINDINGS §3.4 |
+| Setup | Prerequisites with versions; `.env`; running each app; deploying the program; creating the Stream; provisioning the agent; EAS builds | L, E2, E3 | — |
+| Demo mode and accounts | Seeded accounts, fallbacks labelled "REPLAY" (ARCHITECTURE §7.1), custodial demo seeds disclosed | L | — |
 | Testing and measurements | How to run the tests; the latency table from §6.5 | L, E3 | `docs/measurements.md` |
-| Licences | InsightFace `w600k_mbf` weights are **non-commercial research only** | E2 | FINDINGS §3.2 |
+| Licences | InsightFace `w600k_mbf` weights are **non-commercial research only** | E2 | — |
 | Team, technologies used | Names and roles; technology list (same as Devpost) | E3 | — |
 
 ### 8.2 Demo video (2–3 min, target 2:50)
@@ -927,7 +903,7 @@ Then test that the video plays from a logged-out browser.
 | How does it work? | L (tech), E3 (edit) | Wed | Thu | README Architecture + Solana sections |
 | What makes it unique? | E3 | Wed | Thu | Atomic two-party lock; AI judge with an appeal panel; voice-first; invisible crypto |
 | What would you build next? | E2 | Wed | Thu | P2 list; Gemini-routed real-world bets; Squads upgrade authority; real signups with a key backup |
-| Technologies used | E3 | Wed | Thu | §8.1 + FINDINGS §3 |
+| Technologies used | E3 | Wed | Thu | §8.1 |
 | Program IDs, repo, video links | L | Thu | Fri 09:30 | README |
 
 ### 8.4 Friday freeze and submission checklist (BRIEF §2)
@@ -956,10 +932,9 @@ Thick arrows are the critical path. Two chains feed Sunday's Beat 3: the iOS bui
 
 ```mermaid
 flowchart LR
-  subgraph PRE["Before the window (Nov 8-13)"]
+  subgraph PRE["Setup"]
     P01["P-01 Apple Developer enrolled"]
     P04["P-04 every iPhone registered (24-72 h)"]
-    P06["P-05/06 spike iOS builds of the native stack"]
     P09["P-09 at least 10 devnet SOL (human faucet)"]
     P07["P-07 accounts + keys"]
     P11["P-11 20 judge-cam clips filmed"]
@@ -988,7 +963,6 @@ flowchart LR
   SUB(["Fri 10:00 CST: submit"])
 
   P01 ==> P04 ==> M2
-  P04 --> P06 --> M2
   K ==> M2
   K ==> L1 ==> L11 ==> DEP
   P09 ==> DEP
@@ -1017,50 +991,36 @@ flowchart LR
 
 ## 10. Spec edits owed, and conflicts found
 
-### 10.1 Spec edits from D3 and D7: applied in Phase 0
+### 10.1 Spec edits from D3 and D7: applied
 
-All six were applied on 2026-11-08, before the window (the core-spec pass, then the cross-doc consistency pass). K-05 is now a review, not an edit.
+All six are applied. K-05 is now a review, not an edit.
 
 | # | Doc and section | Edit | Owner |
 |---|---|---|---|
-| 1 | ESCROW §5.0 | **Done** (§5.0.1–§5.0.3). Apply D3 to the device-policy table, signing-flow step 1 (under atomic, the server pushes the message in `AuthorizeRequest` before the hold, so the policy runs before the hold is enabled), the "Rejecting durable nonces…" paragraph and the sequence diagram. Adopt the FINDINGS §3.7 exception wording exactly. | L |
-| 2 | ESCROW §8.4, §9.2, §10.1, §13 | **Done.** §8.4: lock latency under atomic. §9.2: added N1–N17 and DP1–DP16; mark A14/A15 sequential-only. §10.1: the CU limit is simulated × **1.3** with a floor of the measured max + margin (it says × 1.2; FINDINGS §3.5 and 3b say a 60k cap failed 1 in 20). §13: the "two per-party txs" row becomes superseded. | L |
+| 1 | ESCROW §5.0 | **Done** (§5.0.1–§5.0.3). Apply D3 to the device-policy table, signing-flow step 1 (under atomic, the server pushes the message in `AuthorizeRequest` before the hold, so the policy runs before the hold is enabled), the "Rejecting durable nonces…" paragraph and the sequence diagram. | L |
+| 2 | ESCROW §8.4, §9.2, §10.1, §13 | **Done.** §8.4: lock latency under atomic. §9.2: added N1–N17 and DP1–DP16; mark A14/A15 sequential-only. §10.1: the CU limit is simulated × **1.3** with a floor of the measured max + margin (it says × 1.2; a 60k cap failed 1 in 20). §13: the "two per-party txs" row becomes superseded. | L |
 | 3 | SCHEMAS §9 intro, §9.1, §9.2, §9.3, X14, O9 | **Done** (plus a new §9.4). Under atomic: AWAITING_AUTHORIZATIONS holds the first signature with nothing onchain. AWAITING_LOCK becomes "tx in flight" (transient). The B-first held-tx bullet and `HELD_SIGNATURE_MAX_SECS` apply only to `LOCK_MODE=sequential`. A decline or expiry advances the nonce; `cancel_open_bet` stays for robustness. O9 is resolved as atomic. Copy: "Nothing moves until you both lock in". | E3 (L reviews) |
 | 4 | SCHEMAS O3, §5.2, §6; DATA-MODEL §9, §13 | **Done.** D7: `frame_hashes` (the SHA-256 of each frame the model saw) added to `Ruling`, `HearingRuling` and `AppealResult`. Recomputed: §5.2 `437beeee…` → `997ce278…5daa`; §6 `38ceec24…` → `a7721bbc…d368`. The Terms vector `05860f0a…` doesn't change. Remove DATA-MODEL's "ruling_hash does not commit to frames" note. | E3 |
 | 5 | DATA-MODEL §5.8 + a new table | **Done** (`nonce_pool` §5.20; `chain_txs` per-party signature columns, kind `atomic_lock`). Add a nonce pool table (pubkey, authority, current nonce, leased `bet_id`, `leased_at`, status). `chain_txs` assumes one party signer (`signer_role`, `party_signed_at`) and one in-flight tx per `(bet_id, ix)`, while the atomic tx has two escrow instructions and two party signatures: add per-party signed-at columns and a tx kind (e.g. `atomic_lock`), or an equivalent. | L |
-| 6 | SCHEMAS O6, O7, `MAX_REDOS` | **Done** (SCHEMAS §12.3). No change: D7 confirms the 10 s window for Gemini bets with the GG prompt, that no majority upholds the original ruling, and `MAX_REDOS` = 2 then HEARING. Mark them "confirmed (lead, 2026-11-08)". | E3 |
+| 6 | SCHEMAS O6, O7, `MAX_REDOS` | **Done** (SCHEMAS §12.3). No change: D7 confirms the 10 s window for Gemini bets with the GG prompt, that no majority upholds the original ruling, and `MAX_REDOS` = 2 then HEARING. Mark them "confirmed (lead)". | E3 |
 
 ### 10.2 Conflicts found while planning
 
 1. **Sequential lock in the specs.** Resolved: the specs now describe the atomic lock (§10.1 items 1–3).
 2. **Ruling hash.** Resolved: `ruling_hash` now commits to `frame_hashes` too (§10.1 item 4).
 3. **DATA-MODEL vs the atomic tx.** `chain_txs` (one party signer, one in-flight tx per instruction) doesn't fit a two-instruction, two-signer transaction, and there is no nonce-pool table. Resolved by §10.1 item 5.
-4. **Package manager.** DATA-MODEL §11 says `pnpm db:demo-reset`, while FINDINGS' install recipes use npm (`npm dedupe`, `npx expo install`). This plan uses npm workspaces. Resolved: DATA-MODEL §11 now says `npm run db:demo-reset`.
-5. **Voice tools.** SCHEMAS §3 still names an `ask_clarification` tool, and runs the guardrail "on every `propose_terms` / `ask_clarification` call". FINDINGS §3.10 drops that tool (the agent asks clarifications in speech) and makes `lock_bet`/`issue_ruling` uncallable by the LLM. DATA-MODEL `judge_tool_calls.tool_name` still lists `lock_bet`. Resolved: SCHEMAS §3 now says the clarifications are spoken, the answers arrive as `edge_cases`, and `ClarificationQuestion` records exist only in the Speech Engine fallback. DATA-MODEL §5.11 no longer lists `lock_bet` as a tool.
+4. **Package manager.** DATA-MODEL §11 says `pnpm db:demo-reset`, while the install recipes use npm (`npm dedupe`, `npx expo install`). This plan uses npm workspaces. Resolved: DATA-MODEL §11 now says `npm run db:demo-reset`.
+5. **Voice tools.** SCHEMAS §3 still names an `ask_clarification` tool, and runs the guardrail "on every `propose_terms` / `ask_clarification` call". D6 drops that tool (the agent asks clarifications in speech) and makes `lock_bet`/`issue_ruling` uncallable by the LLM. DATA-MODEL `judge_tool_calls.tool_name` still lists `lock_bet`. Resolved: SCHEMAS §3 now says the clarifications are spoken, the answers arrive as `edge_cases`, and `ClarificationQuestion` records exist only in the Speech Engine fallback. DATA-MODEL §5.11 no longer lists `lock_bet` as a tool.
 6. **Saturday's plan.** BRIEF §8 says Saturday runs create/accept/resolve/finalize "end to end from the app". Under the atomic lock, the phone-signed create + accept is Sunday's authorization flow. On Saturday the same transaction runs through the server with custodial demo keys, triggered from a phone (D1-L5). This is a deliberate re-plan.
 7. **Stage priority.** BRIEF §7 makes the stage view P1, but Beat 3 and §5h need the events on stage. This plan makes a bare ticker P0 (§0).
-8. **Devnet SOL target.** ESCROW §10.2 says "≈ 10 SOL before the window"; FINDINGS §1 says ≥ 5 SOL for deploys plus 0.5–2 SOL for the fee payer. This plan targets 10 SOL, which covers both. ESCROW §10.2 now puts it in the human-held bank wallet (SETUP-CHECKLIST KP0).
-9. **Test framework.** ESCROW §9.1 makes Rust `litesvm` 0.15.0 primary, while FINDINGS §3.6 says TS LiteSVM 1.6.2 "for the paths". The plan uses Rust litesvm for the matrix, TS litesvm for the client, the policy and the atomic composition, and a local Agave validator for nonce and fee behaviour.
-10. **Hermes vectors.** Resolved: SCHEMAS §11 (rule 6) now says noble needs no `crypto.subtle` (FINDINGS §2.3/§3.4; RNQC only if Kit signers run on the phone). The plan runs the vectors with noble sha256 and no RNQC.
+8. **Devnet SOL target.** ESCROW §10.2 says "≈ 10 SOL"; deploys need ≥ 5 SOL, plus 0.5–2 SOL for the fee payer. This plan targets 10 SOL, which covers both. ESCROW §10.2 now puts it in the human-held bank wallet (SETUP-CHECKLIST KP0).
+9. **Test framework.** ESCROW §9.1 makes Rust `litesvm` 0.15.0 primary, while TS LiteSVM 1.6.2 is pinned "for the paths". The plan uses Rust litesvm for the matrix, TS litesvm for the client, the policy and the atomic composition, and a local Agave validator for nonce and fee behaviour.
+10. **Hermes vectors.** Resolved: SCHEMAS §11 (rule 6) now says noble needs no `crypto.subtle` (RNQC only if Kit signers run on the phone). The plan runs the vectors with noble sha256 and no RNQC.
 11. **Sibling docs.** Resolved: ARCHITECTURE.md and API-CONTRACT.md exist. §3.1 now points at the canonical env names (SETUP-CHECKLIST §7), and §8.1 follows ARCHITECTURE §9.
-12. **Camera stack (open).** FINDINGS §3.3 doesn't decide between VisionCamera and expo-camera for recording; D1-M1 decides on Saturday.
+12. **Camera stack (open).** Nothing yet decides between VisionCamera and expo-camera for recording; D1-M1 decides on Saturday.
 13. **Face matching day.** BRIEF §8 puts "face enrollment + matching" on Monday. This plan enrolls on Monday (D3-M3) and matches on Tuesday (D4-M1), after Beat 4. It is a deliberate re-plan: Beat 1 abstains rather than mismatching, and its fallback (`face_pick_list`, D1-M6) exists from Saturday.
 14. **Gesture for GG and "I appeal!".** Earlier drafts of D3-M2, D4-M3 and the Monday checkpoint said "hold + Face ID". Resolved: **tap + Face ID**, no hold (API-CONTRACT O1, ARCHITECTURE O-A1, planning README question 5). The hold is only for the stake authorization (BRIEF 5f).
-15. **Pre-window artifacts (timing rule).** The face model and the 20 eval clips both exist in `youre-on-spikes/`. Resolved: the model is regenerated in the window by a committed script (D0-M2), and the clips are test data kept out of git and disclosed (§3.2 rule 9).
-16. **Completeness pass.** `TRACEABILITY.md` (2026-11-08) found requirements with no task: rooms and the challenge API, the USDC float into the phone wallets, the dollar balance, avatars on stage, face disable, the demo-control routes, the pitch run-of-show, the clean-clone setup run. Each now has a task or a DoD line.
 
 ## Changelog
 
-- **2026-11-08:** first draft (Phase 0).
-- **2026-11-08, cross-doc consistency pass** (all eight planning docs checked against D1–D7 and FINDINGS; ownership: SCHEMAS types, ESCROW onchain, DATA-MODEL tables, API-CONTRACT endpoints/events/tools):
-  - **Spec edits (§10.1, K-05, summary).** The D3/D7 spec edits are already applied, so K-05 is a review. §10.2 conflicts marked resolved where fixed.
-  - **Tests (§6.1–§6.4, D1-L2, D2-L1, D2-L2).** Use ESCROW §9.2 IDs: N1–N17 (was AT1–AT10) and A13 + DP1–DP16 (was DP1–DP12), with mapping tables; the two plan-only rows are DP-HERMES and DP-FUZZ.
-  - **Env (§3.1).** The `.env.example` block now points at SETUP-CHECKLIST §7 names (`PROGRAM_ID`, `*_SECRET_KEY`, `FACE_KEK_*`, `DEMO_SEED_KEK`, …); `EXPO_PUBLIC_NONCE_POOL` dropped, because phones derive pool addresses from the pinned fee payer.
-  - **Routes and names.** API-CONTRACT paths in D0-M4, D0-J2, D1-J3, D2-J4; `frame_hashes` (not `evidence_record_hash`) and the recomputed vectors in D0-J1; `ms_since_auth_success`; client tool `cue`; `SCHEMAS §11 (rule 6)` instead of the non-existent §11.6; fixed the internal §10.2 item references (6, 5).
-- **2026-11-08, completeness pass** (`TRACEABILITY.md`, every BRIEF requirement → spec → task):
-  - **New tasks.** D0-J4 rooms + challenge API; D1-L6 `scripts/fund.ts` (USDC float into the phone and demo wallets before Sunday); D1-M6 room join + challenge-from-list + invite accept/decline; D5-X2 finals pitch run-of-show and Q&A prep; D6-X2 clean-clone setup run.
-  - **DoDs that now prove the requirement.** D0-M4 `AGE_REQUIRED`; D0-J3 one refusal per BRIEF 5c category; D1-L4 committed filter + Stream script; D1-L5 / T-SMK party wallets hold 0 lamports; D2-J1 1–2 questions on the Beat 2 line; D3-M2 dollar balance header; D3-M3 skippable-at-signup, disable, delete; D4-M1 nothing stored on no match; D4-J1 hearing ≤ 30 s + `force-hearing`; D5-L1 the remaining `/v1/demo/*` routes; D5-M2 crypto-copy audit, history, avatar.
-  - **Alignments.** D2-M1 card shows the bet deadline (BRIEF 5f); D2-J3 stage shows photos; GG and appeal are tap + Face ID (§10.2 item 14); TASKS routes match API-CONTRACT (`/v1/face/enrollment`, `/v1/rooms/:room_id/face-match`); the attempt → ruling clock is "bottle at rest" (ARCHITECTURE §4); fallbacks are labelled REPLAY.
-  - **Rules.** §0 official-docs-first and traceability bullets; §3.2 rule 9 (face model regenerated in the window, eval clips out of git) and rule 11 (README moves with the code); §10.2 items 13–16.
-  - **Hours.** About +9 h in total (D5-X2 counted once): Fri E3 +2 (D0-J4, may spill to Sat), Sat L +1 and E2 +1, Mon L +0.5 and E2 +0.5, Tue E3 +0.5, Wed L +1 and ALL +1.5, Thu E2 +1. Absorb it from bug-bash hours or rebalance per §1.3.
 - **2026-11-18, D10 judge inputs and the two-phone fallback** (branch `feat/attempt-capture`): D3-M1's DoD and steps 1–3 say 12 frames + the landing crop, a muted recording, and that the non-performer's phone films when the room has no judge cam.

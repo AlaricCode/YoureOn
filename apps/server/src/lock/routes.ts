@@ -16,7 +16,7 @@ export function betIdParam(raw: string): string {
   return raw;
 }
 
-/** PartyAuthorization + the optional `client_metrics` sibling (FINDINGS §6 step 12; logged only). */
+/** PartyAuthorization + the optional `client_metrics` sibling (logged only). */
 const AuthorizationBody = PartyAuthorization.extend({
   client_metrics: z
     .object({

@@ -8,7 +8,7 @@ import { OnchainOutcome } from './ruling';
 /** Added by the webhook decoder, not part of the Anchor event. */
 export const ChainMeta = {
   signature: Signature,
-  /** getBlock objects have no slot field (spike 06); rpc_poll always has it. */
+  /** getBlock objects have no slot field; rpc_poll always has it. */
   slot: z.number().int().nonnegative().nullable(),
   /** Streams block dataset carries blockHeight; getTransaction doesn't. */
   block_height: z.number().int().nonnegative().nullable(),

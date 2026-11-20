@@ -11,7 +11,7 @@
 //                  and captioned as A's line
 //   onCue()        judge.cue -> sendUserMessage (speak) / sendContextualUpdate, verbatim (§4.5);
 //                  queued while connecting, never thrown into the bet hub's listener loop
-//   setMuted()     "mute, don't end" from the terms card on (FINDINGS §4), with
+//   setMuted()     "mute, don't end" from the terms card on, with
 //                  sendUserActivity every 10 s meanwhile so the turn timeout never fires (§4.1)
 //   onMessage()    captions (same id as the server's line, so its echo replaces ours) + the
 //                  transcript relay (POST /voice/lines); our own [EVENT] text is never captioned

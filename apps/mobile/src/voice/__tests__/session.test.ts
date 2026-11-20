@@ -345,7 +345,7 @@ describe('judge session: [EVENT] cues (§4.5)', () => {
   });
 });
 
-describe('judge session: mute, do not end (FINDINGS §4) + user activity', () => {
+describe('judge session: mute, do not end + user activity', () => {
   it('live only while negotiating or in a hearing; muted from the terms card on', () => {
     expect(micMutedFor('DRAFTING')).toBe(false);
     expect(micMutedFor('TERMS_PROPOSED')).toBe(false);

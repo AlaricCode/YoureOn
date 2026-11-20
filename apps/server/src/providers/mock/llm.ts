@@ -1,7 +1,6 @@
 // Deterministic offline LLM (LLM_PROVIDER=mock, the default). Never touches the network.
 //
-// Ported in spirit from Verdict packages/backend/src/providers/mock/booth.ts (deterministic votes)
-// but schema-generic: by default it answers with a value sampled from the request's JSON schema
+// Schema-generic: by default it answers with a value sampled from the request's JSON schema
 // (first enum value, 0.9 for 0..1 numbers, "mock <field>" strings, [] arrays, false booleans).
 // Tests and the demo pass `respond` to script answers per request. The reply goes through the same
 // parse + zod path as the live vendors, so a scripted bad answer yields the same `invalid_output`.

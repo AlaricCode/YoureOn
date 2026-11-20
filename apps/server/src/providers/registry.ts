@@ -11,9 +11,8 @@
 // STT_PROVIDER=live (with ALLOW_SPEND=true), or inject an override. The SFX mock (beeps) is
 // harmless and stays.
 //
-// Ported from Verdict packages/backend/src/providers/registry.ts (createProviders + overrides).
-// `overrides` lets tests and the demo inject specific instances; an overridden capability is not
-// spend-checked, because the caller built it.
+// createProviders + overrides: `overrides` lets tests and the demo inject specific instances; an
+// overridden capability is not spend-checked, because the caller built it.
 import type { Env } from '../env';
 import { LiveLlm, type FetchLike } from './live/llm';
 import { LiveSfx, LiveStt } from './live/voice';

@@ -32,7 +32,7 @@ describe('face model (TASKS D0-M2, made by scripts/face-model.sh)', () => {
     // FlatBuffer file identifier at bytes 4..8.
     expect(bytes.subarray(4, 8).toString('latin1')).toBe('TFL3');
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(FACE_MODEL.sha256);
-    // The spike-01 conversion hash prefix from FINDINGS §3.2 / TASKS D0-M2.
+    // The known-good conversion hash prefix (TASKS D0-M2).
     expect(FACE_MODEL.sha256.startsWith('ca17b05a')).toBe(true);
   });
 
@@ -55,7 +55,7 @@ describe('face model (TASKS D0-M2, made by scripts/face-model.sh)', () => {
 });
 
 describe('model facts', () => {
-  it('matches API-CONTRACT accepted_models and FINDINGS §3.2', () => {
+  it('matches API-CONTRACT accepted_models', () => {
     expect(FACE_MODEL).toMatchObject({ name: 'w600k_mbf', version: 'buffalo_s-fp32', dim: 512 });
     expect(FACE_INPUT_FLOATS).toBe(112 * 112 * 3);
     expect(FACE_INPUT_BYTES).toBe(150_528);
