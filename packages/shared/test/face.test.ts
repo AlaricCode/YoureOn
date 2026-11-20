@@ -16,6 +16,7 @@ import {
   bytesToEmbedding,
   cosineSimilarity,
   decideDanceAssignments,
+  pairDanceFaces,
   decideMatch,
   embeddingProblem,
   embeddingToBytes,
@@ -112,10 +113,38 @@ describe('decideDanceAssignments (DANCE-OFF §3: dance identify)', () => {
     ]);
   });
 
-  it('applies the face-match threshold', () => {
+  it('a face just under the scan threshold is still placed when the pair is unmistakable', () => {
+    // strict rule: only B (A's face is under the threshold). As a pair there is one answer.
     const below = FACE_MATCH_MIN_COSINE - 0.01;
     expect(decideDanceAssignments({ A: [below, 0.0], B: [0.0, 0.6] }, 2)).toEqual([
+      { face_index: 0, party: 'A' },
       { face_index: 1, party: 'B' },
+    ]);
+  });
+
+  it('small, far-away faces: both under the threshold, told apart as a pair', () => {
+    // what a full-body dance still gives: nobody clears 0.30, the right pairing is far ahead
+    expect(decideDanceAssignments({ A: [0.24, 0.03], B: [0.05, 0.21] }, 2)).toEqual([
+      { face_index: 0, party: 'A' },
+      { face_index: 1, party: 'B' },
+    ]);
+    expect(decideDanceAssignments({ A: [0.02, 0.19], B: [0.22, -0.04] }, 2)).toEqual([
+      { face_index: 1, party: 'A' },
+      { face_index: 0, party: 'B' },
+    ]);
+  });
+
+  it('the pair is not guessed: too close, a face nobody knows, or one face only', () => {
+    // either way round scores about the same
+    expect(pairDanceFaces({ A: [0.2, 0.15], B: [0.18, 0.2] }, 2)).toBeNull();
+    // one of the two faces looks like neither dancer (a third person standing in)
+    expect(pairDanceFaces({ A: [0.4, 0.02], B: [0.03, 0.05] }, 2)).toBeNull();
+    // one face, or one party without an enrollment
+    expect(pairDanceFaces({ A: [0.5], B: [0.1] }, 1)).toBeNull();
+    expect(pairDanceFaces({ A: [0.5, 0.1] }, 2)).toBeNull();
+    expect(pairDanceFaces({ A: [Number.NaN, 0.4], B: [0.4, Number.NaN] }, 2)).toEqual([
+      { face_index: 1, party: 'A' },
+      { face_index: 0, party: 'B' },
     ]);
   });
 

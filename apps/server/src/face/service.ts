@@ -636,6 +636,15 @@ export async function identifyDanceParties(
         candidates: rows.length,
       });
     const assignments = decideDanceAssignments(scores, probes.length);
+    // How the faces scored (two decimals, never the embeddings): the only way to see from the
+    // server why a dance round fell back to the left / right rule.
+    const rounded = (v: number[] | undefined) => v?.map((x) => Math.round(x * 100) / 100) ?? null;
+    deps.log.info('face.dance_identify', {
+      faces: probes.length,
+      a: rounded(scores.A),
+      b: rounded(scores.B),
+      assigned: assignments.map((x) => `${x.party}=${x.face_index}`),
+    });
     scores.A?.fill(0);
     scores.B?.fill(0);
     return { assignments };

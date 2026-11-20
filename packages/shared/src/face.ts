@@ -137,6 +137,10 @@ export function decideMatch<Id>(
  *  - among the faces, i is p's confident match (no other face in the still looks as much like p).
  * So each party gets at most one face, each face at most one party, and an unsure case gets
  * nothing (the phone then uses the left / right rule). Pure; the scores never leave the caller.
+ *
+ * When that strict rule does not place BOTH parties, the two are told apart as a pair
+ * (pairDanceFaces below): a dance off has exactly two dancers, so the question is only which of
+ * them is which.
  */
 export function decideDanceAssignments(
   scores: Partial<Record<'A' | 'B', readonly number[]>>,
@@ -162,7 +166,57 @@ export function decideDanceAssignments(
     );
     if (byParty.kind === 'match' && byParty.id === p) out.push({ face_index: i, party: p });
   }
-  return out;
+  if (out.length === 2) return out;
+  return pairDanceFaces(scores, faceCount) ?? out;
+}
+
+/** A dancer's face must look at least this much like their own enrollment to be paired. */
+export const DANCE_PAIR_MIN_COSINE = 0.12;
+/** The best pairing must beat every other pairing's total by this much. */
+export const DANCE_PAIR_MIN_MARGIN = 0.12;
+
+/**
+ * Which face is A and which is B, decided together. The faces in a dance still are small (the
+ * dancers stand back so their whole bodies fit), so each one's cosine with its own enrollment
+ * is often under the room-scan threshold and the strict rule placed nobody: on real devices the
+ * names never left their fixed sides. But only two answers are possible here, and the right one
+ * is usually far ahead of the wrong one: the pairing (A = face i, B = face j, i ≠ j) with the
+ * highest total is taken when both of its faces clear a low floor and its total beats every
+ * other pairing's by a margin. Otherwise null (the left / right rule). Pure.
+ */
+export function pairDanceFaces(
+  scores: Partial<Record<'A' | 'B', readonly number[]>>,
+  faceCount: number,
+  rule: { minCosine: number; minMargin: number } = {
+    minCosine: DANCE_PAIR_MIN_COSINE,
+    minMargin: DANCE_PAIR_MIN_MARGIN,
+  },
+): { face_index: number; party: 'A' | 'B' }[] | null {
+  const a = scores.A;
+  const b = scores.B;
+  if (!a || !b || faceCount < 2) return null;
+  let best: { i: number; j: number; total: number } | null = null;
+  let second = -Infinity;
+  for (let i = 0; i < faceCount; i++) {
+    for (let j = 0; j < faceCount; j++) {
+      if (i === j) continue;
+      const total = (a[i] ?? Number.NaN) + (b[j] ?? Number.NaN);
+      if (!Number.isFinite(total)) continue;
+      if (best === null || total > best.total) {
+        if (best !== null) second = best.total;
+        best = { i, j, total };
+      } else if (total > second) {
+        second = total;
+      }
+    }
+  }
+  if (best === null) return null;
+  if ((a[best.i] as number) < rule.minCosine || (b[best.j] as number) < rule.minCosine) return null;
+  if (best.total - second < rule.minMargin) return null;
+  return [
+    { face_index: best.i, party: 'A' },
+    { face_index: best.j, party: 'B' },
+  ];
 }
 
 // ---------------------------------------------------------------------------------------
