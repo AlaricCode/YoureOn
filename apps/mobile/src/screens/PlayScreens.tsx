@@ -66,7 +66,7 @@ import { JudgeOrb } from '../ui/JudgeOrb';
 import { RollingText } from '../ui/RollingNumber';
 import { Perforation, Slip } from '../ui/slip';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
-import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
+import { avatarSize, color, dp, half, hold, palette, radius, space, type } from '../ui/tokens';
 import { useReportCallOffGuard } from './CallOff';
 import { COPY, fill, t } from './copy';
 
@@ -79,6 +79,7 @@ export function LiveScreen({
   phase,
   attemptNo,
   onStart,
+  startLabel,
   startBusy = false,
   tag,
 }: {
@@ -90,6 +91,8 @@ export function LiveScreen({
    * no judge cam in the room this phone films (API-CONTRACT §2.9, ../attempt/recorder).
    */
   onStart?: (() => void) | undefined;
+  /** The button's label in place of "Start" ("Open camera" when this phone films). */
+  startLabel?: string | undefined;
   startBusy?: boolean;
   tag?: string | undefined;
 }) {
@@ -135,7 +138,7 @@ export function LiveScreen({
         {onStart && phase === 'locked' ? (
           <PrimaryButton
             testID="live-start"
-            label={t(COPY.live.start)}
+            label={startLabel ?? t(COPY.live.start)}
             busy={startBusy}
             onPress={onStart}
           />
@@ -169,7 +172,7 @@ export interface Clip {
 }
 
 /** The judge's sphere while it deliberates on the live screen. */
-const JUDGING_ORB = 88;
+const JUDGING_ORB = dp(88);
 
 /** The appeal window the ruling counts down (SCHEMAS §9.3, 10 s demo). */
 const APPEAL_WINDOW_MS = 10_000;
@@ -177,10 +180,19 @@ const APPEAL_WINDOW_MS = 10_000;
 /** Recording ceiling (TASKS D3-M1 maxDuration 6). */
 const MAX_RECORD_MS = 6000;
 
+/** How long a recording waits for a camera that is not up yet before it gives up. */
+const CAMERA_WAIT_MS = 10_000;
+
 /**
  * expo-camera records the clip (FINDINGS §3.3, codec avc1, maxDuration 6). Without `arm` (the
  * preview) the operator starts it; with `arm` the server's attempt.started does, counting down
  * to go_at. `onSend` gets the clip (null when nothing was recorded) and does the frames.
+ *
+ * `onRecord` (two phones, this one films): the screen is up BEFORE the attempt exists, so the
+ * filmer frames the shot and iOS asks for the camera now, not in the middle of a countdown, and
+ * the attempt starts when they tap "Start recording". It used to open only once the attempt had
+ * started, three seconds before GO: a camera still coming up (or a permission prompt) recorded
+ * nothing, and the attempt was sent empty.
  */
 export function JudgeCamScreen({
   onBack,
@@ -188,11 +200,16 @@ export function JudgeCamScreen({
   arm,
   tag,
   onCallOffGuard,
+  onRecord,
+  recordBusy = false,
 }: {
   onBack?: (() => void) | undefined;
   onSend: (clip: Clip | null) => Promise<void>;
   /** undefined = preview (manual start); null = waiting for the server; set = armed. */
   arm?: CamArm | null;
+  /** Waiting for the server (`arm` null): "Start recording" starts the attempt from here. */
+  onRecord?: (() => void) | undefined;
+  recordBusy?: boolean;
   tag?: string | undefined;
   /** "Call it off" (../app/callOff judgeCamGuard): held while recording, off with a clip. */
   onCallOffGuard?: ((guard: CallOffGuard) => void) | undefined;
@@ -204,6 +221,8 @@ export function JudgeCamScreen({
   /** The camera failed to start, or it started with no lens (the simulator). */
   const [noCamera, setNoCamera] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** The failure was an empty attempt: the camera never came up, or the clip came back empty. */
+  const [empty, setEmpty] = useState(false);
   const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
@@ -232,6 +251,7 @@ export function JudgeCamScreen({
     lastClip.current = null;
     manualCountdown.current = false;
     setFailed(false);
+    setEmpty(false);
     setCount(Math.min(3, Math.max(0, Math.ceil((arm.goAtMs - Date.now()) / 1000))));
     setPhase('countdown');
   }, [arm]);
@@ -276,6 +296,7 @@ export function JudgeCamScreen({
           };
       }
       lastClip.current = clip;
+      setEmpty(clip === null);
       await onSend(clip);
       setPhase('sent');
     } catch {
@@ -288,6 +309,7 @@ export function JudgeCamScreen({
   const retry = useCallback(async () => {
     const action = camRetryAction({ armed: !!arm, hasClip: lastClip.current !== null });
     setFailed(false);
+    setEmpty(false);
     if (action === 'standby') {
       setPhase('standby');
       return;
@@ -308,11 +330,22 @@ export function JudgeCamScreen({
     }
   }, [arm, onSend]);
 
-  // Start the camera recording on GO; Stop (or max_ms, at most 6 s) ends it.
+  // Start the camera recording on GO; Stop (or max_ms, at most 6 s) ends it. A camera that is
+  // not up yet is waited for (this effect runs again when it is ready): the clip starts then,
+  // with its full length, instead of the time running out with nothing recording.
   useEffect(() => {
     if (phase !== 'recording') return;
     const camera = cam.current;
-    if (camera && ready && !recording.current) {
+    if (!camera || !ready) {
+      const giveUp = setTimeout(() => {
+        lastClip.current = null;
+        setEmpty(true);
+        setFailed(true);
+        setPhase('sent');
+      }, CAMERA_WAIT_MS);
+      return () => clearTimeout(giveUp);
+    }
+    if (!recording.current) {
       startedAt.current = Date.now();
       firstProgress.current = null;
       finishedAt.current = null;
@@ -357,7 +390,9 @@ export function JudgeCamScreen({
             ) : (
               <StatusHero
                 mark={failed ? 'cross' : 'check'}
-                title={t(failed ? COPY.ruling.retry : COPY.judgeCam.sent)}
+                title={t(
+                  failed ? (empty ? COPY.judgeCam.empty : COPY.ruling.retry) : COPY.judgeCam.sent,
+                )}
               />
             )}
           </Stage>
@@ -409,6 +444,15 @@ export function JudgeCamScreen({
               setCount(3);
               setPhase('countdown');
             }}
+          />
+        ) : phase === 'standby' && arm === null && onRecord ? (
+          // This phone films and the shot is framed: the attempt starts on this tap.
+          <PrimaryButton
+            testID="cam-record"
+            label={t(COPY.judgeCam.record)}
+            busy={recordBusy}
+            disabled={!permission?.granted || !ready || noCamera}
+            onPress={onRecord}
           />
         ) : phase === 'sent' && (arm === undefined || failed) ? (
           <QuietButton

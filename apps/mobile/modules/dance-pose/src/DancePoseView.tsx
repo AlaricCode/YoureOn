@@ -13,7 +13,7 @@ const MISSING_STATUS: StatusEvent = { state: 'no_camera', message: 'pose module 
 
 export const DancePoseView = forwardRef<DancePoseHandle, DancePoseViewProps>(
   function DancePoseView(props, ref) {
-    const { style, active, maxFps, onPoses, onStatus } = props;
+    const { style, active, maxFps, facing, onPoses, onStatus } = props;
     const Native = getNativeDancePoseView();
     const inner = useRef<NativeDancePoseInstance | null>(null);
     const onStatusRef = useRef(onStatus);
@@ -60,6 +60,7 @@ export const DancePoseView = forwardRef<DancePoseHandle, DancePoseViewProps>(
         style={style}
         active={active}
         maxFps={clampMaxFps(maxFps)}
+        facing={facing === 'front' ? 'front' : 'back'}
         onPoses={onPoses}
         onStatus={onStatus}
       />

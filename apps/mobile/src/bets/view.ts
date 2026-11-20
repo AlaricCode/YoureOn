@@ -8,6 +8,7 @@ import {
   type AppealVote,
   type PanelProvider,
 } from '@youre-on/shared/appeal';
+import { routineDisplayTitle } from '@youre-on/shared/dance/routine';
 import { danceRoundSeconds, parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import { formatUsd, type MicroUsdc } from '@youre-on/shared/money';
 import { ratioLabel, toWinLine } from '@youre-on/shared/odds-math';
@@ -91,7 +92,7 @@ export function betView(terms: Terms, termsHash: string, me: Party): BetView {
   // A dance off's routine line ("Routine wave-pop v1 sha256:…") reads as the routine's title,
   // only when it is the bundled routine the scorer uses (id, version and hash all match).
   const routine = kind === 'dance' ? parseDanceTermsRoutine(terms) : null;
-  const routineTitle = routine?.ok ? routine.routine.title : null;
+  const routineTitle = routine?.ok ? routineDisplayTitle(routine.routine) : null;
   // The round length is the routine's own (15 s, 32.6 s → "33 seconds", ...).
   const seconds = kind === 'dance' ? danceRoundSeconds(terms) : null;
   const roundLine = seconds === null ? 'One round' : `${seconds} seconds`;

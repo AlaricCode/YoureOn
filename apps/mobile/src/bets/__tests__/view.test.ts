@@ -81,10 +81,10 @@ describe('betView (DANCE-OFF §1 dance off)', () => {
     const long = danceOff('Logan', 'Jake', 'bye-bye-shuffle');
     const v = betView(long.terms, long.termsHash, 'A');
     expect(long.terms.claim).toBe(
-      'Dance Off: Bye Bye Shuffle, 33 seconds, higher match score wins, $5 each',
+      'Dance Off: Bye Bye Bye, 33 seconds, higher match score wins, $5 each',
     );
     expect(v.attempts).toBe('33 seconds');
-    expect(v.success[0]).toBe('Bye Bye Shuffle, 33 seconds');
+    expect(v.success[0]).toBe('Bye Bye Bye, 33 seconds');
   });
   it('no appeal on a dance off: the score is deterministic', () => {
     const v = betView(terms, termsHash, 'B');

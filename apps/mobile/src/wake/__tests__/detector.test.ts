@@ -238,4 +238,59 @@ describe('wake detector', () => {
       { type: 'utterance', text: 'go', reason: 'max' },
     ]);
   });
+
+  // In a loud room the recognizer writes "a" for the breath after "Jarvis". Ending the capture
+  // on that sent the judge "a" as the whole challenge.
+  describe('a tail that is not a challenge yet ("a")', () => {
+    it('does not end on the short silence: the real sentence still gets heard', () => {
+      const d = createWakeDetector();
+      expect(d.feed(T('Jarvis'), 0)).toEqual([{ type: 'wake' }]);
+      expect(d.feed(T('Jarvis a'), 300)).toEqual([]);
+      // 1.3 s of nothing new used to end it here, with "a"
+      expect(d.tick(1700)).toEqual([]);
+      expect(d.tick(2500)).toEqual([]);
+      expect(d.phase).toBe('capturing');
+      expect(d.feed(T('Jarvis a dance off against Eva'), 2800)).toEqual([]);
+      expect(d.tick(4000)).toEqual([]);
+      expect(d.tick(4100)).toEqual(utterance('a dance off against Eva', 'silence'));
+    });
+
+    it('is nothing said when that is all there ever was, never "a"', () => {
+      const d = createWakeDetector();
+      d.feed(T('Jarvis'), 0);
+      d.feed(T('Jarvis a'), 300);
+      expect(d.tick(4200)).toEqual([]);
+      expect(d.tick(4300)).toEqual(utterance('', 'no_tail'));
+      expect(d.phase).toBe('done');
+    });
+
+    it('is not ended by a final result either', () => {
+      const d = createWakeDetector();
+      d.feed(T('Jarvis'), 0);
+      d.feed(T('Jarvis the'), 300);
+      expect(d.feed(T('Jarvis the', 0, true), 1000)).toEqual([]);
+      expect(d.phase).toBe('capturing');
+      // a new task brings the challenge; the stub is not kept in front of it
+      expect(d.feed(T('I bet Mo misses', 1), 1500)).toEqual([]);
+      expect(d.tick(2900)).toEqual(utterance('I bet Mo misses', 'silence'));
+    });
+
+    it('still ends at the hard cap, with nothing', () => {
+      const d = createWakeDetector({ noTailTimeoutMs: 60_000 });
+      d.feed(T('Jarvis'), 0);
+      d.feed(T('Jarvis a'), 300);
+      expect(d.tick(8999)).toEqual([]);
+      expect(d.tick(9000)).toEqual(utterance('', 'no_tail'));
+    });
+
+    it('leaves a short real answer alone: a name, one word', () => {
+      for (const said of ['Mo', 'Eva', 'scan']) {
+        const d = createWakeDetector();
+        d.feed(T('Jarvis'), 0);
+        d.feed(T(`Jarvis ${said}`), 300);
+        expect(d.tick(1500)).toEqual([]);
+        expect(d.tick(1600)).toEqual(utterance(said, 'silence'));
+      }
+    });
+  });
 });

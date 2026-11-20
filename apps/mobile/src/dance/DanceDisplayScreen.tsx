@@ -1,6 +1,8 @@
-// B's phone during a Dance Off round: the DISPLAY (../app/danceFlow showsDanceDisplay). The
-// recording phone (A's phone or the judge cam) films both dancers; this phone stands where they
-// can see it and plays the routine for them:
+// B's device during a Dance Off round: the DISPLAY (../app/danceFlow showsDanceDisplay). The
+// recording phone (A's phone or the judge cam) films both dancers; this device stands where they
+// can see it and plays the routine for them. An iPad is the better display (sign it in as B): the
+// reference fills its screen, and everything drawn over it is sized from the screen, not from a
+// phone's type scale, so the count-in and the names read from across a room:
 //   - full screen, the reference MIRRORED (scaleX −1: players copy it like a mirror, DANCE-OFF
 //     §4.2) and contain-fit on the routine's dark backdrop, with its music. A routine with no clip
 //     (the synthetic ones) shows its mirrored skeleton full screen instead, with its music if it
@@ -16,7 +18,7 @@
 // Native-free apart from expo-video (lazily, for a clip), expo-audio and expo-keep-awake (both
 // through importSafely), so a binary missing any of them loses that part, not the screen.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
-import type { RoutineData } from '@youre-on/shared/dance/routine';
+import { routineDisplayTitle, type RoutineData } from '@youre-on/shared/dance/routine';
 import type { Terms } from '@youre-on/shared/terms';
 import { useEffect, useMemo, useState } from 'react';
 import { StatusBar, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
@@ -30,6 +32,7 @@ import { half, palette, space, type } from '../ui/tokens';
 import { DANCE_COPY, danceLabels, dt } from './copy';
 import { nowMs, useFrameClock } from './hooks';
 import { routineMedia } from './media';
+import { displaySizes, sized } from './model/display';
 import type { Size } from './model/overlay';
 import { roundConfig } from './model/round';
 import {
@@ -55,9 +58,6 @@ export type DanceDisplayScreenProps = {
 };
 
 const KEEP_AWAKE_TAG = 'dance-display';
-/** The count-in numeral on the display: as big as a phone held at arm's length needs. */
-const DISPLAY_NUMERAL_SIZE = 240;
-
 /** The screen stays on while the display is up. */
 function useKeepAwake() {
   useEffect(() => {
@@ -186,6 +186,7 @@ function Display({
     if (width !== box.width || height !== box.height) setBox({ width, height });
   };
 
+  const sizes = displaySizes(box);
   const round = {
     phase: phase === 'playing' ? ('dancing' as const) : ('countIn' as const),
     countInAt: timeline?.countInAt ?? null,
@@ -195,12 +196,12 @@ function Display({
     timeline && phase === 'playing' ? Math.min(1, (now - timeline.goAt) / cfg.durationMs) : 0;
   const status =
     phase === 'done' ? (
-      <DotsLabel text={dt(DANCE_COPY.scoring)} variant="subtitle" />
+      <DotsLabel text={dt(DANCE_COPY.scoring)} variant="subtitle" size={sizes.status} />
     ) : phase === 'waiting' ? (
       timeline ? (
-        <Text style={styles.status}>{dt(DANCE_COPY.getReady)}</Text>
+        <Text style={[styles.status, sized(sizes.status)]}>{dt(DANCE_COPY.getReady)}</Text>
       ) : (
-        <DotsLabel text={dt(DANCE_COPY.gettingReady)} variant="subtitle" />
+        <DotsLabel text={dt(DANCE_COPY.gettingReady)} variant="subtitle" size={sizes.status} />
       )
     ) : null;
 
@@ -211,28 +212,34 @@ function Display({
         <ReferencePanel routine={routine} startAt={startAt} size={box} />
       </View>
       {phase === 'countIn' || phase === 'playing' ? (
-        <CountInOverlay round={round} beatMs={cfg.beatMs} numeralSize={DISPLAY_NUMERAL_SIZE} />
+        <CountInOverlay round={round} beatMs={cfg.beatMs} numeralSize={sizes.numeral} />
       ) : null}
       {phase === 'waiting' || phase === 'done' ? (
-        <View style={styles.top} pointerEvents="none">
-          <Text style={styles.title} numberOfLines={1}>
-            {routine.title}
+        <View style={[styles.top, { top: sizes.edge }]} pointerEvents="none">
+          <Text style={[styles.title, sized(sizes.title)]} numberOfLines={1}>
+            {routineDisplayTitle(routine)}
           </Text>
           <View style={styles.versus}>
-            <Text style={[styles.name, { color: PLAYER_TINT.A }]} numberOfLines={1}>
+            <Text
+              style={[styles.name, sized(sizes.name), { color: PLAYER_TINT.A }]}
+              numberOfLines={1}
+            >
               {danceLabels(names).a}
             </Text>
-            <Text style={styles.vs}>{dt(DANCE_COPY.versus)}</Text>
-            <Text style={[styles.name, { color: PLAYER_TINT.B }]} numberOfLines={1}>
+            <Text style={[styles.vs, sized(sizes.vs)]}>{dt(DANCE_COPY.versus)}</Text>
+            <Text
+              style={[styles.name, sized(sizes.name), { color: PLAYER_TINT.B }]}
+              numberOfLines={1}
+            >
               {danceLabels(names).b}
             </Text>
           </View>
         </View>
       ) : null}
-      <View style={styles.bottom} pointerEvents="none">
+      <View style={[styles.bottom, { bottom: sizes.edge }]} pointerEvents="none">
         {status}
         {phase === 'playing' ? (
-          <View style={styles.progressTrack}>
+          <View style={[styles.progressTrack, { height: sizes.bar, borderRadius: sizes.bar / 2 }]}>
             <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
           </View>
         ) : null}

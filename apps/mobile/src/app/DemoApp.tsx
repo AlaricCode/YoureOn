@@ -234,6 +234,7 @@ import {
   type HeldUtterance,
   type LoopState,
 } from './wakeGate';
+import { danceEventsFor, danceRequest, type DanceRequest } from './wakeDance';
 import { useOddsPanel, useTypedOdds } from '../odds/useOdds';
 import { CallOffLayer } from '../screens/CallOff';
 import { callOffOnRoute, callOffWithdrawDue, type CallOffGuard } from './callOff';
@@ -444,10 +445,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const [judgeArmedBet, setJudgeArmedBet] = useState<string | null>(null);
   /** The bet whose JudgeVoice is mounted: it stays until the bet's session ends as before. */
   const [judgeMountedBet, setJudgeMountedBet] = useState<string | null>(null);
+  /**
+   * The bet whose attempt this phone is framing: its camera is up (JudgeCamScreen, standing by)
+   * before the attempt exists, and "Start recording" there starts it. Two phones, this one films.
+   */
+  const [framingBet, setFramingBet] = useState<string | null>(null);
   /** What was said after "Jarvis", per bet: the judge's first user message (JudgeVoice). */
   const wakeUtterances = useRef(new Map<string, string>());
   /** Said on Home: waits for the challenge it started (openNewBet). */
   const heldWake = useRef<HeldUtterance | null>(null);
+  /**
+   * "Jarvis, dance off" on Home (./wakeDance): the challenge it started opens on the Dance off
+   * panel, applied once that bet's panel exists (the init effect below).
+   */
+  const saidDance = useRef<{ betId: string; req: DanceRequest } | null>(null);
   /** The rainbow loop. */
   const [loop, loopDispatch] = useReducer(loopReducer, 'off' as LoopState);
 
@@ -923,6 +934,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       shown: danceCardOf(bet.envelope),
       stakeUsd: rematchStake,
     });
+    // Asked for out loud on Home: the panel opens on what was said.
+    const said = saidDance.current;
+    if (said?.betId === bet.bet_id) {
+      saidDance.current = null;
+      for (const e of danceEventsFor(said.req)) danceDispatch(e);
+    }
   }, [negotiating, bet?.bet_id]);
 
   const submitDance = async () => {
@@ -1127,6 +1144,10 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   }, [homeNote]);
 
   // ---- actions -----------------------------------------------------------------------------
+  /** The Dance Off a sentence asked for (./wakeDance), or null: then it is the judge's to hear. */
+  const danceAsked = (text: string): DanceRequest | null =>
+    DANCE_ENABLED ? danceRequest(text, DANCE_ROUTINE_CHOICES, DANCE_STAKES_USD) : null;
+
   /**
    * Start A's judge for this bet (a wake, "Tap to talk", or a sentence held from Home): it mounts
    * with `text` as its first user message ('' = none) while the loop thinks.
@@ -1143,10 +1164,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   /** A new challenge (list or face): A hosts the judge, follows the bet, and opens it. */
   const openNewBet = (r: CreateBetResponse) => {
     voiceVars.current.set(r.bet.bet_id, r.voice.dynamic_variables);
-    // "Jarvis, …" on Home started this challenge: the judge hears it as the screen opens.
+    // "Jarvis, …" on Home started this challenge: the judge hears it as the screen opens,
+    // unless it asked for a Dance Off, which the judge cannot write: that opens the panel.
     const held = heldUtterance(heldWake.current, Date.now());
     heldWake.current = null;
-    if (held !== null && WAKE_ENABLED) armJudge(r.bet.bet_id, held);
+    const saidDanceOff = held !== null ? danceAsked(held) : null;
+    if (saidDanceOff) saidDance.current = { betId: r.bet.bet_id, req: saidDanceOff };
+    else if (held !== null && WAKE_ENABLED) armJudge(r.bet.bet_id, held);
     rt.hub.adopt(r.bet);
     rt.ws.subscribe(r.bet.bet_id);
     dispatch({ type: 'bet_opened', bet_id: r.bet.bet_id, force: true });
@@ -1637,6 +1661,24 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         }
       : null;
 
+  // Framing is for one attempt: once it has started, or the bet is another, it is over.
+  const attemptNoNow = bet?.attempt?.attempt_no ?? null;
+  useEffect(() => {
+    setFramingBet(null);
+  }, [bet?.bet_id, attemptNoNow]);
+  /** This phone films the next attempt and is framing it (the camera up, nothing started). */
+  const framing = bet !== null && canStart && framingBet === bet.bet_id;
+  const framingCam = (
+    <JudgeCamScreen
+      arm={null}
+      onSend={sendClip}
+      onBack={() => setFramingBet(null)}
+      onRecord={() => void startAttempt()}
+      recordBusy={busy}
+      onCallOffGuard={setCallOffGuard}
+    />
+  );
+
   const dismiss = () => {
     setAlert(null);
     dispatch({ type: 'bet_dismissed' });
@@ -1737,6 +1779,14 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       // The mic is already released here.
       const pending = pendingRef.current;
       if (routeRef.current === 'negotiate' && pending) {
+        // "Jarvis, dance off": the panel opens (already this bet's: the judge was pending on
+        // it), and the judge is not asked for terms it cannot write.
+        const asked = danceAsked(text);
+        if (asked) {
+          loopDispatch({ type: 'utterance', toJudge: false });
+          for (const e of danceEventsFor(asked)) danceDispatch(e);
+          return;
+        }
         armJudge(pending, text);
         return;
       }
@@ -2198,7 +2248,20 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 : undefined
             }
             onDecline={() => {
+              // Backing out ends the bet for both phones. B declines the invite; A, the
+              // challenger, declines the bet itself (lock/decline, which takes a draft too).
+              // A's back-out used to only leave this screen: the bet stayed open on B's phone
+              // and refused a new challenge between the two until the draft idled out.
               if (bet && me === 'B') void rt.api.declineInvite(bet.bet_id).catch(() => undefined);
+              else if (bet && me === 'A')
+                void rt.api
+                  .declineLock({
+                    bet_id: bet.bet_id,
+                    party: 'A',
+                    lock_request_id: null,
+                    declined_at: new Date(rt.clock.now()).toISOString(),
+                  })
+                  .catch(() => undefined);
               dismiss();
             }}
           />
@@ -2238,12 +2301,16 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       case 'live': {
         const phase: LivePhase =
           state === 'LOCKED' ? 'locked' : state === 'ATTEMPT' ? 'filming' : 'judging';
+        // This phone may have to film: it opens its camera first, and the recording starts on
+        // "Start recording" there, never by itself (a room with a judge cam still uses that one).
+        if (framing && state === 'LOCKED') return framingCam;
         return view ? (
           <LiveScreen
             view={view}
             phase={phase}
             attemptNo={bet?.attempt?.attempt_no ?? 1}
-            onStart={canStart ? () => void startAttempt() : undefined}
+            onStart={canStart && bet ? () => setFramingBet(bet.bet_id) : undefined}
+            startLabel={canStart ? t(COPY.live.openCamera) : undefined}
             startBusy={busy}
           />
         ) : (
@@ -2407,13 +2474,15 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           />
         );
       case 'redo':
+        // "Ready" opens the camera; the retake starts on "Start recording" there, as the first did.
+        if (framing) return framingCam;
         return (
           <RedoScreen
             attemptNo={nextAttemptNo(bet ?? { lastAttemptNo: null })}
             maxAttempts={3}
             tip={FILMING_TIP}
             onReady={() => {
-              if (canStart) void startAttempt();
+              if (canStart && bet) setFramingBet(bet.bet_id);
             }}
           />
         );
@@ -2558,10 +2627,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
               dynamicVariables={voice}
               initialUtterance={wakeUtterances.current.get(voiceBet.bet_id)}
               // A dance round starts on the dance screen, after its framing check (never by voice).
-              startAttempt={(n) =>
+              // A camera attempt is the filmer's to start too ("Open camera", "Start recording"):
+              // started by the judge the moment the bet locked, nobody was ready and nothing was
+              // framed. The judge is told to say so instead.
+              startAttempt={() =>
                 isDanceBet(voiceBet)
                   ? Promise.reject(new ActionError('INVALID_STATE'))
-                  : startAttemptFor(voiceBet, n, 'A')
+                  : Promise.resolve('manual' as const)
               }
               micMuted={micMutedFor(voiceBet.state, {
                 reviewable: reviewable(voiceBet),

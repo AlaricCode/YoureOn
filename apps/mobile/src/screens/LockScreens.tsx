@@ -30,7 +30,7 @@ import {
 import { DrainBar } from '../ui/DrainBar';
 import { Criteria, Perforation, Serial, Slip } from '../ui/slip';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
-import { avatarSize, half, palette, space, type } from '../ui/tokens';
+import { avatarSize, dp, half, palette, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
 export function TermsCardScreen({
@@ -320,13 +320,13 @@ export function LockEndedScreen({
   );
 }
 
-const TICK = 18;
+const TICK = dp(18);
 /** The fade at the dock's top edge. */
 const FADE = space.x4;
 /** The cut-out between the signed tick and the avatar (the slip's own colour). */
 const TICK_RING = 2;
 /** The switch on the lock moment, and how long it waits before it flips on. */
-const SWITCH = 84;
+const SWITCH = dp(84);
 const SWITCH_DELAY_MS = 200;
 
 const styles = StyleSheet.create({

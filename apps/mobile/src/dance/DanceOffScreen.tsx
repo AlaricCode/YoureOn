@@ -23,7 +23,7 @@
 // runs this same flow on synthetic poses and key frames (./model/simRound): A follows the
 // routine, B lags and stops halfway, so two simulators can test the display, sync and ruling.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
-import type { RoutineData } from '@youre-on/shared/dance/routine';
+import { routineDisplayTitle, type RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { Terms } from '@youre-on/shared/terms';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -41,6 +41,7 @@ import { safeLine } from './DanceResultBreakdown';
 import { DANCE_COPY, danceLabels, dt, ERROR_COPY, FRAMING_COPY } from './copy';
 import { appDocumentsUri, readFileBytes } from './fs';
 import { nowMs, useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
+import { DANCE_CAMERA, guideSides, previewMirrored } from './model/camera';
 import type { LiveStore } from './model/liveStore';
 import { attemptCountIn, framingProgress, type RoundState } from './model/round';
 import { serverIsoToLocalMs } from './model/schedule';
@@ -130,23 +131,29 @@ function FramingGuide({
   store,
   names,
   visible,
+  mirrored,
 }: {
   store: LiveStore;
   names: { a: string; b: string };
   visible: boolean;
+  /** The preview is a mirror image (the selfie camera): A, on the image's left, is on the right. */
+  mirrored: boolean;
 }) {
   const ok = useLive(store, (v) => v.framing?.ok === true);
   const byFace = useLive(store, (v) => v.byFace);
   if (!visible || byFace) return null;
+  const sides = guideSides(mirrored);
+  const labels = danceLabels(names);
+  const tint = { a: PLAYER_TINT.A, b: PLAYER_TINT.B } as const;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={[styles.centerLine, ok && styles.centerLineOk]} />
       <View style={styles.guideRow}>
-        <Text style={[styles.guideName, { color: PLAYER_TINT.A }]} numberOfLines={1}>
-          {`${danceLabels(names).a} ←`}
+        <Text style={[styles.guideName, { color: tint[sides.left] }]} numberOfLines={1}>
+          {`${labels[sides.left]} ←`}
         </Text>
-        <Text style={[styles.guideName, { color: PLAYER_TINT.B }]} numberOfLines={1}>
-          {`→ ${danceLabels(names).b}`}
+        <Text style={[styles.guideName, { color: tint[sides.right] }]} numberOfLines={1}>
+          {`→ ${labels[sides.right]}`}
         </Text>
       </View>
     </View>
@@ -411,7 +418,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   if (showResult && result) {
     return (
       <Screen>
-        <TopBar title={dt(DANCE_COPY.title)} tag={routine.title} />
+        <TopBar title={dt(DANCE_COPY.title)} tag={routineDisplayTitle(routine)} />
         <ScrollView contentContainerStyle={styles.resultBody}>
           <ResultCard data={resultFromRound(routine, result)} names={names} me={me} />
           <ResultStatus
@@ -426,12 +433,15 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   }
 
   const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
+  // The selfie camera's preview is a mirror image; the sample round has no camera to mirror.
+  const mirrored = Pose !== null && previewMirrored(DANCE_CAMERA);
   const camera = Pose ? (
     <Pose
       ref={engine.handleRef}
       style={StyleSheet.absoluteFill}
       active={state.phase !== 'failed'}
       maxFps={30}
+      facing={DANCE_CAMERA}
       onPoses={engine.onPoses}
       onStatus={engine.onStatus}
     />
@@ -476,7 +486,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     <Screen>
       <TopBar
         title={dt(DANCE_COPY.title)}
-        tag={routine.title}
+        tag={routineDisplayTitle(routine)}
         onBack={framing || state.phase === 'failed' ? props.onLeave : undefined}
       />
       <DanceStage
@@ -487,7 +497,10 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
         beatMs={engine.cfg.beatMs}
         startAt={engine.startAt}
         camera={camera}
-        cameraOverlay={<FramingGuide store={engine.store} names={names} visible={framing} />}
+        mirrored={mirrored}
+        cameraOverlay={
+          <FramingGuide store={engine.store} names={names} visible={framing} mirrored={mirrored} />
+        }
         debug={settings.debugOverlay}
         syncOffsetMs={settings.syncOffsetMs}
         footer={footer}

@@ -43,7 +43,7 @@ import {
   stakeTap,
   type Frame,
 } from './polish';
-import { color, half, motion, palette, radius, space, TABULAR, type } from './tokens';
+import { color, dp, half, motion, palette, radius, space, TABULAR, type } from './tokens';
 
 const easeOut = Easing.bezier(...motion.easing);
 
@@ -303,7 +303,7 @@ const styles = StyleSheet.create({
   // ChoiceChip's box: 44 pt pill, at least 64 wide, 20 pt sides.
   chip: {
     minWidth: space.x8,
-    height: 44,
+    height: dp(44),
     borderRadius: radius.pill,
     paddingHorizontal: space.x2 + half.x05,
     alignItems: 'center',

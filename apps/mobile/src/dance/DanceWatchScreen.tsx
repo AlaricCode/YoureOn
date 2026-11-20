@@ -3,6 +3,7 @@
 // B's phone is the display, DanceDisplayScreen). It shows where the round is (getting ready,
 // live, judging) and then the server's scores, the per-move grid and the announcer line.
 // Native-free.
+import { routineDisplayTitle } from '@youre-on/shared/dance/routine';
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
 import type { DanceScoredPayload } from '@youre-on/shared/realtime';
 import type { Terms } from '@youre-on/shared/terms';
@@ -44,7 +45,7 @@ function Versus({ names, me }: { names: { a: string; b: string }; me: 'A' | 'B' 
 
 export function DanceWatchScreen({ terms, me, names, phase, scored }: DanceWatchScreenProps) {
   const parsed = parseDanceTermsRoutine(terms);
-  const title = parsed.ok ? parsed.routine.title : null;
+  const title = parsed.ok ? routineDisplayTitle(parsed.routine) : null;
   return (
     <Screen>
       <TopBar title={dt(DANCE_COPY.title)} tag={title ?? undefined} />

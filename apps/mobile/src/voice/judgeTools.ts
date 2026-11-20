@@ -11,7 +11,11 @@ export type CueKind = 'gavel' | 'drumroll' | 'buzzer' | 'cheer';
 
 export interface ToolDeps {
   /** Resolves with who films: the judge cam, or (two phones) this phone itself. */
-  startAttempt(attemptNo: number): Promise<'judge_cam' | 'self' | void>;
+  /**
+   * 'manual': nothing was started. The recording is the filmer's to start (they open the camera,
+   * frame the shot and tap "Start recording"), so the judge only tells them to.
+   */
+  startAttempt(attemptNo: number): Promise<'judge_cam' | 'self' | 'manual' | void>;
   showTermsCard(): void;
   cue(kind: CueKind): Promise<void>;
   /** request_attempt is allowed only after [EVENT] LOCKED or [EVENT] REDO (§4.4). */
@@ -34,6 +38,8 @@ export function judgeClientTools(d: ToolDeps) {
       if (!d.canAttempt()) return 'error: INVALID_STATE';
       try {
         const recorder = await d.startAttempt(n);
+        if (recorder === 'manual')
+          return 'not started: the players start the recording themselves. Say, in one short line, to open the camera and start recording when they are ready. Do not count down.';
         return recorder === 'self'
           ? 'armed: this phone films, counting down'
           : 'armed: judge cam counting down';

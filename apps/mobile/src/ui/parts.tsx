@@ -49,6 +49,7 @@ import { balance, isDisplay, typographic } from './typography';
 import {
   aurora,
   color,
+  dp,
   fontFamily,
   glow,
   half,
@@ -699,31 +700,37 @@ export function DotsLabel({
   text,
   variant = 'heading',
   align = 'start',
+  size,
 }: {
   text: string;
   variant?: TypeToken;
   align?: 'start' | 'end';
+  /** A font size (pt) in place of the variant's: a screen that sizes its own words. */
+  size?: number;
 }) {
   const [dots, setDots] = useState(1);
   useEffect(() => {
     const t = setInterval(() => setDots((d) => (d % 3) + 1), 400);
     return () => clearInterval(t);
   }, []);
+  const fontSize = size ?? type[variant].fontSize ?? 17;
+  const style =
+    size === undefined
+      ? type[variant]
+      : [type[variant], { fontSize: size, lineHeight: Math.round(size * 1.25) }];
   if (align === 'end') {
     return (
       <View style={styles.dotsRow} accessibilityLabel={text}>
-        <Text style={type[variant]}>{`${text}.`}</Text>
-        <Text style={[type[variant], styles.dotsOverflow]}>{'.'.repeat(dots - 1)}</Text>
+        <Text style={style}>{`${text}.`}</Text>
+        <Text style={[style, styles.dotsOverflow]}>{'.'.repeat(dots - 1)}</Text>
       </View>
     );
   }
   return (
     <View style={styles.dotsRow} accessibilityLabel={text}>
-      <Text style={type[variant]}>{text}</Text>
+      <Text style={style}>{text}</Text>
       {/* A fixed slot sized to the font (three dots), so the text does not shift as they cycle. */}
-      <Text style={[type[variant], { width: Math.ceil((type[variant].fontSize ?? 17) * 0.9) }]}>
-        {'.'.repeat(dots)}
-      </Text>
+      <Text style={[style, { width: Math.ceil(fontSize * 0.9) }]}>{'.'.repeat(dots)}</Text>
     </View>
   );
 }
@@ -1528,7 +1535,7 @@ const styles = StyleSheet.create({
   },
   choice: {
     minWidth: space.x8,
-    height: 44,
+    height: dp(44),
     borderRadius: radius.pill,
     backgroundColor: palette.fill,
     paddingHorizontal: space.x2 + half.x05,

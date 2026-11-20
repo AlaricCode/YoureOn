@@ -17,6 +17,7 @@ import { clockText, DANCE_COPY, dt } from './copy';
 import { useFrameClock } from './hooks';
 import { CameraSkeletons, DebugReadout, NameTags, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
+import { mirroredClipShift } from './model/framing';
 import type { LiveStore } from './model/liveStore';
 import { CAMERA_ASPECT, fitPanels, stagePanels, type Size } from './model/overlay';
 import { referencePoseAt, upcomingKeyMove } from './model/reference';
@@ -67,6 +68,7 @@ export function ReferencePanel({
           startAt={startAt}
           durationMs={routine.duration_ms}
           mutedUntil={mutedUntil}
+          shiftX={mirroredClipShift(routine, size)}
         />
       </Suspense>
     );
@@ -198,6 +200,7 @@ export function DanceStage({
   beatMs,
   startAt,
   camera,
+  mirrored = false,
   cameraOverlay,
   debug,
   syncOffsetMs,
@@ -214,6 +217,8 @@ export function DanceStage({
   startAt: number | null;
   /** The live camera view (DancePoseView), or a placeholder. Fills the camera panel. */
   camera: ReactNode;
+  /** The camera is the selfie one: its preview is a mirror image (see the layer below). */
+  mirrored?: boolean;
   /** Extra layers over the camera panel (the framing guide). */
   cameraOverlay?: ReactNode;
   debug: boolean;
@@ -248,9 +253,13 @@ export function DanceStage({
         ) : null}
         <View style={[styles.panel, panel]}>
           {camera}
-          <CameraSkeletons store={store} size={panel} />
-          <NameTags store={store} size={panel} names={names} />
-          <PopupLayer store={store} size={panel} />
+          {/* The selfie camera's preview is a mirror image, the poses are not: everything drawn
+              from them is flipped as one layer, and each piece of text flips itself back. */}
+          <View style={[StyleSheet.absoluteFill, mirrored && styles.flipped]} pointerEvents="none">
+            <CameraSkeletons store={store} size={panel} />
+            <NameTags store={store} size={panel} names={names} flipped={mirrored} />
+            <PopupLayer store={store} size={panel} flipped={mirrored} />
+          </View>
           {cameraOverlay}
         </View>
         <CountInOverlay round={round} beatMs={beatMs} />
@@ -279,6 +288,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface,
     overflow: 'hidden',
   },
+  flipped: { transform: [{ scaleX: -1 }] },
   flash: { backgroundColor: palette.fill },
   beatBar: { gap: space.x1 },
   beatRow: { flexDirection: 'row', alignItems: 'center', gap: space.x2 },
