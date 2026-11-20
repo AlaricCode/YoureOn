@@ -105,19 +105,8 @@ export async function isActiveMember(
 }
 
 // ---- face_enrolled ----------------------------------------------------------------------
-// The to_regclass probe lets a database without face_enrollments (migration 0006 not run) still
-// list members, every one with face_enrolled=false; once the table exists it is picked up without
-// a restart. Only a positive probe result is cached.
-let faceTableKnown = false;
 async function faceEnrolledIds(db: Reader, userIds: string[]): Promise<Set<string>> {
   if (userIds.length === 0) return new Set();
-  if (!faceTableKnown) {
-    const rows = await db.execute<{ ok: boolean }>(
-      sql`SELECT to_regclass('public.face_enrollments') IS NOT NULL AS ok`,
-    );
-    if (!rows[0]?.ok) return new Set();
-    faceTableKnown = true;
-  }
   const rows = await db.execute<{ user_id: string }>(
     sql`SELECT user_id::text AS user_id FROM face_enrollments
         WHERE status = 'active' AND user_id IN ${userIds}`,

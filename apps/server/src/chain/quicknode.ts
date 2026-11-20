@@ -19,8 +19,6 @@ export const QN_HEADER_BATCH_END = 'batch-end-range';
 export const QN_HEADER_DATASET = 'stream-dataset';
 /** Reject |now − timestamp| > 300 s. */
 export const QN_MAX_SKEW_S = 300;
-/** Optional source-IP allowlist entry. Not enforced: Fly's proxy rewrites the source address. */
-export const QN_SOURCE_IP = '141.148.40.227';
 /**
  * Decompression cap. The HMAC covers the decompressed body, so an unauthenticated caller can make
  * us inflate up to this much before the signature check: keep it near the real batch size (a

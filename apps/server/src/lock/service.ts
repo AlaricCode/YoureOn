@@ -1501,22 +1501,3 @@ export async function syncNoncePool(
   }
   return n;
 }
-
-/** bet_id -> the signature of its sent or confirmed atomic_lock, read from chain_txs. */
-export async function lockSignaturesFromChainTxs(
-  tx: Pick<Tx, 'select'>,
-  betIds: readonly string[],
-): Promise<Map<string, string>> {
-  if (!betIds.length) return new Map();
-  const rows = await tx
-    .select({ bet_id: chainTxs.bet_id, signature: chainTxs.signature })
-    .from(chainTxs)
-    .where(
-      and(
-        inArray(chainTxs.bet_id, [...betIds]),
-        eq(chainTxs.kind, 'atomic_lock'),
-        inArray(chainTxs.status, ['sent', 'confirmed']),
-      ),
-    );
-  return new Map(rows.filter((r) => r.signature).map((r) => [r.bet_id, r.signature!]));
-}

@@ -289,8 +289,6 @@ export function assertOddsState(bet: BetRow, o: { allowDrafting?: boolean } = {}
     });
 }
 
-export type OddsDeps = TermsDeps;
-
 export function publish(deps: Pick<TermsDeps, 'hub'>, bet: BetRow, envs: BetEventEnvelope[]) {
   if (envs.length) fanout(deps, bet, envs);
 }

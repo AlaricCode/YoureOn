@@ -602,9 +602,6 @@ export async function createChallenge(
   return { row, refA, refB };
 }
 
-/** Also exported from here; it lives in ./invite, shared with the terms confirm. */
-export { priorAnswers } from './invite';
-
 /** SELECT … FOR UPDATE the bet; 404 if unknown, 403 NOT_A_PARTY unless the caller is B. */
 async function lockBetAsB(tx: Tx, betId: string, userId: string): Promise<BetRow> {
   const [bet] = await tx.select().from(bets).where(eq(bets.id, betId)).for('update').limit(1);

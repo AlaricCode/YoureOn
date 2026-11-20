@@ -83,24 +83,6 @@ export const termsSink: ProposalSink = {
   },
 };
 
-/** An audit-only sink: one audit row per refusal, nothing else. Not referenced anywhere. */
-export const auditOnlySink: ProposalSink = {
-  async onEvaluated({ deps, session, evaluation, requestId }) {
-    if (evaluation.kind !== 'refused') return;
-    await deps.db.insert(auditLog).values({
-      actor_kind: 'judge',
-      action: 'terms.refused_prefilter',
-      bet_id: session.bet_id,
-      request_id: requestId,
-      details: {
-        category: evaluation.refusal.category,
-        conversation_id: session.conversation_id,
-        voice_session_id: session.voice_session_id,
-      },
-    });
-  },
-};
-
 /** Always HTTP 200, the body fitted under 300 B. */
 export const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 200);
 

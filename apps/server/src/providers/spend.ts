@@ -4,8 +4,6 @@
 // Adapted from Verdict's packages/backend/src/config/spend.ts (docs/MERGE-PLAN.md).
 import type { Env } from '../env';
 
-export type ProviderMode = 'mock' | 'live';
-
 export const PROVIDER_VARS = ['LLM_PROVIDER', 'STT_PROVIDER', 'SFX_PROVIDER'] as const;
 export type ProviderVar = (typeof PROVIDER_VARS)[number];
 

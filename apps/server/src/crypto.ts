@@ -29,7 +29,6 @@ export function decodeBase64Url(s: string): Uint8Array | null {
 }
 
 export const toBase64 = (b: Uint8Array): string => Buffer.from(b).toString('base64');
-export const toBase64Url = (b: Uint8Array): string => Buffer.from(b).toString('base64url');
 
 /** Verifies an ed25519 signature over the UTF-8 bytes of `message`. Never throws. */
 export function verifyEd25519(
