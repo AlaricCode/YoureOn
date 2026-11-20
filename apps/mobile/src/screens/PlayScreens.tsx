@@ -18,6 +18,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { judgeCamGuard, type CallOffGuard } from '../app/callOff';
 import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
+import { debugLog } from '../device/debugLog';
 import { importSafely } from '../app/importSafely';
 import { measuredSpan, recordedSpan } from '../attempt/span';
 import { hasCameraLens } from '../device/camera';
@@ -302,65 +303,70 @@ export function JudgeCamScreen({
     return () => clearTimeout(tm);
   }, [phase, count, arm]);
 
-  const stop = useCallback(async () => {
-    // One stop at a time: a second tap (or the timer) while the file is being finalized is a no-op.
-    if (stopping.current) return;
-    stopping.current = true;
-    if (stopTimer.current) clearTimeout(stopTimer.current);
-    stopTimer.current = null;
-    let clip: Clip | null = null;
-    let recordNote: string | null = null;
-    try {
-      const pending = recording.current;
-      if (pending) {
-        // The clip ends now, not when the file is finalized (../attempt/span).
-        const stopAtMs = Date.now();
-        cam.current?.stopRecording();
-        // The camera stays on screen until the file is finalized. The 'sending' phase takes the
-        // CameraView away, and expo-camera rejects a recording whose view went away before
-        // didFinishRecording ("unmounted"): every clip was lost that way, on every device.
-        let out: { uri: string } | undefined;
-        try {
-          // A camera that never answers must not leave the screen stuck on "recording".
-          out = await Promise.race([
-            pending,
-            new Promise<undefined>((resolve) => setTimeout(resolve, FINALIZE_WAIT_MS)),
-          ]);
-          if (!out?.uri) recordNote = 'record: the camera gave no file';
-        } catch (e) {
-          recordNote = `record: ${failureNote(e)}`;
+  const stop = useCallback(
+    async (by: 'button' | 'timer' = 'timer') => {
+      // One stop at a time: a second tap (or the timer) while the file is being finalized is a no-op.
+      if (stopping.current) return;
+      stopping.current = true;
+      // Who ended the clip and how far in: clips kept ending before the throw, and nothing said why.
+      debugLog(`cam stop by=${by} after=${Date.now() - startedAt.current}ms`);
+      if (stopTimer.current) clearTimeout(stopTimer.current);
+      stopTimer.current = null;
+      let clip: Clip | null = null;
+      let recordNote: string | null = null;
+      try {
+        const pending = recording.current;
+        if (pending) {
+          // The clip ends now, not when the file is finalized (../attempt/span).
+          const stopAtMs = Date.now();
+          cam.current?.stopRecording();
+          // The camera stays on screen until the file is finalized. The 'sending' phase takes the
+          // CameraView away, and expo-camera rejects a recording whose view went away before
+          // didFinishRecording ("unmounted"): every clip was lost that way, on every device.
+          let out: { uri: string } | undefined;
+          try {
+            // A camera that never answers must not leave the screen stuck on "recording".
+            out = await Promise.race([
+              pending,
+              new Promise<undefined>((resolve) => setTimeout(resolve, FINALIZE_WAIT_MS)),
+            ]);
+            if (!out?.uri) recordNote = 'record: the camera gave no file';
+          } catch (e) {
+            recordNote = `record: ${failureNote(e)}`;
+          }
+          if (out?.uri) {
+            const estimate = recordedSpan({
+              requestedAtMs: startedAt.current,
+              firstProgress: firstProgress.current,
+              stopAtMs,
+              finishedAtMs: finishedAt.current,
+              maxMs: MAX_RECORD_MS,
+            });
+            // The file's own length when it can be read: the estimate is only the fallback.
+            clip = {
+              uri: out.uri,
+              ...measuredSpan(estimate, await clipFileMs(out.uri), MAX_RECORD_MS),
+            };
+          }
         }
-        if (out?.uri) {
-          const estimate = recordedSpan({
-            requestedAtMs: startedAt.current,
-            firstProgress: firstProgress.current,
-            stopAtMs,
-            finishedAtMs: finishedAt.current,
-            maxMs: MAX_RECORD_MS,
-          });
-          // The file's own length when it can be read: the estimate is only the fallback.
-          clip = {
-            uri: out.uri,
-            ...measuredSpan(estimate, await clipFileMs(out.uri), MAX_RECORD_MS),
-          };
-        }
+        recording.current = null;
+        lastClip.current = clip;
+        setEmpty(clip === null);
+        setPhase('sending');
+        await onSend(clip);
+        setPhase('sent');
+      } catch (e) {
+        // The camera's own reason, when it gave no clip, says more than the "no clip" that follows.
+        setFailNote(recordNote ?? failureNote(e));
+        setFailed(true);
+        setPhase('sent');
+      } finally {
+        recording.current = null;
+        stopping.current = false;
       }
-      recording.current = null;
-      lastClip.current = clip;
-      setEmpty(clip === null);
-      setPhase('sending');
-      await onSend(clip);
-      setPhase('sent');
-    } catch (e) {
-      // The camera's own reason, when it gave no clip, says more than the "no clip" that follows.
-      setFailNote(recordNote ?? failureNote(e));
-      setFailed(true);
-      setPhase('sent');
-    } finally {
-      recording.current = null;
-      stopping.current = false;
-    }
-  }, [onSend]);
+    },
+    [onSend],
+  );
 
   // "Try again": resend the same clip, retake it, or back to standby (../attempt/retry).
   const retry = useCallback(async () => {
@@ -407,6 +413,7 @@ export function JudgeCamScreen({
     }
     if (!recording.current && !stopping.current) {
       startedAt.current = Date.now();
+      debugLog(`cam record start limit=${Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS)}ms`);
       firstProgress.current = null;
       finishedAt.current = null;
       recording.current = camera
@@ -424,11 +431,30 @@ export function JudgeCamScreen({
       recording.current.catch(() => undefined);
     }
     const limit = Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS);
-    stopTimer.current = setTimeout(() => void stop(), limit);
+    stopTimer.current = setTimeout(() => void stop('timer'), limit);
     return () => {
       if (stopTimer.current) clearTimeout(stopTimer.current);
     };
   }, [phase, stop, ready, arm]);
+
+  // The seconds left of the clip, shown with "Recording": whoever films can see how long the
+  // throw still has, instead of guessing when it will stop.
+  const [leftS, setLeftS] = useState<number | null>(null);
+  useEffect(() => {
+    if (phase !== 'recording') {
+      setLeftS(null);
+      return;
+    }
+    const tick = () =>
+      setLeftS(
+        recording.current
+          ? Math.max(0, Math.ceil((MAX_RECORD_MS - (Date.now() - startedAt.current)) / 1000))
+          : null,
+      );
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [phase]);
 
   // No capture device (the simulator) or one that failed to start: say so on the stage.
   const bubble = noCamera
@@ -439,7 +465,9 @@ export function JudgeCamScreen({
         ? count === 0
           ? t(COPY.judgeCam.go)
           : String(count)
-        : t(COPY.judgeCam.recording);
+        : leftS === null
+          ? t(COPY.judgeCam.recording)
+          : `${t(COPY.judgeCam.recording)} ${leftS}`;
 
   return (
     <Screen>
@@ -491,7 +519,11 @@ export function JudgeCamScreen({
             )}
             {phase === 'recording' ? (
               <View style={styles.shutterSlot}>
-                <ShutterButton active label={t(COPY.judgeCam.stop)} onPress={() => void stop()} />
+                <ShutterButton
+                  active
+                  label={t(COPY.judgeCam.stop)}
+                  onPress={() => void stop('button')}
+                />
               </View>
             ) : null}
           </Stage>
