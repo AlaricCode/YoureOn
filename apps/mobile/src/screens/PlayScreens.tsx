@@ -29,6 +29,7 @@ import {
   countdownLabel,
   RESULT_TITLE,
   rulingFooter,
+  rulingRematch,
   signedUsd,
   type BetView,
   type MyResult,
@@ -585,6 +586,7 @@ export function RulingScreen({
   onRematch,
   onHome,
   rematchBusy = false,
+  rematchSoon = false,
   tag,
 }: {
   view: BetView;
@@ -608,16 +610,23 @@ export function RulingScreen({
   /** Double or nothing, once the bet is over (a void round's refund is done): DANCE-OFF §7. */
   onRematch?: (() => void) | undefined;
   /**
-   * "Back home", passed once the bet is over (VOIDED: a call-off, a dance too close to call, three
-   * REDOs, a void ruling). The bet never leaves this screen by itself then, so without it the
-   * phone was stuck here.
+   * "Back home", passed once the bet is over, and for a VOID ruling (a call-off, a dance too close
+   * to call, three REDOs) from the moment it shows (bets/view rulingEnds). The bet never leaves
+   * this screen by itself then, so without it the phone was stuck here.
    */
   onHome?: (() => void) | undefined;
   rematchBusy?: boolean;
+  /**
+   * This phone offers Double or nothing once the bet is over: until onRematch comes, the end
+   * footer keeps the button in its place, disabled (a VOID ruling shows that footer before the
+   * refund settles).
+   */
+  rematchSoon?: boolean;
   tag?: string | undefined;
 }) {
   const now = useNow(200);
   const footer = rulingFooter(result, onHome !== undefined);
+  const rematch = rulingRematch(onRematch !== undefined, rematchSoon);
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
   const left = appealDeadlineMs - now;
@@ -650,11 +659,12 @@ export function RulingScreen({
                 label={t(COPY.ruling.backHome)}
                 onPress={onHome}
               />
-              {onRematch ? (
+              {rematch ? (
                 <QuietButton
                   testID="ruling-rematch"
                   label={t(COPY.rematch.button)}
                   busy={rematchBusy}
+                  disabled={rematch === 'soon'}
                   onPress={onRematch}
                 />
               ) : null}

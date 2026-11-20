@@ -235,6 +235,22 @@ export type RulingFooter = 'gg' | 'home' | 'waiting';
 export const rulingFooter = (result: MyResult, over: boolean): RulingFooter =>
   over ? 'home' : result === 'lost' ? 'gg' : 'waiting';
 
+/**
+ * Whether the ruling screen gets its end footer (Back home, Double or nothing): once the bet is
+ * over, and for a VOID ruling (a call-off, too close to call, three REDOs) from the moment it
+ * shows. Nobody concedes a VOID and its refund needs nothing from this phone, so its footer is the
+ * end one from the start: no "Final in" countdown that turns into Back home at 0:00.
+ */
+export const rulingEnds = (result: MyResult, over: boolean): boolean => over || result === 'void';
+
+/**
+ * The end footer's Double or nothing: 'ready' once the server takes a rematch (the bet is over),
+ * 'soon' while a VOID ruling settles (the button holds its place, disabled, so nothing moves when
+ * it turns on), or null where this phone never offers one (the judge cam).
+ */
+export const rulingRematch = (ready: boolean, offered: boolean): 'ready' | 'soon' | null =>
+  ready ? 'ready' : offered ? 'soon' : null;
+
 /** "+$5.00", "−$7.00", "$0.00" from a signed micro-USDC string (ui/money: one result format). */
 export function signedUsd(signedMicro: string): string {
   return signedMicroToUsd(signedMicro);
