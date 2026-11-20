@@ -98,9 +98,21 @@ export const EnvSchema = z.object({
    * not STAGE_TTS=off), else mock. So the cues go live with the key and need no other switch.
    */
   SFX_PROVIDER: z.preprocess(unset, z.enum(['mock', 'live', 'auto']).default('auto')),
+  /**
+   * Generate the four stage cue clips at boot (server.ts) instead of on first use. Off by
+   * default: the cache is on the machine's temp disk, so every deploy and restart would pay
+   * ElevenLabs for them again. Turn it on for the demo itself if the first gavel must not wait.
+   */
+  STAGE_SFX_PREWARM: z.preprocess(unset, boolStr.default(false)),
   // --- judge pipeline (src/judge, Beat 4)
   /** Anthropic model for the attempt ruling (12 frames; Opus is too slow for the 10 s cap). */
   JUDGE_MODEL: z.preprocess(unset, str.default('claude-sonnet-5-5')),
+  /**
+   * Typed terms (src/terms/structure.ts): the Anthropic model that turns a typed or spoken
+   * sentence into structured terms. The phone waits on it, so the fast one. Only used with
+   * LLM_PROVIDER=live (ALLOW_SPEND).
+   */
+  TERMS_MODEL: z.preprocess(unset, str.default('claude-haiku-5-5')),
   /**
    * Odds (src/odds/suggest.ts): the Anthropic model that words the judge's odds suggestion
    * (default DEFAULT_CHAT_MODELS.anthropic, Opus 5.5 at effort low). claude-haiku-5-5 if the p50

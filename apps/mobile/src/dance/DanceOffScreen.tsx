@@ -23,7 +23,7 @@
 // runs this same flow on synthetic poses and key frames (./model/simRound): A follows the
 // routine, B lags and stops halfway, so two simulators can test the display, sync and ruling.
 import { parseDanceTermsRoutine } from '@youre-on/shared/dance/terms';
-import type { RoutineData } from '@youre-on/shared/dance/routine';
+import { routineDisplayTitle, type RoutineData } from '@youre-on/shared/dance/routine';
 import type { DanceRoundResult } from '@youre-on/shared/dance/score';
 import type { Terms } from '@youre-on/shared/terms';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -411,7 +411,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   if (showResult && result) {
     return (
       <Screen>
-        <TopBar title={dt(DANCE_COPY.title)} tag={routine.title} />
+        <TopBar title={dt(DANCE_COPY.title)} tag={routineDisplayTitle(routine)} />
         <ScrollView contentContainerStyle={styles.resultBody}>
           <ResultCard data={resultFromRound(routine, result)} names={names} me={me} />
           <ResultStatus
@@ -476,7 +476,7 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     <Screen>
       <TopBar
         title={dt(DANCE_COPY.title)}
-        tag={routine.title}
+        tag={routineDisplayTitle(routine)}
         onBack={framing || state.phase === 'failed' ? props.onLeave : undefined}
       />
       <DanceStage

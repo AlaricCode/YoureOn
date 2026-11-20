@@ -9,7 +9,7 @@
 //     deterministic checks, Claude's validation) as the card keeps it;
 //   - what the stage says in each step: framing -> dancing -> scoring -> the verdict, where a VOID
 //     dance ruling reads "Too close to call" (or "No contest" for an invalid round), never "NN%".
-import { getRoutine, routineSeconds } from '@youre-on/shared/dance/routine';
+import { getRoutine, routineDisplayTitle, routineSeconds } from '@youre-on/shared/dance/routine';
 import { DANCE_TERMS_TYPE, parseDanceRoutineLine } from '@youre-on/shared/dance/terms';
 import type { DanceScoredPayload } from '@youre-on/shared/realtime';
 import { CALLED_OFF_MODEL, DANCE_OFF_MODEL } from '@youre-on/shared/ruling';
@@ -99,7 +99,8 @@ export function danceRoutineOf(b: BetView): DanceRoutineInfo | null {
   const known = r && (version === null || r.version === version) ? r : null;
   const claim = t ? CLAIM_TITLE_RE.exec(t.claim) : null;
   const fromClaim = claim?.[1]?.trim();
-  const title = known?.title ?? fromClaim ?? (id ? titleCase(id) : null);
+  const title =
+    (known ? routineDisplayTitle(known) : null) ?? fromClaim ?? (id ? titleCase(id) : null);
   if (!title) return null;
   const seconds = known ? routineSeconds(known) : claim?.[2] ? Number(claim[2]) : null;
   const moves: Record<string, string> = {};
@@ -114,7 +115,7 @@ const titleCase = (id: string) =>
     .map((w) => w[0]!.toUpperCase() + w.slice(1))
     .join(' ');
 
-/** "Wave Pop · 15 seconds", "Bye Bye Shuffle · 33 seconds" (each routine has its own length). */
+/** "Wave Pop · 15 seconds", "Bye Bye Bye · 33 seconds" (each routine has its own length). */
 export function danceRoutineLabel(b: BetView): string {
   const r = danceRoutineOf(b);
   const len = danceSecondsText(r);

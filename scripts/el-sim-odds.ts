@@ -251,7 +251,22 @@ const dump = (t: Turn[]) =>
       `  ${x.role}: ${x.message ?? ''}${(x.tool_calls ?? []).map((c) => ` [${c.tool_name} ${c.params_as_json}]`).join('')}`,
   );
 
+/**
+ * This script runs REAL ElevenLabs agent tests and spends the account's credits. It only runs
+ * when that is asked for on purpose (EL_TEST_SPEND=yes): the credits ran out on 2026-11-19 with
+ * the voice judge down for the rest of the day.
+ */
+function requireSpendOptIn(name: string): void {
+  if (process.env['EL_TEST_SPEND'] === 'yes') return;
+  console.error(
+    `${name}: refusing to run. It runs real ElevenLabs agent tests and spends credits. ` +
+      'Set EL_TEST_SPEND=yes to run it on purpose.',
+  );
+  process.exit(2);
+}
+
 async function main() {
+  requireSpendOptIn('el-sim-odds');
   let failed = 0;
   const check = (ok: boolean, what: string) => {
     log(`${ok ? 'PASS' : 'FAIL'} ${what}`);
