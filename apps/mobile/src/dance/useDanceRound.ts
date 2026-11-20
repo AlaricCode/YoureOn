@@ -179,6 +179,8 @@ export function useDanceRound(opts: {
   const [runDisplay, setRunDisplay] = useState<boolean | null>(null);
   /** Who is who while framing (face assignment), created on the first frame (its size). */
   const identity = useRef<PlayerIdentity | null>(null);
+  /** The frame size `identity` was made for (it changes when the device is turned). */
+  const identitySize = useRef({ w: 0, h: 0 });
   /** Face attempts this run: one in flight, a few tries, spaced. */
   const faceTry = useRef({ inFlight: false, tries: 0, lastTryAt: null as number | null });
 
@@ -410,6 +412,11 @@ export function useDanceRound(opts: {
         const fr = framingCheck(people, f.w, f.h);
         if (s.phase !== 'starting')
           dispatch({ type: 'framing', at: nowMs(), ok: fr.ok, reason: fr.reason });
+        // The device was turned while framing (the frames changed shape): who is who starts over.
+        if (identitySize.current.w !== f.w || identitySize.current.h !== f.h) {
+          identity.current = null;
+          identitySize.current = { w: f.w, h: f.h };
+        }
         identity.current ??= createPlayerIdentity({ w: f.w, h: f.h });
         const id = identity.current;
         const who = id.observe({ ts: f.ts ?? f.t, people });

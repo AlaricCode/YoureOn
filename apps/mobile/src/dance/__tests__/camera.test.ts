@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { danceCameraFrom, guideSides, previewMirrored } from '../model/camera';
+import { CAMERA_ASPECT, fitPanels, stagePanelLayout } from '../model/overlay';
 
 const MOBILE = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const read = (rel: string) => readFileSync(resolve(MOBILE, rel), 'utf8');
@@ -77,5 +78,49 @@ describe('what is drawn over a mirrored preview (source audit)', () => {
     expect(screen).toContain('facing={DANCE_CAMERA}');
     expect(screen).toContain('previewMirrored(DANCE_CAMERA)');
     expect(screen).toContain('guideSides(mirrored)');
+  });
+});
+
+// The frames follow how the device is held: upright 720x1280, on its side 1280x720.
+describe('recording on its side (landscape)', () => {
+  it('lays two upright panels side by side, as before', () => {
+    const box = { width: 390, height: 600 };
+    const { panel, stacked } = stagePanelLayout(box, CAMERA_ASPECT, 8);
+    expect(stacked).toBe(false);
+    expect(panel).toEqual(fitPanels(box, CAMERA_ASPECT, 8));
+  });
+
+  it('stacks two wide panels on an upright screen, where side by side they would be slivers', () => {
+    const { panel, stacked } = stagePanelLayout({ width: 390, height: 600 }, 16 / 9, 8);
+    expect(stacked).toBe(true);
+    expect(panel.width).toBe(390);
+    expect(panel.height * 2 + 8).toBeLessThanOrEqual(600);
+  });
+
+  it("keeps the camera's shape either way, and survives an unmeasured box", () => {
+    for (const aspect of [9 / 16, 16 / 9]) {
+      const { panel } = stagePanelLayout({ width: 1210, height: 700 }, aspect, 8);
+      expect(panel.width / panel.height).toBeCloseTo(aspect, 6);
+    }
+    expect(stagePanelLayout({ width: 0, height: 0 }, 16 / 9, 8).panel).toEqual({
+      width: 0,
+      height: 0,
+    });
+  });
+
+  it('turns the frames with the device, but never while a round is recording (source audit)', () => {
+    const engine = read('modules/dance-pose/ios/DancePoseEngine.swift');
+    expect(engine).toContain(
+      'guard configured, !roundActive.get(), let angle = wantedRotation.get()',
+    );
+    expect(engine).toContain('self.roundActive.set(true)');
+    const view = read('modules/dance-pose/ios/DancePoseView.swift');
+    expect(view).toContain(
+      'AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)',
+    );
+    expect(view).toContain('videoRotationAngleForHorizonLevelCapture');
+    // and the app starts its scoring over at the new size, before the round only
+    const pipeline = read('src/dance/model/pipeline.ts');
+    expect(pipeline).toContain('if (size && (tracker !== null || offset !== null)) return;');
   });
 });

@@ -134,8 +134,13 @@ export function createRoundPipeline(opts: {
   };
 
   const ensure = (w: number, h: number) => {
-    if (size) return;
-    size = { w: Math.round(w), h: Math.round(h) };
+    const next = { w: Math.round(w), h: Math.round(h) };
+    if (size && size.w === next.w && size.h === next.h) return;
+    // The frames changed shape: the device was turned (upright 720x1280, on its side 1280x720).
+    // Before the round that starts everything over at the new size, so the aspect-correct
+    // scoring is right. Never mid-round: the native side holds the rotation while it records.
+    if (size && (tracker !== null || offset !== null)) return;
+    size = next;
     preview = createTracker({ ...size, start: opts.start ?? null });
     scorer = createLiveScorer(opts.routine, {
       syncOffsetMs: opts.syncOffsetMs,
