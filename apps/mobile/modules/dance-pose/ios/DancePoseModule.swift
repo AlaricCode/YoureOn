@@ -14,6 +14,16 @@ public final class DancePoseModule: Module {
   public func definition() -> ModuleDefinition {
     Name("DancePose")
 
+    // A line on the process's stderr and in the unified log: read from a Mac with
+    // `devicectl device process launch --console`. For finding out on a real device why the
+    // face assignment fell back to the left / right rule (nothing reaches the server then).
+    Function("debugLog") { (message: String) in
+      let line = "[yo] \(message)\n"
+      fputs(line, stderr)
+      fflush(stderr)
+      NSLog("[yo] %@", message)
+    }
+
     // The real length of a recorded media file, read from the file itself (ms); -1 when it cannot
     // be read. The judge-cam clip's length was being estimated from timers around the recording,
     // and on a real device the estimate came out at 1.1 s for a clip several seconds long, so

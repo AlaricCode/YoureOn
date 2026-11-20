@@ -65,6 +65,17 @@ export async function mediaDurationMs(uri: string): Promise<number | null> {
   }
 }
 
+/** A diagnostic line on the device's console (native debugLog); a no-op without the module. */
+export function debugLog(message: string): void {
+  try {
+    requireOptionalNativeModule<{ debugLog?: (m: string) => void }>(DANCE_POSE_MODULE)?.debugLog?.(
+      message,
+    );
+  } catch {
+    // diagnostics never break the round
+  }
+}
+
 /** The native view component, created on first use; null when the module is missing. */
 export function getNativeDancePoseView(): NativeDancePoseComponent | null {
   if (!isDancePoseAvailable()) return null;
