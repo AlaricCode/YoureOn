@@ -1,10 +1,8 @@
-// BetSnapshot (API-CONTRACT §2.18) from a `bets` row plus the two parties' UserRefs.
-// Exported for other streams: GET /v1/bets/:bet_id (§2.14), terms, lock, etc. should build
-// their `{bet: BetSnapshot}` responses with `betSnapshot()` too.
-//
-// Fields this stream cannot fill yet are null until their owners land: `envelope` / `draft`
-// (terms stream: bet_terms_versions), `pending_tx` (lock/tx stream: chain_txs), `attempt_no`,
-// `latest_ruling`, `appeal`. Pass them through `extras` when you have them.
+// BetSnapshot from a `bets` row plus the two parties' UserRefs. What the row doesn't hold (the
+// terms envelope and draft, pending_tx, attempt_no, latest_ruling, appeal, prev_state) comes in
+// through `extras` and is null without it; stage/routes.ts loadBetSnapshot fills most of it from
+// the bet's event log.
+// Spec: docs/planning/API-CONTRACT.md §2.18.
 import { inArray } from 'drizzle-orm';
 import { bets, users, type Db } from '@youre-on/db';
 import type { BetSnapshot } from '@youre-on/shared/api';
@@ -25,15 +23,15 @@ const ONCHAIN: Record<Exclude<BetRow['onchain_status'], 'none'>, OnchainStatus> 
   cancelled: 'Cancelled',
 };
 
-/** Postgres onchain_status ('none' | snake_case) -> SCHEMAS OnchainStatus (null for 'none'). */
+/** Postgres onchain_status ('none' | snake_case) -> the shared OnchainStatus (null for 'none'). */
 export function toOnchainStatus(s: BetRow['onchain_status'] | null): OnchainStatus | null {
   return s === null || s === 'none' ? null : ONCHAIN[s];
 }
 
 /**
- * DATA-MODEL §8.4: 'rpc' while our own RPC `confirmed` set `onchain_pending` and Streams has
- * not echoed it yet (onchain_status still holds the OLD status, e.g. 'locked' while RULED is
- * rpc-confirmed); 'stream' once the projector applied it; 'none' before anything onchain.
+ * 'rpc' while our own RPC `confirmed` set `onchain_pending` and Streams has not echoed it yet
+ * (onchain_status still holds the OLD status, e.g. 'locked' while RULED is rpc-confirmed);
+ * 'stream' once the projector applied it; 'none' before anything onchain.
  */
 export function chainAckOf(row: Pick<BetRow, 'onchain_status' | 'onchain_pending'>): ChainAck {
   if (row.onchain_pending !== null) return 'rpc';
@@ -48,7 +46,7 @@ export function userRefOf(u: UserRow): UserRef | null {
     user_id: u.id,
     pubkey: u.wallet_pubkey as UserRef['pubkey'], // users_wallet_pubkey_fmt CHECK
     display_name: u.display_name,
-    avatar_url: null, // presigned avatar URLs land with POST /v1/me/avatar (S3, PENDING)
+    avatar_url: null, // no avatar upload yet (planned: POST /v1/me/avatar, presigned S3 URLs)
   };
 }
 
@@ -99,7 +97,7 @@ export function partyOf(
   return null;
 }
 
-/** Builds the §2.18 BetSnapshot. `viewerUserId` sets `my_party`. */
+/** Builds the BetSnapshot. `viewerUserId` sets `my_party`. */
 export function betSnapshot(
   row: BetRow,
   refs: { a: UserRef; b: UserRef },

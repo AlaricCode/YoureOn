@@ -1,12 +1,13 @@
-// The spoken review request (./service.ts; API-CONTRACT §2.12a, §4.3 request_review):
+// The spoken review request (./service.ts):
 //   POST /el/tools/request_review          ElevenLabs webhook tool, secret header (./tool.ts)
 //   POST /v1/bets/:bet_id/review/decline   (S, the loser) "Keep ruling" -> 200 {status:'closed'}
 //                                          (idempotent; NOT_LOSER for anyone else)
 //   POST /v1/demo/bets/:bet_id/review      (demo key) the laptop fallback: the same request with
-//                                          source 'demo' -> 200 {ok:true, say, review} | 409 {ok:false,
-//                                          fix, say}. No voice needed (stage / phones QA).
+//                                          source 'demo', no voice needed (stage / phones QA)
+//                                          -> 200 {ok:true, say, review} | 409 {ok:false, fix, say}
 // Confirming a review is the normal appeal: GET/POST /v1/bets/:bet_id/appeal (appeal/routes.ts),
 // signed on the loser's phone (device policy 'appeal'). Nothing here spends the 3/h appeal bucket.
+// Spec: docs/planning/API-CONTRACT.md §2.12a.
 import type { RouteModule } from '../context';
 import { appAuth, requireSignedRequest } from '../auth/middleware';
 import { requireDemo } from '../demo/routes';

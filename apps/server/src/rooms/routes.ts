@@ -1,12 +1,14 @@
-// Rooms and presence, API-CONTRACT §2.3 (TASKS D0-J4):
-//   POST /v1/rooms                      (S)          -> 201 {room_id, code, qr_payload, expires_at}
-//   POST /v1/rooms/join                 (S)          -> 200 {room: RoomSummary, members: RoomMember[]}
-//                                                       (DEMO_MODE: the demo room admits demo players only)
-//   POST /v1/rooms/lobby                (S, `{}`)    -> 200 {room, members}: the shared lobby, created on
-//                                                       first use (./lobby.ts; 404 when LOBBY_ENABLED=false)
-//                                                       (POST /v1/rooms and a /join elsewhere leave it)
-//   POST /v1/rooms/:room_id/leave       (S)          -> 204
-//   GET  /v1/rooms/:room_id/presence    (B, member)  -> 200 {members: RoomMember[]}
+// Rooms and presence.
+// Spec: docs/planning/API-CONTRACT.md §2.3.
+//
+//   POST /v1/rooms                    (S)         -> 201 {room_id, code, qr_payload, expires_at}
+//   POST /v1/rooms/join               (S)         -> 200 {room: RoomSummary, members: RoomMember[]}
+//       DEMO_MODE: the demo room admits demo players only
+//   POST /v1/rooms/lobby              (S, `{}`)   -> 200 {room, members}
+//       the shared lobby, created on first use (./lobby.ts; 404 when LOBBY_ENABLED=false);
+//       POST /v1/rooms and a /join elsewhere leave it
+//   POST /v1/rooms/:room_id/leave     (S)         -> 204
+//   GET  /v1/rooms/:room_id/presence  (B, member) -> 200 {members: RoomMember[]}
 // plus the `room.presence` WS control frame to room:<room_id> on join, leave and every
 // online/offline transition of a member.
 import { and, eq, isNull } from 'drizzle-orm';

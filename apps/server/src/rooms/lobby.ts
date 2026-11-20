@@ -1,7 +1,8 @@
-// The shared lobby (API-CONTRACT §2.3a): one live room every phone joins on launch, so a face
-// scan reaches whoever has the app open without anyone typing a code. It is an ordinary rooms
-// row (bets, the stage and face scoping all key on room_id), told apart without a migration by
-// isLobbyRoom (kind 'nearby', name 'Lobby', created_by null, not a demo room).
+// The shared lobby: one live room every phone joins on launch, so a face scan reaches whoever has
+// the app open without anyone typing a code. It is an ordinary rooms row (bets, the stage and
+// face scoping all key on room_id), told apart without a migration by isLobbyRoom (kind
+// 'nearby', name 'Lobby', created_by null, not a demo room).
+// Spec: docs/planning/API-CONTRACT.md §2.3a.
 //
 // Get-or-create: the newest live lobby wins. Every lobby join pushes its expires_at out to
 // now + ROOM_TTL_MS (capped by the rooms_expiry CHECK, created_at + 14 days) so it never

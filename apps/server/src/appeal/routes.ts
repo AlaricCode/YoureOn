@@ -1,11 +1,12 @@
-// Appeal (API-CONTRACT §2.12, Beat 5):
+// The appeal: the loser of a ruling asks the three-model panel to judge it again.
 //   GET  /v1/bets/:bet_id/appeal   (B, loser)  -> 200 SignRequest (kind 'appeal')
 //   POST /v1/bets/:bet_id/appeal   (S, loser)  -> 202 {status: 'submitted', signature, appeal_id}
-// POST takes SCHEMAS PartySignature (kind 'appeal'). With LOCK_SIGNER=server (custodial demo) the
+// POST takes a PartySignature (kind 'appeal'). With LOCK_SIGNER=server (custodial demo) the
 // signature fields may be omitted: the server signs as the appellant's demo key. The operator's
 // custodial appeal is POST /v1/demo/bets/:bet_id/appeal (demo/routes.ts).
-// Rate limit: 3/h per user (§1.7), spent only by an accepted filing (every check passed, and the
-// chain's preflight did not refuse it).
+// Rate limit: 3/h per user, spent only by an accepted filing (every check passed, and the chain's
+// preflight did not refuse it).
+// Spec: docs/planning/API-CONTRACT.md §2.12.
 import { PartySignature } from '@youre-on/shared/api';
 import type { RouteModule } from '../context';
 import { readBody } from '../http/body';

@@ -1,42 +1,12 @@
-// Appeal service, Beat 5 without the hearing (API-CONTRACT §2.12, §3.4, §4.5, §7.2; SCHEMAS §7;
-// ESCROW §5.2 appeal / resolve_appeal, §8.3). The concede path (payout/service.ts) is the template.
+// Appeals: the loser of a ruling files an `appeal` tx, a three-model panel re-judges the same
+// evidence, and the appeal authority settles with [resolve_appeal, close_bet] -> PAID / VOIDED.
+// The filing is written DB-first, the panel starts beside its confirm, and sweep() is the keeper's
+// durable backstop for every step.
+// Spec: docs/planning/API-CONTRACT.md §2.12.
 //
-//   appealRequest(bet, user)  GET /v1/bets/:id/appeal: the appellant's SignRequest kind 'appeal',
-//                             [ComputeBudget, appeal] on a recent blockhash, one device signature
-//                             (the appellant slot); rebuilt when > 20 s old and unsigned.
-//                             valid_until = min(build + 50 s, appeal_deadline − 1 s).
-//   appeal(bet, user, sig)    POST: verifies the PartySignature over the stored bytes (exactly as
-//                             concede does), co-signs as fee payer, records the filing DB-first
-//                             (chain_txs 'sent', appeals 'filing'), sends once with preflight, then
-//                             emits tx.submitted + judge.cue APPEAL_FILED. LOCK_SIGNER=server
-//                             (custodial demo): the signature may be omitted and the server signs
-//                             as the appellant's demo key (appealAsDemo: POST /v1/demo/bets/:id/appeal).
-//   background, per appeal    the panel starts at once (speculative, §7.2: the votes are stored but
-//                             streamed only after Appealed confirms); the confirm moves the bet to
-//                             APPEALED (appeals 'panel_voting'); once all three votes are in (8 s
-//                             each at most) decideAppeal -> AppealResult (hashed, the stage='appeal'
-//                             ruling) -> appeal.result + judge.cue APPEAL_RESULT -> [resolve_appeal,
-//                             close_bet] signed by the appeal authority -> APPEAL_RESOLVED ->
-//                             processed (payout animation) -> confirmed -> PAID / VOIDED.
-//   sweep(now)                keeper: 'sent' appeal rows whose confirm died (landed -> APPEALED and
-//                             the panel; dead -> failed, finalize re-armed); APPEALED bets with no
-//                             running panel (a restart; an appeal the projector saw first) -> panel /
-//                             decision / resolve_appeal; 'sent' resolve_appeal rows -> PAID or back
-//                             to APPEALED. An undecided appeal past appeal_resolve_deadline is the
-//                             timeout-refund keeper's (EXPIRED, both stakes back).
-//
-// Errors: NOT_A_PARTY, NOT_LOSER (the winner of a decisive ruling), APPEAL_WINDOW_CLOSED
-// (now >= appeal_deadline − 1 s, or the program's 6024), STATE_MOVED_ON (not RULED any more:
-// GG / finalize / another appeal got there first), SIGN_REQUEST_EXPIRED (no fresh built message),
-// MESSAGE_MISMATCH (message_sha256 != the stored message), SIGNATURE_INVALID (the signature does
-// not verify over the stored bytes, as for concede). Rate limit 3/h per user: the route passes
-// the `bucket`. Its token is taken last in the filing's own transaction (every check passed;
-// RATE_LIMITED rolls the filing back) and given back when the chain refuses the filing at
-// preflight, so only an accepted filing spends one.
-//
-// Decision timing: the AppealResult carries all three votes (SCHEMAS §7 `votes.length(3)`), so
-// it is decided when every seat has answered or timed out. Two agreeing votes already fix the
-// majority, so this only waits for the third vote's drama, never changes the outcome.
+// Decision timing: the AppealResult carries all three votes, so it is decided when every seat has
+// answered or timed out. Two agreeing votes already fix the majority, so this only waits for the
+// third vote's drama, never changes the outcome.
 import { and, desc, eq, inArray, lte, ne, sql } from 'drizzle-orm';
 import {
   createNoopSigner,
@@ -143,11 +113,11 @@ import type { Providers } from '../providers/types';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import { runPanel, type CastVote, type PanelInput } from './panel';
 
-/** ESCROW §8.3 / API-CONTRACT §1.5: the UI (and the server) stop taking appeals 1 s early. */
+/** The UI (and the server) stop taking appeals 1 s before appeal_deadline: no doomed tx. */
 export const APPEAL_UI_MARGIN_MS = 1_000;
-/** API-CONTRACT §2.12 (as §2.10): rebuild an unsigned appeal message older than this. */
+/** Rebuild an unsigned appeal message older than this (as concede does). */
 export const APPEAL_REBUILD_MS = 20_000;
-/** API-CONTRACT §1.7: 3 appeals per hour per user (ESCROW TM-L9). */
+/** 3 appeals per hour per user: an undecided appeal refunds both stakes, so they are rationed. */
 export const APPEAL_BUCKET = { limit: 3, windowMs: 3_600_000 } as const;
 /** The appellant's 3/h bucket (the route binds it to deps.rateLimit and the caller). */
 export interface AppealBucket {
@@ -158,7 +128,7 @@ export interface AppealBucket {
 }
 /** A failed resolve_appeal is sent again by the sweep no sooner than this. */
 export const RESOLVE_APPEAL_RETRY_MS = 3_000;
-/** rulings.model of the stage='appeal' row (DATA-MODEL §5.13). */
+/** rulings.model of the stage='appeal' row. */
 export const PANEL_MODEL = 'panel/majority-of-3';
 
 const b58enc = getBase58Encoder();
@@ -264,7 +234,7 @@ export function appealResultCue(r: AppealResult, names: Record<Party, string>): 
   );
 }
 
-/** A stored appeal_votes row -> SCHEMAS AppealVote. */
+/** A stored appeal_votes row -> the shared AppealVote. */
 function voteOf(r: typeof appealVotes.$inferSelect, betId: string): AppealVote {
   return AppealVote.parse({
     schema_version: 1,
@@ -307,6 +277,7 @@ export class AppealService {
 
   // ---- GET: the appellant's SignRequest ---------------------------------------------------
 
+  /** GET /v1/bets/:id/appeal: the appellant's SignRequest (kind 'appeal', one device signature). */
   async appealRequest(betId: string, userId: string): Promise<SignRequest> {
     const rt = await this.rt();
     const bet = await this.bet(betId);
@@ -322,8 +293,8 @@ export class AppealService {
    */
   async pushRequest(rt: ChainRuntime, bet: BetRow, loser: Party): Promise<SignRequest | null> {
     try {
-      if (bet.evidence_source === 'gemini') return null; // SCHEMAS §7: no "I appeal!" on a market
-      if (await isDanceOffBet(this.deps.db, bet.id)) return null; // DANCE-OFF §5: the score decides
+      if (bet.evidence_source === 'gemini') return null; // the UI has no "I appeal!" on a market
+      if (await isDanceOffBet(this.deps.db, bet.id)) return null; // the dance score decides
       if (await isCalledOffBet(this.deps.db, bet.id)) return null; // both agreed: nothing to appeal
       this.windowOrThrow(bet, this.deps.now());
       return await this.buildRequest(rt, bet, loser);
@@ -334,8 +305,8 @@ export class AppealService {
   }
 
   /**
-   * DANCE-OFF §5: a dance off is decided by the deterministic score, so it has no appeal (no
-   * "check it again"), as a Gemini market has none.
+   * Refuses the bets that have no appeal: a dance off (its deterministic score decides) and a
+   * call-off (judge/call-off.ts: both players agreed to the refund).
    */
   private async danceOffOrThrow(bet: Pick<BetRow, 'id' | 'state'>): Promise<void> {
     if (await isDanceOffBet(this.deps.db, bet.id))
@@ -343,7 +314,6 @@ export class AppealService {
         state: bet.state,
         reason: 'dance_off',
       });
-    // A call-off (judge/call-off.ts): both players agreed to the refund, so there is no appeal.
     if (await isCalledOffBet(this.deps.db, bet.id))
       throw new HttpError('INVALID_STATE', 'Called off. No appeals.', {
         state: bet.state,
@@ -351,7 +321,10 @@ export class AppealService {
       });
   }
 
-  /** The caller's party if they may appeal now (SCHEMAS §5.3 loser; the window; RULED). */
+  /**
+   * The caller's party if they may appeal now: the loser of a decisive ruling (either party of a
+   * VOID), while the bet is RULED and the window is open.
+   */
   private appellantOrThrow(bet: BetRow, userId: string, now: number): Party {
     const party = partyOf(bet, userId);
     if (!party) throw new HttpError('NOT_A_PARTY', "You're not in this bet.");
@@ -364,6 +337,10 @@ export class AppealService {
     return party;
   }
 
+  /**
+   * Throws unless RULED: STATE_MOVED_ON after it (a GG, finalize or another appeal got there
+   * first), INVALID_STATE before it.
+   */
   private rulingOpenOrThrow(bet: Pick<BetRow, 'state'>): void {
     if (bet.state === 'RULED') return;
     throw new HttpError(
@@ -453,8 +430,8 @@ export class AppealService {
       staticAccounts: Address[];
       lifetimeToken: string;
     };
-    // Device policy G2: the card equals the phone's own renderSignCard() over the same final
-    // Terms, appellant and BetSnapshot.deadlines.appeal_deadline (whole unix seconds).
+    // The phone's device policy signs only if this card equals its own renderSignCard() over the
+    // same final Terms, appellant and BetSnapshot.deadlines.appeal_deadline (whole unix seconds).
     const appealEndSecs = Math.floor(
       (bet.appeal_deadline?.getTime() ?? row.built_at.getTime() + SIGN_REQUEST_TTL_MS) / 1000,
     );
@@ -484,7 +461,8 @@ export class AppealService {
         me: party,
         appeal_deadline: appealEndSecs,
       }),
-      // T2: the offchain outcome of the ruling.issued the phone verified (VOID for a Refund).
+      // The ruling's hash and offchain outcome (VOID where the chain says Refund), which the phone
+      // checks against the ruling.issued it verified.
       ruling_ref: { ruling_hash: bet.ruling_hash!, outcome: PG_TO_RULING[bet.outcome!] },
       issued_at: iso(this.deps.now()),
     };
@@ -659,7 +637,6 @@ export class AppealService {
       this.deps.log.warn('appeal.send_retry', { bet_id: betId, err });
     }
 
-    // Out: tx.submitted + the judge announces the panel (API-CONTRACT §2.12 effects).
     const names = await this.names(bet);
     const envs = await this.deps.db.transaction(async (tx) => [
       await appendBetEvent(tx, {
@@ -683,7 +660,8 @@ export class AppealService {
       signature: prepared.txSig,
     });
 
-    // The panel starts now, beside the confirm (§7.2: votes stored, streamed after Appealed).
+    // The panel starts now, beside the confirm: its votes are stored as they land but streamed
+    // only once the bet is APPEALED (failAppeal discards them if the appeal never lands).
     void this.ensurePanel(prepared.appealId);
     this.o.inflight.run('appeal.confirm', () =>
       this.confirmAppeal(
@@ -876,8 +854,8 @@ export class AppealService {
 
   /**
    * The appeal tx never landed (preflight, onchain failure, expiry): row failed / expired,
-   * appeals 'failed', its votes discarded (§7.2), tx.failed pushed, and finalize re-armed so
-   * the ruling is paid out as usual.
+   * appeals 'failed', its votes discarded, tx.failed pushed, and finalize re-armed so the ruling
+   * is paid out as usual.
    */
   private async failAppeal(
     betId: string,
@@ -1032,7 +1010,7 @@ export class AppealService {
     if (out?.envs.length) fanout(this.deps, out.b, out.envs);
   }
 
-  /** appeal.vote + APPEAL_VOTE for every stored vote not on the bet's log yet (under the bet lock). */
+  /** appeal.vote + APPEAL_VOTE for each stored vote not yet on the bet's log (under its lock). */
   private async pendingVotes(tx: Tx, appealId: string, betId: string): Promise<BetEventEnvelope[]> {
     const stored = await tx
       .select()
@@ -1664,7 +1642,8 @@ export class AppealService {
       }
     }
 
-    // 2. APPEALED bets: the panel, the decision, resolve_appeal (whatever is missing).
+    // 2. APPEALED bets: the panel, the decision, resolve_appeal (whatever is missing). Past
+    //    appeal_resolve_deadline a bet is the timeout-refund keeper's (EXPIRED, stakes back).
     const live = await this.deps.db
       .select()
       .from(bets)
@@ -1842,7 +1821,7 @@ async function insertVotes(tx: Tx, casts: readonly CastVote[]): Promise<void> {
     .onConflictDoNothing();
 }
 
-/** One in-flight tx per (bet, kind) (chain_txs_inflight_uq): retire a stale one before a new build. */
+/** One in-flight tx per (bet, kind) (chain_txs_inflight_uq): retire a stale one before a build. */
 async function expireInflight(tx: Tx, betId: string, kind: 'appeal' | 'resolve_appeal') {
   await tx
     .update(chainTxs)

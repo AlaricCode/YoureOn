@@ -1,13 +1,14 @@
-// The keeper: one in-process scheduler for the server's periodic sweeps (ARCHITECTURE §1
-// "every timer is a DB row first"; SCHEMAS §9.2 "Deadline sweep: this happens server-side").
-// Ported from Verdict packages/backend/src/keeper/keeper.ts (the scheduler idea only: tasks
-// register, a pass runs them serially, overlapping passes coalesce). Re-done for this server:
+// The keeper: one in-process scheduler for the server's periodic sweeps. Tasks register, a pass
+// runs them serially, and overlapping passes coalesce.
+// Adapted from Verdict's packages/backend/src/keeper/keeper.ts (docs/MERGE-PLAN.md).
+// Spec: docs/planning/ARCHITECTURE.md §1.3.
 //
-//  - Tasks read and write Postgres, never in-memory state, so a restart loses nothing: the
-//    first pass after boot catches up on every deadline that passed while the machine was down.
-//  - Every task must be safe when two keepers run it at once (two Fly machines during a deploy,
-//    or a manual `tick()` racing the timer): lock rows with FOR UPDATE SKIP LOCKED and re-check
-//    the condition after the lock (see draft-idle.ts).
+//  - Every timer is a DB row first: a task's durable state lives in Postgres (what it keeps in
+//    memory only skips work already in flight here or paces a retry), so a restart loses nothing
+//    and the first pass after boot catches up on every deadline that passed while it was down.
+//  - Every task must be safe when two runs overlap (two Fly machines during a deploy, or a route
+//    that runs the same sweep directly): lock rows with FOR UPDATE SKIP LOCKED and re-check the
+//    condition after the lock (see draft-idle.ts).
 //  - The clock is `deps.now` (injectable), passed to each task as `nowMs`.
 //  - The timer is a setTimeout chain (interval + random jitter, unref'd), so timer passes never
 //    overlap; `stop()` waits for an in-flight pass, so server close() never closes the DB pool
@@ -16,16 +17,9 @@
 //    something is badly stuck) is logged and the pass moves on to the next task: one hung sweep
 //    never stalls the others. The stuck run is left to finish on its own and the task is skipped
 //    until it does, so a task never overlaps itself.
-//  - `status()` reports per-task runs / failures / timeouts / last error and the recent errors
-//    (GET /v1/demo/health).
-//
-//   const keeper = new Keeper({ now: deps.now, log: deps.log });
-//   keeper.register({ name: 'draft-idle', run: (now) => expireIdleDrafts(deps, { now }) });
-//   keeper.start();            // server.ts startServer
-//   await keeper.stop();       // server.ts close()
 import type { Logger } from '../log';
 
-/** Default pass interval: the reconciler cadence (= SCHEMAS `STREAM_FALLBACK_MS`, 5 s). */
+/** Default pass interval: the reconciler cadence (= `STREAM_FALLBACK_MS`, 5 s). */
 export const KEEPER_INTERVAL_MS = 5_000;
 /** Default random extra delay per pass, so several keepers don't sweep in lockstep. */
 export const KEEPER_JITTER_MS = 1_000;

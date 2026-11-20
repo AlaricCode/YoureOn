@@ -1,10 +1,11 @@
-// The voice judge's `request_review` webhook tool (API-CONTRACT §4.3): POST /el/tools/request_review
-// with the secret header (X-YO-Tool-Secret), body {conversation_id, bet_id, heard}. Someone said
-// "check that again" after the ruling: ReviewService.request (./service.ts) asks the LOSER's phone
-// to confirm (the agent never decides, and this files nothing). Same conventions as confirm_terms
+// The voice judge's `request_review` webhook tool: POST /el/tools/request_review with the secret
+// header (X-YO-Tool-Secret), body {conversation_id, bet_id, heard}. Someone said "check that
+// again" after the ruling: ReviewService.request (./service.ts) asks the LOSER's phone to confirm
+// (the agent never decides, and this files nothing). Same conventions as confirm_terms
 // (voice/tools.ts): 401 only for a bad secret; otherwise HTTP 200 with {ok, say, …} under 300 B;
 // WRONG_BET (+ an audit row) when the ids don't match the conversation's bet; the 'el/tools'
 // bucket (30/min per conversation) answers SLOW_DOWN; a success is replayed within 10 s.
+// Spec: docs/planning/API-CONTRACT.md §4.3.
 import type { Context } from 'hono';
 import { auditLog } from '@youre-on/db';
 import { REVIEW_HEARD_MAX, type ReviewFix } from '@youre-on/shared/gg';
@@ -28,7 +29,7 @@ import type { ReviewResult } from './service';
 
 const NAME = 'request_review';
 
-/** What the judge says for each refusal (API-CONTRACT §4.3 request_review). */
+/** What the judge says for each refusal. */
 export const REVIEW_SAY: Record<
   Exclude<ReviewFix, 'WRONG_BET' | 'SLOW_DOWN' | 'SERVER'>,
   string
@@ -77,7 +78,7 @@ export function requestReviewHandler(opts: { state: ToolState }) {
       deps.log.warn('el_tool.unauthorized', { tool: NAME, request_id: requestId });
       return c.json({ ok: false, fix: 'UNAUTHORIZED' }, 401);
     }
-    // §4.1: every WRONG_BET writes an audit row (off the reply path, failures only logged).
+    // Every WRONG_BET writes an audit row (off the reply path, failures only logged).
     const wrongBet = (betId: string | undefined, details: Record<string, unknown>) => {
       void deps.db
         .insert(auditLog)

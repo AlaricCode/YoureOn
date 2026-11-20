@@ -1,26 +1,20 @@
-// The spoken review request (packages/shared/src/gg.ts; API-CONTRACT §3.4 review.requested /
-// review.closed, §4.3 request_review). Someone in the room says "check that again": the voice
-// agent calls request_review (./tool.ts), or the operator POSTs /v1/demo/bets/:id/review. The
-// court then asks the LOSER's phone to confirm the appeal (tap + Face ID, device policy 'appeal').
-// A spoken request never files anything: the mic can't tell who spoke.
-//
-//   request(bet)    under the bet lock: the checks below, once per bet; appends review.requested
-//                   {review_id, for_party: loser, source, requested_at, confirm_by} and an audit row
-//                   (what was heard stays there: never broadcast), then arms the lapse timer.
-//   lapse(bet, id)  at confirm_by: still RULED, no appeal out, not closed -> review.closed lapsed
-//                   + judge.cue REVIEW_CLOSED (speak:false). Otherwise nothing.
-//   decline(bet)    the loser's "Keep ruling" -> review.closed declined (+ REVIEW_CLOSED).
+// The spoken review request (types: packages/shared/src/gg.ts). Someone in the room says "check
+// that again": the voice agent calls request_review (./tool.ts), or the operator POSTs
+// /v1/demo/bets/:id/review. The court then asks the LOSER's phone to confirm the appeal (tap +
+// Face ID, device policy 'appeal'). A spoken request never files anything: the mic can't tell
+// who spoke.
+// Spec: docs/planning/API-CONTRACT.md §2.12a.
 //
 // confirm_by = appeal_deadline − APPEAL_UI_MARGIN_MS: the appeal POST's own cutoff. The hold can't
-// be longer: the program refuses an appeal at or after appeal_deadline (ESCROW I10), so the review
-// holds the ruling open exactly until the appeal cutoff and never moves it (once per ruling).
+// be longer: the program refuses an appeal at or after appeal_deadline, so the review holds the
+// ruling open exactly until the appeal cutoff and never moves it (once per ruling).
 // Finalize can't race it: a request is accepted only before confirm_by − REVIEW_MIN_LEAD_MS, and
 // finalize runs at or after appeal_deadline (chain clock; the server re-arms on AppealWindowOpen),
 // so they are at least 2.5 s apart. A confirmed review is the normal appeal (appeal/service.ts:
 // filed RULED-under-lock, finalize skips while it is out). A GG closes it (bet.gg on clients).
 //
-// Persistent state is the bet's own log (bet_events): the timers are in memory, and a timer lost
-// to a restart only means no review.closed (clients close at confirm_by; the PAID cue reads the log).
+// Persistent state is the bet's own log (bet_events). The timers are in memory: a timer lost to
+// a restart only means no review.closed (clients close at confirm_by; the PAID cue reads the log).
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { appeals, auditLog, betEvents, bets, chainTxs, users } from '@youre-on/db';
@@ -53,7 +47,7 @@ export interface ReviewServiceOptions {
 
 export interface ReviewRequestOptions {
   source: ReviewSource;
-  /** What the judge heard (audit only, cut to REVIEW_HEARD_MAX). */
+  /** What the judge heard (audit only, never broadcast; cut to REVIEW_HEARD_MAX). */
   heard?: string;
   conversationId?: string | null;
   requestId?: string;
@@ -171,7 +165,10 @@ export class ReviewService {
     return this.o.deps;
   }
 
-  /** The state checks, in order; null = the bet is RULED with a decisive camera ruling. */
+  /**
+   * The state checks, in order; null when the bet is RULED (request() then checks the appeal, the
+   * market, the dance off, the loser, one review per ruling, the window and the appeals left).
+   */
   private stateFix(b: BetRow): ReviewFix | null {
     if (b.state === 'RULED') return null;
     if (before(b.state, 'RULED')) return 'NO_RULING';
@@ -198,7 +195,7 @@ export class ReviewService {
       if (stateFix) return no(stateFix);
       if (await appealFiled(tx, betId)) return no('WITH_PANEL');
       if (b.evidence_source === 'gemini') return no('MARKET');
-      // DANCE-OFF §5: the score decides a dance off; there is no review ("The ruling is final.").
+      // The score decides a dance off; there is no review ("The ruling is final.").
       if (await isDanceOffBet(tx, betId)) return no('FINAL');
       if (!loser || !loserName) return no('NO_LOSER');
       if (!b.appeal_deadline) return no('NO_RULING');

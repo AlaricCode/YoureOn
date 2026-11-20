@@ -1,15 +1,12 @@
-// B's invite answer as the consent gate for freezing terms (API-CONTRACT §2.5, §4.3 confirm_terms).
+// B's invite answer as the consent gate for freezing terms: a confirm (voice or typed) is refused
+// INVITE_PENDING until B has accepted. If the voice judge's confirm_terms was refused for THESE
+// terms, B's accept hands it an [EVENT] INVITE_ACCEPTED line to re-confirm, since nothing else
+// would tell it (the judge only hears the room).
+// Spec: docs/planning/API-CONTRACT.md §2.5.
 //
-//   priorAnswers()          B's answers so far, from the bet_events log (accepted / declined)
-//   recordInvitePending()   the audit row a refused confirm leaves (terms.confirm_refused,
-//                           reason invite_pending, the terms_hash it was refused for)
-//   judgeAwaitsAccept()     did the voice judge try to confirm THESE terms before B accepted?
-//                           Then B's accept hands it an [EVENT] INVITE_ACCEPTED line to re-confirm,
-//                           since nothing else would tell it (the judge only hears the room).
-//
-// All three run inside the caller's transaction, under the bet row lock, so a confirm and an
-// accept serialize: either the refusal is recorded first (and the accept sees it) or the accept
-// is (and the confirm goes through).
+// The deciding checks run inside the caller's transaction, under the bet row lock, so a confirm
+// and an accept serialize: either the refusal is recorded first (and the accept sees it) or the
+// accept is (and the confirm goes through).
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { auditLog, betEvents } from '@youre-on/db';
 import { BetInviteAnsweredPayload } from '@youre-on/shared/api';
@@ -18,7 +15,7 @@ import type { Tx } from '../lock/common';
 
 export const CONFIRM_REFUSED_ACTION = 'terms.confirm_refused';
 
-/** B's earlier invite answers for this bet, from the bet_events log (also terms/routes.ts). */
+/** B's invite answers so far (accepted / declined), from the bet's bet_events log. */
 export async function priorAnswers(
   tx: Tx | AppDeps['db'],
   betId: string,

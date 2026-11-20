@@ -1,18 +1,14 @@
-// Challenge, API-CONTRACT §2.5 (TASKS D0-J4):
-//   POST /v1/bets                          (S)     -> 201 {bet: BetSnapshot (DRAFTING), voice: {dynamic_variables}}
-//   POST /v1/bets/:bet_id/invite/accept    (S, B)  -> 200 {bet}   bet.invite_answered accepted; state unchanged
-//                                                     (+ judge.cue INVITE_ACCEPTED if the voice judge
-//                                                     was told to wait for it: ./invite.ts)
-//   POST /v1/bets/:bet_id/invite/decline   (S, B)  -> 200 {bet}   -> CANCELLED (declined); judge.cue DECLINED
-//   POST /v1/bets/:bet_id/rematch          (S, A|B) -> 201 {bet_id, suggested_stake_usd, bet, voice}
-//                                                     DANCE-OFF §7 double or nothing: a new DRAFTING
-//                                                     bet, caller = A, supersedes_bet_id = this bet
+// Challenges: create one, answer the invite, ask for a rematch.
+// Spec: docs/planning/API-CONTRACT.md §2.5.
 //
-// POST /v1/bets effects, in ONE transaction: the bets row (bet_id = new UUIDv4 = the onchain
-// bet_id), the voice_sessions binding, bet.invited (seq 1) + bet.state DRAFTING (seq 2) in
-// bet_events, outbox `challenge_received` to B, an audit row. After commit: bet.invited to
-// B's user channel (and the bet channel / room stage), bet.state to the bet channel.
-// bet.invited carries `rivalry` (the pair's head-to-head before this bet, A's view; §3.4).
+//   POST /v1/bets                         (S)      -> 201 {bet: BetSnapshot (DRAFTING), voice}
+//   POST /v1/bets/:bet_id/invite/accept   (S, B)   -> 200 {bet}
+//       bet.invite_answered accepted, state unchanged (+ judge.cue INVITE_ACCEPTED if the voice
+//       judge was told to wait for it: ./invite.ts)
+//   POST /v1/bets/:bet_id/invite/decline  (S, B)   -> 200 {bet}
+//       CANCELLED (declined); judge.cue DECLINED
+//   POST /v1/bets/:bet_id/rematch         (S, A|B) -> 201 {bet_id, suggested_stake_usd, bet, voice}
+//       double or nothing: a new DRAFTING bet, caller = A, supersedes_bet_id = this bet
 import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { auditLog, bets, outbox, users, voiceSessions } from '@youre-on/db';
@@ -46,7 +42,7 @@ import { judgeAwaitsAccept, priorAnswers } from './invite';
 import { verifyMatchTicket } from './match-ticket';
 import { betSnapshot, loadUserRefs, partyOf, type BetRow } from './snapshot';
 
-/** Circle devnet USDC (the packages/shared pin, ESCROW §2), used when USDC_MINT is unset. */
+/** Circle devnet USDC (the packages/shared pin), used when USDC_MINT is unset. */
 export const DEVNET_USDC_MINT = USDC_MINT_DEVNET;
 
 /** States before the lock lands: a pair may have at most one bet here (`pair_busy`). */
@@ -57,11 +53,11 @@ export const PRE_LOCK_STATES = [
   'AWAITING_LOCK',
 ] as const satisfies readonly BetState[];
 
-/** §1.7: POST /v1/bets 6/min per user, and ≤ 3 pre-lock bets per user. */
+/** POST /v1/bets: 6/min per user, and ≤ 3 pre-lock bets per user. */
 export const BETS_BUCKET = { limit: 6, windowMs: 60_000 } as const;
 export const MAX_PRE_LOCK_BETS_PER_USER = 3;
 
-/** DANCE-OFF §7: a rematch (double or nothing) follows a bet that is over. */
+/** A rematch (double or nothing) follows a bet that is over. */
 export const REMATCH_FROM = [
   'PAID',
   'VOIDED',
@@ -71,16 +67,16 @@ export const REMATCH_FROM = [
 /** The rematch stake suggestion when the old bet never had stakes (dollars per side). */
 const REMATCH_DEFAULT_STAKE_USD = 5;
 
-/** §2.5: B may decline through the invite only here; later through §2.8 lock/decline. */
+/** B may decline through the invite only here; later through lock/decline. */
 const INVITE_DECLINABLE: readonly BetState[] = ['DRAFTING', 'TERMS_PROPOSED'];
-/** Accept is informational; it makes sense until the lock is in flight. */
+/** B may accept until the lock is in flight; the terms confirm waits for it (./invite.ts). */
 const INVITE_ACCEPTABLE: readonly BetState[] = [
   'DRAFTING',
   'TERMS_PROPOSED',
   'AWAITING_AUTHORIZATIONS',
 ];
 
-/** "20000000" -> "20" (the agent's `max_stake_usd` dynamic variable, §4.1). */
+/** "20000000" -> "20" (the voice agent's `max_stake_usd` dynamic variable). */
 export function maxStakeUsd(env: AppDeps['env']): string {
   const micro = env.MAX_STAKE_MICRO ?? MAX_STAKE.toString();
   return formatUsd(micro).replace(/^\$/, '');
@@ -120,7 +116,7 @@ export const betsRoutes: RouteModule = {
         voiceConversationId: body.voice_conversation_id ?? null,
         requestId: c.get('requestId'),
         now,
-        // after the room, membership and age checks, as before the helper existed
+        // a callback, so it runs after the room, membership and age checks
         verify: () => {
           if (body.challenge_method !== 'face') return;
           const v = verifyMatchTicket(
@@ -152,11 +148,11 @@ export const betsRoutes: RouteModule = {
       return c.json(out, 201);
     });
 
-    // DANCE-OFF §7 double or nothing (every bet type): either party of a finished bet challenges
-    // the other again in the same room, as A. The new bet is a normal DRAFTING challenge (any
-    // bet type on the negotiate screen); bet.invited carries rematch_of and the stake chip's
-    // default, 2 x the old per-side stake capped at max_stake. A repeat by the same caller while
-    // that rematch is still pre-lock answers it again (201, same bet).
+    // Double or nothing (every bet type): either party of a finished bet challenges the other
+    // again in the same room, as A. The new bet is a normal DRAFTING challenge (any bet type on
+    // the negotiate screen); bet.invited carries rematch_of and the stake chip's default, 2 x the
+    // old per-side stake capped at max_stake. A repeat by the same caller while that rematch is
+    // still pre-lock answers it again (201, same bet).
     app.post('/v1/bets/:bet_id/rematch', requireSignedRequest, async (c) => {
       const me = appAuth(c);
       deps.rateLimit?.take('bets', me.user_id, BETS_BUCKET);
@@ -307,7 +303,7 @@ export const betsRoutes: RouteModule = {
           });
         }
         const now = deps.now();
-        // The versioned state write first; appendBetEvent's last_seq bump comes after.
+        // The versioned state write first: appendBetEvent's last_seq bump also bumps bets.version.
         const updated = await tx
           .update(bets)
           .set({ state: 'CANCELLED', end_reason: 'declined' })
@@ -388,12 +384,12 @@ export interface ChallengeInput {
   now: number;
   /** Extra checks after the room, membership and age checks (POST /v1/bets: the face ticket). */
   verify?: () => void;
-  /** DANCE-OFF §7 double or nothing: the terminal bet this one follows (supersedes_bet_id). */
+  /** Double or nothing: the finished bet this one follows (supersedes_bet_id). */
   rematch?: { of: string; suggested_stake_usd: number };
 }
 
 /**
- * The challenge itself (§2.5), shared by POST /v1/bets and POST /v1/bets/:id/rematch: the room
+ * The challenge itself, shared by POST /v1/bets and POST /v1/bets/:id/rematch: the room
  * and both players checked, then ONE transaction (serialized per user: pair_busy and the open-bet
  * cap are race-free) writes the bets row, the voice binding, bet.invited (seq 1) + bet.state
  * DRAFTING (seq 2), the outbox push to B and an audit row; after commit bet.invited goes to B's
@@ -457,7 +453,7 @@ export async function createChallenge(
   const refs = await loadUserRefs(deps.db, [aId, bId]);
   const refA = refs.get(aId)!;
   const refB = refs.get(bId)!;
-  const betId = randomUUID(); // v4; = the onchain bet_id (SCHEMAS §1.2)
+  const betId = randomUUID(); // v4; also the onchain bet_id
   const at = new Date(now);
 
   const { row, invited, drafting } = await deps.db.transaction(async (tx) => {
@@ -606,7 +602,7 @@ export async function createChallenge(
   return { row, refA, refB };
 }
 
-/** Moved to ./invite (the lock's confirm step uses it too); re-exported for existing callers. */
+/** Also exported from here; it lives in ./invite, shared with the terms confirm. */
 export { priorAnswers } from './invite';
 
 /** SELECT … FOR UPDATE the bet; 404 if unknown, 403 NOT_A_PARTY unless the caller is B. */
@@ -637,11 +633,11 @@ async function snapshotFor(
 }
 
 /**
- * §2.5 "The voice session is bound: voice_sessions(el_conversation_id → bet_id)".
- * The conversation must be A's own, active and not bound to another bet. POST /v1/voice/tokens
- * (§2.6) now stores the row at mint time, but minting needs the ElevenLabs key (PENDING-KEY), so
- * until the key exists an unknown id still creates a bound row here. Once tokens mint for real,
- * make an unknown id a 422 (it lets a caller squat a conversation id).
+ * Binds the voice session to the bet: voice_sessions(el_conversation_id → bet_id). The
+ * conversation must be A's own, active and not bound to another bet. POST /v1/voice/tokens
+ * stores the row at mint time, but minting needs the ElevenLabs key, so until the key exists an
+ * unknown id still creates a bound row here. Once tokens mint for real, make an unknown id a 422
+ * (it lets a caller squat a conversation id).
  */
 async function bindVoiceSession(
   tx: Tx,
@@ -670,7 +666,7 @@ async function bindVoiceSession(
         user_id: v.user_id,
         device_id: v.device_id,
         purpose: 'terms',
-        // PENDING-KEY: the real agent id comes with the token mint (§2.6).
+        // The real agent id comes with the token mint (POST /v1/voice/tokens).
         el_agent_id: deps.env.ELEVENLABS_AGENT_ID ?? 'unconfigured',
         el_conversation_id: v.conversation_id,
       })

@@ -1,7 +1,8 @@
-// `[EVENT]` lines for judge.cue (API-CONTRACT §4.5):
+// `[EVENT]` lines for judge.cue:
 //   [EVENT] <NAME> k=v k=v … :: <instruction>
 // One line, ≤ 300 chars, ASCII; values with spaces are double-quoted. The server composes the
-// text so wording can change without an EAS rebuild. Exported for the judge/lock streams.
+// text so wording can change without an EAS rebuild.
+// Spec: docs/planning/API-CONTRACT.md §4.5.
 import { JudgeCuePayload, type JudgeCueName } from '@youre-on/shared/api';
 import type { z } from 'zod/v4';
 
@@ -33,8 +34,8 @@ export function eventLine(
   const text = asciiFold(instruction);
   const line = head + text;
   if (line.length <= EVENT_LINE_MAX) return line;
-  // Shorten the free-text instruction first, so a quoted k="v" value is never cut open
-  // (§4.5 grammar). Only a head that alone overflows is cut blindly.
+  // Shorten the free-text instruction first, so a quoted k="v" value is never cut open. Only a
+  // head that alone overflows is cut blindly.
   const room = EVENT_LINE_MAX - head.length - 3;
   if (room >= 0) return `${head}${text.slice(0, room)}...`;
   return `${line.slice(0, EVENT_LINE_MAX - 3)}...`;
@@ -52,7 +53,7 @@ export function judgeCue(
   return JudgeCuePayload.parse({ cue, text: eventLine(cue, kv, instruction), speak });
 }
 
-/** §4.5 DECLINED: `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` */
+/** `[EVENT] DECLINED name=Jake :: Say Jake passed. Nothing moved.` */
 export function declinedCue(name: string): JudgeCue {
   const n = asciiFold(name);
   return judgeCue('DECLINED', { name }, `Say ${n} passed. Nothing moved.`);

@@ -1,26 +1,21 @@
-// Typed terms: Beat 2 without the voice judge (packages/shared/src/judge/typed-terms.ts).
+// Typed terms: the terms negotiation without the voice judge, for a phone that types the terms or
+// picks a dance routine. The routes run the voice tools' own core (evaluateProposeTerms, then
+// lock/terms.ts persistEvaluation; confirmAndLock to freeze), but await the persist, so the phone
+// gets the outcome.
 //
 //   POST /v1/bets/:bet_id/terms/typed    (S, party A; DRAFTING | TERMS_PROPOSED)
-//     TypedTermsRequest -> typedTermsArgs -> evaluateProposeTerms (the same pure core as
-//     /el/tools/propose_terms: normText, mapping, guardrail prefilter, stake cap, market) ->
-//     lock/terms.ts persistEvaluation (the body of voice/tools.ts termsSink): terms.proposed +
-//     bet.state TERMS_PROPOSED, or terms.draft, or a refusal that cancels the bet (terms.refused,
-//     judge.cue REFUSED). Unlike the webhook, the persist is awaited: the phone gets the outcome.
+//     -> terms.proposed (TERMS_PROPOSED), a terms.draft, or a refusal that cancels the bet
 //   POST /v1/bets/:bet_id/terms/dance    (S, party A; DRAFTING | TERMS_PROPOSED)
-//     DanceTermsRequest {routine_id, amount_usd} -> danceTermsArgs (DANCE-OFF §1: the routine's
-//     id, version and sha256 prefix ride in success_criteria[0]; both perform, A is the yes party,
-//     one round, even money) -> the same evaluateProposeTerms + persistEvaluation (source
-//     'dance'). 404 NOT_FOUND for a routine this server doesn't bundle. No odds (even money).
+//     a bundled routine (404 NOT_FOUND otherwise) at even money, so no odds
 //   POST /v1/bets/:bet_id/terms/confirm  (S, party A; TERMS_PROPOSED)
-//     {terms_hash} must be the bet's current terms (409 TERMS_HASH_MISMATCH otherwise), then the
-//     confirm_terms step (voice/tools.ts confirmAndLock): freeze -> AWAITING_AUTHORIZATIONS ->
-//     LockService.start in the background. A repeat after the freeze answers the same code.
-//     B must have accepted the invite first (409 INVALID_STATE {reason: 'invite_pending'}):
-//     with LOCK_SIGNER=server the lock is custodial, so B's accept is B's only consent here.
+//     {terms_hash} must be the current terms (409 TERMS_HASH_MISMATCH); freeze ->
+//     AWAITING_AUTHORIZATIONS, then the lock starts in the background. A repeat after the freeze
+//     answers the same code.
 //
-// Only A sets terms, as only A's phone hosts the judge (D6); B consents with the invite accept
-// (and, with LOCK_SIGNER=phones, the lock hold).
-// Both routes share a per-(bet, user) bucket on top of the session bucket (API-CONTRACT §1.7).
+// Only A sets terms, as only A's phone hosts the judge; B consents with the invite accept (and,
+// with LOCK_SIGNER=phones, the lock hold). The confirm needs that accept first (409 INVALID_STATE
+// invite_pending): with LOCK_SIGNER=server the lock is custodial, so it is B's only consent.
+// Spec: docs/planning/API-CONTRACT.md §2.7.
 import type { Context } from 'hono';
 import { isTerminalBetState } from '@youre-on/shared/bet-state';
 import { MAX_STAKE } from '@youre-on/shared/constants';
@@ -57,7 +52,10 @@ import { displayCode, loadEnvelope, persistEvaluation, type PersistResult } from
 import { marketMessage } from '../markets/routes';
 import { confirmAndLock, PROPOSABLE_STATES } from '../voice/tools';
 
-/** Typed proposals + confirms: 12/min per (bet, user). Plenty for a person, stops a loop. */
+/**
+ * One bucket for all three routes, on top of the session bucket: 12/min per (bet, user). Plenty
+ * for a person, stops a loop.
+ */
 export const TYPED_TERMS_BUCKET: BucketSpec = { limit: 12, windowMs: 60_000 };
 
 const isProposable = (state: string) => (PROPOSABLE_STATES as readonly string[]).includes(state);
@@ -156,7 +154,7 @@ export const termsRoutes: RouteModule = {
       return c.json(await typedResponse(deps, bet.id, evaluation, reply, r), 200);
     });
 
-    // DANCE-OFF §1: A picks a bundled routine and an even stake; the server writes the terms.
+    // A picks a bundled routine and an even stake; the server writes the terms.
     app.post('/v1/bets/:bet_id/terms/dance', requireSignedRequest, async (c) => {
       const deps = c.get('deps');
       const requestId = c.get('requestId');
@@ -243,7 +241,7 @@ export const termsRoutes: RouteModule = {
         requireInviteAccepted: true,
       });
       if (!r.ok && r.fix === 'INVITE_PENDING') throw invitePending();
-      // Odds: unequal stakes must be accepted on both phones first (odds/service.ts R7).
+      // Odds: unequal stakes must be accepted on both phones first (odds/service.ts oddsGate).
       if (!r.ok && r.fix === 'ODDS_PENDING')
         throw new HttpError('INVALID_STATE', 'Waiting on the odds.', {
           state: bet.state,

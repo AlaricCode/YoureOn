@@ -1,25 +1,17 @@
-// Keeper task `draft-idle`: SCHEMAS §9.3 "Draft idle: 5 min since the last negotiation event
-// → EXPIRED" (server-enforced; TASKS D2-J1 "a draft idle for 5 minutes expires").
-// Ported from Verdict packages/backend/src/persistence/housekeeping.ts (a throttled keeper
-// task that expires stale records). Here it is a Postgres sweep over `bets`, not a JSON store.
+// Keeper task `draft-idle`: a bet still in negotiation 5 min after its last negotiation event
+// moves to EXPIRED (end_reason draft_idle). Without it a challenge nobody answers would hold
+// `pair_busy` and a slot of the 3-open-bets cap forever (bets/routes.ts PRE_LOCK_STATES).
+// Adapted from Verdict's packages/backend/src/persistence/housekeeping.ts (docs/MERGE-PLAN.md).
+// Spec: docs/planning/SCHEMAS.md §9.3.
 //
-// Why: a challenge nobody answers would otherwise hold `pair_busy` and a slot of the 3-open-bets
-// cap forever (bets/routes.ts PRE_LOCK_STATES; docs/STATUS-D0.md "No idle-draft sweeper").
-//
-// Scope: the negotiation phase only, DRAFTING and TERMS_PROPOSED (both list "EXPIRED (idle 5 min)"
-// as an exit in the SCHEMAS §9.2 state table). Nothing is built or signed
-// there (no nonce lease, no chain_txs row), so expiring is a pure offchain write. From
-// AWAITING_AUTHORIZATIONS on, expiry is the lock window (`expires_at`, API-CONTRACT §2.8) and
-// needs the nonce advance, which belongs to the lock sweeper, not this task.
+// Scope: DRAFTING and TERMS_PROPOSED only. Nothing is built or signed there (no nonce lease, no
+// chain_txs row), so expiring is a pure offchain write. From AWAITING_AUTHORIZATIONS on, expiry
+// is the lock window (`expires_at`) and needs the nonce advance, which belongs to the lock sweeper.
+// Expiring writes no outbox row: the API contract's state-to-events table has none for EXPIRED.
 //
 // "Last negotiation event" = the newest bet_events row of the bet (bet.invited,
 // bet.invite_answered, terms.draft / terms.proposed …), or bets.created_at if newer. Both are
 // written with the injectable clock (deps.now), so tests can move time.
-//
-// Effects per expired bet, in one transaction (API-CONTRACT §3.4 "State → events on entry",
-// row CANCELLED / EXPIRED): state EXPIRED, end_reason `draft_idle`; events `bet.state` and
-// `judge.cue EXPIRED`; an audit row. No outbox push (the table has none for EXPIRED). After
-// commit the events fan out to bet:<id> and the room's stage.
 //
 // Concurrency: candidates are read without locks, then each bet is claimed in its own short
 // transaction with `FOR UPDATE SKIP LOCKED` (a request path or another keeper holding the row
@@ -35,7 +27,7 @@ import { judgeCue, type JudgeCue } from '../bets/cues';
 import { appendBetEvent, type BetEventEnvelope } from '../realtime/events';
 import type { KeeperTask } from './keeper';
 
-/** SCHEMAS §9.3 draft idle (ARCHITECTURE §7 demo config: 5 min). */
+/** How long a draft may go without a negotiation event before it expires. */
 export const DRAFT_IDLE_MS = 5 * 60_000;
 /** The negotiation states this task expires. */
 export const DRAFT_IDLE_STATES = [
@@ -65,7 +57,7 @@ export interface DraftIdleResult {
   skipped: number;
 }
 
-/** §4.5 `[EVENT] EXPIRED …` for a draft that went quiet. */
+/** `[EVENT] EXPIRED reason=draft_idle :: …` for a draft that went quiet. */
 export function draftIdleCue(): JudgeCue {
   return judgeCue(
     'EXPIRED',
@@ -147,7 +139,7 @@ async function expireOne(
       .where(eq(bets.id, betId));
     if (!fresh?.idle) return null;
 
-    // The versioned state write first; appendBetEvent's last_seq bump comes after.
+    // The versioned state write first: appendBetEvent's last_seq bump also bumps bets.version.
     const updated = await tx
       .update(bets)
       .set({ state: 'EXPIRED', end_reason: 'draft_idle' })

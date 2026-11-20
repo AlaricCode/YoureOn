@@ -1,5 +1,6 @@
-// Rooms and presence (API-CONTRACT §2.3, DATA-MODEL §5.4/§5.5): room lookup and liveness,
-// active membership, member lists (RoomMember[]) and the `room.presence` WS control frame.
+// Rooms and presence: room lookup and liveness, active membership, member lists (RoomMember[])
+// and the `room.presence` WS control frame.
+// Spec: docs/planning/API-CONTRACT.md §2.3.
 import { randomInt } from 'node:crypto';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import { roomMembers, rooms, users, type Db } from '@youre-on/db';
@@ -21,7 +22,7 @@ import { userRefOf } from '../bets/snapshot';
 export type RoomRow = typeof rooms.$inferSelect;
 type Reader = Pick<Db, 'select' | 'execute'>;
 
-/** DATA-MODEL §5.4 default lifetime (`now() + 12 h`). */
+/** A room's lifetime: 12 h, as the rooms.expires_at default (`now() + 12 h`). */
 export const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
 
 export function generateRoomCode(): string {
@@ -104,10 +105,9 @@ export async function isActiveMember(
 }
 
 // ---- face_enrolled ----------------------------------------------------------------------
-// face_enrollments (DATA-MODEL §5.3) arrived with migration 0006 (src/face). The probe below is
-// kept so a database that has not run 0006 yet still works. Until
-// it does, every member reports face_enrolled=false; once the table exists this picks it up
-// without a code change. The probe result is cached only once it is true.
+// The to_regclass probe lets a database without face_enrollments (migration 0006 not run) still
+// list members, every one with face_enrolled=false; once the table exists it is picked up without
+// a restart. Only a positive probe result is cached.
 let faceTableKnown = false;
 async function faceEnrolledIds(db: Reader, userIds: string[]): Promise<Set<string>> {
   if (userIds.length === 0) return new Set();
@@ -128,10 +128,10 @@ async function faceEnrolledIds(db: Reader, userIds: string[]): Promise<Set<strin
 // ---- presence ---------------------------------------------------------------------------
 
 /**
- * Tracks `online` per §2.3 ("a live WS within 30 s"): online while the hub has a socket for
- * the user, and for PRESENCE_ONLINE_GRACE_MS after the last one closes. On every transition
- * (online, and offline once the grace ends) it bumps room_members.last_seen_at and pushes
- * `room.presence` to each of the user's live rooms.
+ * Tracks `online` ("a live WS within 30 s"): online while the hub has a socket for the user, and
+ * for PRESENCE_ONLINE_GRACE_MS after the last one closes. On every transition (online, and
+ * offline once the grace ends) it bumps room_members.last_seen_at and pushes `room.presence` to
+ * each of the user's live rooms.
  */
 export class PresenceTracker {
   private readonly lastOffline = new Map<string, number>();
@@ -272,7 +272,7 @@ export async function loadMembers(
   return out;
 }
 
-/** Pushes the `room.presence` control frame (§3.1) to room:<roomId>. */
+/** Pushes the `room.presence` control frame to room:<roomId>. */
 export async function publishPresence(
   deps: Pick<AppDeps, 'db' | 'hub'>,
   presence: PresenceView,

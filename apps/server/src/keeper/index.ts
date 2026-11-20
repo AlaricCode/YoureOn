@@ -1,7 +1,5 @@
-// The server's keeper and its registered sweeps. server.ts createDeps builds it (unless
-// disabled) and startServer starts / stops it with the HTTP server. Later sweeps (lock-window
-// expiry with the nonce advance, `timeout_refund`, the nonce-pool sweep, the outbox drain)
-// register here.
+// The server's keeper and the sweeps it runs. server.ts createDeps builds it (unless disabled)
+// and startServer starts / stops it with the HTTP server.
 import type { AppDeps } from '../context';
 import { rpcPollFallbackMs, StreamGapReconciler } from '../chain/reconciler';
 import { lifecycleOf } from '../lock/runtime';
@@ -25,9 +23,10 @@ export {
 } from './draft-idle';
 
 /**
- * Chain lifecycle sweeps (src/lock, src/payout); both no-op while the chain is not configured.
+ * Chain lifecycle sweeps (src/lock, src/payout, src/appeal); each no-ops while the chain is not
+ * configured.
  *  - lock-sweep: lock windows past expires_at -> EXPIRED + nonce revoke; sent locks re-checked;
- *    nonce advances finished / retried (DATA-MODEL §5.20 "Boot reconcile and sweep").
+ *    nonce advances finished / retried.
  *  - finalize-due: RULED bets past appeal_deadline + 1 s -> [finalize, close_bet] (the durable
  *    backstop of the PayoutService setTimeout fast path). A bet whose appeal is out is skipped.
  *  - appeal-sweep: 'sent' appeal / resolve_appeal txs whose confirm died, APPEALED bets with no
@@ -58,8 +57,8 @@ export function chainLifecycleTasks(deps: SweepDeps & Pick<AppDeps, 'env'>): Kee
 /**
  * stream-gaps: server txs with no Stream event after rpcPollFallbackMs(env) (30 s with a Stream
  * configured, else 5 s) -> getTransaction -> chain_events (source rpc_poll) -> projector
- * (src/chain/reconciler.ts, DATA-MODEL §8.3). The only best-effort RPC poller: registered after
- * the money sweeps, so a throttled RPC delays nothing behind it (its pass is also time-boxed).
+ * (src/chain/reconciler.ts). The only best-effort RPC poller: registered after the money sweeps,
+ * so a throttled RPC delays nothing behind it (its pass is also time-boxed).
  */
 export function streamGapsTask(deps: SweepDeps & Pick<AppDeps, 'env'>): KeeperTask {
   const gaps = new StreamGapReconciler({ fallbackMs: rpcPollFallbackMs(deps.env) });
@@ -79,9 +78,10 @@ export function createServerKeeper(
     return keeper;
   }
   // Always the SAME deps object, never a spread copy: lifecycleOf() keys the chain lifecycle by
-  // object identity, and a copy got a second Lock/Payout/RefundService (own in-flight sets,
-  // finalize timers, RPC client and stats) that the routes and /v1/demo/health never saw.
-  // server.ts sets deps.keeper / deps.markets / deps.onRuling on this object after this returns.
+  // object identity, so a copy would get a second Lock/Payout/RefundService (own in-flight sets,
+  // finalize timers, RPC client and stats) that the routes and /v1/demo/health never see. The
+  // tasks read deps.onRuling, deps.keeper and deps.markets at run time; server.ts sets the last
+  // two on this object after this returns.
   const chain = deps as typeof deps &
     Pick<AppDeps, 'env'> &
     Partial<Pick<AppDeps, 'keeper' | 'markets'>>;
@@ -94,10 +94,8 @@ export function createServerKeeper(
   });
   keeper.register(draftIdleTask(deps));
   for (const t of chainLifecycleTasks(chain)) keeper.register(t);
-  // resolve-due reads deps.onRuling at run time (server.ts sets it on this same object).
   keeper.register(resolveDueTask(chain));
   keeper.register(settlementTask(chain));
-  // The only best-effort RPC poller: after every money sweep, so a throttled RPC delays nothing.
   keeper.register(streamGapsTask(chain));
   // Every 10 min: one chain.unhealthy line when the chain or money path needs a human (judge
   // warnings alone never count: chain/health.ts chainNeedsAttention). Its first run (the boot

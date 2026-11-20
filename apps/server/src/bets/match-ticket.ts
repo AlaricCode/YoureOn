@@ -1,4 +1,5 @@
-// The `challenge_method:'face'` ticket check (API-CONTRACT §2.4, §2.5; TASKS D4-M1).
+// The `challenge_method:'face'` ticket check.
+// Spec: docs/planning/API-CONTRACT.md §2.4.
 //
 // A match_ticket is the 60 s HMAC token from POST /v1/rooms/:room_id/face-match that binds
 // {room, scanner (A), candidate (B), exp} (src/face/ticket.ts). POST /v1/bets accepts a 'face'

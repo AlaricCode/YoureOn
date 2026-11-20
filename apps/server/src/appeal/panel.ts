@@ -1,6 +1,7 @@
-// The appeals panel (API-CONTRACT §7.2, SCHEMAS §7): three vendors vote independently and in
-// parallel through deps.providers.llm (providers/structured.ts: one structured multimodal call per
-// vendor), seat k = PANEL_SEATS[k] (Claude, GPT, Gemini).
+// The appeals panel: three vendors vote independently and in parallel through deps.providers.llm
+// (providers/structured.ts: one structured multimodal call per vendor), seat k = PANEL_SEATS[k]
+// (Claude, GPT, Gemini).
+// Spec: docs/planning/API-CONTRACT.md §7.2.
 //
 //   - Inputs are identical across seats: the binding terms and the appealed ruling's frames (a
 //     Gemini bet: its GeminiSettlementRecord instead). The panel never sees the original ruling,
@@ -10,7 +11,7 @@
 //   - A missing key (not_configured), a timeout, an HTTP error, a refusal, bad output, a thrown
 //     provider (the production mock refuses) or confidence < 0.6 is an abstention (countVote).
 //   - The vote's side has no 0.8 floor (shared voteOutcome); decideAppeal then needs 2 agreeing
-//     counted votes, else the original stands (D7, O7). All abstain = upheld.
+//     counted votes, else the original stands. All abstain = upheld.
 import { createHash } from 'node:crypto';
 import {
   AppealVote,
@@ -97,7 +98,7 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
 
 /**
- * A model's reason as SCHEMAS NText(280, 0): no control chars, NFC, single-spaced, at most 280
+ * A model's reason as the shared NText(280, 0): no control chars, NFC, single-spaced, at most 280
  * UTF-16 units (zod's max), cut on a code point so no surrogate pair is split.
  */
 export function voteReason(raw: string): string {
