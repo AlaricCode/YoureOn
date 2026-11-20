@@ -240,6 +240,9 @@ describe('judge prompt labels (D10: the landing frames and the landing crop)', (
     // a win that broke a rule is ruled a loss, and the reason says both
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/the reason says BOTH things/);
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/Say a rule was broken only when one was/);
+    // a make is ruled from the rim and the empty floor after it, not from seeing inside the bin
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/gone from every later frame means it went in/);
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/never seen leaving the hand/);
   });
 });
 
