@@ -76,19 +76,19 @@ export const STRUCTURE_OUTPUT: StructuredOutput<StructuredClaim> = {
   upperCase: ['performer', 'yes_party'],
 };
 
-export const STRUCTURE_SYSTEM = `You write the terms of a friendly money bet between two people for "You're On". One of them says a sentence. A phone camera films ONE short attempt, about six seconds. An AI judge looks at frames of it and rules whether the claim came true.
+export const STRUCTURE_SYSTEM = `You write the terms of a friendly money bet between two people for "You're On". One of them says a sentence. A phone camera films one short attempt, and an AI judge looks at frames of it and rules whether the claim came true. The terms are read on a phone screen, so every line is short and plain.
 
 You get JSON: party_a (the challenger, who said the sentence), party_b (the one challenged) and said (the sentence, from speech recognition or typed in a hurry: it can have filler, repeats and mis-heard words).
 
 Return JSON only, with these fields:
-- claim: ONE third-person statement that ends up TRUE or FALSE, naming the performer by name, like "Jake lands a water bottle flip upright on the table." Never "I", "me", "you", "we", "let's" or "bet you can't". Keep exactly what was asked: add no distance, count, time limit or difficulty that was not said. Under 140 characters.
+- claim: ONE third-person statement that ends up TRUE or FALSE, naming the performer by name, like "Jake lands a water bottle flip upright on the table." Never "I", "me", "you", "we", "let's" or "bet you can't". At most 90 characters.
 - performer: "A" or "B", who attempts it. In said, "I" and "me" are party A, and "you" is party B. If it does not say, "B".
 - yes_party: who wins if the claim is TRUE. The performer wins by doing it: "I bet I can" is performer A, yes_party A; "bet you can't" is performer B, yes_party B.
-- success_criteria: 1 to 3 short things the camera can SEE that make it count.
-- failure_criteria: 0 to 3 explicit ways it does not count.
-- edge_cases: 1 or 2 objects {question, answer}: the dispute most likely to come up, each with a crisp rule as the answer, like "No. It has to stay in the bin."
+- success_criteria: 1 or 2 things the camera can SEE that make it count. At most 70 characters each.
+- failure_criteria: 1 or 2 explicit ways it does not count. At most 70 characters each.
+- edge_cases: 1 or 2 objects {question, answer}: the dispute most likely to come up, with a crisp rule as the answer, like "No. It has to stay in the bin." Question at most 70 characters, answer at most 80.
 
-Plain words, sentence case, no emoji, no quotation marks around names. Fix obvious speech slips ("a trash trashcan" is "the trash can"). If the sentence is not something a camera can film in one short attempt, give its most literal filmable reading and nothing more.`;
+Keep exactly what was asked and add nothing: no distance, count, number of tries, time limit or difficulty that was not said, and never mention the camera, the clip, the footage or how long it is. Plain words, sentence case, no emoji, no quotation marks around names. Fix obvious speech slips ("a trash trashcan" is "the trash can"). If the sentence is not something a camera can film in one short attempt, give its most literal filmable reading and nothing more.`;
 
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -104,6 +104,9 @@ export function needsStructuring(r: TypedTermsRequest): boolean {
   return criteria.length === 1 && norm(criteria[0] ?? '') === norm(r.claim);
 }
 
+/** How many success lines, failure lines and edge cases a card shows from a structured sentence. */
+export const CARD_LINES = 2;
+
 /** A claim still in the first or second person is the sentence again, not terms. */
 const FIRST_OR_SECOND_PERSON = /\b(i|i'm|im|me|my|mine|you|your|yours|we|let's|lets)\b/i;
 
@@ -111,7 +114,15 @@ const FIRST_OR_SECOND_PERSON = /\b(i|i'm|im|me|my|mine|you|your|yours|we|let's|l
 export function usableClaim(v: StructuredClaim): StructuredClaim | null {
   if (FIRST_OR_SECOND_PERSON.test(v.claim)) return null;
   const claim = /[.!?]$/.test(v.claim) ? v.claim : `${v.claim}.`;
-  return claim.length <= 200 ? { ...v, claim } : null;
+  if (claim.length > 200) return null;
+  // The card is read on a phone: two lines of each at most, whatever the model sent.
+  return {
+    ...v,
+    claim,
+    success_criteria: v.success_criteria.slice(0, CARD_LINES),
+    failure_criteria: v.failure_criteria.slice(0, CARD_LINES),
+    edge_cases: v.edge_cases.slice(0, CARD_LINES),
+  };
 }
 
 export interface StructureInput {

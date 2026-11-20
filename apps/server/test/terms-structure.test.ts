@@ -109,6 +109,22 @@ describe('usableClaim', () => {
     );
   });
 
+  it('keeps at most two lines of each for the card, whatever the model sent', () => {
+    const long = usableClaim({
+      ...GOOD,
+      success_criteria: ['one thing', 'two things', 'three things', 'four things'],
+      failure_criteria: ['first foul', 'second foul', 'third foul'],
+      edge_cases: [
+        { question: 'First question?', answer: 'Yes.' },
+        { question: 'Second question?', answer: 'No.' },
+        { question: 'Third question?', answer: 'No.' },
+      ],
+    })!;
+    expect(long.success_criteria).toEqual(['one thing', 'two things']);
+    expect(long.failure_criteria).toEqual(['first foul', 'second foul']);
+    expect(long.edge_cases.map((e) => e.question)).toEqual(['First question?', 'Second question?']);
+  });
+
   it('refuses a claim that is still the sentence', () => {
     for (const claim of [
       'I throw a paper ball into the trash can.',
@@ -192,7 +208,14 @@ describe('the output schema and the prompt', () => {
     for (const field of Object.keys(props)) expect(STRUCTURE_SYSTEM).toContain(field);
     // who "I" is, and that nothing is added to what was asked
     expect(STRUCTURE_SYSTEM).toContain('"I" and "me" are party A');
-    expect(STRUCTURE_SYSTEM).toContain('add no distance, count, time limit or difficulty');
+    expect(STRUCTURE_SYSTEM).toContain(
+      'no distance, count, number of tries, time limit or difficulty',
+    );
+    // short lines for a phone, and nothing about the clip (the first prompt let "six seconds"
+    // into an edge case, which would have changed the bet)
+    expect(STRUCTURE_SYSTEM).toContain('At most 90 characters');
+    expect(STRUCTURE_SYSTEM).toContain('never mention the camera, the clip, the footage');
+    expect(STRUCTURE_SYSTEM).not.toMatch(/six seconds|6 seconds/);
   });
 
   it('gives terms that pass the same checks as any proposal, complete', () => {
