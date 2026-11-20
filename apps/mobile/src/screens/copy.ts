@@ -67,6 +67,8 @@ export const COPY = {
   negotiate: {
     title: ['The judge', 'label'],
     listening: ['Listening', 'label'],
+    // A's phone before its judge session is live (minting, connecting).
+    connecting: ['Connecting', 'label'],
     speaking: ['Speaking', 'label'],
     micOn: ['Mic on', 'label'],
     micMuted: ['Mic muted', 'label'],
@@ -316,6 +318,12 @@ export const fill = {
   turn: (name: string) => `${name}'s turn`,
   /** A's typed terms are on the card; B has not accepted yet. First name only: a 3-word label. */
   waitingFor: (name: string) => `Waiting for ${name.trim().split(/\s+/)[0] || 'them'}`,
+  /**
+   * B's negotiate screen: the judge session runs on A's phone, not this one (contract copy). The
+   * label is A's on-screen name as it is (../app/judgeHead judgeHostLabel); '' -> "their phone".
+   */
+  judgeOn: (label: string) =>
+    label.trim() ? `Judge on ${label.trim()}'s phone` : 'Judge on their phone',
   /** An odds offer is out: the other side has not tapped Accept yet. First name only. */
   waitingOn: (name: string) => `Waiting on ${name.trim().split(/\s+/)[0] || 'them'}`,
   /** The judge's offer header: "Judge suggests 3:1" (compact ratio keeps it a 3-word label). */

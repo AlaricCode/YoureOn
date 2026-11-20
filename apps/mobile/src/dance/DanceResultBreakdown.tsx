@@ -35,12 +35,18 @@ export function DanceResultBreakdown({
   names,
   me,
   omitLine,
+  roll = true,
 }: {
   scored: DanceScoredPayload;
   names: { a: string; b: string };
   me?: 'A' | 'B';
   /** A line already on screen (the ruling's reason is the announcer's line): not drawn twice. */
   omitLine?: string | null | undefined;
+  /**
+   * Roll the scores up from 0.0 (the first reveal). The ruling passes false: the result screen
+   * before it already showed them, so they never read "0.0 v 0.0" there.
+   */
+  roll?: boolean;
 }) {
   const data = resultFromScored(scored);
   const invalid = scored.validation.verdict === 'invalid';
@@ -49,7 +55,7 @@ export function DanceResultBreakdown({
   const notes = invalid ? safeLine(scored.validation.notes) : null;
   return (
     <View style={styles.wrap}>
-      <ResultCard data={data} names={names} me={me} />
+      <ResultCard data={data} names={names} me={me} roll={roll} />
       {invalid ? (
         <View style={styles.block}>
           <Text style={styles.problem}>{dt(DANCE_COPY.notCounted)}</Text>
