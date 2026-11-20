@@ -90,7 +90,7 @@ describe('throwOutcome: real tracks', () => {
       }),
     });
     expect(out.call).toBe('out');
-    expect(out.why).toBe('rests_outside');
+    expect(out.why).toBe('came_to_rest_outside');
     expect(out.frames).toEqual([9, 10, 11]);
   });
 
@@ -109,6 +109,184 @@ describe('throwOutcome: real tracks', () => {
     expect(out.call).toBe('unknown');
     expect(out.why).toBe('lost_away_from_target');
     expect(out.last_seen).toBe(3);
+  });
+});
+
+describe('throwOutcome: a miss that was picked up afterwards', () => {
+  it('bet 84514bea: landed beside the bin, lay there four frames, then picked up -> out', () => {
+    // the ruling had been a retake: the track "ended away from the target"
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, [523, 786, 655, 1030]),
+      object: frames(12, {
+        0: still(12, 272, 562),
+        1: still(12, 588, 503),
+        4: [
+          [1, 79, 456],
+          [2, 326, 718],
+          [3, 477, 949],
+          [4, 503, 944],
+          [5, 514, 952],
+          [6, 511, 950],
+        ],
+      }),
+    });
+    expect(out.call).toBe('out');
+    expect(out.why).toBe('came_to_rest_outside');
+    expect(out.frames).toEqual([3, 4, 5, 6]);
+    expect(out.last_seen).toBe(6);
+  });
+
+  it('bet dfe60bb3: missed, lay on the floor, then carried to the bin and dropped in -> out', () => {
+    // the track's last sighting is at the mouth of the bin, in the thrower's hand
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, [524, 760, 670, 984]),
+      object: frames(12, {
+        0: still(12, 529, 322),
+        4: [
+          [2, 169, 486],
+          [3, 489, 898],
+          [4, 459, 979],
+          [5, 443, 1006],
+          [6, 444, 1005],
+          [7, 440, 1002],
+          [8, 440, 1000],
+          [9, 429, 997],
+          [10, 443, 846],
+          [11, 601, 795],
+        ],
+      }),
+    });
+    expect(out.call).toBe('out');
+    expect(out.why).toBe('came_to_rest_outside');
+    expect(out.frames).toEqual([4, 5, 6, 7, 8, 9]);
+  });
+
+  it('held low and still BEFORE the throw, then thrown in: not a miss', () => {
+    const BIN = [500, 700, 640, 920] as const;
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          // in a lowered hand, level with the bin's body, for four frames
+          [0, 120, 800],
+          [1, 122, 802],
+          [2, 121, 801],
+          [3, 123, 800],
+          // the throw
+          [4, 300, 520],
+          [5, 565, 690],
+        ],
+      }),
+    });
+    expect(out.call).toBe('in');
+  });
+
+  it('two frames on the floor are not yet at rest', () => {
+    const BIN = [500, 700, 640, 920] as const;
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [3, 100, 400],
+          [4, 380, 880],
+          [5, 385, 882],
+        ],
+      }),
+    });
+    expect(out.call).toBe('unknown');
+  });
+});
+
+describe('throwOutcome: off the picture', () => {
+  const BIN = [500, 700, 640, 920] as const;
+  const SIZE = { w: 720, h: 1280 };
+
+  it('flying out past the side of the frame, never seen again -> out', () => {
+    const out = throwOutcome({
+      n: 12,
+      size: SIZE,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [3, 200, 500],
+          [4, 450, 520],
+          [5, 690, 560],
+        ],
+      }),
+    });
+    expect(out.call).toBe('out');
+    expect(out.why).toBe('left_the_picture');
+  });
+
+  it('rolling out through the bottom of the frame -> out', () => {
+    const out = throwOutcome({
+      n: 12,
+      size: SIZE,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [3, 200, 500],
+          [4, 300, 1000],
+          [5, 330, 1250],
+        ],
+      }),
+    });
+    expect(out.call).toBe('out');
+  });
+
+  it('heading into the bin wins over heading off the picture', () => {
+    // fast, toward a bin near the right edge: its line reaches the mouth first
+    const out = throwOutcome({
+      n: 12,
+      size: SIZE,
+      target: target(12, [560, 700, 700, 920]),
+      object: frames(12, {
+        0: [
+          [3, 100, 300],
+          [4, 380, 500],
+        ],
+      }),
+    });
+    expect(out.call).toBe('in');
+  });
+
+  it('lost in the middle of the picture is still unknown (the frames skipped it)', () => {
+    const out = throwOutcome({
+      n: 12,
+      size: SIZE,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [1, 98, 283],
+          [2, 65, 222],
+          [3, 152, 263],
+        ],
+      }),
+    });
+    expect(out.call).toBe('unknown');
+  });
+
+  it('a lob out through the top is not a miss yet; no frame size, no call', () => {
+    const lob = [
+      [3, 200, 300],
+      [4, 300, 40],
+    ] as const;
+    expect(
+      throwOutcome({ n: 12, size: SIZE, target: target(12, BIN), object: frames(12, { 0: lob }) })
+        .call,
+    ).toBe('unknown');
+    const side = [
+      [3, 200, 500],
+      [4, 450, 520],
+      [5, 690, 560],
+    ] as const;
+    expect(
+      throwOutcome({ n: 12, target: target(12, BIN), object: frames(12, { 0: side }) }).call,
+    ).toBe('unknown');
   });
 });
 
