@@ -46,6 +46,13 @@ export const THROW = {
   MOUTH_ABOVE: 1.25,
   /** …and no lower below it than this many (a ball dropping past the rim into the opening). */
   MOUTH_BELOW: 0.4,
+  /**
+   * in, when it was lost in mid-flight: its line of travel reaches the rim within this many
+   * frames' worth of the travel it had just made…
+   */
+  HEADING_FRAMES: 2,
+  /** …inside the opening, widened by this many target widths each side. */
+  HEADING_X: 0.25,
 } as const;
 
 export type ThrowCall = 'in' | 'out' | 'unknown';
@@ -163,12 +170,17 @@ export function throwOutcome(i: {
 
     const end = pts.filter((p) => p.f >= n - 3);
     if (last.f === n - 1 && end.length >= THROW.END_SEEN) {
-      const onFloor = end.every((p) => {
-        const b = bins[p.f] as Box;
-        const h = b[3] - b[1];
-        const w = b[2] - b[0];
-        return gap(p.box, b) >= THROW.OUT_GAP * w && p.cy >= b[1] + THROW.OUT_BELOW_RIM * h;
-      });
+      // Only a track that MOVED can be the ball on the floor: something small and white that
+      // came into the picture when the camera shifted (seen on a real throw: a bottle at the
+      // edge of the counter, from frame 5) arrived too, and never went anywhere.
+      const onFloor =
+        moved &&
+        end.every((p) => {
+          const b = bins[p.f] as Box;
+          const h = b[3] - b[1];
+          const w = b[2] - b[0];
+          return gap(p.box, b) >= THROW.OUT_GAP * w && p.cy >= b[1] + THROW.OUT_BELOW_RIM * h;
+        });
       if (onFloor) {
         verdicts.push({
           call: 'out',
@@ -201,6 +213,33 @@ export function throwOutcome(i: {
         });
         continue;
       }
+      // Lost in mid-flight (the frames are up to a third of a second apart, and a thrown ball
+      // covers a body length in that time): where was it heading? Seen on a real make: last
+      // sighted 150 px short of the bin and above it, in no frame after. If the line from its
+      // last two sightings comes down through the opening within the next frame or two, and it
+      // is nowhere afterwards, it went in. (A ball that hits the rim and stays out is in view at
+      // the end, and that track says `out`.)
+      if (prev && prev.f < last.f) {
+        const df = last.f - prev.f;
+        const vx = (last.cx - prev.cx) / df;
+        const vy = (last.cy - prev.cy) / df;
+        const frames = vy > 0 ? (bin[1] - last.cy) / vy : Number.NaN;
+        const xAtRim = last.cx + vx * frames;
+        if (
+          frames > 0 &&
+          frames <= THROW.HEADING_FRAMES &&
+          xAtRim >= bin[0] - THROW.HEADING_X * bw &&
+          xAtRim <= bin[2] + THROW.HEADING_X * bw
+        ) {
+          verdicts.push({
+            call: 'in',
+            why: 'heading_into_the_mouth',
+            frames: pts.slice(-2).map((p) => p.f),
+            last_seen: last.f,
+          });
+          continue;
+        }
+      }
       verdicts.push(none('lost_away_from_target', last.f));
       continue;
     }
@@ -209,7 +248,7 @@ export function throwOutcome(i: {
 
   const ins = verdicts.filter((v) => v.call === 'in');
   const outs = verdicts.filter((v) => v.call === 'out');
-  if (ins.length > 0 && outs.length > 0) return none('tracks_disagree', lastSeen);
+  // A ball lying outside the target at the end settles it, whatever another track suggested.
   if (outs.length > 0) return outs[0] as ThrowOutcome;
   if (ins.length === 1) return ins[0] as ThrowOutcome;
   if (ins.length > 1) return none('two_objects_went_in', lastSeen);

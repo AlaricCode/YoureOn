@@ -112,6 +112,73 @@ describe('throwOutcome: real tracks', () => {
   });
 });
 
+describe('throwOutcome: lost in mid-flight', () => {
+  it('a make (bet e9ec7f78): last seen 150 px short of the bin and above it, heading in -> in', () => {
+    // the tracker had said unknown, and the vision judge then wrote that it flew "toward the
+    // counter"; the thrower confirmed it went in
+    const bin = [518, 747, 661, 966] as const;
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, bin),
+      object: frames(12, {
+        // on the counter the whole time
+        0: still(12, 276, 556),
+        1: still(12, 394, 556),
+        // came into view at the edge when the camera shifted, and never moved
+        3: Array.from({ length: 7 }, (_, k) => [5 + k, 86 - k, 576 - k] as const),
+        4: [
+          [5, 185, 481],
+          [6, 230, 469],
+          [7, 434, 601],
+        ],
+      }),
+    });
+    expect(out.call).toBe('in');
+    expect(out.why).toBe('heading_into_the_mouth');
+    expect(out.last_seen).toBe(7);
+  });
+
+  it('heading wide of the bin, or over it, is not a make', () => {
+    const BIN = [500, 700, 640, 920] as const;
+    // its line comes down well to the left of the opening
+    const wide = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [5, 100, 400],
+          [6, 180, 520],
+        ],
+      }),
+    });
+    expect(wide.call).toBe('unknown');
+    // fast and flat over the top: it would not reach the rim line for many frames
+    const over = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [5, 200, 300],
+          [6, 420, 310],
+        ],
+      }),
+    });
+    expect(over.call).toBe('unknown');
+    // rising, not falling
+    const up = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [5, 300, 600],
+          [6, 420, 480],
+        ],
+      }),
+    });
+    expect(up.call).toBe('unknown');
+  });
+});
+
 describe('throwOutcome: what must stay unknown', () => {
   const BIN = [200, 400, 280, 520] as const;
 
@@ -206,19 +273,40 @@ describe('throwOutcome: what must stay unknown', () => {
 describe('throwOutcome: synthetic makes and misses', () => {
   const BIN = [200, 400, 280, 520] as const;
 
-  it('a ball that lands late and lies beside the bin: out, even if it barely moved in view', () => {
+  it('a ball seen rolling to rest beside the bin: out', () => {
     const out = throwOutcome({
       n: 12,
       target: target(12, BIN),
       object: frames(12, {
         0: [
-          [9, 330, 560],
-          [10, 332, 561],
+          [8, 250, 430],
+          [9, 310, 540],
+          [10, 330, 560],
           [11, 332, 561],
         ],
       }),
     });
     expect(out.call).toBe('out');
+  });
+
+  it('something small and white that only comes into view (the camera shifted) is not the ball', () => {
+    // seen on a real throw: a bottle at the edge of the counter, from frame 5, never moving
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [5, 330, 560],
+          [6, 331, 560],
+          [7, 331, 561],
+          [8, 332, 561],
+          [9, 332, 561],
+          [10, 332, 561],
+          [11, 332, 561],
+        ],
+      }),
+    });
+    expect(out.call).toBe('unknown');
   });
 
   it('dropping past the rim into the opening, then gone: in', () => {
@@ -237,7 +325,7 @@ describe('throwOutcome: synthetic makes and misses', () => {
     expect(out.call).toBe('in');
   });
 
-  it('one track into the bin and one on the floor: the tracks disagree', () => {
+  it('one track at the mouth and one on the floor at the end: out', () => {
     const out = throwOutcome({
       n: 12,
       target: target(12, BIN),
@@ -255,7 +343,7 @@ describe('throwOutcome: synthetic makes and misses', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
-    expect(out.why).toBe('tracks_disagree');
+    // the ball lying outside at the end settles it
+    expect(out.call).toBe('out');
   });
 });

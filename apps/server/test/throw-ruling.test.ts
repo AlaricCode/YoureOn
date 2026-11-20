@@ -1,16 +1,28 @@
-// A throw at a target: the object tracker decides whether it went in, the vision judge is the
-// cheat detector (judge/ruling applyThrowOutcome, judge/camera-checks samPromptFor/throwEntities).
+// A throw at a target is ruled from two indicators (judge/ruling decideThrow): did it go in (the
+// object tracker, and ONLY the tracker) and was a rule broken (the vision judge's rule_broken).
+// The reason is written from them in code. The vision judge never decides in or out.
 import { describe, expect, it } from 'vitest';
 import { CheckSpec } from '@youre-on/shared/checks/spec';
 import { toOutcome } from '@youre-on/shared/ruling';
 
 import { samPromptFor, throwEntities } from '../src/judge/camera-checks';
-import { applyThrowOutcome, THROW_MODEL, type Judged } from '../src/judge/ruling';
+import { JudgeVerdict } from '../src/judge/checks';
+import { JUDGE_SYSTEM_PROMPT, JUDGE_VERDICT_JSON_SCHEMA } from '../src/judge/prompt';
+import { decideThrow, THROW_MODEL, type Judged } from '../src/judge/ruling';
 
 const LABELS = { object: 'paper ball', target: 'bin' };
 const IN = { call: 'in' as const, why: 'gone_at_the_mouth', frames: [5, 6], last_seen: 6 };
 const OUT = { call: 'out' as const, why: 'rests_outside', frames: [9, 10, 11], last_seen: 11 };
+const UNKNOWN = {
+  call: 'unknown' as const,
+  why: 'lost_away_from_target',
+  frames: [],
+  last_seen: 7,
+};
+const CLEAN = { broken: false, note: '' };
+const STEPPED = { broken: true, note: 'Logan stepped past the boot before he threw.' };
 
+/** A vision verdict whose own claim and free text must never reach a throw's ruling. */
 const vision = (
   claim: 'MET' | 'NOT_MET' | 'UNCLEAR',
   rule: { broken: boolean; note: string } | null,
@@ -19,9 +31,9 @@ const vision = (
   model: 'anthropic/claude-sonnet-5-5',
   verdict: {
     claim_result: claim,
-    confidence: 0.55,
-    reason: "I can't confirm the result.",
-    cited_frames: [],
+    confidence: 0.9,
+    reason: 'The ball leaves his hand toward the counter. His foot is close to the line.',
+    cited_frames: [5, 7],
     contested: false,
   },
   disagreement: null,
@@ -33,55 +45,56 @@ const verdictOf = (j: Judged) => {
   return j;
 };
 
-describe('applyThrowOutcome', () => {
-  it('the track says it went in and no rule was broken: MET, whatever the vision judge thought', () => {
+describe('decideThrow: the tracker says where it went', () => {
+  it('in and no rule broken: MET, whatever the vision judge wrote', () => {
     // the real case: the vision judge voided a make ("I never see it land inside")
-    const j = verdictOf(
-      applyThrowOutcome(vision('UNCLEAR', { broken: false, note: '' }), IN, LABELS),
-    );
+    const j = verdictOf(decideThrow(vision('UNCLEAR', CLEAN), IN, LABELS));
     expect(j.verdict.claim_result).toBe('MET');
     expect(j.verdict.reason).toBe(
-      "The paper ball went in: tracked from the throw to the bin's rim in frame 6, and it is in no frame after.",
+      'The paper ball went in (tracked to frame 6). No rule was broken.',
     );
     expect(j.verdict.cited_frames).toEqual([5, 6]);
+    expect(j.verdict.confidence).toBe(0.92);
     expect(toOutcome(j.verdict, 'B')).toBe('B_WINS');
     expect(j.thrown).toEqual({ call: 'in', why: 'gone_at_the_mouth' });
-    expect(j.veto).toBeNull();
   });
 
-  it('it went in but a rule was broken: NOT_MET, and the reason says both', () => {
-    const j = verdictOf(
-      applyThrowOutcome(
-        vision('MET', { broken: true, note: 'Logan stepped past the boot before he threw.' }),
-        IN,
-        LABELS,
-      ),
-    );
+  it('in but a rule was broken: NOT_MET, and the reason says both', () => {
+    // the real case (bet e9ec7f78): it went in and he stepped over the line
+    const j = verdictOf(decideThrow(vision('NOT_MET', STEPPED), IN, LABELS));
     expect(j.verdict.claim_result).toBe('NOT_MET');
     expect(j.verdict.reason).toBe(
-      "The paper ball went in, tracked to the bin's rim in frame 6. But Logan stepped past the boot before he threw, so it does not count.",
+      'The paper ball went in (tracked to frame 6), but Logan stepped past the boot before he threw, so it does not count.',
     );
     expect(toOutcome(j.verdict, 'B')).toBe('A_WINS');
   });
 
-  it('the track says it missed: NOT_MET; a broken rule is added, never invented', () => {
-    const clean = verdictOf(
-      applyThrowOutcome(vision('UNCLEAR', { broken: false, note: '' }), OUT, LABELS),
-    );
+  it('out: NOT_MET; a broken rule is added, never invented', () => {
+    const clean = verdictOf(decideThrow(vision('UNCLEAR', CLEAN), OUT, LABELS));
     expect(clean.verdict.claim_result).toBe('NOT_MET');
     expect(clean.verdict.reason).toBe(
-      'The paper ball missed: tracked to the floor outside the bin, still there in frame 11.',
+      'The paper ball missed the bin (tracked to frame 11). No rule was broken.',
     );
-    expect(clean.verdict.reason).not.toMatch(/rule|boot/);
     const cheat = verdictOf(
-      applyThrowOutcome(
+      decideThrow(
         vision('MET', { broken: true, note: 'He threw from in front of the boot.' }),
         OUT,
         LABELS,
       ),
     );
     expect(cheat.verdict.reason).toBe(
-      'The paper ball missed: tracked to the floor outside the bin in frame 11. Also, he threw from in front of the boot.',
+      'The paper ball missed the bin (tracked to frame 11). Also, he threw from in front of the boot.',
+    );
+  });
+
+  it("the vision judge's own claim never changes the result", () => {
+    // it wrote NOT_MET ("toward the counter"); the track says in and no rule was broken
+    expect(verdictOf(decideThrow(vision('NOT_MET', CLEAN), IN, LABELS)).verdict.claim_result).toBe(
+      'MET',
+    );
+    // it wrote MET; the track says out
+    expect(verdictOf(decideThrow(vision('MET', CLEAN), OUT, LABELS)).verdict.claim_result).toBe(
+      'NOT_MET',
     );
   });
 
@@ -92,26 +105,72 @@ describe('applyThrowOutcome', () => {
       status: 'timeout',
       message: 'slow',
     };
-    const j = verdictOf(applyThrowOutcome(failed, IN, LABELS));
+    const j = verdictOf(decideThrow(failed, IN, LABELS));
     expect(j.model).toBe(THROW_MODEL);
     expect(j.verdict.claim_result).toBe('MET');
-    expect(j.rule).toBeNull();
+  });
+});
+
+describe('decideThrow: the tracker cannot say', () => {
+  it('no rule broken: a retake, never the vision judge deciding in or out', () => {
+    for (const claim of ['MET', 'NOT_MET', 'UNCLEAR'] as const) {
+      for (const track of [UNKNOWN, null]) {
+        const j = verdictOf(decideThrow(vision(claim, CLEAN), track, LABELS));
+        expect(j.verdict.claim_result, `${claim}`).toBe('UNCLEAR');
+        expect(j.verdict.reason).toBe(
+          'The tracker could not follow the paper ball to the bin. Run it back.',
+        );
+        expect(toOutcome(j.verdict, 'B')).toBe('REDO');
+      }
+    }
+    expect(verdictOf(decideThrow(vision('MET', CLEAN), UNKNOWN, LABELS)).thrown).toEqual({
+      call: 'unknown',
+      why: 'lost_away_from_target',
+    });
+    expect(verdictOf(decideThrow(vision('MET', CLEAN), null, LABELS)).thrown).toEqual({
+      call: 'unknown',
+      why: 'no_reply',
+    });
   });
 
-  it('an older verdict with no rule finding counts as no rule broken', () => {
-    expect(
-      verdictOf(applyThrowOutcome(vision('UNCLEAR', null), IN, LABELS)).verdict.claim_result,
-    ).toBe('MET');
+  it('a rule seen broken loses on its own, wherever the ball went', () => {
+    const j = verdictOf(decideThrow(vision('MET', STEPPED), UNKNOWN, LABELS));
+    expect(j.verdict.claim_result).toBe('NOT_MET');
+    expect(j.verdict.reason).toBe(
+      'Logan stepped past the boot before he threw, so it does not count.',
+    );
+    expect(toOutcome(j.verdict, 'B')).toBe('A_WINS');
+  });
+
+  it('the vision call failed too: a retake', () => {
+    const failed: Judged = {
+      kind: 'failure',
+      model: 'anthropic/x',
+      status: 'timeout',
+      message: 'slow',
+    };
+    const j = verdictOf(decideThrow(failed, null, LABELS));
+    expect(j.verdict.claim_result).toBe('UNCLEAR');
   });
 
   it('every reason fits the ruling record', () => {
-    const long = 'x'.repeat(200);
-    for (const t of [IN, OUT]) {
-      const j = verdictOf(
-        applyThrowOutcome(vision('MET', { broken: true, note: long }), t, LABELS),
-      );
-      expect(j.verdict.reason.length).toBeLessThanOrEqual(280);
-    }
+    const long = { broken: true, note: 'x'.repeat(200) };
+    for (const t of [IN, OUT, UNKNOWN, null])
+      expect(
+        verdictOf(decideThrow(vision('MET', long), t, LABELS)).verdict.reason.length,
+      ).toBeLessThanOrEqual(280);
+  });
+});
+
+describe('the vision judge is only the cheat detector for a throw', () => {
+  it('its answer carries the rule flag and no field for whether the object went in', () => {
+    const props = Object.keys(JUDGE_VERDICT_JSON_SCHEMA.properties);
+    expect(props).toContain('rule_broken');
+    expect(props).toContain('rule_note');
+    expect(props).not.toContain('object_result');
+    expect(Object.keys(JudgeVerdict.shape)).not.toContain('object_result');
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/rule_broken: true when the frames show a rule/);
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/"Close to the line" is not an answer/);
   });
 });
 
