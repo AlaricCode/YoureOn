@@ -1,5 +1,6 @@
 // throwOutcome (src/checks/throw.ts) on tracks SAM 3.1 returned for real throws on the night of
-// 2026-11-20 (prompts "bin" and "small white object"), and on the cases that must stay unknown.
+// 2026-11-20 (prompts "bin" and "small white object"), on the best calls for tracks no firm rule
+// fits, and on the cases that must stay unknown (nothing to go on).
 import { describe, expect, it } from 'vitest';
 
 import { throwOutcome } from '../../src/checks/throw';
@@ -94,7 +95,7 @@ describe('throwOutcome: real tracks', () => {
     expect(out.frames).toEqual([9, 10, 11]);
   });
 
-  it('a throw the frames lost sight of (bet de97651e #2): last seen far from the bin -> unknown', () => {
+  it('a throw the frames lost sight of (bet de97651e #2): thrown, in no frame after -> best call in', () => {
     const out = throwOutcome({
       n: 12,
       target: target(12, [246, 457, 353, 656]),
@@ -106,8 +107,10 @@ describe('throwOutcome: real tracks', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
-    expect(out.why).toBe('lost_away_from_target');
+    // it was a retake; the vision judge had written "it is not on the floor"
+    expect(out.call).toBe('in');
+    expect(out.why).toBe('lost_in_flight');
+    expect(out.guess).toBe(true);
     expect(out.last_seen).toBe(3);
   });
 });
@@ -184,7 +187,7 @@ describe('throwOutcome: a miss that was picked up afterwards', () => {
     expect(out.call).toBe('in');
   });
 
-  it('two frames on the floor are not yet at rest', () => {
+  it('two frames on the floor, then gone: not at rest by the firm rule, but last seen outside', () => {
     const BIN = [500, 700, 640, 920] as const;
     const out = throwOutcome({
       n: 12,
@@ -197,7 +200,9 @@ describe('throwOutcome: a miss that was picked up afterwards', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
+    expect(out.call).toBe('out');
+    expect(out.why).toBe('last_seen_outside');
+    expect(out.guess).toBe(true);
   });
 });
 
@@ -334,7 +339,7 @@ describe('throwOutcome: off the picture', () => {
     expect(out.call).toBe('in');
   });
 
-  it('lost in the middle of the picture is still unknown (the frames skipped it)', () => {
+  it('lost in the middle of the picture (the frames skipped it): best call in', () => {
     const out = throwOutcome({
       n: 12,
       size: SIZE,
@@ -347,26 +352,30 @@ describe('throwOutcome: off the picture', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
+    expect(out.call).toBe('in');
+    expect(out.guess).toBe(true);
   });
 
-  it('a lob out through the top is not a miss yet; no frame size, no call', () => {
+  it('a lob out through the top is not a miss; past the target with no frame size is', () => {
     const lob = [
       [3, 200, 300],
       [4, 300, 40],
     ] as const;
-    expect(
-      throwOutcome({ n: 12, size: SIZE, target: target(12, BIN), object: frames(12, { 0: lob }) })
-        .call,
-    ).toBe('unknown');
+    const lobbed = throwOutcome({
+      n: 12,
+      size: SIZE,
+      target: target(12, BIN),
+      object: frames(12, { 0: lob }),
+    });
+    expect([lobbed.call, lobbed.why, lobbed.guess]).toEqual(['in', 'lost_in_flight', true]);
     const side = [
       [3, 200, 500],
       [4, 450, 520],
       [5, 690, 560],
     ] as const;
-    expect(
-      throwOutcome({ n: 12, target: target(12, BIN), object: frames(12, { 0: side }) }).call,
-    ).toBe('unknown');
+    // without the frame's size it cannot be `left_the_picture`, but it is past the bin
+    const flown = throwOutcome({ n: 12, target: target(12, BIN), object: frames(12, { 0: side }) });
+    expect([flown.call, flown.why, flown.guess]).toEqual(['out', 'flew_past_the_target', true]);
   });
 });
 
@@ -396,7 +405,7 @@ describe('throwOutcome: lost in mid-flight', () => {
     expect(out.last_seen).toBe(7);
   });
 
-  it('heading wide of the bin, or over it, is not a make', () => {
+  it('about to land wide is a miss; over it or rising, and never seen again, is a best call in', () => {
     const BIN = [500, 700, 640, 920] as const;
     // its line comes down well to the left of the opening
     const wide = throwOutcome({
@@ -409,7 +418,7 @@ describe('throwOutcome: lost in mid-flight', () => {
         ],
       }),
     });
-    expect(wide.call).toBe('unknown');
+    expect([wide.call, wide.why, wide.guess]).toEqual(['out', 'heading_wide', true]);
     // fast and flat over the top: it would not reach the rim line for many frames
     const over = throwOutcome({
       n: 12,
@@ -421,7 +430,7 @@ describe('throwOutcome: lost in mid-flight', () => {
         ],
       }),
     });
-    expect(over.call).toBe('unknown');
+    expect([over.call, over.why, over.guess]).toEqual(['in', 'lost_in_flight', true]);
     // rising, not falling
     const up = throwOutcome({
       n: 12,
@@ -433,11 +442,11 @@ describe('throwOutcome: lost in mid-flight', () => {
         ],
       }),
     });
-    expect(up.call).toBe('unknown');
+    expect([up.call, up.why, up.guess]).toEqual(['in', 'lost_in_flight', true]);
   });
 });
 
-describe('throwOutcome: what must stay unknown', () => {
+describe('throwOutcome: nothing to go on stays unknown; a track that moved gets a best call', () => {
   const BIN = [200, 400, 280, 520] as const;
 
   it('nothing found, no target, or too few frames', () => {
@@ -461,7 +470,7 @@ describe('throwOutcome: what must stay unknown', () => {
     expect(out.call).toBe('unknown');
   });
 
-  it('the ball still in the hand at the end (no throw in the clip): not a miss', () => {
+  it('the ball still in the hand at the end (no throw in the clip): not in the bin', () => {
     // waved about, above the rim line the whole time, in view on the last frame
     const out = throwOutcome({
       n: 12,
@@ -470,11 +479,10 @@ describe('throwOutcome: what must stay unknown', () => {
         0: Array.from({ length: 12 }, (_, f) => [f, 90 + 8 * f, 250 + (f % 2) * 20] as const),
       }),
     });
-    expect(out.call).toBe('unknown');
-    expect(out.why).toBe('still_in_view');
+    expect([out.call, out.why, out.guess]).toEqual(['out', 'not_in_the_target_at_the_end', true]);
   });
 
-  it('the clip ends with the ball in the air above the bin: not a make yet', () => {
+  it('the clip ends with the ball in the air, coming down into the opening: best call in', () => {
     const out = throwOutcome({
       n: 12,
       target: target(12, BIN),
@@ -487,10 +495,10 @@ describe('throwOutcome: what must stay unknown', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
+    expect([out.call, out.why, out.guess]).toEqual(['in', 'heading_into_the_mouth', true]);
   });
 
-  it('gone on the very last frame only: one frame is not enough to call it in', () => {
+  it('gone at the mouth on the very last frame only: not firm, but the best call is in', () => {
     const out = throwOutcome({
       n: 12,
       target: target(12, BIN),
@@ -502,10 +510,10 @@ describe('throwOutcome: what must stay unknown', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
+    expect([out.call, out.why, out.guess]).toEqual(['in', 'gone_at_the_mouth', true]);
   });
 
-  it('a ball that rises past the mouth and is lost is not a make', () => {
+  it('a ball that rises past the mouth and is lost: not firm, best call in', () => {
     const out = throwOutcome({
       n: 12,
       target: target(12, BIN),
@@ -517,7 +525,89 @@ describe('throwOutcome: what must stay unknown', () => {
         ],
       }),
     });
-    expect(out.call).toBe('unknown');
+    expect([out.call, out.why, out.guess]).toEqual(['in', 'lost_in_flight', true]);
+  });
+
+  it('in view at the end, lying in the opening: in', () => {
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [7, 60, 260],
+          [8, 130, 200],
+          [9, 236, 410],
+          [10, 238, 418],
+          [11, 238, 418],
+        ],
+      }),
+    });
+    expect([out.call, out.why, out.guess]).toEqual(['in', 'in_view_in_the_target', true]);
+  });
+
+  it('lost in flight, found again under a new id lying on the floor: out, and firmly', () => {
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [3, 60, 260],
+          [4, 130, 200],
+          [5, 200, 250],
+        ],
+        // SAM's new id for the same ball, where it landed
+        7: [
+          [7, 340, 560],
+          [8, 341, 561],
+          [9, 341, 561],
+          [10, 341, 561],
+          [11, 341, 561],
+        ],
+      }),
+    });
+    expect(out.call).toBe('out');
+    expect(out.why).toBe('rests_outside');
+    expect(out.guess).toBeUndefined();
+  });
+
+  it('a firm call is never a guess, and beats one', () => {
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        // dropped into the opening, then gone: firm
+        0: [
+          [4, 60, 260],
+          [5, 130, 200],
+          [6, 200, 290],
+          [7, 238, 420],
+        ],
+        // something else that moved and is still in view, up in a hand: only a best call
+        1: Array.from({ length: 12 }, (_, f) => [f, 60 + 6 * f, 150] as const),
+      }),
+    });
+    expect(out.call).toBe('in');
+    expect(out.why).toBe('gone_at_the_mouth');
+    expect(out.guess).toBeUndefined();
+  });
+
+  it('two tracks that both went in are one ball under two ids: in', () => {
+    const out = throwOutcome({
+      n: 12,
+      target: target(12, BIN),
+      object: frames(12, {
+        0: [
+          [3, 60, 260],
+          [4, 130, 200],
+          [5, 236, 396],
+        ],
+        1: [
+          [6, 150, 300],
+          [7, 239, 405],
+        ],
+      }),
+    });
+    expect(out.call).toBe('in');
   });
 
   it('an object SAM tracks but no longer sees (score -10000) is not a detection', () => {

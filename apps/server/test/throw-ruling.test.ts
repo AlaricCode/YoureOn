@@ -109,6 +109,31 @@ describe('decideThrow: the tracker says where it went', () => {
     expect(j.model).toBe(THROW_MODEL);
     expect(j.verdict.claim_result).toBe('MET');
   });
+
+  it("the tracker's best call (a track no firm rule fits) is a ruling too, never a retake", () => {
+    const lost = {
+      call: 'in' as const,
+      why: 'lost_in_flight',
+      frames: [2, 3],
+      last_seen: 3,
+      guess: true,
+    };
+    const made = verdictOf(decideThrow(vision('UNCLEAR', CLEAN), lost, LABELS));
+    expect(made.verdict.claim_result).toBe('MET');
+    expect(made.verdict.reason).toBe(
+      'The paper ball went in (tracked to frame 3). No rule was broken.',
+    );
+    // less sure than a firm call, and still decisive (a ruling under REDO_BELOW becomes a redo)
+    expect(made.verdict.confidence).toBeLessThan(
+      verdictOf(decideThrow(vision('UNCLEAR', CLEAN), IN, LABELS)).verdict.confidence,
+    );
+    expect(toOutcome(made.verdict, 'A')).toBe('A_WINS');
+    const held = { ...lost, call: 'out' as const, why: 'not_in_the_target_at_the_end' };
+    const missed = verdictOf(decideThrow(vision('MET', CLEAN), held, LABELS));
+    expect(missed.verdict.claim_result).toBe('NOT_MET');
+    expect(toOutcome(missed.verdict, 'A')).toBe('B_WINS');
+    expect(missed.thrown).toEqual({ call: 'out', why: 'not_in_the_target_at_the_end' });
+  });
 });
 
 describe('decideThrow: the tracker cannot say', () => {
