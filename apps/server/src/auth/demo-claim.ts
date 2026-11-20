@@ -1,8 +1,9 @@
-// POST /v1/auth/demo-claim (API-CONTRACT §1.3, §2.1; DEMO_MODE only, else 404).
+// POST /v1/auth/demo-claim (DEMO_MODE only, else 404).
+// Spec: docs/planning/API-CONTRACT.md §1.3.
 //
 //   {challenge_id?, claim_token, device_pubkey, device_sig} -> 200 Session + wallet_seed_b64
 //
-// Decision D-A: phones A and B import the custodial demo-a / demo-b seeds (env DEMO_A_SECRET_KEY /
+// Phones A and B import the custodial demo-a / demo-b seeds (env DEMO_A_SECRET_KEY /
 // DEMO_B_SECRET_KEY), so phone-signed locks and the server's custodial locks use the same party
 // keys. The phone scans the stage QR (src/demo/claim-tokens.ts), signs the challenge with its
 // device key (purpose 'demo-claim', wallet '-'), and gets back the session of the user whose
@@ -44,7 +45,7 @@ import {
 } from './common';
 import { issueAppSession } from './sessions';
 
-/** On top of the §1.7 auth buckets: a claim hands out a wallet seed, so keep guessing slow. */
+/** On top of the auth buckets: a claim hands out a wallet seed, so keep guessing slow. */
 export const DEMO_CLAIM_BUCKET = { limit: 5, windowMs: 60_000 } as const satisfies BucketSpec;
 
 const DEFAULT_NAME: Record<DemoParty, string> = { a: 'Demo A', b: 'Demo B' };
@@ -81,7 +82,7 @@ async function claimTx(
 ): Promise<ClaimResult> {
   return db.transaction(async (tx: Tx) => {
     const nowDate = new Date(a.now);
-    // 1. The demo party's user: whoever holds its wallet (cp1-drive may have signed it up), else new.
+    // 1. The demo party's user: whoever holds its wallet (cp1-drive may have signed it up), or new.
     const [found] = await tx
       .select({
         id: users.id,
@@ -107,7 +108,7 @@ async function claimTx(
           wallet_pubkey: a.pubkey,
           wallet_kind: 'device_keypair',
           is_demo: true,
-          // The team's demo accounts are attested at seed time (DATA-MODEL §11).
+          // The team's demo accounts are attested, as in the seed data.
           age_attested_18plus: true,
           attested_at: nowDate,
         })
@@ -217,7 +218,7 @@ async function claimTx(
 
 export async function demoClaim(c: Context<AppEnv>) {
   const deps = c.get('deps');
-  // The route does not exist outside the demo (§1.3).
+  // The route does not exist outside the demo.
   if (!deps.env.DEMO_MODE) throw new HttpError('NOT_FOUND', 'Not found.');
 
   const raw = await readJsonBody(c);

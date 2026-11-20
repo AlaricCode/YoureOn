@@ -1,37 +1,12 @@
-// ElevenLabs post-call webhook (API-CONTRACT §4.6, DATA-MODEL §5.10 / §9):
-//   POST /webhooks/elevenlabs   ElevenLabs-Signature HMAC (./webhook-signature), no bearer auth
+// ElevenLabs post-call webhook: POST /webhooks/elevenlabs, authenticated only by the
+// ElevenLabs-Signature HMAC (./webhook-signature). Without ELEVENLABS_WEBHOOK_SECRET the route
+// answers 404 to every request, signed or not, so unsigned data is never accepted.
+// Spec: docs/planning/API-CONTRACT.md §4.6.
 //
-// - ELEVENLABS_WEBHOOK_SECRET unset -> 404 for every request (signed or not): the route does not
-//   exist until the operator has the secret, so unsigned data is never accepted.
-// - Missing / malformed / stale / bad signature -> 401 SIGNATURE_INVALID, nothing read or stored.
-// - post_call_transcription: the transcript is archived and the voice_sessions row is closed in
-//   ONE DB transaction, then 200 (§4.6 ack: within 1 s, after the DB write).
-// - post_call_audio: 200 and discarded. Audio is never stored (DATA-MODEL §10); enable only
-//   transcripts in the ElevenLabs webhook settings.
-// - call_initiation_failure: logged (`voice.call_initiation_failure`) plus a small audit row.
-// - Dedupe on (conversation_id, type): a repeat is 200 {duplicate: true} and changes nothing.
-// - A signed body that is not JSON or lacks a conversation id is 200 {ok: false} with an alert:
-//   a retry would fail the same way, and repeated failures auto-disable the webhook (§4.6).
-//   Only a transient DB error answers 503 (retry).
-//
-// Storage (deviation, reported): DATA-MODEL §9 puts the transcript at
-// `evidence/transcripts/{bet_id}/{el_conversation_id}.json` in object storage, which is not wired
-// (no S3 client in the server yet). Until it is, the transcript is kept in Postgres, with no
-// migration: one append-only `audit_log` row per (conversation_id, type), action
-// `el_webhook.<type>`. details.transcript_json is the JCS (RFC 8785) of `data.transcript` and
-// voice_sessions.transcript_sha256 = sha256(UTF-8(it)), checkable in SQL:
-//   encode(sha256(convert_to(details->>'transcript_json', 'UTF8')), 'hex')
-// voice_sessions.transcript_key = `audit_log:<id>` points at that row. details also keeps
-// data.metadata (charging / llm_usage: which LLM really served, FINDINGS §6 step 1), data.analysis
-// and the conversation_initiation_client_data (dynamic variables and the requested overrides).
-// The dedupe is an advisory transaction lock on (conversation_id, type) plus a lookup of that row.
-//
-// Hygiene: any copy of ELEVENLABS_TOOL_SECRET / ELEVENLABS_API_KEY / ELEVENLABS_WEBHOOK_SECRET
-// (and any X-YO-Tool-Secret header value) found in the payload is replaced with "[redacted]"
-// before it is stored or hashed (a webhook tool call's record could echo its request headers);
-// so are the characters JCS / jsonb refuse (lone surrogates, NUL), with U+FFFD.
-// Only conversations of ours are archived: one with a voice_sessions row, or of the agent
-// ELEVENLABS_AGENT_ID (a dashboard test call). Another agent's in the same workspace is ignored.
+// ElevenLabs auto-disables a webhook that keeps failing, so a signed body that is unusable gets
+// 200 {ok: false} plus an alert log (a retry would fail the same way), and only a transient DB
+// error answers 503 (retry). A repeat of (conversation_id, type) is 200 {duplicate: true} and
+// changes nothing. Audio is never stored.
 import type { Context } from 'hono';
 import { and, eq, sql } from 'drizzle-orm';
 import { auditLog, voiceSessions } from '@youre-on/db';
@@ -81,8 +56,9 @@ const storable = (s: string) => s.replace(UNSTORABLE, '\uFFFD');
 
 /**
  * Deep copy ready to store and hash: every secret value (and X-YO-Tool-Secret header) replaced
- * with "[redacted]" (counted), and characters JCS or jsonb would refuse replaced with U+FFFD, so
- * one odd transcript cannot fail every retry.
+ * with "[redacted]" (counted), since a webhook tool call's record could echo its request headers,
+ * and characters JCS or jsonb would refuse replaced with U+FFFD, so one odd transcript cannot fail
+ * every retry.
  */
 export function scrubForStorage(value: unknown, secrets: readonly (string | undefined)[]) {
   const needles = secrets.filter((s): s is string => !!s && s.length >= MIN_REDACT_LEN);
@@ -152,7 +128,10 @@ const dedupeLock = (conversationId: string, type: string) =>
 type Tx = Parameters<Parameters<AppDeps['db']['transaction']>[0]>[0];
 type SessionRow = typeof voiceSessions.$inferSelect;
 
-/** Inside the dedupe lock: the earlier row for (conversation_id, type), if any. */
+/**
+ * The dedupe: takes the transaction's advisory lock on (conversation_id, type), then returns the
+ * earlier row for that pair, if any.
+ */
 async function priorDelivery(tx: Tx, conversationId: string, type: string) {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(${dedupeLock(conversationId, type)})`);
   const [row] = await tx
@@ -178,7 +157,10 @@ async function sessionOf(tx: Tx, conversationId: string): Promise<SessionRow | n
   return s ?? null;
 }
 
-/** Ours: a conversation we minted or bound, or one of our agent's (a dashboard test call). */
+/**
+ * Ours: a conversation we minted or bound, or one of our agent's (a dashboard test call). Another
+ * agent's conversation in the same workspace is ignored.
+ */
 const isOurs = (deps: AppDeps, s: SessionRow | null, agentId: string | null) =>
   s !== null || (!!deps.env.ELEVENLABS_AGENT_ID && agentId === deps.env.ELEVENLABS_AGENT_ID);
 
@@ -191,6 +173,17 @@ interface Event {
   requestId: string;
 }
 
+/**
+ * Archives the transcript and closes its voice_sessions row (if any) in one transaction, before
+ * the 200 (the spec wants it within 1 s). The server has no object storage, so the transcript
+ * lives in Postgres: one append-only audit_log row per (conversation_id, type), action
+ * `el_webhook.<type>`. details.transcript_json is the JCS of data.transcript and
+ * voice_sessions.transcript_sha256 its sha256, checkable in SQL:
+ *   encode(sha256(convert_to(details->>'transcript_json', 'UTF8')), 'hex')
+ * voice_sessions.transcript_key = `audit_log:<id>` points at that row. details also keeps
+ * data.metadata (which LLM really billed the call), data.analysis and the client data (dynamic
+ * variables and the requested overrides).
+ */
 async function onTranscription(deps: AppDeps, ev: Event) {
   const { data, conversationId, agentId } = ev;
   const secrets = [
@@ -376,7 +369,7 @@ async function onInitiationFailure(deps: AppDeps, ev: Event) {
 }
 
 function reject(deps: AppDeps, reason: ElSignatureRejectReason, requestId: string): never {
-  // ALERT: ElevenLabs auto-disables a webhook that keeps failing (§4.6).
+  // ALERT: ElevenLabs auto-disables a webhook that keeps failing.
   deps.log.error('voice.webhook_rejected', { alert: true, reason, request_id: requestId });
   throw new HttpError('SIGNATURE_INVALID', 'ElevenLabs signature rejected.', { reason });
 }
@@ -411,7 +404,7 @@ export function postCallWebhookHandler() {
       return c.json({ ok: false, reason: 'invalid_payload' }, 200);
     }
     if (type === 'post_call_audio') {
-      // Never stored, never logged beyond its size (DATA-MODEL §10).
+      // Never stored, never logged beyond its size.
       d.log.warn('voice.post_call_audio_discarded', {
         conversation_id: str(data.conversation_id, 128),
         bytes: raw.length,

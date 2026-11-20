@@ -1,12 +1,12 @@
-// DB-backed HubAccess: who may subscribe to what (API-CONTRACT §3.1/§3.2) and replay from
-// bet_events (DATA-MODEL §5.19).
+// DB-backed HubAccess: who may subscribe to what, and the replay from bet_events.
+// Spec: docs/planning/API-CONTRACT.md §3.2.
 import { and, asc, eq, gt, isNull } from 'drizzle-orm';
 import { betEvents, bets, roomMembers, type Db } from '@youre-on/db';
 import { resolveSession } from '../auth/sessions';
 import type { AuthContext } from '../context';
 import type { BetEnvelope, HubAccess } from './hub';
 
-/** Max envelopes per socket replay; beyond this the client falls back to REST resync (§2.14). */
+/** Max envelopes per socket replay; beyond this the client falls back to REST resync. */
 export const REPLAY_LIMIT = 1000;
 
 export function dbHubAccess(db: Db, now: () => number = Date.now): HubAccess {

@@ -1,12 +1,13 @@
-// Embeddings at rest and in transit (DATA-MODEL §10; API-CONTRACT §2.2 SealedEmbedding).
+// Embeddings at rest and in transit (the SealedEmbedding request field).
+// Spec: docs/planning/DATA-MODEL.md §10.
 //
 // At rest: AES-256-GCM under the active KEK, a fresh 12-byte nonce per write, and the AAD
 // "yo.face.v1|<user_id>|<model_name>@<model_version>|<dim>" so a ciphertext copied to another
 // row (or relabelled as another model) fails to decrypt. Stored as ciphertext ‖ 16-byte tag.
 //
 // In transit: `plain-v0` carries the float32-LE bytes in `ct_b64` (TLS only), accepted while
-// FACE_SEAL_REQUIRED=false. The sealed x25519 form (API-CONTRACT O8) is not built, so it is
-// refused with FACE_SEAL_INVALID.
+// FACE_SEAL_REQUIRED=false. The sealed x25519 form is not built, so it is refused with
+// FACE_SEAL_INVALID.
 //
 // Nothing here logs, and the plaintext buffers are zero-filled once they are no longer needed.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';

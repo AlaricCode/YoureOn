@@ -1,9 +1,10 @@
-// GET /v1/ws (API-CONTRACT §3.1). The bearer token arrives in the first frame (`hello`), never
-// in the URL. Requires the server to be started through startServer() (server.ts), which
-// attaches the `ws` WebSocketServer to @hono/node-server.
+// GET /v1/ws: the bearer token arrives in the first frame (`hello`), never in the URL. Requires the
+// server to be started through startServer() (server.ts), which attaches the `ws` WebSocketServer
+// to @hono/node-server.
+// Spec: docs/planning/API-CONTRACT.md §3.1.
 //
-// GET /v1/bets/:bet_id/events?after=<seq>&limit=200 (§2.14): the REST resync of the same log,
-// through the hub's own access rules and replay (./resync.ts).
+// GET /v1/bets/:bet_id/events?after=<seq>&limit=200: the REST resync of the same log, through the
+// hub's own access rules and replay (./resync.ts).
 import { upgradeWebSocket } from '@hono/node-server';
 import { WS_PATH } from '@youre-on/shared/api';
 import type { RouteModule } from '../context';

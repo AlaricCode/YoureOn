@@ -1,24 +1,13 @@
-// ElevenLabs webhook tools: POST /el/tools/:name (API-CONTRACT §4.2–§4.3, TASKS D0-J2, D1-J1).
+// ElevenLabs webhook tools propose_terms and confirm_terms (POST /el/tools/:name).
+// Spec: docs/planning/API-CONTRACT.md §4.3.
 //
-// propose_terms: validate the LLM-facing projection, map it into TermsProposal, run the
-// synchronous guardrail prefilter, answer the judge, then hand the evaluation to a `ProposalSink`
-// (NOT awaited: §4.2 heavy work is asynchronous). The production sink is `termsSink`
-// (lock/terms.ts persistEvaluation): compose Terms with the server-owned fields (bet_id, escrow,
-// party pubkeys snapshotted onto the bet, deadline, USDC base-unit stakes), computeTermsHash, a
-// bet_terms_versions row, TERMS_PROPOSED, terms.proposed / terms.draft to both parties + the stage;
-// a refusal cancels the bet (terms.refused, judge.cue REFUSED). The async LLM guardrail is not
-// wired (the synchronous prefilter is the only guardrail today).
-//
-// confirm_terms: the read-back is done and both said yes out loud (theatre, not binding): freeze
-// the terms -> AWAITING_AUTHORIZATIONS, answer now, then LockService.start in the background
-// (nonce lease + build + simulate, terms.authorize_request; LOCK_SIGNER=server signs custodially).
-// B must have accepted the invite on B's own phone first ({ok:false, fix:'INVITE_PENDING'},
-// checked under the bet row lock); B's accept then cues the judge to call it again.
-//
-// Conventions (§4.2): always HTTP 200 with JSON < 300 B, except 401 for a bad secret; business
-// errors are {ok:false, fix, say}; the binding check resolves conversation_id -> voice_sessions
-// -> bet_id and answers WRONG_BET (plus an audit row) on any mismatch; a duplicate call within
-// 10 s replays the stored reply; /el/tools/* is limited to 30/min per conversation (§1.7).
+// propose_terms answers at once from a pure evaluation (its synchronous prefilter is the server's
+// only guardrail) and hands it to a ProposalSink without awaiting it: the production sink,
+// lock/terms.ts persistEvaluation, composes, stores and pushes the terms, or cancels a refused bet.
+// confirm_terms freezes the terms, answers, then starts the lock in the background.
+// Every reply is HTTP 200 with JSON under 300 B (only a bad secret gets a 401), and errors are
+// {ok:false, fix, say} so the judge can speak them. A call whose conversation is not bound to the
+// claimed bet gets WRONG_BET plus an audit row.
 import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { auditLog, bets, voiceSessions } from '@youre-on/db';
@@ -46,11 +35,11 @@ import { realWorldEnabled } from '../markets/quote';
 import { realWorldReply } from '../markets/voice-tool';
 import { TOOL_SECRET_HEADER, toolSecretOk } from './tool-auth';
 
-/** States in which the judge may (re)propose terms (SCHEMAS §9.2: edits before the freeze). */
+/** States in which the judge may (re)propose terms: edits happen before the freeze. */
 export const PROPOSABLE_STATES = ['DRAFTING', 'TERMS_PROPOSED'] as const;
-/** §4.2 hash-dedupe window (used while the webhook tool-call id is unverified: PENDING-KEY). */
+/** Dedupe window: the same call (see toolDedupeKey) within it replays the stored reply. */
 export const TOOL_DEDUPE_WINDOW_MS = 10_000;
-/** §1.7 `/el/tools/*`: 30/min per conversation. */
+/** `/el/tools/*`: 30/min per conversation. */
 export const EL_TOOLS_BUCKET = { limit: 30, windowMs: 60_000 } as const;
 
 export interface BoundSession {
@@ -73,16 +62,15 @@ export interface ProposalEvent {
 }
 
 /**
- * Where D1-J1 plugs in (compose Terms, hash, persist, push terms.draft / terms.proposed, start the
- * async guardrail; on a refusal cancel the bet). Called after the reply is computed and NOT
- * awaited by the request path (§4.2: heavy work is asynchronous). Errors are logged.
+ * Receives each evaluation after the reply is computed. NOT awaited by the request path (heavy
+ * work is asynchronous); errors are logged.
  */
 export interface ProposalSink {
   onEvaluated(e: ProposalEvent): Promise<void>;
 }
 
 /**
- * The production sink (D1-J1): lock/terms.ts persistEvaluation. Errors are logged by the caller.
+ * The production sink: lock/terms.ts persistEvaluation. Errors are logged by the caller.
  */
 export const termsSink: ProposalSink = {
   async onEvaluated({ deps, session, evaluation, requestId }) {
@@ -95,7 +83,7 @@ export const termsSink: ProposalSink = {
   },
 };
 
-/** The pre-D1-J1 sink: an audit row for every refusal, nothing else (kept for tests). */
+/** An audit-only sink: one audit row per refusal, nothing else. Not referenced anywhere. */
 export const auditOnlySink: ProposalSink = {
   async onEvaluated({ deps, session, evaluation, requestId }) {
     if (evaluation.kind !== 'refused') return;
@@ -113,7 +101,7 @@ export const auditOnlySink: ProposalSink = {
   },
 };
 
-/** Always HTTP 200, the body fitted under 300 B (§4.2). Shared by every webhook tool. */
+/** Always HTTP 200, the body fitted under 300 B. */
 export const reply = (c: Context<AppEnv>, body: ToolReply) => c.json(fitReply(body), 200);
 
 export const SAY = {
@@ -129,10 +117,10 @@ interface CachedReply {
   reply: ToolReply;
 }
 
-/** In-process state of the tool layer (one Fly machine, like the P0 idempotency LRU). */
+/** In-process state of the tool layer (one Fly machine, like http/idempotency.ts). */
 export class ToolState {
   private replies = new Map<string, CachedReply>();
-  /** bet_id -> {rev, fingerprint of the last valid proposal}. D1-J1 moves this to bet_terms_versions. */
+  /** bet_id -> {rev, fingerprint of the last valid proposal} (see revision()). */
   private revisions = new Map<string, { rev: number; fp: string }>();
   constructor(private readonly maxEntries = 2_000) {}
 
@@ -158,9 +146,9 @@ export class ToolState {
   }
 
   /**
-   * bet_id -> the refusal reply. SCHEMAS §3: a refusal ends the bet (CANCELLED,
-   * 'refused:<category>'). Until D2-J1 commits that transition, a refused bet stays refused here,
-   * so a re-worded call on the same bet cannot talk its way past the prefilter.
+   * bet_id -> the refusal reply. A refusal ends the bet (the sink cancels it), but the sink is not
+   * awaited, so until it commits the bet still looks proposable. This map keeps a refused bet
+   * refused: a re-worded call on the same bet cannot talk its way past the prefilter.
    */
   private refusals = new Map<string, ToolReply>();
 
@@ -176,7 +164,10 @@ export class ToolState {
     if (!this.refusals.has(betId)) this.refusals.set(betId, r);
   }
 
-  /** +1 per judge turn that changes the draft (SCHEMAS TermsDraft.revision); same proposal -> same rev. */
+  /**
+   * +1 per judge turn that changes the draft; the same proposal keeps its rev. This is the `rev`
+   * of the propose_terms reply only: terms.draft numbers its revisions from bet_terms_versions.
+   */
   revision(betId: string, fingerprint: string): number {
     const cur = this.revisions.get(betId);
     if (cur && cur.fp === fingerprint) return cur.rev;
@@ -186,11 +177,11 @@ export class ToolState {
   }
 }
 
-/** §4.2 hash dedupe: sha256(conversation_id ‖ name ‖ JCS(args)). */
+/** Dedupe key: sha256(conversation_id ‖ name ‖ JCS(args)). */
 export const toolDedupeKey = (conversationId: string, name: string, body: unknown): string =>
   sha256Hex(`${conversationId}\n${name}\n${jcs(body)}`);
 
-/** conversation_id -> the active voice session's bet (§4.1 binding check); null = WRONG_BET. */
+/** conversation_id -> the active voice session's bet (the binding check); null = WRONG_BET. */
 export async function loadBinding(
   deps: AppDeps,
   conversationId: string,
@@ -252,7 +243,7 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
     const deps = c.get('deps');
     const requestId = c.get('requestId');
     const t0 = performance.now();
-    // §4.1: every WRONG_BET writes an audit row; off the reply path, failures only logged.
+    // Every WRONG_BET writes an audit row; off the reply path, failures only logged.
     const audit = (action: string, betId: string | undefined, details: Record<string, unknown>) =>
       void deps.db
         .insert(auditLog)
@@ -273,7 +264,6 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         ...extra,
       });
 
-    // 1. auth (the only non-200)
     if (!toolSecretOk(c.req.header(TOOL_SECRET_HEADER), [deps.env.ELEVENLABS_TOOL_SECRET])) {
       deps.log.warn('el_tool.unauthorized', { tool: name, request_id: requestId });
       return c.json({ ok: false, fix: 'UNAUTHORIZED' }, 401);
@@ -281,7 +271,6 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
 
     let conversationId: string | undefined;
     try {
-      // 2. body
       let body: unknown;
       try {
         body = JSON.parse(await c.req.text());
@@ -304,7 +293,7 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
       }
 
-      // 3. rate limit per conversation (§1.7); a 429 would break the tool contract, so it is a fix.
+      // A 429 would break the tool contract, so the rate limit answers with a fix.
       try {
         deps.rateLimit?.take('el/tools', conversationId, EL_TOOLS_BUCKET);
       } catch (e) {
@@ -315,7 +304,6 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         throw e;
       }
 
-      // 4. duplicate within 10 s -> replay
       const now = deps.now();
       const dedupeKey = toolDedupeKey(conversationId, name, body);
       const prior = opts.state.cached(dedupeKey, now);
@@ -324,7 +312,6 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         return reply(c, prior);
       }
 
-      // 5. binding check (§4.1 security)
       const session = await loadBinding(deps, conversationId);
       if (!session || session.bet_id !== betId) {
         audit('el_tool.wrong_bet', session?.bet_id ?? betId, {
@@ -337,8 +324,8 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         log('error', { fix: 'WRONG_BET', conversation_id: conversationId });
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
       }
-      // A refused bet stays refused (SCHEMAS §3; see ToolState.refusedReply). Checked before the
-      // state: the sink has already moved a refused bet to CANCELLED.
+      // A refused bet stays refused (see ToolState.refusedReply). Checked before the state: the
+      // sink may already have moved a refused bet to CANCELLED.
       const refused = opts.state.refusedReply(betId);
       if (refused) {
         opts.state.store(dedupeKey, now, refused);
@@ -352,9 +339,9 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         return reply(c, r);
       }
 
-      // 6. evaluate (pure: normText, map, strip-parse, prefilter, stake, market)
       const maxStake = deps.env.MAX_STAKE_MICRO ? BigInt(deps.env.MAX_STAKE_MICRO) : MAX_STAKE;
-      // real_world (the Gemini BTC 5-minute closer) only with the relay on (markets/quote.ts).
+      // real_world (the Gemini BTC 5-minute closer) only when markets/quote.ts realWorldEnabled:
+      // the relay is on and real-world bets are allowed.
       const evaluation = evaluateProposeTerms(body, {
         maxStake,
         realWorldEnabled: realWorldEnabled(deps),
@@ -363,12 +350,12 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
         evaluation.kind === 'proposal'
           ? opts.state.revision(betId, sha256Hex(jcs(evaluation.proposal)))
           : undefined;
-      // real_world: Gemini's split (or its refusal) in the spoken reply (markets/voice-tool.ts)
       // Odds read-back names ("Logan puts in fifteen, Jake puts in five"): one query, odds only.
       const names =
         evaluation.kind === 'proposal' && hasOdds(evaluation.proposal)
           ? await partyNames(deps, session)
           : undefined;
+      // real_world: Gemini's split (or its refusal) in the spoken reply (markets/voice-tool.ts).
       const r = realWorldReply(
         deps,
         evaluation,
@@ -401,7 +388,7 @@ export function proposeTermsHandler(opts: ToolHandlerOptions) {
   };
 }
 
-// ---- confirm_terms (API-CONTRACT §4.3) ---------------------------------------------------------
+// ---- confirm_terms ------------------------------------------------------------------------------
 
 const CONFIRM_SAY = {
   NOT_PROPOSED: "Nothing to confirm yet. What's the bet?",
@@ -414,7 +401,9 @@ export function invitePendingSay(b: string): string {
   return `${b.slice(0, 40)} has to accept the challenge on their phone first.`;
 }
 
-/** "Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do." */
+/**
+ * "Logan, Jake: hold the button on your own phone to lock it in. Nothing moves until you both do."
+ */
 export function confirmSay(a: string, b: string): string {
   return `${a}, ${b}: hold the button on your own phone to lock it in. Nothing moves until you both do.`;
 }
@@ -495,7 +484,7 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
       const betId = typeof ids.bet_id === 'string' ? ids.bet_id : undefined;
       const heard = typeof ids.heard === 'string' ? ids.heard.slice(0, 8) : undefined;
       if (!conversationId || !betId || conversationId.length > 128) {
-        // §4.1: every WRONG_BET writes an audit row (off the reply path).
+        // Every WRONG_BET writes an audit row (off the reply path).
         void deps.db
           .insert(auditLog)
           .values({
@@ -547,7 +536,7 @@ export function confirmTermsHandler(opts: Pick<ToolHandlerOptions, 'state'>) {
         return reply(c, { ok: false, fix: 'WRONG_BET', say: SAY.WRONG_BET });
       }
       // B's consent is B's own tap on the invite, never what the judge heard (a spoken "deal"
-      // is theatre, §4.1). With LOCK_SIGNER=server the lock signs B's stake custodially, so
+      // is theatre). With LOCK_SIGNER=server the lock signs B's stake custodially, so
       // freezing before B accepted would spend B's money on A's word. Checked inside the
       // freeze, under the row lock: the binding's bet_state above may already be stale (the
       // propose_terms sink is not awaited). B's later accept sends the judge an [EVENT]

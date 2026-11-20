@@ -20,9 +20,9 @@ export function clientIp(c: Context<AppEnv>): string {
 }
 
 /**
- * §1.7 auth buckets. Runs before the body is validated, so the device bucket is keyed only on a
- * well-formed key: any other string (up to the 64 KB body cap) would be a fresh map entry per
- * request. The request then fails validation (422) under the IP bucket alone.
+ * Auth buckets, per IP and per device key. Runs before the body is validated, so the device
+ * bucket is keyed only on a well-formed key: any other string (up to the 64 KB body cap) would be
+ * a fresh map entry per request. The request then fails validation (422) under the IP bucket alone.
  */
 export function limitAuth(c: Context<AppEnv>, device_pubkey?: string) {
   const rl = c.get('deps').rateLimit;
@@ -59,7 +59,7 @@ export function userRef(u: {
     user_id: u.id,
     pubkey: u.wallet_pubkey as UserRef['pubkey'], // validated by the users_wallet_pubkey_fmt CHECK
     display_name: u.display_name,
-    avatar_url: null, // presigned avatar URLs land with POST /v1/me/avatar (PENDING: S3)
+    avatar_url: null, // no avatars: the server has no object storage
   };
 }
 

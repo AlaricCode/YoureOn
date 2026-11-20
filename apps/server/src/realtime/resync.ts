@@ -1,22 +1,16 @@
-// GET /v1/bets/:bet_id/events?after=<seq>&limit=200 (API-CONTRACT §2.14, §3.3): REST resync.
-// Returns {events: RealtimeEvent[], last_seq}, replayed from bet_events (DATA-MODEL §5.19). A
-// phone calls it when a seq gap stays open 2 s, after a reconnect, and on cold start to rebuild a
-// bet from its log (B's invite answer, the lock request, authorizations, the armed attempt...).
+// REST resync: GET /v1/bets/:bet_id/events?after=<seq>&limit=200 -> {events, last_seq} from
+// bet_events. A phone calls it when a seq gap stays open 2 s, after a reconnect, and on cold start
+// to rebuild a bet from its log (B's invite answer, the lock request, authorizations...).
+// Spec: docs/planning/API-CONTRACT.md §2.14.
 //
 // It reads through the WS hub's own HubAccess (hub.access): the same canSeeBet as `subscribe`
-// and the same replay query as the socket replay. So a session sees here exactly the envelopes,
-// verbatim, that subscribing with after_seq would send it; there is no second copy of the rules.
-// The socket replay applies no per-recipient filtering or redaction (§3.2: the bet channel
-// carries every RealtimeEvent of the bet to every member; the envelopes hold no secrets,
-// DATA-MODEL §5.19), and neither does this.
+// and the same replay query, so a session sees here exactly the envelopes, verbatim, that
+// subscribing with after_seq would send it; there is no second copy of the rules. Neither path
+// filters or redacts per recipient: the bet channel carries every event of the bet to everyone
+// who may see it, and the envelopes hold no secrets.
 //
-// Who: as GET /v1/bets/:bet_id (B+P or stage). A party's app sessions (A's judge cam is a device
-// of A) and stage sessions of the bet's room. Everyone else, a room member who is not a party
-// included, gets 404 NOT_FOUND, the same as an unknown bet, so bet ids can't be probed.
-//
-// Each envelope is checked against the shared RealtimeEvent schema (the element schema of
-// BetEventsResponse). One that fails is left out with a log line: every client drops it anyway
-// (SCHEMAS §10.1), and failing the whole page would strand the bet on its snapshot.
+// An envelope that fails the shared RealtimeEvent schema is left out with a log line: every client
+// drops it anyway, and failing the whole page would strand the bet on its snapshot.
 import { BET_EVENTS_LIMIT } from '@youre-on/shared/api';
 import { BetId } from '@youre-on/shared/primitives';
 import { BetEventsResponse, RealtimeEvent } from '@youre-on/shared/realtime';

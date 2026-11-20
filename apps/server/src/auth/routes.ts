@@ -1,5 +1,5 @@
-// POST /v1/auth/challenge, /v1/auth/signup, /v1/auth/session; DELETE /v1/auth/session
-// (API-CONTRACT §1.3, §2.1). TASKS D0-M4 (server side).
+// POST /v1/auth/challenge, /v1/auth/signup, /v1/auth/session; DELETE /v1/auth/session.
+// Spec: docs/planning/API-CONTRACT.md §1.3.
 //
 // POST /v1/auth/demo-claim (DEMO_MODE only) lives in ./demo-claim.ts.
 import type { Context } from 'hono';
@@ -58,7 +58,7 @@ async function signup(c: Context<AppEnv>) {
   };
   limitAuth(c, typeof pre.device_pubkey === 'string' ? pre.device_pubkey : undefined);
 
-  // BRIEF 5c guardrail: a missing or false 18+ attestation is AGE_REQUIRED, before any other check.
+  // Guardrail: a missing or false 18+ attestation is AGE_REQUIRED, before any other check.
   if (pre.age_attestation?.is_18_plus !== true) throw new HttpError('AGE_REQUIRED');
   const body = parseWith(SignupRequest, raw);
 

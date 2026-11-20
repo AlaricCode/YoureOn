@@ -1,6 +1,7 @@
-// Match tickets (API-CONTRACT §2.4): a short-lived HMAC token from POST /v1/rooms/:id/face-match
-// that binds {room, challenger (the scanner), target (the matched member), exp}. Its only use is
+// Match tickets: a short-lived HMAC token from POST /v1/rooms/:id/face-match that binds
+// {room, challenger (the scanner), target (the matched member), exp}. Its only use is
 // POST /v1/bets with challenge_method 'face'. It addresses a challenge; it authorizes nothing.
+// Spec: docs/planning/API-CONTRACT.md §2.4.
 //
 //   mt1.<base64url(JSON {r, a, b, e})>.<base64url(HMAC-SHA256(key, "mt1." + payload))>
 //

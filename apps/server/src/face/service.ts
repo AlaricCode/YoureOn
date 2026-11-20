@@ -1,5 +1,6 @@
-// Face enrollment and room-scoped matching over Postgres (API-CONTRACT §2.2, §2.4; DATA-MODEL
-// §5.3, §7.2, §10). The only code that reads or writes face_enrollments.
+// Face enrollment and room-scoped matching over Postgres. The only code that reads or writes the
+// embeddings in face_enrollments (rooms/service.ts reads only who is enrolled).
+// Spec: docs/planning/DATA-MODEL.md §10.
 //
 // Privacy rules this file keeps:
 //  - Vectors never reach a log, an audit row, an error message or a response. Audit details
@@ -8,13 +9,12 @@
 //    No confident match stores nothing; a match only bumps the matched row's day-truncated
 //    last_used_at (retention).
 //  - Candidates are the opted-in (status 'active'), current members of the caller's room with
-//    the same model, never the caller, never anyone outside the room (DATA-MODEL §7.2). In the
-//    shared lobby (rooms/lobby.ts), only the members who are around: online now, or seen within
+//    the same model, never the caller, never anyone outside the room. In the shared lobby
+//    (rooms/lobby.ts), only the members who are around: online now, or seen within
 //    LOBBY_RECENT_MS, most recently seen first, so a day of past visitors is never compared.
-//  - Scores stay here. The response is a user + ticket, or null.
-//  - Dance identify (identifyDanceParties, DANCE-OFF §3) compares only with the bet's two parties
-//    (the caller's own enrollment included), stores nothing at all (not even last_used_at), and
-//    answers face indices and parties, never a score.
+//  - Scores stay here. The response is a user, a ticket and the head-to-head record, or null.
+//  - Dance identify compares only with the bet's two parties, stores nothing (not even
+//    last_used_at) and answers face indices and parties, never a score.
 //  - Database errors are re-thrown without their message (Drizzle puts query parameters, i.e.
 //    ciphertext, in it) so the app's error log never sees face bytes.
 import { and, asc, desc, eq, gte, inArray, isNull, ne, or, sql } from 'drizzle-orm';
@@ -156,7 +156,7 @@ export async function enroll(
     throw new HttpError('FACE_CONSENT_REQUIRED', undefined, { reason: 'consent_in_future' });
   }
   if (passedAt < consentAt) {
-    // DATA-MODEL §10: consent before capture.
+    // Consent before capture.
     throw new HttpError('FACE_CONSENT_REQUIRED', undefined, { reason: 'capture_before_consent' });
   }
   if (passedAt > now + REQUEST_CLOCK_SKEW_MS) {
@@ -367,7 +367,7 @@ export interface AroundFilter {
 }
 
 /**
- * DATA-MODEL §7.2: opted-in current members of `roomId` with this model, minus the scanner.
+ * Opted-in current members of `roomId` with this model, minus the scanner.
  * With `around` (the lobby): only those seen since `seenSince` or online, online first, then the
  * most recently seen, so the FACE_MATCH_MAX_CANDIDATES cap only ever drops the stalest.
  */
@@ -560,7 +560,7 @@ function openRow(
   return v;
 }
 
-// ---- dance identify (DANCE-OFF §3) -------------------------------------------------------
+// ---- dance identify ---------------------------------------------------------------------
 
 /**
  * POST /v1/bets/:bet_id/dance/identify, after the route's gate (the bet's recorder device, a
@@ -644,7 +644,7 @@ export async function identifyDanceParties(
   }
 }
 
-// ---- head-to-head (DATA-MODEL §7.1) ------------------------------------------------------
+// ---- head-to-head -----------------------------------------------------------------------
 
 const signedUsd = (micro: bigint): string =>
   micro === 0n
@@ -652,9 +652,9 @@ const signedUsd = (micro: bigint): string =>
     : `${micro < 0n ? '−' : '+'}${formatUsd((micro < 0n ? -micro : micro).toString())}`;
 
 /**
- * `me` vs `them` over chain-confirmed settlements (onchain_status 'settled') plus labelled
- * is_seed history, per the DATA-MODEL §7.1 view (computed inline; the view itself is not
- * migrated). No rows means 0-0.
+ * `me` vs `them` over bets with onchain_status 'settled': chain-confirmed settlements plus labelled
+ * is_seed history (flagged by includes_seed). Computed inline: the database has no head-to-head
+ * view. No rows means 0-0.
  *
  * Rivalry fields (one statement): `total` = wins + losses + pushes; `last_result` is the newest
  * settled bet's result (settled_at DESC NULLS LAST, then id DESC); `streak` is the run of that
@@ -738,7 +738,7 @@ export async function headToHead(db: Reader, me: string, them: string): Promise<
   };
 }
 
-// ---- retention (DATA-MODEL §10 written schedule) ------------------------------------------
+// ---- retention --------------------------------------------------------------------------
 
 /**
  * Destroys enrollments at the earliest of: 180 days without a match (or since enrollment),

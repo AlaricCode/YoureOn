@@ -1,5 +1,5 @@
-// Bearer sessions (API-CONTRACT §1.3, DATA-MODEL §5.21): `yo_s_<base64url 32 B>`, stored as
-// sha256(token) only, 7-day lifetime.
+// Bearer sessions: `yo_s_<base64url 32 B>`, stored as sha256(token) only, 7-day lifetime.
+// Spec: docs/planning/API-CONTRACT.md §1.3.
 import { and, eq, isNull } from 'drizzle-orm';
 import { apiSessions, devices, type Db } from '@youre-on/db';
 import { SESSION_TTL_MS, SessionToken } from '@youre-on/shared/api';

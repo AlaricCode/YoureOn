@@ -1,8 +1,9 @@
-// WebSocket hub, API-CONTRACT §3 / ARCHITECTURE §1.3 (one process, in-memory fan-out).
+// WebSocket hub: one process, in-memory fan-out.
+// Spec: docs/planning/API-CONTRACT.md §3.
 //
 // Channels: user:<user_id> (auto on hello), bet:<bet_id> (subscribe), room:<room_id>
-// (subscribe_room). Event frames are bare SCHEMAS RealtimeEvent envelopes (no `op`);
-// control frames carry `op` and are not sequenced.
+// (subscribe_room). Event frames are bare RealtimeEvent envelopes (no `op`); control frames
+// carry `op` and are not sequenced.
 //
 // Protocol (server side):
 //  1. client `hello` within 5 s or close 4401; bad token -> 4401.
@@ -45,8 +46,7 @@ export interface HubAccess {
   canSeeRoom(auth: AuthContext, roomId: string): Promise<boolean>;
   /**
    * Envelopes with seq > afterSeq in seq order (at most `limit`; the access's own cap when
-   * omitted), and the bet's current last_seq. The socket replay and the REST resync
-   * (GET /v1/bets/:bet_id/events) both read through this.
+   * omitted), and the bet's current last_seq.
    */
   replay(
     betId: string,
@@ -64,7 +64,7 @@ export interface HubOptions {
   maxBufferedBytes?: number;
 }
 
-/** Closes the hub uses that API-CONTRACT does not number (it only fixes 4401 and 4403). */
+/** Close codes the hub uses that the spec does not number (it fixes only 4401 and 4403). */
 export const HUB_CLOSE = {
   HEARTBEAT_TIMEOUT: 4408,
   BACKPRESSURE: 4413,
@@ -167,7 +167,7 @@ export class RealtimeHub {
   /**
    * Fans an already-persisted envelope (bet_events row) out to bet:<bet_id>. Pass the bet's
    * `roomId` so stage sessions of that room that sent `subscribe_room` also get it: stage
-   * scope receives every bet in its room (API-CONTRACT §3.1, §3.2). emitBetEvent does this.
+   * scope receives every bet in its room. emitBetEvent does this.
    */
   publishBetEvent(env: BetEnvelope, roomId?: string | null): void {
     const targets = new Set(this.channels.get(`bet:${env.bet_id}`) ?? []);
@@ -204,8 +204,8 @@ export class RealtimeHub {
 
   /**
    * Drops every non-stage socket of `userId` from room:<roomId>, e.g. after
-   * POST /v1/rooms/:id/leave: a member who left must stop receiving room.presence frames
-   * (API-CONTRACT §3.2: the room channel is its members). They may re-subscribe after re-joining.
+   * POST /v1/rooms/:id/leave: a member who left must stop receiving room.presence frames (the
+   * room channel is its members). They may re-subscribe after re-joining.
    */
   leaveRoom(userId: string, roomId: string): void {
     for (const c of [...(this.channels.get(`room:${roomId}`) ?? [])]) {
@@ -215,7 +215,10 @@ export class RealtimeHub {
     }
   }
 
-  /** Sends a frame (a seq-bearing envelope such as bet.invited, or a control frame) to user:<user_id>. */
+  /**
+   * Sends a frame (a seq-bearing envelope such as bet.invited, or a control frame) to
+   * user:<user_id>.
+   */
   publishToUser(userId: string, frame: BetEnvelope | WsServerControlFrame): void {
     for (const c of this.channels.get(`user:${userId}`) ?? []) {
       if ('seq' in frame && 'bet_id' in frame) this.deliverBet(c, frame as BetEnvelope);
@@ -339,7 +342,7 @@ export class RealtimeHub {
           this.userConnCount.set(auth.user_id, n);
           if (n === 1) this.emitPresence(auth.user_id, true);
         }
-        // The D0-L3 cellular DoD wants the WS round trip in the server log too (Fly logs).
+        // Logged so a phone's WS connection (on cellular, say) shows in the server log too.
         this.log.info('ws.hello', {
           conn: c.id,
           session_id: auth.session_id,
@@ -399,8 +402,8 @@ export class RealtimeHub {
       lastSeq = Math.max(r.last_seq, c.lastSent.get(betId) ?? afterSeq);
     } catch (err) {
       // Never claim `subscribed` after a failed replay: the client would treat last_seq as
-      // caught up and miss the gap. Drop the subscription; the client resyncs over REST
-      // (§2.14) and subscribes again.
+      // caught up and miss the gap. Drop the subscription; the client resyncs over REST and
+      // subscribes again.
       c.replaying.delete(betId);
       c.bets.delete(betId);
       c.lastSent.delete(betId);

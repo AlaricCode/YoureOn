@@ -1,4 +1,5 @@
-// Face module configuration, resolved once per Env (DATA-MODEL §10, SETUP-CHECKLIST §7):
+// Face module configuration, resolved once per Env.
+// Spec: docs/planning/DATA-MODEL.md §10.
 //
 //  - The KEK ring for embeddings at rest. `FACE_KEK_ACTIVE` names the key_id new rows use
 //    (e.g. `face-kek-2026-11-a`); its 32 bytes live in `FACE_KEK_<KEY_ID in UPPER_SNAKE>`
@@ -31,7 +32,7 @@ export interface FaceConfig {
   /** HMAC-SHA256 key for match tickets (already domain-separated). */
   readonly ticketKey: Uint8Array;
   readonly ticketKeySource: 'FACE_TICKET_SECRET' | 'SESSION_SECRET' | 'dev-default' | 'ephemeral';
-  /** API-CONTRACT §2.2: plain-v0 is accepted only while this is false. */
+  /** plain-v0 is accepted only while this is false. */
   readonly sealRequired: boolean;
   /** Configuration problems to log at boot (names only, never values). */
   readonly warnings: readonly string[];

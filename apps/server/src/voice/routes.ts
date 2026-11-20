@@ -1,24 +1,12 @@
-// Voice routes (TASKS D0-J2):
-//   POST /v1/voice/tokens       (S)  mint an ElevenLabs conversation token (API-CONTRACT §2.6);
-//                                    6 / 10 min per user; DEMO_MODE: demo players only
-//   POST /el/tools/propose_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
-//   POST /el/tools/confirm_terms      ElevenLabs webhook tool (API-CONTRACT §4.3), secret header
-//   POST /v1/bets/:bet_id/voice/lines (S, A)  transcript relay -> judge.line / party.line (./relay)
-//   POST /v1/bets/:bet_id/cues        (S, A)  `cue` client tool -> stage.cue (./relay)
-//   POST /webhooks/elevenlabs         post-call webhook (API-CONTRACT §4.6), ElevenLabs-Signature
-//                                     HMAC; 404 while ELEVENLABS_WEBHOOK_SECRET is unset (./post-call)
-//   GET  /v1/demo/voice               (demo key) is the judge switched on? (./readiness)
-//   (POST /el/tools/get_market_odds is registered by markets/bet-routes.ts.)
+// Voice routes: the ElevenLabs conversation token (POST /v1/voice/tokens), the propose_terms and
+// confirm_terms webhook tools (./tools), A's transcript and cue relays (./relay), the post-call
+// webhook (./post-call) and the judge's readiness probe (GET /v1/demo/voice, ./readiness). The
+// other webhook tools are registered by odds/routes.ts, review/routes.ts and markets/bet-routes.ts.
+// Spec: docs/planning/API-CONTRACT.md §2.6.
 //
-// createVoiceRoutes() takes injectable collaborators (the ElevenLabs client, the D1-J1 proposal
-// sink) so tests mock the ElevenLabs HTTP call; `voiceRoutes` is the production instance that
-// routes.ts registers.
-//
-// Spend guard (README D14): a conversation token starts a billable ElevenLabs Agent session
-// (agent minutes + LLM usage), so the default client calls ElevenLabs only with ALLOW_SPEND=true.
-// Without it the token route answers 502 UPSTREAM_ERROR {reason: 'spend_disabled'} and never
-// calls out; the server still boots (ELEVENLABS_API_KEY in .env is also used by
-// scripts/el-agent.ts, whose agent / tool configuration calls are not billed).
+// Spend guard: a conversation token starts a billable ElevenLabs Agent session (agent minutes +
+// LLM usage), so the default client calls ElevenLabs only with ALLOW_SPEND=true. Without it the
+// token route answers 502 UPSTREAM_ERROR {reason: 'spend_disabled'} and never calls out.
 import { eq } from 'drizzle-orm';
 import { bets, voiceSessions } from '@youre-on/db';
 import { isTerminalBetState, type BetState } from '@youre-on/shared/bet-state';
@@ -45,7 +33,7 @@ import {
   type ProposalSink,
 } from './tools';
 
-/** Conversation tokens per user (§1.7): a burst of 6, then one every 100 s. */
+/** Conversation tokens per user: a burst of 6, then one every 100 s. */
 export const VOICE_TOKENS_BUCKET = { limit: 6, windowMs: 10 * 60_000 } as const;
 
 export interface VoiceRoutesOptions {
@@ -113,7 +101,7 @@ export function createVoiceRoutes(o: VoiceRoutesOptions = {}): RouteModule {
             .where(eq(bets.id, body.bet_id))
             .limit(1);
           if (!bet) throw new HttpError('NOT_FOUND', 'No such bet.');
-          // D6: only A's phone hosts the session; B (or anyone else) gets NOT_A_PARTY.
+          // Only A's phone hosts the session; B (or anyone else) gets NOT_A_PARTY.
           if (bet.party_a_id !== me.user_id)
             throw new HttpError('NOT_A_PARTY', "Only the challenger's phone hosts the judge.", {
               bet_id: body.bet_id,

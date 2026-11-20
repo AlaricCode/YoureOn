@@ -1,8 +1,9 @@
-// Auth middleware for route modules (API-CONTRACT §1.3, §1.6).
-//   requireSession       — any valid bearer (app or stage scope)          -> c.get('auth')
-//   requireAppSession    — bearer of a phone session (scope 'app')         -> c.get('auth') as AppAuthContext
+// Auth middleware for route modules. Each sets the request's auth context (c.get('auth')):
+//   requireSession       — any valid bearer (app or stage scope)
+//   requireAppSession    — bearer of a phone session (scope 'app'); appAuth(c) reads it typed
 //   requireSignedRequest — requireAppSession + X-YO-* request signature + Idempotency-Key replay
 // Use requireSignedRequest on every POST/PUT/PATCH/DELETE outside /v1/auth/* ("S" routes).
+// Spec: docs/planning/API-CONTRACT.md §1.3.
 import type { Context, MiddlewareHandler } from 'hono';
 import type { HttpBindings } from '@hono/node-server';
 import { HDR, REQUEST_CLOCK_SKEW_MS, requestSigningString } from '@youre-on/shared/api';
@@ -18,7 +19,7 @@ async function authenticate(c: Context<AppEnv>): Promise<AuthContext> {
   if (!token) throw new HttpError('AUTH_REQUIRED');
   const deps = c.get('deps');
   const auth = await resolveSession(deps.db, token, deps.now());
-  // §1.7 "everything else": 120/min per session. Route-specific buckets are taken on top.
+  // 120/min per session for everything; route-specific buckets are taken on top.
   deps.rateLimit?.take('session', auth.session_id, BUCKETS.default);
   return auth;
 }

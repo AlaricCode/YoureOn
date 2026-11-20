@@ -1,6 +1,7 @@
-// Keeper task `face-retention`: DATA-MODEL §10 "A daily job enforces the schedule and writes
-// audit rows". Runs hourly (cheap: one indexed DELETE ... RETURNING), so a deadline is never
-// missed by more than an hour, including the 2026-12-31 hackathon cut-off.
+// Keeper task `face-retention`: enforces the face data retention schedule and audits each
+// deletion. Runs hourly (cheap: one DELETE ... RETURNING), so a deadline is never missed by more
+// than an hour, including the 2026-12-31 hackathon cut-off.
+// Spec: docs/planning/DATA-MODEL.md §10.
 import type { AppDeps } from '../context';
 import type { KeeperTask } from '../keeper/keeper';
 import { purgeExpiredEnrollments } from './service';

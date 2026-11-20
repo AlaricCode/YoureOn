@@ -1,19 +1,17 @@
-// Minimal ElevenLabs REST client for the server (FINDINGS §3.10: "Server: plain fetch or
-// @elevenlabs/elevenlabs-js"). Only what the running server needs: the conversation token,
-// (for src/providers, behind STT_PROVIDER / SFX_PROVIDER) Scribe speech-to-text and Sound Effects,
-// and text-to-speech for the stage's voice (src/voice/tts.ts).
-// `fetch` is injectable so tests mock the HTTP call (no key exists yet: PENDING-KEY).
+// Minimal ElevenLabs REST client over plain fetch, with only what the running server needs: the
+// conversation token, (for src/providers, behind STT_PROVIDER / SFX_PROVIDER) Scribe
+// speech-to-text and Sound Effects, and text-to-speech for the stage's voice (src/voice/tts.ts).
+// `fetch` is injectable so tests mock the HTTP call.
 //
-// speechToText / soundGeneration are ported from Verdict
-// packages/backend/src/providers/real/elevenlabs.ts (ElevenLabsStt, ElevenLabsSfx), re-shaped to
-// this client's error type and deadlines (API-CONTRACT §1.8: STT 6 s) and to `scribe_v2` (§2.11).
+// speechToText and soundGeneration: adapted from Verdict's ElevenLabsStt / ElevenLabsSfx
+// (packages/backend/src/providers/real/elevenlabs.ts; docs/MERGE-PLAN.md).
 import { z } from 'zod/v4';
 import { ElTokenResponse } from '@youre-on/shared/judge/voice';
 
 export const ELEVENLABS_API = 'https://api.elevenlabs.io';
-/** API-CONTRACT §1.8: server-side outbound deadline for the ElevenLabs token. */
+/** Server-side outbound deadline for the ElevenLabs token. */
 export const EL_TOKEN_TIMEOUT_MS = 3_000;
-/** API-CONTRACT §1.8: server-side outbound deadline for ElevenLabs STT. */
+/** Server-side outbound deadline for ElevenLabs STT. */
 export const EL_STT_TIMEOUT_MS = 6_000;
 /** Sound Effects are generated once per cue and cached, off any latency path. */
 export const EL_SFX_TIMEOUT_MS = 30_000;
@@ -24,7 +22,7 @@ export const EL_SFX_TIMEOUT_MS = 30_000;
 export const EL_TTS_TIMEOUT_MS = 10_000;
 /** MP3 every browser decodes (`output_format` query of POST /v1/text-to-speech/{voice_id}). */
 export const EL_TTS_OUTPUT_FORMAT = 'mp3_44100_128';
-/** API-CONTRACT §2.11 (FINDINGS §4 Verification). */
+/** The Scribe speech-to-text model. */
 export const SCRIBE_MODEL_ID = 'scribe_v2';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -46,7 +44,7 @@ export interface ConversationToken {
 }
 
 export interface ElevenLabsClient {
-  /** `GET /v1/convai/conversation/token?agent_id=…` with `xi-api-key` (API-CONTRACT §2.6). */
+  /** `GET /v1/convai/conversation/token?agent_id=…` with `xi-api-key`. */
   conversationToken(agentId: string): Promise<ConversationToken>;
 }
 
@@ -65,7 +63,10 @@ export const ScribeResponse = z.looseObject({
 });
 export type ScribeResponse = z.infer<typeof ScribeResponse>;
 
-/** Scribe and Sound Effects (paid; only reached through src/providers behind the spend guard). */
+/**
+ * The paid calls: Scribe and Sound Effects (reached only through src/providers, behind the spend
+ * guard) and text-to-speech (voice/tts.ts, behind stageAudioGate).
+ */
 export interface ElevenLabsMediaClient {
   /** Diarized, word-timestamped, audio-event-tagged transcript. Deadline EL_STT_TIMEOUT_MS. */
   speechToText(req: {

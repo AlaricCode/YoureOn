@@ -1,20 +1,16 @@
-// Face addressing routes (Beat 1; API-CONTRACT §2.2, §2.4; DATA-MODEL §10):
-//   GET    /v1/face/consent                  (B) -> FaceConsentResponse (the exact consent text + hash)
-//   GET    /v1/face/enrollment               (B) -> FaceEnrollmentStatusResponse (no vector data)
-//   POST   /v1/face/enrollment               (S) -> 201 {status:'active', enrolled_at}
-//   PATCH  /v1/face/enrollment               (S) -> 200 FaceEnrollmentStatusResponse
-//   DELETE /v1/face/enrollment               (S) -> 204 (hard delete; idempotent)
-//   POST   /v1/rooms/:room_id/face-match     (S, room member) -> {match: {...}} | {match: null}
+// Face addressing routes: the consent text, the caller's own enrollment (read, enroll, turn
+// matching off or on, hard delete) and POST /v1/rooms/:room_id/face-match.
+// Spec: docs/planning/API-CONTRACT.md §2.2, §2.4.
 //
 // Opt-in only: nothing is stored without a POST carrying the current consent. A match only
 // addresses a challenge (POST /v1/bets challenge_method 'face' + match_ticket); it never
 // authorizes anything. Request and response bodies on these routes are never logged (nothing in
 // this server logs bodies; the face service also strips DB error messages).
 //
-// Rate limits (§1.7): face-match 30/min per user (`face-match`, tap scans) plus 60/min for
-// `mode:'live'` scans (`face-match/live`, the panning camera), with 1 in flight per user across
-// both; enrollment writes 5/h per user. Turning matching off and deleting are never rate limited ("disable or delete it
-// anytime", BRIEF 5e).
+// Rate limits: face-match 30/min per user (`face-match`, tap scans) plus 60/min for `mode:'live'`
+// scans (`face-match/live`, the panning camera), with 1 in flight per user across both;
+// enrollment writes 5/h per user. Turning matching off and deleting are never rate limited: the
+// consent promises the user can do either at any time.
 import type { Context } from 'hono';
 import {
   ACCEPTED_FACE_MODELS,
@@ -46,9 +42,9 @@ import {
   setEnrollmentStatus,
 } from './service';
 
-/** §1.7 `face-match`: tap scans (and any request without `mode`). */
+/** `face-match`: tap scans (and any request without `mode`). */
 export const FACE_MATCH_BUCKET = FACE_MATCH_BUCKETS.tap;
-/** §1.7 `face-match/live`: the live (panning) scan, so it can't use up the tap/Challenge path. */
+/** `face-match/live`: the live (panning) scan, so it can't use up the tap/Challenge path. */
 export const FACE_MATCH_LIVE_BUCKET = FACE_MATCH_BUCKETS.live;
 export const FACE_MATCH_LIVE_BUCKET_NAME = 'face-match/live';
 export const FACE_ENROLL_BUCKET = { limit: 5, windowMs: 60 * 60_000 } as const;
@@ -59,7 +55,7 @@ export function createFaceRoutes(): RouteModule {
     text: FACE_CONSENT_V1_TEXT,
     text_sha256: FACE_CONSENT_V1_SHA256,
     retention_summary: FACE_CONSENT_V1_RETENTION,
-    // Sealing (API-CONTRACT O8) is not built: plain-v0 over TLS only.
+    // Sealing is not built: plain-v0 over TLS only.
     face_seal_pubkey: null,
     accepted_models: [...ACCEPTED_FACE_MODELS],
   });
@@ -72,7 +68,6 @@ export function createFaceRoutes(): RouteModule {
     register(app, deps) {
       for (const problem of faceConfigOf(deps.env).warnings)
         deps.log.warn('face.config', { problem });
-      // DATA-MODEL §10 retention schedule (hourly; see ./retention.ts).
       deps.keeper?.register(faceRetentionTask(deps));
       const matchGate = faceMatchGate((userId, mode) =>
         mode === 'live'
@@ -129,7 +124,7 @@ export function createFaceRoutes(): RouteModule {
 
 const roomIdOf = (c: Context<AppEnv>): string => c.req.param('room_id') ?? '';
 
-/** Runs one call per key at a time; a second concurrent call is 429 RATE_LIMITED (Retry-After 1). */
+/** One call per key at a time; a second concurrent call is 429 RATE_LIMITED (Retry-After 1). */
 export function oneInFlight() {
   const keys = new Set<string>();
   return async <T>(key: string, f: () => Promise<T>): Promise<T> => {
@@ -144,10 +139,10 @@ export function oneInFlight() {
 }
 
 /**
- * §1.7 face-match: one in flight per user (tap and live share it), then the bucket of the body's
- * mode (absent = tap). The body is read inside the guard, before the token: a concurrent call
- * refused with "One scan at a time" and an invalid body (422 VALIDATION_FAILED) spend none; a call the bucket
- * refuses frees the guard like any other failure. Without `read`, the call is a tap.
+ * face-match: one in flight per user (tap and live share it), then the bucket of the body's mode
+ * (absent = tap). The body is read inside the guard, before the token: a concurrent call refused
+ * with "One scan at a time" and an invalid body (422 VALIDATION_FAILED) spend none; a call the
+ * bucket refuses frees the guard like any other failure. Without `read`, the call is a tap.
  */
 export function faceMatchGate(take: (userId: string, mode: FaceMatchMode) => void) {
   const oneAtATime = oneInFlight();

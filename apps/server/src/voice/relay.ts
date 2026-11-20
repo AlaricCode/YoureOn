@@ -1,23 +1,12 @@
-// Relays from A's phone, the voice host (API-CONTRACT §2.6, D6):
+// Relays from A's phone, the voice host:
+//   POST /v1/bets/:bet_id/voice/lines  the judge session's transcript -> judge.line / party.line
+//        bet events: the stage's live transcript and B's captions.
+//   POST /v1/bets/:bet_id/cues         the `cue` client tool -> a `stage.cue` frame to the bet's
+//        room; the stage laptop plays the clip (audio on A's phone would stop mic capture).
+// Spec: docs/planning/API-CONTRACT.md §2.6.
 //
-//   POST /v1/bets/:bet_id/voice/lines  (S, A)  the judge session's transcript -> judge.line /
-//        party.line bet events (SCHEMAS §10.1): the stage's live transcript (ElevenLabs bounty
-//        evidence) and B's captions. 202 VoiceLinesResponse.
-//   POST /v1/bets/:bet_id/cues         (S, A)  the `cue` client tool (§4.4) -> a `stage.cue`
-//        control frame to the bet's room; the stage laptop plays the clip (A's phone never plays
-//        audio: it would stop mic capture, FINDINGS §4 / LiveKit #286). 202 StageCueResponse.
-//
-// Lines:
-//   - Idem: (bet, utterance_id, final). A repeat inside this process is counted, not re-emitted
-//     (one Fly machine, like the P0 idempotency LRU); the signed request's Idempotency-Key covers
-//     a resent batch.
-//   - Only final lines are persisted: bet events are sequenced and kept, and the ElevenLabs SDK
-//     hands the phone finals only. A partial is counted as dropped.
-//   - Text is whitespace-normalized; judge text is cut to 400 chars (the judge.line cap).
-//   - A party line starting with "[EVENT]" is dropped: that is the server's own judge.cue text,
-//     sent into the conversation with sendUserMessage (§4.5), never something a party said.
-//   - Accepted in any state, terminal included: the judge's "[EVENT] PAID" congratulation is
-//     spoken after the bet is PAID. Bounded by a per-bet cap and the rate limit instead.
+// Lines are accepted in any state, terminal included (the judge's "[EVENT] PAID" congratulation
+// is spoken after the bet is PAID), bounded by a per-bet cap and the rate limit instead.
 import type { Context } from 'hono';
 import { and, count, eq, inArray } from 'drizzle-orm';
 import { betEvents } from '@youre-on/db';
@@ -52,7 +41,12 @@ const LINE_TYPES = ['judge.line', 'party.line'] as const;
 /** "  so   it's\na deal " -> "so it's a deal". */
 export const normalizeLine = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
-/** The judge.line / party.line payload for a line, or null when it is dropped. */
+/**
+ * The judge.line / party.line payload for a line, or null when it is dropped. Only final lines
+ * are persisted: bet events are sequenced and kept, and the ElevenLabs SDK hands the phone finals
+ * only. A party line starting with "[EVENT]" is the server's own judge.cue text (sent into the
+ * conversation with sendUserMessage), never something a party said.
+ */
 export function linePayload(l: VoiceLine):
   | { type: 'judge.line'; payload: { utterance_id: string; text: string; final: boolean } }
   | {
@@ -77,7 +71,10 @@ export function linePayload(l: VoiceLine):
   };
 }
 
-/** In-process (bet, utterance, final) dedupe, LRU-bounded. */
+/**
+ * In-process (bet, utterance, final) dedupe, LRU-bounded (one Fly machine): a repeat is counted,
+ * not re-emitted. A resent batch is covered by the signed request's Idempotency-Key.
+ */
 export class LineDedupe {
   private seen = new Map<string, true>();
   constructor(private readonly maxEntries = 20_000) {}
@@ -96,7 +93,7 @@ export class LineDedupe {
   }
 }
 
-/** The bet, if the caller is its party A (only A's phone hosts the judge, D6). */
+/** The bet, if the caller is its party A (only A's phone hosts the judge). */
 async function hostedBet(c: Context<AppEnv>, scope: string, bucket: BucketSpec): Promise<BetRow> {
   const deps = c.get('deps');
   const me = appAuth(c);

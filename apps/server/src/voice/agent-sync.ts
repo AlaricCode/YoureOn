@@ -1,12 +1,9 @@
-// Create-or-update the ElevenLabs judge idempotently (TASKS D0-J2: "a second run of the script
-// is a no-op"). Engine behind scripts/el-agent.ts; HTTP is injected so it is unit-tested with a
-// fake ElevenLabs (no key yet: PENDING-KEY).
+// Create-or-update the ElevenLabs judge idempotently: a second run of the script is a no-op.
+// Engine behind scripts/el-agent.ts; HTTP is injected so it is unit-tested with a fake ElevenLabs.
 //
-// Resources, in order (SETUP-CHECKLIST K2 step 4), each matched by exact name:
-//   1. workspace secret  GET /v1/convai/secrets?search=  POST /v1/convai/secrets  (PATCH only with rotate)
-//   2. webhook + client tools  GET /v1/convai/tools?search=  POST /v1/convai/tools  PATCH /v1/convai/tools/{id}
-//   3. the private agent  GET /v1/convai/agents?search=  GET/PATCH /v1/convai/agents/{id}  POST /v1/convai/agents/create
-// A resource is PATCHed only when the desired JSON is not already a subset of what ElevenLabs
+// Order: the workspace secret (PATCHed only with --rotate-secret), the tools (the webhook tools
+// need its id), then the private agent (it needs theirs), each matched by exact name. A tool or
+// the agent is PATCHed only when the desired JSON is not already a subset of what ElevenLabs
 // returns, so an unchanged config sends no writes.
 //
 // A throwaway test agent (SyncOptions.agentName != JUDGE_AGENT_NAME, el-agent --agent-name): the

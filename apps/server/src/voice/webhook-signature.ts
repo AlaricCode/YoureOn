@@ -1,9 +1,8 @@
-// ElevenLabs post-call webhook authentication (API-CONTRACT §4.6).
+// ElevenLabs post-call webhook authentication.
+// Spec: docs/planning/API-CONTRACT.md §4.6.
 //
-// Deviation (reported): §4.6 says to verify with the SDK, `@elevenlabs/elevenlabs-js`
-// `webhooks.constructEvent(rawBody, sigHeader, secret)`. That SDK is not a dependency (node_modules
-// has only @elevenlabs/client, react, react-native and types; none of them verify webhooks), so
-// this is the scheme constructEvent implements, by hand:
+// The spec verifies with the SDK's `webhooks.constructEvent(rawBody, sigHeader, secret)`; that SDK
+// (`@elevenlabs/elevenlabs-js`) is not a dependency, so this implements the same scheme by hand:
 //
 //   ElevenLabs-Signature: t=<unix seconds>,v0=<hex HMAC-SHA256(secret, `${t}.${raw body}`)>
 //
@@ -16,7 +15,7 @@
 //   without a plausible signature is refused without buffering it.
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-/** The post-call webhook route (API-CONTRACT §4.6). Here so readiness / el-agent need no DB. */
+/** The post-call webhook route. Here so readiness / el-agent need no DB. */
 export const EL_WEBHOOK_PATH = '/webhooks/elevenlabs';
 /** Hono's c.req.header() is case-insensitive; ElevenLabs sends `ElevenLabs-Signature`. */
 export const EL_SIGNATURE_HEADER = 'elevenlabs-signature';

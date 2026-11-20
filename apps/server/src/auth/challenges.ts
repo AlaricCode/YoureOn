@@ -1,6 +1,7 @@
-// Login/signup challenges (API-CONTRACT §1.3): 32-byte nonce, 60 s, single use, bound to the
-// device_pubkey it was issued for. In-process: one Fly machine (ARCHITECTURE §1.3); a restart
-// only costs the phone one new challenge, so this is not a "timer that must survive".
+// Login/signup challenges: 32-byte nonce, 60 s, single use, bound to the device_pubkey it was
+// issued for. In-process (one Fly machine): a restart only costs the phone one new challenge, so
+// nothing here has to survive one.
+// Spec: docs/planning/API-CONTRACT.md §1.3.
 import { randomUUID } from 'node:crypto';
 import { AUTH_CHALLENGE_TTL_MS } from '@youre-on/shared/api';
 import { randomB64Url } from '../crypto';
@@ -47,7 +48,7 @@ export class ChallengeStore {
 
   /**
    * Consumes the newest challenge issued for `device_pubkey` (demo-claim bodies may omit
-   * challenge_id, API-CONTRACT §1.3). Same single-use / expiry rules as consume().
+   * challenge_id). Same single-use / expiry rules as consume().
    */
   consumeLatestFor(device_pubkey: string): ConsumeResult {
     let latest: Challenge | undefined;

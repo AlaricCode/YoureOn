@@ -1,17 +1,14 @@
-// Stage TTS (API-CONTRACT §3.1 stage.voice, §4.5 "appeal votes are voiced on the stage"): the
-// ElevenLabs text-to-speech clip of each line the projector speaks (packages/shared
-// stage-voice.ts), served to stage sessions at GET /v1/stage/tts/:clip_id (src/stage/audio.ts),
-// so the key never leaves the server.
+// Stage TTS: the ElevenLabs text-to-speech clip of each line the projector speaks (packages/shared
+// stage-voice.ts), the appeal panel's votes included, served to stage sessions at
+// GET /v1/stage/tts/:clip_id (src/stage/audio.ts), so the key never leaves the server.
+// Spec: docs/planning/API-CONTRACT.md §2.17.
 //
 // Gate (stageAudioGate): on only with ELEVENLABS_API_KEY and ALLOW_SPEND=true (every clip bills
 // characters), and never with STAGE_TTS=off (the kill switch). Off means no clip and no network:
 // the stage speaks the same line with the browser's voice.
 //
 // clip_id = sha256(voice_id \n model \n text). A clip never changes, so the GET is immutable, and
-// a repeated line ("Paid. Jake takes $2.00.") is generated once. Bytes are cached in memory (LRU,
-// capped in bytes) and, best effort, on disk under the OS tmp dir, so a local restart does not
-// pay again. Generation starts when a line is registered (as its event goes out), and a GET that
-// comes while it runs waits for that same request.
+// a repeated line ("Paid. Jake takes $2.00.") is generated once.
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -77,8 +74,9 @@ export const DEFAULT_CLIP_DIR = join(tmpdir(), 'youre-on-stage-audio');
 export const CLIP_CACHE_BYTES = 32 * 1024 * 1024;
 
 /**
- * Clip bytes by id: memory (LRU, capped in bytes) in front of an optional directory. Disk errors
- * are logged and ignored: the cache is an optimisation, never a reason to fail a clip.
+ * Clip bytes by id: memory (LRU, capped in bytes) in front of an optional directory, so a local
+ * restart does not pay for its clips again. Disk errors are logged and ignored: the cache is an
+ * optimisation, never a reason to fail a clip.
  */
 export class ClipCache {
   private readonly mem = new Map<string, Uint8Array>();

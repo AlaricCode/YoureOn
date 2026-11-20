@@ -1,8 +1,9 @@
-// Appending to the per-bet realtime log (SCHEMAS §10.1, DATA-MODEL §5.19) and fanning out.
+// Appending to the per-bet realtime log (bet_events) and fanning out.
+// Spec: docs/planning/SCHEMAS.md §10.1.
 //
-//   const env = await appendBetEvent(tx, { bet_id, type: 'bet.state', payload });  // inside YOUR tx
+//   const env = await appendBetEvent(tx, { bet_id, type: 'bet.state', payload }); // inside YOUR tx
 //   ...commit...
-//   deps.hub.publishBetEvent(env, bet.room_id);                                      // after commit
+//   deps.hub.publishBetEvent(env, bet.room_id);                                   // after commit
 //
 // or, when the event is the only write: `await emitBetEvent(deps, {...})` (own tx + publish).
 //
@@ -32,7 +33,7 @@ export interface BetEventEnvelope extends BetEnvelope {
   payload: unknown;
 }
 
-/** A SCHEMAS RealtimeEvent type (API-CONTRACT §3.4 extensions included) with its typed payload. */
+/** A known realtime event type with its typed payload. */
 export type KnownEventInput<T extends RealtimeEventType = RealtimeEventType> = {
   bet_id: string;
   type: T;
@@ -44,7 +45,7 @@ export type KnownEventInput<T extends RealtimeEventType = RealtimeEventType> = {
 /**
  * Appends one event inside the caller's transaction. After commit, publish it with
  * `deps.hub.publishBetEvent(env, bet.room_id)` (the room id lets stage sessions of the room
- * receive it, §3.2).
+ * receive it).
  */
 export async function appendBetEvent<T extends RealtimeEventType>(
   db: Executor,
