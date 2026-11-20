@@ -233,6 +233,10 @@ describe('judge prompt labels (D10: the landing frames and the landing crop)', (
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/frames marked LANDING/);
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/LANDING CROP/);
     expect(JUDGE_SYSTEM_PROMPT).not.toMatch(/The LAST frames decide/);
+    // a plainly broken rule (not behind the marker) is a loss, not a retake
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/A broken rule loses on its own/);
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/Never answer UNCLEAR about something the frames do show/);
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/a clip in which no attempt happens at all/);
   });
 });
 
