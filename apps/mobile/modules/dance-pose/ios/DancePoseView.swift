@@ -13,6 +13,10 @@ public final class DancePoseView: ExpoView {
   private let engine = DancePoseEngine()
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private var active = false
+  /// AVCaptureDevice.RotationCoordinator (iOS 17+): the angles that keep the preview and the
+  /// frames upright however the device is held. Kept as AnyObject for the older-OS build.
+  private var rotationCoordinator: AnyObject?
+  private var rotationObservations: [NSKeyValueObservation] = []
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -35,6 +39,7 @@ public final class DancePoseView: ExpoView {
   }
 
   deinit {
+    rotationObservations.forEach { $0.invalidate() }
     // The engine outlives the view until its queues have stopped the session.
     engine.shutdown()
   }
@@ -96,10 +101,37 @@ public final class DancePoseView: ExpoView {
 
   // MARK: - Private
 
+  /// The preview and the frames follow how the device is held (portrait or on its side), through
+  /// the system's rotation coordinator, which knows each camera's mounting. Before iOS 17 both
+  /// stay portrait, as they always were.
   private func orientPreview() {
     guard let connection = previewLayer.connection else {
       return
     }
-    DancePoseEngine.orientPortrait(connection)
+    guard #available(iOS 17.0, *), let device = engine.captureDevice.get() else {
+      DancePoseEngine.orientPortrait(connection)
+      return
+    }
+    rotationObservations.forEach { $0.invalidate() }
+    let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+    rotationCoordinator = coordinator
+    rotationObservations = [
+      coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) {
+        [weak self] coordinator, _ in
+        let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+        DispatchQueue.main.async {
+          guard let connection = self?.previewLayer.connection,
+            connection.isVideoRotationAngleSupported(angle)
+          else {
+            return
+          }
+          connection.videoRotationAngle = angle
+        }
+      },
+      coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) {
+        [weak self] coordinator, _ in
+        self?.engine.setCaptureRotation(coordinator.videoRotationAngleForHorizonLevelCapture)
+      },
+    ]
   }
 }

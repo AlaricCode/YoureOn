@@ -136,6 +136,25 @@ export const CAMERA_ASPECT = 720 / 1280;
 export const stagePanels = (box: Size, gap: number): Size => fitPanels(box, CAMERA_ASPECT, gap);
 
 /**
+ * The two stage panels for a camera of any shape (the frames follow how the device is held):
+ * side by side, or one above the other when that makes them bigger (two 16:9 panels on a
+ * landscape iPad). Equal, at the camera's aspect.
+ */
+export function stagePanelLayout(
+  box: Size,
+  aspect: number,
+  gap: number,
+): { panel: Size; stacked: boolean } {
+  const side = fitPanels(box, aspect, gap);
+  if (box.width <= 0 || box.height <= 0 || aspect <= 0) return { panel: side, stacked: false };
+  const width = Math.max(0, Math.min(box.width, ((box.height - gap) / 2) * aspect));
+  const above = { width, height: width / aspect };
+  return above.width * above.height > side.width * side.height
+    ? { panel: above, stacked: true }
+    : { panel: side, stacked: false };
+}
+
+/**
  * Where a player's popup sits inside the camera panel: over that player's half, A the left one
  * unless A stands on the right (`aOnRight`: face-identified players, DANCE-OFF §3).
  */

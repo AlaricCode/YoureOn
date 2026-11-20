@@ -98,6 +98,13 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   /// The `facing` prop: the front (selfie) camera instead of the back one. Read once, when the
   /// session is first configured.
   private let wantsFront = Locked(false)
+  /// The camera in use, once the session is configured (the view builds its rotation coordinator
+  /// from it).
+  let captureDevice = Locked<AVCaptureDevice?>(nil)
+  /// A round is recording: the frames' rotation (and so their size) must not change under it.
+  private let roundActive = Locked(false)
+  /// The rotation the device's position asks for (degrees), applied when no round is recording.
+  private let wantedRotation = Locked<CGFloat?>(nil)
 
   // sessionQueue only.
   private var configured = false
@@ -158,6 +165,30 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     wantsFront.set(front)
   }
 
+  /// The rotation that keeps the frames upright for how the device is held (degrees, from the
+  /// view's AVCaptureDevice.RotationCoordinator): upright 720x1280 frames held upright, 1280x720
+  /// on its side, so a landscape iPad records a landscape picture. Held back while a round is
+  /// recording (its video file has one size) and applied when it ends.
+  func setCaptureRotation(_ angle: CGFloat) {
+    wantedRotation.set(angle)
+    applyWantedRotation()
+  }
+
+  private func applyWantedRotation() {
+    sessionQueue.async { [self] in
+      guard configured, !roundActive.get(), let angle = wantedRotation.get(),
+        let connection = videoOutput.connection(with: .video)
+      else {
+        return
+      }
+      if #available(iOS 17.0, *) {
+        if connection.isVideoRotationAngleSupported(angle), connection.videoRotationAngle != angle {
+          connection.videoRotationAngle = angle
+        }
+      }
+    }
+  }
+
   /// Arms a round. The next captured frame becomes t0: its PTS starts the recording and every
   /// onPoses `t` from then on is ms since that frame. `completion` runs on the capture queue.
   func startRound(snapshotAtMs: [Double], completion: @escaping (Bool, String?) -> Void) {
@@ -176,6 +207,7 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         self.discard(previous)
       }
       self.round = RoundState(id: UUID().uuidString.lowercased(), snapshotTargets: targets)
+      self.roundActive.set(true)
       completion(true, nil)
     }
   }
@@ -209,6 +241,8 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         return
       }
       self.round = nil
+      self.roundActive.set(false)
+      self.applyWantedRotation()
 
       let group = DispatchGroup()
       let box = StopResultBox()
@@ -268,6 +302,7 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         discard(current)
       }
       round = nil
+      roundActive.set(false)
     }
     sessionQueue.async { [self] in
       if session.isRunning {
@@ -407,7 +442,9 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     session.commitConfiguration()
 
     DancePoseEngine.lockFrameRate(device, fps: 30)
+    captureDevice.set(device)
     configured = true
+    applyWantedRotation()
     return true
   }
 
