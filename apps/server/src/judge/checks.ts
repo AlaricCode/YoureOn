@@ -23,8 +23,16 @@ export const BottleChecks = z.object({
 });
 export type BottleChecks = z.infer<typeof BottleChecks>;
 
-/** The judge call's structured output: SCHEMAS VisionVerdict plus the deterministic checks. */
-export const JudgeVerdict = VisionVerdict.extend({ checks: BottleChecks });
+/**
+ * The judge call's structured output: SCHEMAS VisionVerdict plus the deterministic checks, and
+ * (for a throw the object tracker decides, ../ruling applyThrowOutcome) whether the frames show
+ * a rule of the terms being broken. Optional: a stored or older verdict has neither field.
+ */
+export const JudgeVerdict = VisionVerdict.extend({
+  checks: BottleChecks,
+  rule_broken: z.boolean().optional(),
+  rule_note: z.string().max(200).optional(),
+});
 export type JudgeVerdict = z.infer<typeof JudgeVerdict>;
 
 /** Do the bottle checks apply to these terms? */

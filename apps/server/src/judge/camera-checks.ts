@@ -32,6 +32,7 @@ import { fromTerms } from '@youre-on/shared/checks/compile';
 import { isDanceOff } from '@youre-on/shared/dance/terms';
 import type { ChecksBox, ChecksReportPayload } from '@youre-on/shared/checks/events';
 import type { SamSegmentReply } from '@youre-on/shared/checks/sam-reply';
+import { throwOutcome, type ThrowOutcome } from '@youre-on/shared/checks/throw';
 import {
   CheckSpec,
   describeChecks,
@@ -305,8 +306,41 @@ export interface AttemptChecksInput {
   duration_ms: number | undefined;
 }
 
+/**
+ * The entity a throw's tracker follows and the one it is thrown at: the `ends_at` need of the
+ * spec ("the paper ends at the bin"). null: this bet is not a throw at a target.
+ */
+export function throwEntities(spec: CheckSpec): { object: string; target: string } | null {
+  for (const a of spec.assertions) {
+    if (a.role === 'need' && a.test.p === 'ends_at') return { object: a.test.a, target: a.test.b };
+  }
+  return null;
+}
+
+/**
+ * The prompt SAM is asked for. It finds things by how they LOOK, not by what they are called: on
+ * real throws "paper ball", "ball", "white ball" and "crumpled paper" found nothing at all, in the
+ * air or lying in plain view on the floor, while "small white object" tracked the ball from the
+ * hand to where it came to rest. So a small thrown thing named for what it is gets its look.
+ */
+export function samPromptFor(prompt: string, thrown: boolean): string {
+  if (!thrown) return prompt;
+  return /\b(paper|ball|tissue|napkin|wad|crumpled|sock|towel)\b/i.test(prompt)
+    ? 'small white object'
+    : prompt;
+}
+
 export interface CheckRun {
+  /**
+   * The spec as SAM was asked (a thrown object's prompt may be its look: samPromptFor). The
+   * stored spec (bet_checks) keeps the compiler's own words.
+   */
   spec: CheckSpec;
+  /**
+   * A throw at a target: what the object's track says (shared checks/throw), with the compiler's
+   * own names for the two things. undefined: not a throw, or no usable SAM reply.
+   */
+  thrown?: { outcome: ThrowOutcome; labels: { object: string; target: string } } | undefined;
   report: CheckReport;
   report_hash: string;
   /** null when no SAM call was made. */
@@ -333,7 +367,17 @@ export async function runAttemptChecks(
       deps.log.error('checks.bad_spec', { bet_id: input.bet_id });
       return null;
     }
-    const spec = stored.spec;
+    const compiled = stored.spec;
+    const asked = throwEntities(compiled);
+    // What SAM is asked: the thrown object by its look (samPromptFor).
+    const spec: CheckSpec = asked
+      ? {
+          ...compiled,
+          entities: compiled.entities.map((e) =>
+            e.key === asked.object ? { ...e, prompt: samPromptFor(e.prompt, true) } : e,
+          ),
+        }
+      : compiled;
     const meta = {
       terms_hash: input.terms_hash,
       frame_hashes: [...input.frame_hashes],
@@ -371,7 +415,31 @@ export async function runAttemptChecks(
       need: report.need,
       sam_ms: samMs,
     });
-    return { spec, report, report_hash: hashJcs(report), sam_ms: samMs, reply };
+    let thrown: CheckRun['thrown'];
+    if (asked && reply) {
+      const promptOf = (key: string) => spec.entities.find((e) => e.key === key)?.prompt;
+      const framesOf = (key: string) =>
+        reply?.results.find((r) => r.prompt === promptOf(key))?.frames;
+      const object = framesOf(asked.object);
+      const target = framesOf(asked.target);
+      if (object && target) {
+        const outcome = throwOutcome({ object, target, n: input.frames.length });
+        const nameOf = (key: string) => compiled.entities.find((e) => e.key === key)?.prompt ?? key;
+        thrown = {
+          outcome,
+          labels: { object: nameOf(asked.object), target: nameOf(asked.target) },
+        };
+        deps.log.info('checks.throw', {
+          bet_id: input.bet_id,
+          attempt_no: input.attempt_no,
+          call: outcome.call,
+          why: outcome.why,
+          last_seen: outcome.last_seen,
+          frames: outcome.frames,
+        });
+      }
+    }
+    return { spec, report, report_hash: hashJcs(report), sam_ms: samMs, reply, thrown };
   } catch (e) {
     deps.log.error('checks.run_failed', { bet_id: input.bet_id, err: String(e) });
     return null;
