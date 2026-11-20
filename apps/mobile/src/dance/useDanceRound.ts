@@ -37,12 +37,14 @@ import type {
   StatusEvent,
   StopRoundResult,
 } from '../../modules/dance-pose';
+import { debugLog } from '../../modules/dance-pose/src/native';
 import { importSafely } from '../app/importSafely';
 import { feel } from '../device/feedback';
 import { identifyPlayers, isFaceIdResult, mayTryFaces, type DanceFaceId } from './faceIdentify';
 import { deleteCacheFile } from './fs';
 import { nowMs, type DancePoseModule } from './hooks';
 import { routineMedia } from './media';
+import { facePlayers } from './model/faceId';
 import { createPlayerIdentity, type PlayerIdentity } from './model/identity';
 import { createLiveStore, type LiveStore } from './model/liveStore';
 import { createRoundPipeline, type RoundPipeline } from './model/pipeline';
@@ -179,8 +181,20 @@ export function useDanceRound(opts: {
   const [runDisplay, setRunDisplay] = useState<boolean | null>(null);
   /** Who is who while framing (face assignment), created on the first frame (its size). */
   const identity = useRef<PlayerIdentity | null>(null);
+  /** The frame size `identity` was made for (it changes when the device is turned). */
+  const identitySize = useRef({ w: 0, h: 0 });
   /** Face attempts this run: one in flight, a few tries, spaced. */
   const faceTry = useRef({ inFlight: false, tries: 0, lastTryAt: null as number | null });
+  const framingLogAt = useRef(0);
+  // The face model loads while the dancers walk into place, not inside the first attempt.
+  useEffect(() => {
+    const t0 = Date.now();
+    debugLog(`dance screen: faceId=${optsRef.current.faceId ? 'on' : 'OFF'}`);
+    void Promise.resolve(optsRef.current.faceId?.prewarm?.()).then(
+      () => debugLog(`face model warm after ${Date.now() - t0}ms`),
+      (e: unknown) => debugLog(`face model FAILED to load: ${String(e).slice(0, 200)}`),
+    );
+  }, []);
 
   const stopAudio = () => {
     const a = audio.current;
@@ -377,6 +391,7 @@ export function useDanceRound(opts: {
       ft.inFlight = true;
       ft.tries += 1;
       ft.lastTryAt = nowMs();
+      store.update({ faces: 'looking' });
       void identifyPlayers({
         open: (uri) => faceId.open(uri),
         identify: (req) => faceId.identify(req),
@@ -385,14 +400,24 @@ export function useDanceRound(opts: {
         frameAt: (ts) => id.frameAt(ts),
         deleteFile: deleteCacheFile,
         size,
+        log: debugLog,
       }).then((r) => {
+        debugLog(`faces result ${isFaceIdResult(r) ? JSON.stringify(r) : r} try=${ft.tries}`);
+        // Only an attempt that asked the server uses up a try: no faces in the still yet (the
+        // dancers are still walking in, or looking away) is just "look again in a moment".
+        if (r === 'no_still' || r === 'no_frame' || r === 'framing' || r === 'faces')
+          ft.tries = Math.max(0, ft.tries - 1);
         if (stateRef.current.run !== run) return;
         faceTry.current.inFlight = false;
+        // An attempt that ran out of time is not counted against the tries: the next one starts
+        // from a warm model.
+        faceTry.current.lastTryAt = nowMs();
         const phase = stateRef.current.phase;
         // Too late: the round already counted in on the left / right rule.
         if (phase !== 'framing' && phase !== 'ready' && phase !== 'starting') return;
         if (isFaceIdResult(r) && id.identify(r.ts, r.aPerson, r.bPerson))
-          store.update({ byFace: true });
+          store.update({ byFace: true, faces: 'matched' });
+        else store.update({ faces: isFaceIdResult(r) ? 'no_frame' : r });
       });
     },
     [store],
@@ -410,16 +435,30 @@ export function useDanceRound(opts: {
         const fr = framingCheck(people, f.w, f.h);
         if (s.phase !== 'starting')
           dispatch({ type: 'framing', at: nowMs(), ok: fr.ok, reason: fr.reason });
+        // The device was turned while framing (the frames changed shape): who is who starts over.
+        if (identitySize.current.w !== f.w || identitySize.current.h !== f.h) {
+          identity.current = null;
+          identitySize.current = { w: f.w, h: f.h };
+        }
         identity.current ??= createPlayerIdentity({ w: f.w, h: f.h });
         const id = identity.current;
         const who = id.observe({ ts: f.ts ?? f.t, people });
         const byFace = id.identified();
         const ft = faceTry.current;
+        // Once a second while framing: what the camera sees and where the face attempt stands.
+        if (nowMs() - framingLogAt.current >= 1000) {
+          framingLogAt.current = nowMs();
+          debugLog(
+            `framing phase=${s.phase} people=${people.length} ok=${fr.ok} reason=${fr.reason} ` +
+              `size=${f.w}x${f.h} byFace=${byFace} tries=${ft.tries} inFlight=${ft.inFlight}`,
+          );
+        }
         if (
           s.phase !== 'starting' &&
           mayTryFaces({
             enabled: optsRef.current.faceId != null,
-            framingOk: fr.ok,
+            // two people the camera can tell apart are enough: they need not be in position
+            framingOk: facePlayers(people, fr) !== null,
             identified: byFace,
             inFlight: ft.inFlight,
             tries: ft.tries,

@@ -22,6 +22,14 @@ import type { RoutineData } from '@youre-on/shared/dance/routine';
 
 /** Framing must pass this long, continuously, before Start is enabled (DANCE-OFF §6.2). */
 export const FRAMING_STABLE_MS = 1_000;
+/**
+ * Once the framing has held (the round is `ready`), the round starts by itself after this much
+ * longer, with both dancers in position the whole time: a countdown they can see from where
+ * they stand. Leaving the frame drops the round back to `framing` and the count starts over.
+ * Starting the moment the framing held (as it did at first) began a round while the players were
+ * still at the phone, and left no time for the faces to say who is who.
+ */
+export const AUTO_START_MS = 5_000;
 /** A framing dropout shorter than this is jitter, not a break. */
 export const FRAMING_GRACE_MS = 250;
 /** Recording keeps going this long past the routine, so the last key-move window closes. */
@@ -326,6 +334,25 @@ export function snapshotSchedule(
     times = Array.from({ length: count }, (_, i) => clampT(((i + 0.5) * r.duration_ms) / count));
   }
   return [...new Set(times)].sort((a, b) => a - b);
+}
+
+/**
+ * The auto-start count while the round is `ready`: ms left until it starts by itself (0 when it
+ * is due), or null when it is not counting (not ready). `okSince` is when the framing began to
+ * hold, so the count runs from FRAMING_STABLE_MS after it.
+ */
+export function autoStartLeftMs(
+  s: Pick<RoundState, 'phase' | 'okSince'>,
+  now: number,
+): number | null {
+  if (s.phase !== 'ready' || s.okSince === null) return null;
+  return Math.max(0, s.okSince + FRAMING_STABLE_MS + AUTO_START_MS - now);
+}
+
+/** The numeral the count shows ("5" to "1"); null when not counting or already due. */
+export function autoStartNumeral(leftMs: number | null): number | null {
+  if (leftMs === null || leftMs <= 0) return null;
+  return Math.ceil(leftMs / 1000);
 }
 
 /** 0..1 of the framing hold before Start is enabled. */

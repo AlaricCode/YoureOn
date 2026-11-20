@@ -66,7 +66,7 @@ function testPatternStream(label: string): MediaStream {
   const t0 = performance.now();
   const stream = c.captureStream(24);
   const track = stream.getVideoTracks()[0];
-  // Obsidian, monochrome: black, white type, grey hairlines; green only for the moving ring
+  // Limelight, monochrome: black, white type, grey hairlines; green only for the moving ring
   const sans = 'Geist, system-ui, sans-serif';
   const draw = () => {
     const t = (performance.now() - t0) / 1000;
@@ -425,7 +425,7 @@ export function StatusRail({
     <aside className="status-rail" aria-label="bet status">
       <header>
         <h1>
-          You&apos;re <span className="on">On</span>
+          You&rsquo;re <span className="on">On</span>
         </h1>
         <span className={`badge ${badge.cls}`}>{badge.text}</span>
       </header>

@@ -9,7 +9,7 @@
 // Neighbouring dashes overlap by `overlap` pt (butt caps) and the later one paints on top, so the
 // anti-aliased ends never leave a dark hairline between two hues.
 //
-// Colour: the Obsidian palette is black, white, greys, one green, one red (ui/tokens). Voice
+// Colour: the Limelight palette is black, white, greys, one green, one red (ui/tokens). Voice
 // activation is the one place the full spectrum is allowed; the colours are computed here as
 // rgb() strings from a hue wheel, never as hex literals scattered through screens.
 

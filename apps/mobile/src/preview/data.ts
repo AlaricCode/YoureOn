@@ -284,7 +284,7 @@ export const FILMING_TIP = 'Keep the whole table in the shot, and stop a beat af
 export const PANEL = [
   { seat: 0, name: 'Claude', reason: 'Bottle rests on its side in the last frame.' },
   { seat: 1, name: 'GPT', reason: 'Upright for one frame, then falls. Not at rest.' },
-  { seat: 2, name: 'Gemini', reason: 'Final frames show it on its side.' },
+  { seat: 2, name: 'Google', reason: 'Final frames show it on its side.' },
 ] as const;
 
 // ---- odds (app/odds, odds/*) -------------------------------------------------------------

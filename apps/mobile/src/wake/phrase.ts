@@ -167,6 +167,36 @@ export function hasWake(text: string): boolean {
 }
 
 // Separators and punctuation that can sit between the wake word and the challenge.
+/**
+ * Words that are not a challenge by themselves: an article or a sound the recognizer writes for a
+ * breath or the room ("a", "the", "oh"). Any single letter counts too. A name is never one, however
+ * short ("Mo", "Al").
+ */
+const STUB_WORDS: ReadonlySet<string> = new Set([
+  'an',
+  'the',
+  'and',
+  'to',
+  'of',
+  'oh',
+  'ah',
+  'eh',
+  'mm',
+  'hm',
+  'im',
+]);
+
+/**
+ * Is `text` (what follows the wake word so far) not yet a challenge: empty, or only stub words
+ * and single letters? In a loud room the recognizer often writes "a" for the breath after
+ * "Jarvis"; ending the capture on that sent the judge "a" as the whole challenge.
+ */
+export function isStubTail(text: string): boolean {
+  return normalizeTranscript(text)
+    .split(' ')
+    .every((w) => w.length <= 1 || STUB_WORDS.has(w));
+}
+
 const LEADING_JUNK = /^[\s,.;:!?…'"’‘“”()\-–—]+/;
 
 /**

@@ -10,6 +10,7 @@
 //        identified, as two different people who are the two framed players; else null (the
 //        left / right rule).
 import { JOINT } from '@youre-on/shared/dance/joints';
+import { hipCenter } from '@youre-on/shared/dance/track';
 
 /** A face box, normalized to the still (x, y, width, height in [0, 1], top-left origin). */
 export interface NormBox {
@@ -90,6 +91,25 @@ export function associateFaces(
     taken.add(p);
   }
   return out;
+}
+
+/**
+ * The two people a face attempt is about (person indices). In position: the framing check's
+ * players. Not in position yet (walking in, feet out of the picture, both on one side): exactly
+ * two people, each with a head a face can be matched to and hips the follow can track, the left
+ * one first. The dancers are named as soon as the camera can see their faces, which is when they
+ * are nearest to it; the follow then carries the names back to where they dance. Null: nobody
+ * to look at yet (one person, a crowd, or someone too close for their hips to show).
+ */
+export function facePlayers(
+  people: readonly (readonly number[])[],
+  framed: { a?: number | undefined; b?: number | undefined } = {},
+): { a: number; b: number } | null {
+  if (framed.a !== undefined && framed.b !== undefined) return { a: framed.a, b: framed.b };
+  if (people.length !== 2) return null;
+  const hips = people.map((k) => hipCenter(k));
+  if (!hips[0] || !hips[1] || !headPoint(people[0]!) || !headPoint(people[1]!)) return null;
+  return hips[0][0] <= hips[1][0] ? { a: 0, b: 1 } : { a: 1, b: 0 };
 }
 
 /**

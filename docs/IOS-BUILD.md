@@ -10,6 +10,17 @@ There are two ways to get the app onto an iPhone:
 
 Both talk to the same server (https://youre-on.fly.dev).
 
+**iPad.** The app is universal (`ios.supportsTablet` in `apps/mobile/app.json`): the same build
+installs on an iPad and runs there natively, full screen, in any orientation and in Split View,
+not as a scaled-up iPhone window. Wherever this page says "phone", an iPad is registered, built
+for and installed the same way, by either path. On an iPad every screen keeps its phone-width
+column, centred (`apps/mobile/src/ui/column.ts`); the dance display, replays and the voice edge
+light use the whole screen. Turning it on was a native config change, so `expo.version` went to
+1.2.0 and older binaries need a rebuild to become universal. Checked on an iPad simulator (a
+native build, every screen of the design preview, the real app's first launch); not yet on a
+physical iPad, so the camera features (face scan, judge cam, the dance pose tracker) are
+unverified there.
+
 ## Paid account (EAS)
 
 From `eas login` to "installed on 3 phones" takes about an hour, most of it waiting for the

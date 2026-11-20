@@ -1,3 +1,7 @@
+// First, and before anything that builds styles: the interface scale for this device (an iPad
+// draws everything larger). See src/ui/formFactor.
+import './src/ui/formFactorBoot';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';

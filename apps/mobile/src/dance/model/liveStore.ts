@@ -30,6 +30,11 @@ export interface LiveView {
   b: number[] | null;
   /** A and B were identified by face (DANCE-OFF §3): their tags carry the face icon. */
   byFace: boolean;
+  /**
+   * The face assignment as the framing screen says it: not tried, an attempt running, or why
+   * the last one ended without an identity (./faceIdentify FaceIdMiss).
+   */
+  faces: 'idle' | 'looking' | 'matched' | string;
   framing: FramingResult | null;
   /** 0..100 live match scores (the name tags show them). */
   meterA: number;
@@ -60,6 +65,7 @@ export const emptyLiveView = (): LiveView => ({
   a: null,
   b: null,
   byFace: false,
+  faces: 'idle',
   framing: null,
   meterA: 0,
   meterB: 0,

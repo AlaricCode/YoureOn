@@ -1,7 +1,7 @@
 /* Odds on the projector (odds.tsx): the judge's odds card (the AI reasoning from the performer's
-   record), the offer / counter timeline, and the terms card's odds chip. Uses only the role
-   tokens both stage themes define (--panel, --line, --text, --muted, --dim, --good, --bad,
-   --accent, --radius, --mono). */
+   record), the offer / counter timeline, and the terms card's odds chip, in the stage's
+   Limelight look (stage.css). Odds on the table are a question, so they are white (--accent);
+   green arrives only when they are agreed. The judge's reason is its own words, in white. */
 
 /* ---- the moment while odds are on the table --------------------------------------------- */
 .odds-moment {
@@ -13,13 +13,16 @@
   min-height: 0;
 }
 .odds-moment > .big {
-  font-size: 1.5em;
-  font-weight: 800;
-  line-height: 1.1;
+  font-size: 1.72em;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
 }
 .odds-moment > .big.compact {
+  font-family: var(--sans);
   font-size: 1.05em;
-  font-weight: 700;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--muted);
 }
 
@@ -31,10 +34,12 @@
   grid-template-rows: auto auto auto;
   align-items: center;
   gap: 0.25em 1.2em;
-  padding: 0.5em 1em 0.45em;
-  border: 0.1em solid var(--accent);
-  border-radius: calc(var(--radius) * 0.75);
-  background: var(--panel);
+  padding: 0.6em 1.1em 0.55em;
+  border-radius: var(--radius);
+  background: var(--glass);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.3),
+    inset 0 1px 0 rgb(255 255 255 / 0.1);
 }
 .judge-odds-head {
   grid-column: 1 / -1;
@@ -49,16 +54,14 @@
 .judge-odds-head .waiting {
   margin-left: auto;
   font-size: 0.85em;
-  font-weight: 700;
+  font-weight: 500;
 }
 .demo-history {
   font-size: 0.6em;
-  font-weight: 800;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  padding: 0.2em 0.6em;
+  font-weight: 500;
+  padding: 0.2em 0.7em;
   border-radius: 999px;
-  border: 0.1em solid var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
   color: var(--muted);
 }
 .judge-odds-ratio {
@@ -69,17 +72,19 @@
   padding-right: 1.2em;
   border-right: 1px solid var(--line);
 }
+/* the ratio: big thin numerals, like the money */
 .judge-odds-ratio .ratio {
-  font-size: 2.8em;
-  font-weight: 900;
+  font-size: 3.2em;
+  font-weight: 600;
+  letter-spacing: -0.04em;
   line-height: 0.95;
   white-space: nowrap;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 .judge-odds-ratio .chance {
-  font-size: 1.15em;
-  font-weight: 800;
+  font-size: 1.1em;
+  font-weight: 600;
   white-space: nowrap;
 }
 .judge-odds-ratio .split {
@@ -95,16 +100,18 @@
   gap: 0.2em;
 }
 .judge-odds-record .cat {
-  font-size: 1.55em;
-  font-weight: 900;
-  line-height: 1.05;
+  font-size: 1.5em;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .judge-odds-record .cat .rate {
   font-size: 0.6em;
-  font-weight: 700;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--muted);
   margin-left: 0.4em;
 }
@@ -114,10 +121,10 @@
   align-items: center;
   gap: 0.2em 0.9em;
   font-size: 0.9em;
-  font-weight: 700;
+  font-weight: 500;
 }
 .judge-odds-record .facts .muted {
-  font-weight: 600;
+  font-weight: 400;
 }
 .form {
   display: inline-flex;
@@ -127,12 +134,12 @@
 .form span {
   display: inline-grid;
   place-items: center;
-  width: 1.45em;
-  height: 1.45em;
-  border-radius: 0.3em;
-  font-size: 0.75em;
-  font-weight: 900;
-  border: 0.1em solid currentColor;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  font-size: 0.72em;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 0.09em currentColor;
 }
 .form .w {
   color: var(--good);
@@ -142,9 +149,10 @@
 }
 .judge-odds-reason {
   margin: 0.1em 0 0;
-  font-size: 0.95em;
-  font-style: italic;
-  line-height: 1.2;
+  font-size: 0.98em;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -174,27 +182,33 @@
   align-items: baseline;
   gap: 0.5em;
   min-width: 0;
-  padding: 0.3em 0.75em;
-  border-radius: 0.5em;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  padding: 0.32em 0.85em;
+  border-radius: var(--radius-in);
+  background: var(--glass);
+  box-shadow: var(--glass-edge);
   white-space: nowrap;
 }
 .odds-step .what {
-  font-weight: 800;
+  font-weight: 600;
 }
 .odds-step .stk {
   font-size: 0.75em;
   color: var(--muted);
 }
 .odds-step.closed {
-  opacity: 0.55;
+  opacity: 0.5;
 }
+/* the offer on the table: it asks, so its rim is white */
 .odds-step.open {
-  border-color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.55),
+    inset 0 1px 0 rgb(255 255 255 / 0.1);
 }
+/* agreed: it is on */
 .odds-step.agreed {
-  border-color: var(--good);
+  box-shadow:
+    inset 0 0 0 1px rgb(0 212 122 / 0.6),
+    0 0 1.2em rgb(0 212 122 / 0.2);
   color: var(--good);
 }
 .odds-step.agreed .stk {
@@ -203,7 +217,7 @@
 .odds-arrow {
   align-self: center;
   color: var(--dim);
-  font-weight: 900;
+  font-weight: 500;
 }
 .odds-strip .odds-step:first-child:not(:last-child) ~ .odds-step {
   flex-shrink: 1;
@@ -211,7 +225,7 @@
 
 /* ---- terms card chip -------------------------------------------------------------------- */
 .chip.odds-chip {
-  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.4);
   color: var(--accent);
 }
 

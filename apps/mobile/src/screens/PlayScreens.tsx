@@ -18,7 +18,9 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { judgeCamGuard, type CallOffGuard } from '../app/callOff';
 import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
-import { recordedSpan } from '../attempt/span';
+import { debugLog } from '../device/debugLog';
+import { importSafely } from '../app/importSafely';
+import { measuredSpan, recordedSpan } from '../attempt/span';
 import { hasCameraLens } from '../device/camera';
 import { feel } from '../device/feedback';
 import {
@@ -63,9 +65,11 @@ import {
   useNow,
 } from '../ui/parts';
 import { DrainBar } from '../ui/DrainBar';
+import { JudgeOrb } from '../ui/JudgeOrb';
 import { RollingText } from '../ui/RollingNumber';
+import { Perforation, Slip } from '../ui/slip';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
-import { avatarSize, color, half, hold, palette, radius, space, type } from '../ui/tokens';
+import { avatarSize, color, dp, half, hold, palette, radius, space, type } from '../ui/tokens';
 import { useReportCallOffGuard } from './CallOff';
 import { COPY, fill, t } from './copy';
 
@@ -78,6 +82,7 @@ export function LiveScreen({
   phase,
   attemptNo,
   onStart,
+  startLabel,
   startBusy = false,
   tag,
 }: {
@@ -89,6 +94,8 @@ export function LiveScreen({
    * no judge cam in the room this phone films (API-CONTRACT §2.9, ../attempt/recorder).
    */
   onStart?: (() => void) | undefined;
+  /** The button's label in place of "Start" ("Open camera" when this phone films). */
+  startLabel?: string | undefined;
   startBusy?: boolean;
   tag?: string | undefined;
 }) {
@@ -97,16 +104,19 @@ export function LiveScreen({
     <Screen>
       <TopBar title={t(COPY.live.title)} tag={tag} />
       <Page>
-        <DataText variant="statement">{view.claim}</DataText>
-        {/* You (white ring), the pot in thin numerals, them; hairlines above and below. */}
-        <View style={styles.vs}>
-          <Avatar name={view.myName} size={avatarSize.vs} accent />
-          <View style={styles.pot}>
-            <Label variant="small">{t(COPY.live.pot)}</Label>
-            <DataText variant="figure">{view.potUsd}</DataText>
+        {/* The slip, kept: the claim, then you (white ring), the pot in thin numerals, them. */}
+        <Slip>
+          <DataText variant="statement">{view.claim}</DataText>
+          <Perforation />
+          <View style={styles.vs}>
+            <Avatar name={view.myName} size={avatarSize.vs} accent />
+            <View style={styles.pot}>
+              <Label variant="small">{t(COPY.live.pot)}</Label>
+              <DataText variant="figure">{view.potUsd}</DataText>
+            </View>
+            <Avatar name={view.theirName} size={avatarSize.vs} />
           </View>
-          <Avatar name={view.theirName} size={avatarSize.vs} />
-        </View>
+        </Slip>
         <View style={styles.center}>
           {phase === 'locked' ? (
             <StatusHero mark="check" title={t(COPY.live.locked)} loud />
@@ -121,7 +131,9 @@ export function LiveScreen({
               loud
             />
           ) : (
-            <View style={styles.hero}>
+            // The judge is looking at it: the orb, breathing.
+            <View style={styles.judging}>
+              <JudgeOrb size={JUDGING_ORB} listening label={t(COPY.ruling.judge)} />
               <DotsLabel text={t(COPY.live.judging)} variant="subtitle" />
             </View>
           )}
@@ -129,7 +141,7 @@ export function LiveScreen({
         {onStart && phase === 'locked' ? (
           <PrimaryButton
             testID="live-start"
-            label={t(COPY.live.start)}
+            label={startLabel ?? t(COPY.live.start)}
             busy={startBusy}
             onPress={onStart}
           />
@@ -162,6 +174,9 @@ export interface Clip {
   endedAtMs: number;
 }
 
+/** The judge's sphere while it deliberates on the live screen. */
+const JUDGING_ORB = dp(88);
+
 /** The appeal window the ruling counts down (SCHEMAS §9.3, 10 s demo). */
 const APPEAL_WINDOW_MS = 10_000;
 
@@ -169,9 +184,45 @@ const APPEAL_WINDOW_MS = 10_000;
 const MAX_RECORD_MS = 6000;
 
 /**
+ * An error as one short line for the failure screen: its code and HTTP status when the server
+ * answered, else its own message. Data, not copy: it is there to be read out to whoever fixes it.
+ */
+function failureNote(e: unknown): string {
+  const err = e as { code?: unknown; status?: unknown; message?: unknown } | null;
+  const parts = [
+    typeof err?.code === 'string' ? err.code : null,
+    typeof err?.status === 'number' && err.status > 0 ? String(err.status) : null,
+    typeof err?.message === 'string' ? err.message : err === null ? null : String(e),
+  ].filter((p): p is string => p !== null && p !== '');
+  return [...new Set(parts)].join(' · ').slice(0, 160) || 'unknown error';
+}
+
+/** The recorded file's real length (ms) from the native module, or null (never throws). */
+async function clipFileMs(uri: string): Promise<number | null> {
+  try {
+    const pose = await importSafely(() => import('../../modules/dance-pose/src/native'));
+    return await pose.mediaDurationMs(uri);
+  } catch {
+    return null;
+  }
+}
+
+/** How long Stop waits for the camera to finalize the file before it counts as no clip. */
+const FINALIZE_WAIT_MS = 8000;
+
+/** How long a recording waits for a camera that is not up yet before it gives up. */
+const CAMERA_WAIT_MS = 10_000;
+
+/**
  * expo-camera records the clip (FINDINGS §3.3, codec avc1, maxDuration 6). Without `arm` (the
  * preview) the operator starts it; with `arm` the server's attempt.started does, counting down
  * to go_at. `onSend` gets the clip (null when nothing was recorded) and does the frames.
+ *
+ * `onRecord` (two phones, this one films): the screen is up BEFORE the attempt exists, so the
+ * filmer frames the shot and iOS asks for the camera now, not in the middle of a countdown, and
+ * the attempt starts when they tap "Start recording". It used to open only once the attempt had
+ * started, three seconds before GO: a camera still coming up (or a permission prompt) recorded
+ * nothing, and the attempt was sent empty.
  */
 export function JudgeCamScreen({
   onBack,
@@ -179,11 +230,16 @@ export function JudgeCamScreen({
   arm,
   tag,
   onCallOffGuard,
+  onRecord,
+  recordBusy = false,
 }: {
   onBack?: (() => void) | undefined;
   onSend: (clip: Clip | null) => Promise<void>;
   /** undefined = preview (manual start); null = waiting for the server; set = armed. */
   arm?: CamArm | null;
+  /** Waiting for the server (`arm` null): "Start recording" starts the attempt from here. */
+  onRecord?: (() => void) | undefined;
+  recordBusy?: boolean;
   tag?: string | undefined;
   /** "Call it off" (../app/callOff judgeCamGuard): held while recording, off with a clip. */
   onCallOffGuard?: ((guard: CallOffGuard) => void) | undefined;
@@ -195,9 +251,15 @@ export function JudgeCamScreen({
   /** The camera failed to start, or it started with no lens (the simulator). */
   const [noCamera, setNoCamera] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** The failure was an empty attempt: the camera never came up, or the clip came back empty. */
+  const [empty, setEmpty] = useState(false);
+  /** What went wrong, as the error itself said it: shown under "Try again" so it can be read out. */
+  const [failNote, setFailNote] = useState<string | null>(null);
   const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
+  /** stop() is waiting for the camera to finalize the file (the CameraView must stay mounted). */
+  const stopping = useRef(false);
   const startedAt = useRef(0);
   /** The camera's first progress event (when the file began) and when recordAsync resolved. */
   const firstProgress = useRef<{ atMs: number; durationS: number } | null>(null);
@@ -223,6 +285,7 @@ export function JudgeCamScreen({
     lastClip.current = null;
     manualCountdown.current = false;
     setFailed(false);
+    setEmpty(false);
     setCount(Math.min(3, Math.max(0, Math.ceil((arm.goAtMs - Date.now()) / 1000))));
     setPhase('countdown');
   }, [arm]);
@@ -241,44 +304,77 @@ export function JudgeCamScreen({
     return () => clearTimeout(tm);
   }, [phase, count, arm]);
 
-  const stop = useCallback(async () => {
-    if (stopTimer.current) clearTimeout(stopTimer.current);
-    stopTimer.current = null;
-    setPhase('sending');
-    let clip: Clip | null = null;
-    try {
-      const pending = recording.current;
-      recording.current = null;
-      if (pending) {
-        // The clip ends now, not when the file is finalized (../attempt/span).
-        const stopAtMs = Date.now();
-        cam.current?.stopRecording();
-        const out = await pending;
-        if (out?.uri)
-          clip = {
-            uri: out.uri,
-            ...recordedSpan({
+  const stop = useCallback(
+    async (by: 'button' | 'timer' = 'timer') => {
+      // One stop at a time: a second tap (or the timer) while the file is being finalized is a no-op.
+      if (stopping.current) return;
+      stopping.current = true;
+      // Who ended the clip and how far in: clips kept ending before the throw, and nothing said why.
+      debugLog(`cam stop by=${by} after=${Date.now() - startedAt.current}ms`);
+      if (stopTimer.current) clearTimeout(stopTimer.current);
+      stopTimer.current = null;
+      let clip: Clip | null = null;
+      let recordNote: string | null = null;
+      try {
+        const pending = recording.current;
+        if (pending) {
+          // The clip ends now, not when the file is finalized (../attempt/span).
+          const stopAtMs = Date.now();
+          cam.current?.stopRecording();
+          // The camera stays on screen until the file is finalized. The 'sending' phase takes the
+          // CameraView away, and expo-camera rejects a recording whose view went away before
+          // didFinishRecording ("unmounted"): every clip was lost that way, on every device.
+          let out: { uri: string } | undefined;
+          try {
+            // A camera that never answers must not leave the screen stuck on "recording".
+            out = await Promise.race([
+              pending,
+              new Promise<undefined>((resolve) => setTimeout(resolve, FINALIZE_WAIT_MS)),
+            ]);
+            if (!out?.uri) recordNote = 'record: the camera gave no file';
+          } catch (e) {
+            recordNote = `record: ${failureNote(e)}`;
+          }
+          if (out?.uri) {
+            const estimate = recordedSpan({
               requestedAtMs: startedAt.current,
               firstProgress: firstProgress.current,
               stopAtMs,
               finishedAtMs: finishedAt.current,
               maxMs: MAX_RECORD_MS,
-            }),
-          };
+            });
+            // The file's own length when it can be read: the estimate is only the fallback.
+            clip = {
+              uri: out.uri,
+              ...measuredSpan(estimate, await clipFileMs(out.uri), MAX_RECORD_MS),
+            };
+          }
+        }
+        recording.current = null;
+        lastClip.current = clip;
+        setEmpty(clip === null);
+        setPhase('sending');
+        await onSend(clip);
+        setPhase('sent');
+      } catch (e) {
+        // The camera's own reason, when it gave no clip, says more than the "no clip" that follows.
+        setFailNote(recordNote ?? failureNote(e));
+        setFailed(true);
+        setPhase('sent');
+      } finally {
+        recording.current = null;
+        stopping.current = false;
       }
-      lastClip.current = clip;
-      await onSend(clip);
-      setPhase('sent');
-    } catch {
-      setFailed(true);
-      setPhase('sent');
-    }
-  }, [onSend]);
+    },
+    [onSend],
+  );
 
   // "Try again": resend the same clip, retake it, or back to standby (../attempt/retry).
   const retry = useCallback(async () => {
     const action = camRetryAction({ armed: !!arm, hasClip: lastClip.current !== null });
     setFailed(false);
+    setEmpty(false);
+    setFailNote(null);
     if (action === 'standby') {
       setPhase('standby');
       return;
@@ -293,18 +389,32 @@ export function JudgeCamScreen({
     try {
       await onSend(lastClip.current);
       setPhase('sent');
-    } catch {
+    } catch (e) {
+      setFailNote(failureNote(e));
       setFailed(true);
       setPhase('sent');
     }
   }, [arm, onSend]);
 
-  // Start the camera recording on GO; Stop (or max_ms, at most 6 s) ends it.
+  // Start the camera recording on GO; Stop (or max_ms, at most 6 s) ends it. A camera that is
+  // not up yet is waited for (this effect runs again when it is ready): the clip starts then,
+  // with its full length, instead of the time running out with nothing recording.
   useEffect(() => {
     if (phase !== 'recording') return;
     const camera = cam.current;
-    if (camera && ready && !recording.current) {
+    if (!camera || !ready) {
+      const giveUp = setTimeout(() => {
+        lastClip.current = null;
+        setFailNote(camera ? 'camera not ready' : 'no camera view');
+        setEmpty(true);
+        setFailed(true);
+        setPhase('sent');
+      }, CAMERA_WAIT_MS);
+      return () => clearTimeout(giveUp);
+    }
+    if (!recording.current && !stopping.current) {
       startedAt.current = Date.now();
+      debugLog(`cam record start limit=${Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS)}ms`);
       firstProgress.current = null;
       finishedAt.current = null;
       recording.current = camera
@@ -318,13 +428,34 @@ export function JudgeCamScreen({
           finishedAt.current ??= Date.now();
           return out;
         });
+      // stop() awaits it and reports a refusal; until then a rejection is not "unhandled".
+      recording.current.catch(() => undefined);
     }
     const limit = Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS);
-    stopTimer.current = setTimeout(() => void stop(), limit);
+    stopTimer.current = setTimeout(() => void stop('timer'), limit);
     return () => {
       if (stopTimer.current) clearTimeout(stopTimer.current);
     };
   }, [phase, stop, ready, arm]);
+
+  // The seconds left of the clip, shown with "Recording": whoever films can see how long the
+  // throw still has, instead of guessing when it will stop.
+  const [leftS, setLeftS] = useState<number | null>(null);
+  useEffect(() => {
+    if (phase !== 'recording') {
+      setLeftS(null);
+      return;
+    }
+    const tick = () =>
+      setLeftS(
+        recording.current
+          ? Math.max(0, Math.ceil((MAX_RECORD_MS - (Date.now() - startedAt.current)) / 1000))
+          : null,
+      );
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [phase]);
 
   // No capture device (the simulator) or one that failed to start: say so on the stage.
   const bubble = noCamera
@@ -335,7 +466,9 @@ export function JudgeCamScreen({
         ? count === 0
           ? t(COPY.judgeCam.go)
           : String(count)
-        : t(COPY.judgeCam.recording);
+        : leftS === null
+          ? t(COPY.judgeCam.recording)
+          : `${t(COPY.judgeCam.recording)} ${leftS}`;
 
   return (
     <Screen>
@@ -346,10 +479,19 @@ export function JudgeCamScreen({
             {phase === 'sending' ? (
               <DotsLabel text={t(COPY.judgeCam.sending)} variant="subtitle" />
             ) : (
-              <StatusHero
-                mark={failed ? 'cross' : 'check'}
-                title={t(failed ? COPY.ruling.retry : COPY.judgeCam.sent)}
-              />
+              <>
+                <StatusHero
+                  mark={failed ? 'cross' : 'check'}
+                  title={t(
+                    failed ? (empty ? COPY.judgeCam.empty : COPY.ruling.retry) : COPY.judgeCam.sent,
+                  )}
+                />
+                {failed && failNote ? (
+                  <DataText variant="small" muted lines={4}>
+                    {failNote}
+                  </DataText>
+                ) : null}
+              </>
             )}
           </Stage>
         ) : permission?.granted ? (
@@ -378,7 +520,11 @@ export function JudgeCamScreen({
             )}
             {phase === 'recording' ? (
               <View style={styles.shutterSlot}>
-                <ShutterButton active label={t(COPY.judgeCam.stop)} onPress={() => void stop()} />
+                <ShutterButton
+                  active
+                  label={t(COPY.judgeCam.stop)}
+                  onPress={() => void stop('button')}
+                />
               </View>
             ) : null}
           </Stage>
@@ -400,6 +546,15 @@ export function JudgeCamScreen({
               setCount(3);
               setPhase('countdown');
             }}
+          />
+        ) : phase === 'standby' && arm === null && onRecord ? (
+          // This phone films and the shot is framed: the attempt starts on this tap.
+          <PrimaryButton
+            testID="cam-record"
+            label={t(COPY.judgeCam.record)}
+            busy={recordBusy}
+            disabled={!permission?.granted || !ready || noCamera}
+            onPress={onRecord}
           />
         ) : phase === 'sent' && (arm === undefined || failed) ? (
           <QuietButton
@@ -475,10 +630,11 @@ export function RulingScreen({
   // The ruling's own moment (both phones); the payout haptic comes later, from DemoApp.
   useEffect(() => feel('ruled'), []);
   const left = appealDeadlineMs - now;
-  // A moment, on both phones: the call in big thin white type on black. The money waits for the
-  // payout; the only colour here is the green action.
+  // A moment, on both phones: the call in bold on black, under an aurora of the result
+  // (green won, red lost, white for no contest). The money waits for the payout.
   return (
     <MomentScreen
+      aurora={result === 'won' ? 'in' : result === 'lost' ? 'out' : 'neutral'}
       top={<TopBar tag={tag} />}
       // A dance off's breakdown (or a long reason) runs taller than the screen: the body scrolls
       // between the top bar and the footer instead of spilling under the status bar and footer.
@@ -554,9 +710,10 @@ export function RulingScreen({
         </DataText>
         {note ? <BodyText style={styles.centerText}>{note}</BodyText> : null}
       </View>
+      {/* Why: the judge's own words. */}
       <View style={styles.call}>
         <Label variant="small">{judgeLabel ?? t(COPY.ruling.judge)}</Label>
-        <DataText variant="label" style={styles.centerText}>
+        <DataText variant="spokenSmall" style={styles.centerText}>
           {reason}
         </DataText>
       </View>
@@ -662,8 +819,7 @@ export function PayoutScreen({
             {balance}
           </View>
         ) : (
-          // The signature: a giant green figure counting up over a soft green glow (drawn behind
-          // the headline too, so "You won" stays pure white).
+          // The signature: a giant green figure counting up under a green aurora.
           <MomentGroup glow="in">
             <MomentHeadline>{RESULT_TITLE.won}</MomentHeadline>
             <MomentMoney direction="in" cents={winCents} />
@@ -679,7 +835,7 @@ export function PayoutScreen({
           {balance}
         </MomentGroup>
       ) : (
-        // The mirror image: red, static, the same soft glow in red at a lower opacity.
+        // The mirror image: red, static, the same aurora in red at a lower opacity.
         <MomentGroup glow="out">
           <MomentHeadline>{t(COPY.ruling.gg)}</MomentHeadline>
           <MomentMoney direction="out" text={signedUsd(`-${view.myStake}`)} />
@@ -734,7 +890,9 @@ export function HearingScreen({
     <Screen>
       <TopBar title={t(COPY.hearing.title)} tag={tag} />
       <Page>
-        <DataText variant="statement">{view.claim}</DataText>
+        <Slip>
+          <DataText variant="statement">{view.claim}</DataText>
+        </Slip>
         <View style={styles.turns}>
           {turns.map((tn) => (
             <View key={tn.name} style={styles.turn}>
@@ -755,7 +913,7 @@ export function HearingScreen({
             <DotsLabel text={t(COPY.hearing.judging)} variant="subtitle" />
           ) : turnEndsAtMs ? (
             // The turn clock: big thin tabular numerals.
-            <Text style={type.moment}>{countdownLabel(turnEndsAtMs - now)}</Text>
+            <Text style={type.display}>{countdownLabel(turnEndsAtMs - now)}</Text>
           ) : null}
         </View>
         {myTurnOpen ? (
@@ -932,19 +1090,10 @@ const styles = StyleSheet.create({
   centerText: { textAlign: 'center' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.x2 },
   centerStage: { alignItems: 'center', justifyContent: 'center' },
-  hero: { paddingVertical: space.x3 },
+  judging: { alignItems: 'center', gap: space.x1 },
   gapLg: { height: space.x3 },
   // Live
-  vs: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: space.x3,
-    paddingVertical: space.x3,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.divider,
-  },
+  vs: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pot: { alignItems: 'center', gap: half.x05 },
   shutterSlot: { position: 'absolute', left: 0, right: 0, bottom: space.x3 },
   // Moments (ruling, payout)
@@ -966,7 +1115,7 @@ const styles = StyleSheet.create({
   waiting: { height: space.control, alignItems: 'center', justifyContent: 'center' },
   // Redo
   // Hearing
-  turns: { marginTop: space.x3 },
+  turns: { marginTop: space.x1 },
   turn: {
     minHeight: space.row + space.x1,
     flexDirection: 'row',
@@ -989,7 +1138,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.black,
     opacity: hold.progressOpacity,
   },
-  talkText: { color: color.onAccent },
+  talkText: { color: color.onPrimary },
   // Appeal
   seats: { marginTop: space.x1 },
   seat: {

@@ -5,6 +5,7 @@ import {
   cleanTail,
   findWakes,
   hasWake,
+  isStubTail,
   isWakeKey,
   normalizeTranscript,
   splitAfterWake,
@@ -186,5 +187,17 @@ describe('splitAfterWake', () => {
     expect(splitAfterWake('jar vis, race to the door').tail).toBe('race to the door');
     expect(splitAfterWake('Jervis race to the door').tail).toBe('race to the door');
     expect(splitAfterWake("Jarvis's bet: race to the door").tail).toBe('bet: race to the door');
+  });
+});
+
+describe('isStubTail', () => {
+  it('is true for nothing, an article, a lone letter, a sound', () => {
+    for (const t of ['', '  ', 'a', 'A.', 'the', 'a the', 'I', 'oh', 'an', 'a, a', '5'])
+      expect(isStubTail(t), t).toBe(true);
+  });
+
+  it('is false as soon as there is a real word, however short', () => {
+    for (const t of ['Mo', 'Eva', 'scan', 'a dance off', 'I bet', 'the bottle', 'go', 'no'])
+      expect(isStubTail(t), t).toBe(false);
   });
 });

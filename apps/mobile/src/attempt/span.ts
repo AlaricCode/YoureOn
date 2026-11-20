@@ -23,6 +23,25 @@ export interface RecordingMarks {
   maxMs: number;
 }
 
+/**
+ * The span with the file's own length, when the file could be measured. The estimate below is
+ * built from timers around the recording and was badly short on a real device (1.1 s for a clip
+ * of several seconds: the judge saw the first second, the ball still in hand, and ruled a miss).
+ * The file is the truth, so it wins whenever there is one; it is capped at the recording's limit.
+ */
+export function measuredSpan(
+  estimate: { durationMs: number; endedAtMs: number },
+  fileMs: number | null | undefined,
+  maxMs: number,
+): { durationMs: number; endedAtMs: number } {
+  if (fileMs === null || fileMs === undefined || !Number.isFinite(fileMs) || fileMs <= 0)
+    return estimate;
+  return {
+    durationMs: Math.min(maxMs, Math.max(1, Math.round(fileMs))),
+    endedAtMs: estimate.endedAtMs,
+  };
+}
+
 /** The clip's length and its end (both for the Clip JudgeCamScreen hands to onSend). */
 export function recordedSpan(m: RecordingMarks): { durationMs: number; endedAtMs: number } {
   const p = m.firstProgress;

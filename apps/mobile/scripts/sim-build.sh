@@ -56,6 +56,8 @@ cd "$MOBILE"
 # has no voice judge unless it is asked for: SIM_VOICE=on scripts/sim-build.sh. The environment
 # wins over .env.local (Expo never overrides a variable that is already set).
 if [[ "${SIM_VOICE:-off}" == "on" ]]; then
+  # The app's own default is off too (DemoApp VOICE_ENABLED): on has to be asked for.
+  export EXPO_PUBLIC_VOICE=on
   echo "sim-build: voice judge ON (SIM_VOICE=on): each challenge opens a real ElevenLabs session"
 else
   export EXPO_PUBLIC_VOICE=off

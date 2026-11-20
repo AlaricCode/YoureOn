@@ -5,7 +5,7 @@
 //
 // Planning D10, through the shared sampler (packages/shared/src/judge/frames, which the server
 // and scripts/judge-eval.ts use too): 12 frames, 4 spread over the clip and 8 in its last ~1.2 s
-// (the landing), each ≤ 512 px, then one landing crop: the last still again, its middle 80 % at
+// (the landing), each ≤ 768 px, then one landing crop: the last still again, its middle 80 % at
 // full resolution (≤ 1024 px), flagged `landing_crop` and sent last.
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { CameraEvidence, type EvidenceFrame } from '@youre-on/shared/evidence';
@@ -17,9 +17,10 @@ import {
   MAX_JUDGE_FRAMES,
   MIN_JUDGE_FRAMES,
   fitSize,
+  judgeFrameCount,
   judgeFramesProblem,
-  judgeFrameTimesMs,
   landingCropPlan,
+  lastSampleMs,
 } from '@youre-on/shared/judge/frames';
 import type { Party } from '@youre-on/shared/primitives';
 
@@ -36,9 +37,38 @@ export const MIN_FRAMES = MIN_JUDGE_FRAMES;
 export const MAX_FRAMES = MAX_JUDGE_FRAMES;
 export const JPEG_QUALITY = 0.8;
 
-/** The instants to sample (planning D10): strictly increasing, all inside the clip. */
+/** Frames spread over the clip before the action window. */
+export const LEAD_FRAMES = 3;
+/** The action window: the end of the clip the other frames are spread over, at most this long… */
+export const ACTION_WINDOW_MS = 2700;
+/** …and at most this share of a shorter clip. */
+export const ACTION_WINDOW_SHARE = 0.75;
+
+/**
+ * The instants to sample: strictly increasing, all inside the clip. LEAD_FRAMES over the start,
+ * the rest evenly over the clip's last ACTION_WINDOW_MS (340 ms apart at most), the last one just
+ * before the end.
+ *
+ * The shared sampler (judgeFrameTimesMs) packs 8 frames into the last 1.2 s, which only shows a
+ * throw when the clip is stopped the moment the object lands. On real throws whoever filmed
+ * stopped a second or two later: the whole flight fell into the half-second gap before those 8
+ * frames, and the judge was shown a release and then an empty floor ("it is never seen again",
+ * a retake). The window is wide enough to hold the release, the flight and the landing.
+ */
 export function frameTimesMs(durationMs: number, n = DEFAULT_FRAMES): number[] {
-  return judgeFrameTimesMs(durationMs, n);
+  const count = judgeFrameCount(n);
+  const end = lastSampleMs(durationMs);
+  const span = Math.min(ACTION_WINDOW_MS, end * ACTION_WINDOW_SHARE);
+  const start = end - span;
+  const lead = Math.min(LEAD_FRAMES, count - 1);
+  const rest = count - lead;
+  const out: number[] = [];
+  for (let i = 0; i < lead; i++) out.push(Math.round((start * i) / lead));
+  // from the window's first instant to its last, both sampled
+  for (let i = 0; i < rest; i++) out.push(Math.round(start + (span * i) / Math.max(1, rest - 1)));
+  for (let i = 1; i < out.length; i++)
+    if ((out[i] as number) <= (out[i - 1] as number)) out[i] = (out[i - 1] as number) + 1;
+  return out;
 }
 
 export type ShotKind = 'frame' | 'landing_crop';

@@ -23,8 +23,6 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  Animated,
-  Easing,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -78,10 +76,21 @@ import {
   Screen,
   TopBar,
   useNow,
-  useReduceMotion,
 } from '../ui/parts';
+import { JudgeOrb } from '../ui/JudgeOrb';
 import { StakePicker } from '../ui/StakePicker';
-import { avatarSize, border, color, half, palette, radius, space, type } from '../ui/tokens';
+import {
+  avatarSize,
+  border,
+  color,
+  dp,
+  half,
+  material,
+  palette,
+  radius,
+  space,
+  type,
+} from '../ui/tokens';
 import { WAKE_COPY, wt } from '../wake/copy';
 import { COPY, fill, SCAN_MISS_COPY, t } from './copy';
 
@@ -347,6 +356,7 @@ export function IncomingScreen({
   useEffect(() => feel('challengeArrived'), []);
   return (
     <MomentScreen
+      aurora="neutral"
       top={<TopBar tag={tag} />}
       footer={
         <>
@@ -363,15 +373,15 @@ export function IncomingScreen({
         </>
       }
     >
-      {/* An 88 pt disc so the headline leads; the headline at 44 in a column 32 pt in from each
-          edge, so "challenged you" never runs edge to edge. */}
+      {/* The challenger's disc, then the line in bold, in a column 32 pt in from each edge so
+          "challenged you" never runs edge to edge. */}
       {rematch ? (
         <View style={styles.rematchTag} testID="incoming-rematch">
           <Chip label={t(COPY.rematch.incoming)} tone="accent" />
         </View>
       ) : null}
-      <Avatar name={challenger} size={avatarSize.moment} />
-      <MomentHeadline size="lg" lines={3} inset={space.x4} letterSpacing={-0.8}>
+      <Avatar name={challenger} size={avatarSize.hero} />
+      <MomentHeadline size="lg" lines={3} inset={space.x4}>
         {fill.challenged(challenger)}
       </MomentHeadline>
       {/* The room, with the green live dot: this is happening now, in the room. */}
@@ -455,7 +465,8 @@ export interface DanceTermsPanel {
  */
 export interface NegotiateWake {
   line: string | null;
-  onTapToTalk: () => void;
+  /** Starts the voice judge without the wake word. Absent when there is no judge to start. */
+  onTapToTalk?: (() => void) | undefined;
   /** Only while the mic or speech permission is off: opens the Settings app. */
   onOpenSettings?: (() => void) | undefined;
 }
@@ -562,14 +573,17 @@ export function NegotiateScreen({
 
   const typing = typed?.mode === 'typed';
   const offerCard = odds ? <OfferCard panel={odds} /> : null;
+  /** An odds offer (or its counter sheet, or the agreed odds) is showing, not just its buttons. */
+  const offerOut = Boolean(odds && (odds.card || odds.counter || odds.agreed));
+  /** A card is on the table: the judge's head becomes one compact row, the terms get the room. */
+  const compact = offerOut || draft !== null;
   const draftCard = draft ? (
-    <Card style={styles.draft}>
-      <Hairline />
+    <Card raised style={styles.draft}>
       <View style={styles.draftHead}>
         <Label variant="small">{t(COPY.negotiate.draft)}</Label>
         {typing || !voice ? null : <DotsLabel text={t(COPY.negotiate.readBack)} variant="small" />}
       </View>
-      <DataText variant="heading">{draft.claim}</DataText>
+      <DataText variant="statementSmall">{draft.claim}</DataText>
       <Hairline style={styles.draftRule} />
       <DataText variant="amount">
         {`${draft.myStakeUsd} vs ${draft.theirStakeUsd}${draft.ratio ? ` · ${draft.ratio}` : ''}${draft.mySide ? ` · you ${draft.mySide}` : ''}`}
@@ -675,61 +689,81 @@ export function NegotiateScreen({
     <Screen>
       <TopBar onBack={onBack} title={t(COPY.negotiate.title)} tag={tag} />
       <Page>
-        <View style={styles.judgeHead}>
-          <JudgeDisc speaking={head.speaking} listening={head.listening} />
-          {head.line === 'off' ? (
-            <DotsLabel
-              text={draft ? fill.waitingFor(view.theirName) : t(COPY.negotiate.waitingTerms)}
-              variant="value"
-            />
-          ) : head.line === 'speaking' ? (
-            <DotsLabel text={t(COPY.negotiate.speaking)} variant="value" />
-          ) : head.line === 'elsewhere' ? (
-            <Label testID="judge-elsewhere" variant="value">
-              {fill.judgeOn(judgeOn ?? '')}
-            </Label>
-          ) : head.line === 'wake' ? (
-            <Label testID="wake-line" variant="value">
-              {wake?.line ?? wt(WAKE_COPY.hint)}
-            </Label>
-          ) : head.line === 'connecting' ? (
-            <DotsLabel text={t(COPY.negotiate.connecting)} variant="value" />
-          ) : head.line === 'muted' ? (
-            <Label variant="value">{t(COPY.negotiate.micMuted)}</Label>
-          ) : (
-            <DotsLabel text={t(COPY.negotiate.listening)} variant="value" />
-          )}
-          {hasMic && !wake && head.line !== 'muted' ? (
-            <Chip
-              label={micMuted ? t(COPY.negotiate.micMuted) : t(COPY.negotiate.micOn)}
-              tone={micMuted ? 'muted' : 'accent'}
-              style={styles.chipCentred}
-            />
-          ) : null}
+        <View style={compact ? styles.judgeHeadCompact : styles.judgeHead}>
+          {/* With a card on the table the orb steps back, so the terms have the room. */}
+          <JudgeOrb
+            size={compact ? JUDGE_ORB_SMALL : JUDGE_ORB}
+            speaking={head.speaking}
+            listening={head.listening || head.line === 'wake'}
+            label={t(COPY.ruling.judge)}
+          />
+          <View style={compact ? styles.judgeStatusCompact : styles.judgeStatus}>
+            {head.line === 'off' ? (
+              <DotsLabel
+                text={draft ? fill.waitingFor(view.theirName) : t(COPY.negotiate.waitingTerms)}
+                variant="value"
+              />
+            ) : head.line === 'speaking' ? (
+              <DotsLabel text={t(COPY.negotiate.speaking)} variant="value" />
+            ) : head.line === 'elsewhere' ? (
+              <Label testID="judge-elsewhere" variant="value">
+                {fill.judgeOn(judgeOn ?? '')}
+              </Label>
+            ) : head.line === 'wake' ? (
+              <Label testID="wake-line" variant="value">
+                {wake?.line ?? wt(WAKE_COPY.hint)}
+              </Label>
+            ) : head.line === 'connecting' ? (
+              <DotsLabel text={t(COPY.negotiate.connecting)} variant="value" />
+            ) : head.line === 'muted' ? (
+              <Label variant="value">{t(COPY.negotiate.micMuted)}</Label>
+            ) : (
+              <DotsLabel text={t(COPY.negotiate.listening)} variant="value" />
+            )}
+            {hasMic && !wake && head.line !== 'muted' ? (
+              <Chip
+                label={micMuted ? t(COPY.negotiate.micMuted) : t(COPY.negotiate.micOn)}
+                tone={micMuted ? 'muted' : 'accent'}
+                style={compact ? undefined : styles.chipCentred}
+              />
+            ) : null}
+          </View>
         </View>
         <ScrollView
           ref={scroll}
           style={styles.flex}
           contentContainerStyle={styles.captions}
-          onContentSizeChange={() => scroll.current?.scrollToEnd({ animated: true })}
+          // What was just said is at the end; an odds offer is at the top, and it is what the
+          // screen is asking about, so that is what stays in view.
+          onContentSizeChange={() =>
+            offerOut
+              ? scroll.current?.scrollTo({ y: 0, animated: true })
+              : scroll.current?.scrollToEnd({ animated: true })
+          }
         >
-          {captions.map((c, i) => (
-            <View key={i} style={styles.caption}>
-              <DataText
-                variant="small"
-                style={c.who === 'judge' ? styles.judgeName : undefined}
-                muted={c.who !== 'judge'}
-              >
+          {/* With a card on the table only the line being said now stays, and none at all next
+              to an odds offer (its card carries the judge's reason): the cards are the
+              conversation's result, and they must fit on the screen. */}
+          {(offerOut ? [] : compact ? captions.slice(-1) : captions).map((c, i) => (
+            <View key={compact ? captions.length - 1 : i} style={styles.caption}>
+              <DataText variant="small" muted>
                 {nameOf(c.who)}
               </DataText>
-              <DataText>{c.text}</DataText>
+              {c.who === 'judge' ? (
+                <DataText variant="spoken">{c.text}</DataText>
+              ) : (
+                <DataText variant="row" style={styles.said}>
+                  {c.text}
+                </DataText>
+              )}
             </View>
           ))}
+          {/* The cards scroll with what was said, so nothing is ever pushed off the screen. */}
+          {offerCard}
+          {draftCard}
         </ScrollView>
-        {offerCard}
-        {draftCard}
         <View style={styles.actions}>
-          {wake ? (
+          {wake?.onTapToTalk ? (
             <PrimaryButton
               testID="wake-tap"
               label={wt(WAKE_COPY.tapToTalk)}
@@ -759,48 +793,6 @@ export function NegotiateScreen({
         </View>
       </Page>
     </Screen>
-  );
-}
-
-/**
- * The judge: a 120 pt #1C1C1F disc (like every other disc) with "Judge" in white 17/500. Green
- * ring while it speaks; while it listens a faint 1 pt outer ring breathes between full and 0.4
- * opacity (Reduce Motion: a still ring).
- */
-function JudgeDisc({ speaking, listening }: { speaking: boolean; listening: boolean }) {
-  const reduced = useReduceMotion();
-  const breath = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    if (!listening || reduced !== false) {
-      breath.setValue(1);
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(breath, {
-          toValue: 0.4,
-          duration: 1200,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(breath, {
-          toValue: 1,
-          duration: 1200,
-          easing: Easing.inOut(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [listening, reduced, breath]);
-  return (
-    <View style={styles.judgeWrap}>
-      {listening ? <Animated.View style={[styles.judgeOuter, { opacity: breath }]} /> : null}
-      <View style={[styles.judgeRing, speaking && styles.judgeRingOn]}>
-        <Label variant="rowMedium">{t(COPY.ruling.judge)}</Label>
-      </View>
-    </View>
   );
 }
 
@@ -1112,8 +1104,8 @@ function ClaimField({
       maxLength={200}
       autoCapitalize="sentences"
       keyboardAppearance="dark"
-      selectionColor={palette.accent}
-      cursorColor={palette.accent}
+      selectionColor={palette.text}
+      cursorColor={palette.text}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={[styles.claimField, { borderColor: focused ? color.borderFocused : 'transparent' }]}
@@ -1121,11 +1113,12 @@ function ClaimField({
   );
 }
 
-// Obsidian: content sits on black at the 20 pt margin; facts are hairline-divided rows, not boxes.
-// Colour is only the one green action, the live dot and the selected side.
-/** The judge's disc, and the gap to its breathing outer ring. */
-const JUDGE_DISC = 120;
-const JUDGE_HALO = 8;
+// Limelight: content sits on black at the 20 pt margin; facts are hairline-divided rows, and
+// only the things you could hold (the draft slip, a match) are soft panels. The judge is the orb.
+/** The judge's sphere on the terms screen (its rings and halo scale with it). */
+const JUDGE_ORB = dp(104);
+/** The same once an offer or the draft is on the table. */
+const JUDGE_ORB_SMALL = dp(44);
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
@@ -1155,39 +1148,20 @@ const styles = StyleSheet.create({
   },
   memberRule: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.divider },
   live: { flexDirection: 'row', alignItems: 'center', gap: space.x1, maxWidth: '100%' },
-  judgeHead: { alignItems: 'center', gap: half.x15, paddingTop: space.x2, paddingBottom: space.x3 },
-  judgeWrap: {
-    width: JUDGE_DISC + 2 * JUDGE_HALO,
-    height: JUDGE_DISC + 2 * JUDGE_HALO,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  judgeOuter: {
-    ...StyleSheet.absoluteFill,
-    borderRadius: (JUDGE_DISC + 2 * JUDGE_HALO) / 2,
-    borderWidth: 1,
-    borderColor: palette.fill,
-  },
-  judgeRing: {
-    width: JUDGE_DISC,
-    height: JUDGE_DISC,
-    borderRadius: JUDGE_DISC / 2,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: palette.fill,
-  },
-  judgeRingOn: { borderColor: color.live },
-  captions: { gap: space.x2, paddingVertical: space.x2 },
+  judgeHead: { alignItems: 'center', gap: half.x15, paddingTop: space.x1, paddingBottom: space.x2 },
+  judgeStatus: { alignItems: 'center', gap: half.x15 },
+  // One row: the small orb (its halo is its own margin), then what it is doing and the mic.
+  judgeHeadCompact: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  judgeStatusCompact: { alignItems: 'flex-start', gap: half.x05 + 2 },
+  captions: { gap: space.x3, paddingVertical: space.x2 },
   caption: { gap: half.x05 },
-  judgeName: { ...type.smallStrong, color: palette.text },
+  /** What a person said: grey, a step back from the judge's white line. */
+  said: { color: palette.textSecondary },
   draft: { marginTop: space.x1, marginBottom: space.x1, gap: half.x15 },
   draftHead: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: half.x15,
   },
   draftRule: { marginTop: half.x05 },
   form: { gap: space.x1, paddingTop: space.x1, paddingBottom: space.x5 },
@@ -1208,8 +1182,8 @@ const styles = StyleSheet.create({
   frozen: { opacity: 0.35 },
   pressed: { opacity: 0.7 },
   sides: { flexDirection: 'row', gap: half.x15 },
-  // Up / Down: no outlines. The chosen side is a #1C1C1F tile with its % in green; the other
-  // sits on black with a grey %.
+  // Up / Down: two soft tiles. The chosen one is a step lighter with its % in white; the other
+  // is the plain panel with a grey %.
   sideBox: {
     flex: 1,
     height: space.control * 2,
@@ -1217,13 +1191,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: half.x05,
-    backgroundColor: palette.background,
+    backgroundColor: palette.surface,
   },
-  sideOn: { backgroundColor: palette.fill },
+  sideOn: { backgroundColor: palette.rim, backgroundImage: material.glassRaised },
   chipCentred: { alignSelf: 'center' },
   replay: { alignItems: 'flex-start', paddingVertical: half.x15 },
   marketCard: { marginTop: space.x3 },
-  // Dance Off: one row per routine, no outlines (the chosen one is the #1C1C1F tile).
+  // Dance Off: one row per routine (the chosen one is the soft grey tile).
   routines: { gap: half.x15 },
   routineCard: {
     minHeight: space.control + space.x2,

@@ -41,8 +41,15 @@ import { safeLine } from './DanceResultBreakdown';
 import { DANCE_COPY, danceLabels, dt, ERROR_COPY, FRAMING_COPY } from './copy';
 import { appDocumentsUri, readFileBytes } from './fs';
 import { nowMs, useDanceSettings, useDancePose, useFrameClock, useLive } from './hooks';
+import { DANCE_CAMERA, guideSides, previewMirrored } from './model/camera';
 import type { LiveStore } from './model/liveStore';
-import { attemptCountIn, framingProgress, type RoundState } from './model/round';
+import {
+  attemptCountIn,
+  autoStartLeftMs,
+  autoStartNumeral,
+  framingProgress,
+  type RoundState,
+} from './model/round';
 import { serverIsoToLocalMs } from './model/schedule';
 import { createSimPoseSource, SIM_FRAME_MS, type SimPoseSource } from './model/simRound';
 import { buildDanceUploadBundle, readSnapshots, type DanceUploadBundle } from './model/upload';
@@ -130,23 +137,29 @@ function FramingGuide({
   store,
   names,
   visible,
+  mirrored,
 }: {
   store: LiveStore;
   names: { a: string; b: string };
   visible: boolean;
+  /** The preview is a mirror image (the selfie camera): A, on the image's left, is on the right. */
+  mirrored: boolean;
 }) {
   const ok = useLive(store, (v) => v.framing?.ok === true);
   const byFace = useLive(store, (v) => v.byFace);
   if (!visible || byFace) return null;
+  const sides = guideSides(mirrored);
+  const labels = danceLabels(names);
+  const tint = { a: PLAYER_TINT.A, b: PLAYER_TINT.B } as const;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={[styles.centerLine, ok && styles.centerLineOk]} />
       <View style={styles.guideRow}>
-        <Text style={[styles.guideName, { color: PLAYER_TINT.A }]} numberOfLines={1}>
-          {`${danceLabels(names).a} ←`}
+        <Text style={[styles.guideName, { color: tint[sides.left] }]} numberOfLines={1}>
+          {`${labels[sides.left]} ←`}
         </Text>
-        <Text style={[styles.guideName, { color: PLAYER_TINT.B }]} numberOfLines={1}>
-          {`→ ${danceLabels(names).b}`}
+        <Text style={[styles.guideName, { color: tint[sides.right] }]} numberOfLines={1}>
+          {`→ ${labels[sides.right]}`}
         </Text>
       </View>
     </View>
@@ -170,6 +183,7 @@ function FramingFooter({
 }) {
   const now = useFrameClock(round.phase === 'framing' && round.okSince !== null, 30);
   const reason = useLive(store, (v) => v.framing?.reason ?? null);
+  const faces = useLive(store, (v) => v.faces);
   const progress = framingProgress(round, now);
   const ready = round.phase === 'ready';
   const line =
@@ -178,7 +192,7 @@ function FramingFooter({
       : camera === 'error'
         ? dt(DANCE_COPY.cameraError)
         : ready
-          ? dt(DANCE_COPY.ready)
+          ? dt(DANCE_COPY.holdStill)
           : reason
             ? dt(FRAMING_COPY[reason])
             : dt(DANCE_COPY.findingYou);
@@ -192,6 +206,17 @@ function FramingFooter({
       <View style={styles.holdTrack}>
         <View style={[styles.holdFill, { width: `${progress * 100}%` }]} />
       </View>
+      {/* Who is who: by face once both are matched; until then each name is a side. The reason
+          an attempt ended is shown as it came, so it can be read out. */}
+      {faces === 'idle' ? null : (
+        <Text style={styles.faces} numberOfLines={1} testID="dance-faces">
+          {faces === 'matched'
+            ? dt(DANCE_COPY.facesMatched)
+            : faces === 'looking'
+              ? dt(DANCE_COPY.facesLooking)
+              : `${dt(DANCE_COPY.facesSides)} (${faces})`}
+        </Text>
+      )}
       <PrimaryButton
         label={dt(DANCE_COPY.start)}
         onPress={ready ? onStart : undefined}
@@ -212,6 +237,9 @@ function FramingFooter({
 function StatusFooter({ children }: { children: ReactNode }) {
   return <View style={[styles.footer, styles.statusFooter]}>{children}</View>;
 }
+
+/** How long past the countdown the round waits for a face attempt that is still running. */
+const FACE_OVERTIME_MS = 3_000;
 
 // ---------------------------------------------------------------------------------------
 // The round
@@ -408,6 +436,34 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
       state.phase === 'submitted' ||
       (state.phase === 'failed' && (state.canRetryUpload || state.error === 'no_frames')));
 
+  // (Hooks: everything below up to the result screen's early return must stay ABOVE it. Put after
+  // it, the screen rendered fewer hooks once the result was shown and React threw "Rendered fewer
+  // hooks than expected": the dance off "failed" for a moment after every round.)
+  // Both dancers in position and held there: a countdown they can read from where they stand,
+  // and the round starts by itself when it runs out (model/round AUTO_START_MS). They are in
+  // front of the camera, not at the phone. Anyone leaving the frame ends the count (the round is
+  // back to `framing`) and it starts over once they are both in place again. Start is still
+  // there, and a failed start is not retried until the framing is lost and found again.
+  const framedAndHeld = state.phase === 'ready';
+  const autoNow = useFrameClock(framedAndHeld, 10);
+  const autoLeft = autoStartLeftMs(state, autoNow);
+  // A face attempt still running when the count runs out gets a little longer to answer, so
+  // the names it is about to settle are the ones the round starts with.
+  const facesLooking = useLive(engine.store, (v) => v.faces === 'looking');
+  const [overtimeFrom, setOvertimeFrom] = useState<number | null>(null);
+  const countDone = autoLeft !== null && autoLeft <= 0;
+  useEffect(() => {
+    setOvertimeFrom(countDone ? nowMs() : null);
+  }, [countDone]);
+  const overtimeUp = overtimeFrom !== null && autoNow - overtimeFrom >= FACE_OVERTIME_MS;
+  const autoDue = countDone && (!facesLooking || overtimeUp);
+  const engineStart = useRef(engine.start);
+  engineStart.current = engine.start;
+  useEffect(() => {
+    if (autoDue) engineStart.current();
+  }, [autoDue]);
+  const autoCount = autoStartNumeral(autoLeft) ?? (countDone && !autoDue ? 1 : null);
+
   if (showResult && result) {
     return (
       <Screen>
@@ -426,12 +482,15 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
   }
 
   const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
+  // The selfie camera's preview is a mirror image; the sample round has no camera to mirror.
+  const mirrored = Pose !== null && previewMirrored(DANCE_CAMERA);
   const camera = Pose ? (
     <Pose
       ref={engine.handleRef}
       style={StyleSheet.absoluteFill}
       active={state.phase !== 'failed'}
       maxFps={30}
+      facing={DANCE_CAMERA}
       onPoses={engine.onPoses}
       onStatus={engine.onStatus}
     />
@@ -487,7 +546,25 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
         beatMs={engine.cfg.beatMs}
         startAt={engine.startAt}
         camera={camera}
-        cameraOverlay={<FramingGuide store={engine.store} names={names} visible={framing} />}
+        mirrored={mirrored}
+        cameraOverlay={
+          <>
+            <FramingGuide
+              store={engine.store}
+              names={names}
+              visible={framing}
+              mirrored={mirrored}
+            />
+            {autoCount !== null ? (
+              <View style={styles.autoCount} pointerEvents="none" testID="dance-auto-count">
+                <Text style={styles.autoLabel}>{dt(DANCE_COPY.startingIn)}</Text>
+                <Text style={styles.autoNumeral} allowFontScaling={false}>
+                  {autoCount}
+                </Text>
+              </View>
+            ) : null}
+          </>
+        }
         debug={settings.debugOverlay}
         syncOffsetMs={settings.syncOffsetMs}
         footer={footer}
@@ -578,6 +655,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   guideName: { ...type.heading },
+  faces: { ...type.small, color: palette.textSecondary, textAlign: 'center' },
+  autoCount: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  autoLabel: { ...type.heading, color: palette.text },
+  autoNumeral: {
+    ...type.moment,
+    fontSize: 132,
+    lineHeight: 148,
+    letterSpacing: -4,
+    color: palette.accent,
+  },
   noCamera: { alignItems: 'center', justifyContent: 'center', backgroundColor: palette.surface },
   noCameraText: { ...type.labelMedium, color: palette.textSecondary },
   resultBody: { paddingHorizontal: space.page, paddingVertical: space.x3, gap: space.x4 },

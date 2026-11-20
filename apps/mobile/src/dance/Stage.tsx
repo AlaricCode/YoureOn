@@ -14,11 +14,12 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { importSafely } from '../app/importSafely';
 import { half, palette, radius, space, TABULAR, type } from '../ui/tokens';
 import { clockText, DANCE_COPY, dt } from './copy';
-import { useFrameClock } from './hooks';
+import { useFrameClock, useLive } from './hooks';
 import { CameraSkeletons, DebugReadout, NameTags, PopupLayer } from './LiveParts';
 import { routineMedia } from './media';
+import { mirroredClipShift } from './model/framing';
 import type { LiveStore } from './model/liveStore';
-import { CAMERA_ASPECT, fitPanels, stagePanels, type Size } from './model/overlay';
+import { CAMERA_ASPECT, fitPanels, stagePanelLayout, type Size } from './model/overlay';
 import { referencePoseAt, upcomingKeyMove } from './model/reference';
 import { beatAt, countInLabel, type RoundState } from './model/round';
 import { SkeletonLayer } from './SkeletonLayer';
@@ -67,6 +68,7 @@ export function ReferencePanel({
           startAt={startAt}
           durationMs={routine.duration_ms}
           mutedUntil={mutedUntil}
+          shiftX={mirroredClipShift(routine, size)}
         />
       </Suspense>
     );
@@ -198,6 +200,7 @@ export function DanceStage({
   beatMs,
   startAt,
   camera,
+  mirrored = false,
   cameraOverlay,
   debug,
   syncOffsetMs,
@@ -214,6 +217,8 @@ export function DanceStage({
   startAt: number | null;
   /** The live camera view (DancePoseView), or a placeholder. Fills the camera panel. */
   camera: ReactNode;
+  /** The camera is the selfie one: its preview is a mirror image (see the layer below). */
+  mirrored?: boolean;
   /** Extra layers over the camera panel (the framing guide). */
   cameraOverlay?: ReactNode;
   debug: boolean;
@@ -229,13 +234,17 @@ export function DanceStage({
     const { width, height } = e.nativeEvent.layout;
     if (width !== box.width || height !== box.height) setBox({ width, height });
   };
-  // Both panels at the CAMERA's 9:16, whatever the routine's own shape: the reference skeleton
-  // contain-fits inside its panel, the live view keeps its full size.
-  const panel = reference ? stagePanels(box, PANEL_GAP) : fitPanels(box, CAMERA_ASPECT, 0, 1);
+  // Both panels at the CAMERA's shape (9:16 held upright, 16:9 on its side: the frames follow the
+  // device), whatever the routine's own: the reference contain-fits inside its panel, the live
+  // view keeps its full size. Two wide panels sit one above the other when that is bigger.
+  const cameraAspect = useLive(store, (v) => (v.w > 0 && v.h > 0 ? v.w / v.h : CAMERA_ASPECT));
+  const { panel, stacked } = reference
+    ? stagePanelLayout(box, cameraAspect, PANEL_GAP)
+    : { panel: fitPanels(box, cameraAspect, 0, 1), stacked: false };
   return (
     <View style={styles.stage}>
       <BeatBar routine={routine} startAt={startAt} />
-      <View style={styles.panels} onLayout={onLayout}>
+      <View style={[styles.panels, stacked && styles.panelsStacked]} onLayout={onLayout}>
         {reference ? (
           <View style={[styles.panel, panel]}>
             <ReferencePanel
@@ -248,9 +257,13 @@ export function DanceStage({
         ) : null}
         <View style={[styles.panel, panel]}>
           {camera}
-          <CameraSkeletons store={store} size={panel} />
-          <NameTags store={store} size={panel} names={names} />
-          <PopupLayer store={store} size={panel} />
+          {/* The selfie camera's preview is a mirror image, the poses are not: everything drawn
+              from them is flipped as one layer, and each piece of text flips itself back. */}
+          <View style={[StyleSheet.absoluteFill, mirrored && styles.flipped]} pointerEvents="none">
+            <CameraSkeletons store={store} size={panel} />
+            <NameTags store={store} size={panel} names={names} flipped={mirrored} />
+            <PopupLayer store={store} size={panel} flipped={mirrored} />
+          </View>
           {cameraOverlay}
         </View>
         <CountInOverlay round={round} beatMs={beatMs} />
@@ -279,6 +292,8 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface,
     overflow: 'hidden',
   },
+  panelsStacked: { flexDirection: 'column' },
+  flipped: { transform: [{ scaleX: -1 }] },
   flash: { backgroundColor: palette.fill },
   beatBar: { gap: space.x1 },
   beatRow: { flexDirection: 'row', alignItems: 'center', gap: space.x2 },

@@ -83,6 +83,14 @@ export interface DancePoseViewProps {
   active: boolean;
   /** Pose rate cap, 1..60, default 30. Recording always keeps every camera frame. */
   maxFps?: number;
+  /**
+   * Which camera: 'back' (default) or 'front', the selfie camera. The poses, the recording and
+   * the stills are never mirrored; only the front camera's PREVIEW is a mirror image, so what is
+   * drawn over it has to be flipped to match. Read when the camera first starts.
+   */
+  facing?: DanceCameraFacing;
   onPoses?(e: { nativeEvent: PoseFrameEvent }): void;
   onStatus?(e: { nativeEvent: StatusEvent }): void;
 }
+
+export type DanceCameraFacing = 'back' | 'front';

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createWakeDetector,
   DEFAULT_WAKE_TIMING,
+  SPOKEN_BET_TIMING,
   type TranscriptInput,
   type UtteranceReason,
   type WakeEvent,
@@ -237,5 +238,144 @@ describe('wake detector', () => {
       { type: 'wake' },
       { type: 'utterance', text: 'go', reason: 'max' },
     ]);
+  });
+
+  // In a loud room the recognizer writes "a" for the breath after "Jarvis". Ending the capture
+  // on that sent the judge "a" as the whole challenge.
+  describe('a tail that is not a challenge yet ("a")', () => {
+    it('does not end on the short silence: the real sentence still gets heard', () => {
+      const d = createWakeDetector();
+      expect(d.feed(T('Jarvis'), 0)).toEqual([{ type: 'wake' }]);
+      expect(d.feed(T('Jarvis a'), 300)).toEqual([]);
+      // 1.3 s of nothing new used to end it here, with "a"
+      expect(d.tick(1700)).toEqual([]);
+      expect(d.tick(2500)).toEqual([]);
+      expect(d.phase).toBe('capturing');
+      expect(d.feed(T('Jarvis a dance off against Eva'), 2800)).toEqual([]);
+      expect(d.tick(4000)).toEqual([]);
+      expect(d.tick(4100)).toEqual(utterance('a dance off against Eva', 'silence'));
+    });
+
+    it('is nothing said when that is all there ever was, never "a"', () => {
+      const d = createWakeDetector();
+      d.feed(T('Jarvis'), 0);
+      d.feed(T('Jarvis a'), 300);
+      expect(d.tick(4200)).toEqual([]);
+      expect(d.tick(4300)).toEqual(utterance('', 'no_tail'));
+      expect(d.phase).toBe('done');
+    });
+
+    it('is not ended by a final result either', () => {
+      const d = createWakeDetector();
+      d.feed(T('Jarvis'), 0);
+      d.feed(T('Jarvis the'), 300);
+      expect(d.feed(T('Jarvis the', 0, true), 1000)).toEqual([]);
+      expect(d.phase).toBe('capturing');
+      // a new task brings the challenge; the stub is not kept in front of it
+      expect(d.feed(T('I bet Mo misses', 1), 1500)).toEqual([]);
+      expect(d.tick(2900)).toEqual(utterance('I bet Mo misses', 'silence'));
+    });
+
+    it('still ends at the hard cap, with nothing', () => {
+      const d = createWakeDetector({ noTailTimeoutMs: 60_000 });
+      d.feed(T('Jarvis'), 0);
+      d.feed(T('Jarvis a'), 300);
+      expect(d.tick(8999)).toEqual([]);
+      expect(d.tick(9000)).toEqual(utterance('', 'no_tail'));
+    });
+
+    it('leaves a short real answer alone: a name, one word', () => {
+      for (const said of ['Mo', 'Eva', 'scan']) {
+        const d = createWakeDetector();
+        d.feed(T('Jarvis'), 0);
+        d.feed(T(`Jarvis ${said}`), 300);
+        expect(d.tick(1500)).toEqual([]);
+        expect(d.tick(1600)).toEqual(utterance(said, 'silence'));
+      }
+    });
+  });
+
+  // "Tap to talk" with no voice judge: the tap starts the capture, no wake word needed.
+  describe('arm (tap to talk)', () => {
+    it('captures what is said after the tap, skipping what the task had heard before it', () => {
+      const d = createWakeDetector();
+      expect(d.feed(T('so anyway we were talking'), 0)).toEqual([]);
+      expect(d.arm(1000)).toEqual([{ type: 'wake' }]);
+      expect(d.phase).toBe('capturing');
+      expect(d.partial).toBe('');
+      // the running task's text still starts with the old words
+      expect(d.feed(T('so anyway we were talking I bet'), 1400)).toEqual([]);
+      expect(d.feed(T('so anyway we were talking I bet Mo misses'), 1800)).toEqual([]);
+      expect(d.partial).toBe('I bet Mo misses');
+      expect(d.tick(3000)).toEqual([]);
+      expect(d.tick(3200)).toEqual(utterance('I bet Mo misses', 'silence'));
+    });
+
+    it('works before anything was heard, and across a new recognition task', () => {
+      const d = createWakeDetector();
+      expect(d.arm(0)).toEqual([{ type: 'wake' }]);
+      expect(d.feed(T('I bet Mo'), 300)).toEqual([]);
+      expect(d.feed(T("can't do ten", 1), 800)).toEqual([]);
+      expect(d.tick(2200)).toEqual(utterance("I bet Mo can't do ten", 'silence'));
+    });
+
+    it('is nothing said when nobody speaks after the tap', () => {
+      const d = createWakeDetector();
+      d.feed(T('background chatter'), 0);
+      d.arm(500);
+      expect(d.feed(T('background chatter'), 900)).toEqual([]);
+      expect(d.tick(4400)).toEqual([]);
+      expect(d.tick(4600)).toEqual(utterance('', 'no_tail'));
+    });
+
+    it('still takes "Jarvis, ..." said after the tap as the start of the challenge', () => {
+      const d = createWakeDetector();
+      d.feed(T('hello there'), 0);
+      d.arm(500);
+      expect(d.feed(T('hello there Jarvis I bet Mo misses'), 1200)).toEqual([]);
+      expect(d.partial).toBe('I bet Mo misses');
+    });
+
+    it('does nothing while a capture is already running or after it is done', () => {
+      const d = createWakeDetector();
+      d.feed(T('Jarvis go'), 0);
+      expect(d.arm(100)).toEqual([]);
+      expect(d.partial).toBe('go');
+      d.tick(5000);
+      expect(d.phase).toBe('done');
+      expect(d.arm(6000)).toEqual([]);
+    });
+  });
+
+  // What the app listens with. On real phones the short-command timing cut a bet off at the
+  // first breath: the server got "let's do a challenge where".
+  describe('a spoken bet (SPOKEN_BET_TIMING)', () => {
+    it('survives a pause to think, and a recognizer final in the middle of it', () => {
+      const d = createWakeDetector(SPOKEN_BET_TIMING);
+      d.feed(T("Jarvis let's do a challenge where"), 0);
+      // a final 0.6 s into the pause used to end it here
+      expect(d.feed(T("Jarvis let's do a challenge where", 0, true), 600)).toEqual([]);
+      expect(d.tick(2000)).toEqual([]);
+      expect(d.feed(T('I have to throw a paper ball into the trash can', 1), 2100)).toEqual([]);
+      expect(d.tick(4200)).toEqual([]);
+      expect(d.tick(4400)).toEqual(
+        utterance(
+          "let's do a challenge where I have to throw a paper ball into the trash can",
+          'silence',
+        ),
+      );
+    });
+
+    it('gives the first few words longer still', () => {
+      const d = createWakeDetector(SPOKEN_BET_TIMING);
+      d.feed(T('Jarvis I bet Eva'), 0);
+      expect(d.tick(3100)).toEqual([]);
+      expect(d.tick(3300)).toEqual(utterance('I bet Eva', 'silence'));
+    });
+
+    it('lets a long sentence run, up to twenty seconds', () => {
+      expect(SPOKEN_BET_TIMING.maxUtteranceMs).toBe(20_000);
+      expect(SPOKEN_BET_TIMING.endSilenceMs).toBeGreaterThan(DEFAULT_WAKE_TIMING.endSilenceMs);
+    });
   });
 });

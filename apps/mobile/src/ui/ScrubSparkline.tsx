@@ -26,7 +26,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Stop } from 'react-native-svg';
 import { scheduleOnRN } from 'react-native-worklets';
 
 import { feel } from '../device/feedback';
@@ -41,6 +41,8 @@ const SCRUB_TICK: HapticMoment = 'scrubTick';
 
 /** The line's insets, the same as Sparkline's: the halo's room top/bottom/right, the cap left. */
 const PAD = sparkline.haloRadius;
+/** One sparkline is on screen at a time (Home), so one gradient id is enough. */
+const SPARK_AREA_ID = 'balance-spark-area';
 const PAD_LEFT = sparkline.strokeWidth / 2;
 
 /**
@@ -206,6 +208,21 @@ export function ScrubSparkline({
       <View testID={testID} style={[styles.box, { height }]} onLayout={onLayout} accessible={false}>
         {g.d ? (
           <Svg width={width} height={height}>
+            {/* The wash under the line: its own colour, fading to nothing at the floor. */}
+            {g.end && verts[0] ? (
+              <>
+                <Defs>
+                  <LinearGradient id={SPARK_AREA_ID} x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset={0} stopColor={stroke} stopOpacity={sparkline.areaOpacity} />
+                    <Stop offset={1} stopColor={stroke} stopOpacity={0} />
+                  </LinearGradient>
+                </Defs>
+                <Path
+                  d={`${g.d} L${g.end.x} ${height} L${verts[0].x} ${height} Z`}
+                  fill={`url(#${SPARK_AREA_ID})`}
+                />
+              </>
+            ) : null}
             <Path
               d={g.d}
               stroke={stroke}

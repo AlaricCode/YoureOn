@@ -95,6 +95,16 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   private let wantsRunning = Locked(false)
   private let maxFps = Locked(DancePoseEngine.defaultMaxFps)
   private let visionBusy = Locked(false)
+  /// The `facing` prop: the front (selfie) camera instead of the back one. Read once, when the
+  /// session is first configured.
+  private let wantsFront = Locked(false)
+  /// The camera in use, once the session is configured (the view builds its rotation coordinator
+  /// from it).
+  let captureDevice = Locked<AVCaptureDevice?>(nil)
+  /// A round is recording: the frames' rotation (and so their size) must not change under it.
+  private let roundActive = Locked(false)
+  /// The rotation the device's position asks for (degrees), applied when no round is recording.
+  private let wantedRotation = Locked<CGFloat?>(nil)
 
   // sessionQueue only.
   private var configured = false
@@ -150,6 +160,35 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     maxFps.set(min(60, max(1, fps)))
   }
 
+  /// Which camera the session opens (before it is first configured; later changes are ignored).
+  func setFacing(front: Bool) {
+    wantsFront.set(front)
+  }
+
+  /// The rotation that keeps the frames upright for how the device is held (degrees, from the
+  /// view's AVCaptureDevice.RotationCoordinator): upright 720x1280 frames held upright, 1280x720
+  /// on its side, so a landscape iPad records a landscape picture. Held back while a round is
+  /// recording (its video file has one size) and applied when it ends.
+  func setCaptureRotation(_ angle: CGFloat) {
+    wantedRotation.set(angle)
+    applyWantedRotation()
+  }
+
+  private func applyWantedRotation() {
+    sessionQueue.async { [self] in
+      guard configured, !roundActive.get(), let angle = wantedRotation.get(),
+        let connection = videoOutput.connection(with: .video)
+      else {
+        return
+      }
+      if #available(iOS 17.0, *) {
+        if connection.isVideoRotationAngleSupported(angle), connection.videoRotationAngle != angle {
+          connection.videoRotationAngle = angle
+        }
+      }
+    }
+  }
+
   /// Arms a round. The next captured frame becomes t0: its PTS starts the recording and every
   /// onPoses `t` from then on is ms since that frame. `completion` runs on the capture queue.
   func startRound(snapshotAtMs: [Double], completion: @escaping (Bool, String?) -> Void) {
@@ -168,6 +207,7 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         self.discard(previous)
       }
       self.round = RoundState(id: UUID().uuidString.lowercased(), snapshotTargets: targets)
+      self.roundActive.set(true)
       completion(true, nil)
     }
   }
@@ -201,6 +241,8 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         return
       }
       self.round = nil
+      self.roundActive.set(false)
+      self.applyWantedRotation()
 
       let group = DispatchGroup()
       let box = StopResultBox()
@@ -260,6 +302,7 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
         discard(current)
       }
       round = nil
+      roundActive.set(false)
     }
     sessionQueue.async { [self] in
       if session.isRunning {
@@ -328,22 +371,36 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     }
   }
 
-  /// Back wide-angle camera, 1280x720, a video data output whose connection is rotated to
-  /// portrait so every buffer arrives upright (720x1280) and Vision runs with orientation .up.
+  /// The wide-angle camera (back, or front with `facing: "front"`), 1280x720, a video data
+  /// output whose connection is rotated to portrait so every buffer arrives upright (720x1280)
+  /// and Vision runs with orientation .up.
+  ///
+  /// The data output is NEVER mirrored, whichever camera: the poses, the recording and the
+  /// stills are the scene as the camera sees it, so scoring and who-stands-where are the same for
+  /// both. Only the PREVIEW of the front camera is a mirror image (AVCaptureVideoPreviewLayer
+  /// mirrors it by itself); the app flips what it draws over it to match.
   private func configureIfNeeded() -> Bool {
     if configured {
       return true
     }
     if configurationFailed {
-      emitStatus("no_camera", "No back camera")
+      emitStatus("no_camera", "No camera")
       return false
     }
+    let wanted: AVCaptureDevice.Position = wantsFront.get() ? .front : .back
+    // The front camera with the widest view first (two dancers have to fit, head to toe).
+    let front =
+      wanted == .front
+      ? (AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .front)
+        ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front))
+      : nil
     guard
-      let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+      let device = front
+        ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     else {
       // The simulator has no camera.
       configurationFailed = true
-      emitStatus("no_camera", "No back camera")
+      emitStatus("no_camera", "No camera")
       return false
     }
     let input: AVCaptureDeviceInput
@@ -390,8 +447,11 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     }
     session.commitConfiguration()
 
+    DancePoseEngine.widenView(device)
     DancePoseEngine.lockFrameRate(device, fps: 30)
+    captureDevice.set(device)
     configured = true
+    applyWantedRotation()
     return true
   }
 
@@ -404,6 +464,39 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
       if connection.isVideoOrientationSupported {
         connection.videoOrientation = .portrait
       }
+    }
+  }
+
+  /// The widest view the camera has at the frame size in use. The front camera came out far too
+  /// zoomed in: Center Stage crops in on faces and follows them, and the 720p preset can pick a
+  /// cropped format. So Center Stage is off, the format is the one with the widest field of view
+  /// at the same frame size and 30 fps, and the zoom is at its minimum.
+  private static func widenView(_ device: AVCaptureDevice) {
+    // Before the flag: it may only be set by the app in the .app (or .cooperative) control mode.
+    AVCaptureDevice.centerStageControlMode = .app
+    AVCaptureDevice.isCenterStageEnabled = false
+    do {
+      try device.lockForConfiguration()
+      defer { device.unlockForConfiguration() }
+      let current = device.activeFormat
+      let size = CMVideoFormatDescriptionGetDimensions(current.formatDescription)
+      let subType = CMFormatDescriptionGetMediaSubType(current.formatDescription)
+      let sameSize = device.formats.filter { format in
+        let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        return d.width == size.width && d.height == size.height
+          && CMFormatDescriptionGetMediaSubType(format.formatDescription) == subType
+          && format.videoSupportedFrameRateRanges.contains {
+            $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate
+          }
+      }
+      if let widest = sameSize.max(by: { $0.videoFieldOfView < $1.videoFieldOfView }),
+        widest.videoFieldOfView > current.videoFieldOfView + 0.5
+      {
+        device.activeFormat = widest
+      }
+      device.videoZoomFactor = device.minAvailableVideoZoomFactor
+    } catch {
+      // Keep the preset's own format and zoom.
     }
   }
 

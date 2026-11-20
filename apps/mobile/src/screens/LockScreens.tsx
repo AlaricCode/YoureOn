@@ -8,11 +8,11 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { declineEnabled, END_COPY, holdEnabled, type LockState } from '../bets/lock';
 import { clockLabel, countdownLabel, type BetView } from '../bets/view';
+import { MarkOn } from '../ui/brand';
 import { AlertLine, CheckBadge, Label, PrimaryButton, TextButton } from '../ui/kit';
 import {
   Appear,
   Avatar,
-  Bullets,
   DataText,
   DotsLabel,
   InfoRow,
@@ -28,8 +28,9 @@ import {
   useNow,
 } from '../ui/parts';
 import { DrainBar } from '../ui/DrainBar';
+import { Criteria, Perforation, Serial, Slip } from '../ui/slip';
 import { SwipeToConfirm } from '../ui/SwipeToConfirm';
-import { avatarSize, color, half, palette, space, type } from '../ui/tokens';
+import { avatarSize, dp, half, palette, space, type } from '../ui/tokens';
 import { COPY, fill, t } from './copy';
 
 export function TermsCardScreen({
@@ -59,16 +60,16 @@ export function TermsCardScreen({
   const mine = lock.phase === 'signed' || lock.phase === 'locking';
 
   if (lock.phase === 'locked') {
-    // The moment: the bet is on. Black, the word in thin white, the pot in thin white over a
-    // soft green glow (a pot is not money moving up, so it is not green), "pot" in grey.
-    // Headline and pot rise together (the one reveal); nothing else moves.
+    // The moment: the bet is on, so the mark comes on. Black under a green aurora, the mark
+    // coming up, the word in bold, the pot in bold white (a pot is not money moving up, so
+    // it is not green), "pot" in grey. Headline and pot rise together (the one reveal).
     return (
       <MomentScreen
         top={<TopBar tag={tag} />}
         footer={<PrimaryButton label={t(COPY.terms.continue)} onPress={onContinue} />}
       >
-        {/* The glow is drawn first, behind the headline, so "Locked" stays pure white. */}
         <MomentGroup glow="in" style={styles.moment}>
+          <MarkOn width={MARK} delayMs={MARK_DELAY_MS} />
           <MomentHeadline>{t(COPY.terms.locked)}</MomentHeadline>
           <Reveal style={styles.momentMoney}>
             <Text
@@ -119,66 +120,82 @@ export function TermsCardScreen({
     <Screen>
       <TopBar title={t(COPY.terms.title)} tag={tag} />
       <ScrollView style={styles.flex} contentContainerStyle={styles.scroll}>
-        <DataText variant="statement">{view.claim}</DataText>
+        {/* The slip: the terms as one object. Its serial is the terms code, the same on both
+            phones and on the stage. */}
+        <Slip testID="terms-slip">
+          <View style={styles.slipHead}>
+            <DataText variant="small" muted lines={1}>
+              {view.evidence}
+            </DataText>
+            <Serial code={view.termsCode} label={t(COPY.terms.code)} />
+          </View>
+          <DataText variant="statement">{view.claim}</DataText>
 
-        <View style={styles.parties}>
-          <Party
-            name={view.myName}
-            label={t(COPY.terms.you)}
-            stake={view.myStakeUsd}
-            signed={mine}
-            accent
-          />
-          <DataText muted style={styles.vs}>
-            vs
-          </DataText>
-          <Party
-            name={view.theirName}
-            label={view.theirName}
-            stake={view.theirStakeUsd}
-            signed={lock.theirsIn}
-          />
-        </View>
-        {view.toWin ? (
-          <DataText muted style={styles.toWin}>
-            {view.toWin}
-          </DataText>
-        ) : null}
-
-        <Section label={t(COPY.terms.counts)}>
-          <Bullets items={view.success} />
-        </Section>
-        {view.failure.length ? (
-          <Section label={t(COPY.terms.doesnt)}>
-            <Bullets items={view.failure} />
-          </Section>
-        ) : null}
-        {view.edgeCases.length ? (
-          <Section label={t(COPY.terms.edge)}>
-            {view.edgeCases.map((e, i) => (
-              <View key={i} style={styles.edge}>
-                <DataText variant="labelStrong">{e.question}</DataText>
-                <DataText muted>{e.answer}</DataText>
-              </View>
-            ))}
-          </Section>
-        ) : null}
-
-        <View style={styles.rows}>
-          {view.mySide ? <InfoRow label={t(COPY.market.side)} value={view.mySide} divider /> : null}
-          {view.lineUsd ? (
-            <InfoRow label={t(COPY.market.line)} value={view.lineUsd} divider />
+          <Perforation />
+          <View style={styles.parties}>
+            <Party
+              name={view.myName}
+              label={t(COPY.terms.you)}
+              stake={view.myStakeUsd}
+              signed={mine}
+              accent
+            />
+            <View style={styles.pot}>
+              <Label variant="small">{t(COPY.terms.pot)}</Label>
+              <DataText variant="heading" style={styles.potFigure} lines={1}>
+                {view.potUsd}
+              </DataText>
+            </View>
+            <Party
+              name={view.theirName}
+              label={view.theirName}
+              stake={view.theirStakeUsd}
+              signed={lock.theirsIn}
+              right
+            />
+          </View>
+          {view.toWin ? (
+            <DataText muted style={styles.toWin}>
+              {view.toWin}
+            </DataText>
           ) : null}
-          <InfoRow label={t(COPY.terms.evidence)} value={view.evidence} divider />
-          {view.kind === 'skill' ? (
-            <InfoRow label={t(COPY.terms.tries)} value={view.attempts} divider />
-          ) : view.kind === 'dance' ? (
-            <InfoRow label={t(COPY.terms.round)} value={view.attempts} divider />
+
+          <Perforation />
+          <Section label={t(COPY.terms.counts)} flush>
+            <Criteria items={view.success} tone="yes" />
+          </Section>
+          {view.failure.length ? (
+            <Section label={t(COPY.terms.doesnt)}>
+              <Criteria items={view.failure} tone="no" />
+            </Section>
           ) : null}
-          {view.odds ? <InfoRow label={t(COPY.terms.odds)} value={view.odds} divider /> : null}
-          <InfoRow label={t(COPY.terms.deadline)} value={clockLabel(view.deadline)} divider />
-          <InfoRow label={t(COPY.terms.code)} value={view.termsCode} />
-        </View>
+          {view.edgeCases.length ? (
+            <Section label={t(COPY.terms.edge)}>
+              {view.edgeCases.map((e, i) => (
+                <View key={i} style={styles.edge}>
+                  <DataText variant="labelStrong">{e.question}</DataText>
+                  <DataText muted>{e.answer}</DataText>
+                </View>
+              ))}
+            </Section>
+          ) : null}
+
+          <View style={styles.rows}>
+            {view.mySide ? (
+              <InfoRow label={t(COPY.market.side)} value={view.mySide} divider />
+            ) : null}
+            {view.lineUsd ? (
+              <InfoRow label={t(COPY.market.line)} value={view.lineUsd} divider />
+            ) : null}
+            {view.kind === 'skill' ? (
+              <InfoRow label={t(COPY.terms.tries)} value={view.attempts} divider />
+            ) : view.kind === 'dance' ? (
+              <InfoRow label={t(COPY.terms.round)} value={view.attempts} divider />
+            ) : null}
+            {view.odds ? <InfoRow label={t(COPY.terms.odds)} value={view.odds} divider /> : null}
+            <InfoRow label={t(COPY.terms.deadline)} value={clockLabel(view.deadline)} />
+          </View>
+        </Slip>
       </ScrollView>
 
       <View style={styles.dock}>
@@ -221,36 +238,49 @@ export function TermsCardScreen({
   );
 }
 
+/**
+ * One side of the slip: the disc, then the name over the stake. `right` mirrors it, so the
+ * two stakes face each other across the pot. Signed, the disc is ringed in green light and
+ * carries a tick.
+ */
 function Party({
   name,
   label,
   stake,
   signed = false,
   accent = false,
+  right = false,
 }: {
   name: string;
   label: string;
   stake: string;
-  /** This party has locked in: a small tick on their avatar. */
+  /** This party has locked in: a green ring and a small tick on their avatar. */
   signed?: boolean;
   accent?: boolean;
+  right?: boolean;
 }) {
   return (
-    <View style={styles.party}>
+    <View style={[styles.party, right && styles.partyRight]}>
       <View>
-        <Avatar name={name} size={avatarSize.vs} accent={accent} />
+        <Avatar name={name} size={avatarSize.md} accent={accent && !signed} lit={signed} />
         {signed ? (
           <Appear style={styles.signedTick}>
             <CheckBadge size={TICK} fill={palette.accent} />
           </Appear>
         ) : null}
       </View>
-      <Label variant="labelMedium" style={styles.partyName}>
-        {label}
-      </Label>
-      <DataText variant="figure" lines={1}>
-        {stake}
-      </DataText>
+      <View style={[styles.partyText, right && styles.partyTextRight]}>
+        <Label variant="small">{label}</Label>
+        {/* A market stake ("$6.20") is longer than a round one: it shrinks, never truncates. */}
+        <Text
+          style={[type.figure, right && styles.stakeRight]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.55}
+        >
+          {stake}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -290,11 +320,14 @@ export function LockEndedScreen({
   );
 }
 
-const TICK = 20;
+const TICK = dp(18);
 /** The fade at the dock's top edge. */
 const FADE = space.x4;
-/** The black cut-out between the signed tick and the avatar. */
+/** The cut-out between the signed tick and the avatar (the slip's own colour). */
 const TICK_RING = 2;
+/** The logo on the lock moment, and how long it waits before it comes on. */
+const MARK = dp(132);
+const MARK_DELAY_MS = 200;
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
@@ -306,36 +339,43 @@ const styles = StyleSheet.create({
   momentMoney: { alignSelf: 'stretch' },
   // Room under the last line for the dock's fade, so it scrolls clear of it.
   scroll: { paddingHorizontal: space.page, paddingTop: space.x1, paddingBottom: space.x5 + FADE },
-  // The two sides, flat on black between hairlines.
-  parties: {
+  slipHead: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginTop: space.x3,
-    paddingVertical: space.x3,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.divider,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.x2,
+    marginBottom: half.x15,
   },
-  party: { flex: 1, alignItems: 'center', gap: half.x05 },
-  /** On the avatars' centre line: 28 (half the 56 pt disc) less half the 22 pt line. */
-  vs: { marginTop: avatarSize.vs / 2 - type.label.lineHeight / 2 },
-  /** "pot" after the white figure: grey 22/400, no negative tracking. */
-  potWord: { ...type.statement, color: palette.textSecondary, letterSpacing: 0 },
-  partyName: { marginTop: half.x15 },
+  // The two stakes face each other across the pot.
+  parties: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  party: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: half.x05 + half.x05 + 2,
+    flexShrink: 1,
+  },
+  partyRight: { flexDirection: 'row-reverse' },
+  partyText: { flexShrink: 1 },
+  partyTextRight: { alignItems: 'flex-end' },
+  stakeRight: { textAlign: 'right' },
+  pot: { alignItems: 'center', paddingHorizontal: space.x1 },
+  potFigure: { fontVariant: ['tabular-nums'] },
+  /** "pot" after the white figure: grey Geist 22/400, no negative tracking. */
+  potWord: { ...type.amount, color: palette.textSecondary, letterSpacing: 0 },
   signedTick: {
     position: 'absolute',
     right: -half.x05,
     bottom: -half.x05,
     borderRadius: TICK / 2 + TICK_RING,
     borderWidth: TICK_RING,
-    borderColor: palette.background,
+    borderColor: palette.surface,
   },
   edge: { gap: half.x05, marginBottom: half.x15 },
-  toWin: { textAlign: 'center', marginTop: space.x1 },
+  toWin: { textAlign: 'center', marginTop: half.x15 },
   rows: {
-    marginTop: space.x4,
+    marginTop: space.x3,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.divider,
+    borderTopColor: palette.rim,
   },
   // No hairline on top: the fade and the countdown bar already separate it from the list.
   dock: {

@@ -259,7 +259,7 @@ export function TermsCard({ bet }: { bet: BetView }) {
               <OddsChip bet={bet} />
             </>
           )}
-          <span className="chip">
+          <span className="chip pot-chip">
             pot {usd((BigInt(t.stakes.a) + BigInt(t.stakes.b)).toString())}
           </span>
           {t.market && (
@@ -1188,11 +1188,21 @@ export function BetCard({
     if (!presence || !id || !(id in presence)) return null;
     return presence[id]!;
   };
+  // what is on the table, between the two names (the terms slip's own pot chip steps aside)
+  const stakes = bet.envelope?.terms.stakes;
+  const pot = stakes ? usd((BigInt(stakes.a) + BigInt(stakes.b)).toString()) : null;
   return (
     <section className="card" aria-label="bet">
       <div className="versus">
         <PartyCard bet={bet} party="A" online={online('A')} />
-        <span className="vs">vs</span>
+        <div className="vs-mid">
+          <span className="vs">vs</span>
+          {pot && (
+            <span className="vs-pot">
+              {pot} <span className="label">pot</span>
+            </span>
+          )}
+        </div>
         <PartyCard bet={bet} party="B" online={online('B')} />
       </div>
       <RivalryLine bet={bet} />
@@ -1674,7 +1684,7 @@ export function StageView({
       <div className="stage">
         <header className="topbar">
           <h1>
-            You&apos;re <span className="on">On</span>
+            You&rsquo;re <span className="on">On</span>
           </h1>
           <PhaseRail bet={bet} />
           <div className="conn">
