@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COPY, t } from '../screens/copy';
 import { Label, PrimaryButton, useColumn } from './kit';
 import { DotsLabel, useReduceMotion } from './parts';
-import { material, motion, palette, space, type } from './tokens';
+import { dp, material, motion, palette, space, type } from './tokens';
 import { typographic } from './typography';
 
 /**
@@ -132,7 +132,7 @@ export function Wordmark({ name }: { name: string }) {
 }
 
 /** The switch beside the wordmark. */
-const WORDMARK_MARK = 30;
+const WORDMARK_MARK = dp(30);
 
 /** The native splash's mark: 180 pt image, mark 560/1024 of it ≈ 98 pt wide. */
 export const SPLASH_MARK_WIDTH = Math.round((180 * 560) / 1024);

@@ -18,7 +18,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { drainFrom } from './swipe';
-import { half, palette } from './tokens';
+import { half, palette, stroke } from './tokens';
 
 export function DrainBar({
   endsAtMs,
@@ -67,16 +67,16 @@ export function DrainBar({
 
 const styles = StyleSheet.create({
   track: {
-    height: 4,
-    borderRadius: 2,
+    height: stroke.bar,
+    borderRadius: stroke.bar / 2,
     backgroundColor: palette.rim,
     overflow: 'hidden',
     marginTop: half.x05,
   },
   fill: {
-    height: 4,
+    height: stroke.bar,
     width: '100%',
-    borderRadius: 2,
+    borderRadius: stroke.bar / 2,
     backgroundColor: palette.text,
     transformOrigin: 'left',
   },

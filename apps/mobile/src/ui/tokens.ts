@@ -21,6 +21,29 @@
 // payout animation fires at `processed` and reverts if not confirmed within 5 s (SCHEMAS X10,
 // API-CONTRACT §6.2, ARCHITECTURE §5.2); LOCKED is a double haptic on both phones (ARCHITECTURE §5.2).
 
+import { uiScale } from './formFactor';
+
+// ---------------------------------------------------------------------------------------
+// Scale: every size below is written at a phone's size and drawn at the device's (./formFactor:
+// 1 on a phone, about 1.3 on an iPad). Colours, opacities and durations do not scale.
+// ---------------------------------------------------------------------------------------
+
+const K = uiScale();
+
+/** A phone-size length (pt) at this device's scale, on the whole point. */
+export const dp = (n: number): number => (K === 1 ? n : Math.round(n * K));
+
+/** The same for a set of named lengths. The names and the phone values are the type. */
+function scaled<T extends Readonly<Record<string, number>>>(sizes: T): T {
+  if (K === 1) return sizes;
+  const out: Record<string, number> = {};
+  for (const [name, n] of Object.entries(sizes)) out[name] = dp(n);
+  return out as T;
+}
+
+/** Tracking scales with the type it belongs to, kept to a tenth of a point. */
+const tracking = (n: number): number => (K === 1 ? n : Math.round(n * K * 10) / 10);
+
 // ---------------------------------------------------------------------------------------
 // Color
 // ---------------------------------------------------------------------------------------
@@ -124,7 +147,7 @@ export function moneyColor(deltaCents: number): string {
  * The soft glow behind a moment's money figure: a radial fade of the money colour from
  * `opacity` at the centre to 0 at the edge of a `size` disc (no gradient banners, no blur views).
  */
-export const glow = { size: 320, opacity: 0.22, lossOpacity: 0.1 } as const;
+export const glow = { size: dp(320), opacity: 0.22, lossOpacity: 0.1 } as const;
 
 /**
  * The aurora: the one light on a moment screen. A wide ellipse of the moment's colour hung from
@@ -181,7 +204,7 @@ export const material = {
  * palette swatches), so it reads as someone, not as a control. Drawn with react-native-svg.
  */
 export const orb = {
-  size: 148,
+  size: dp(148),
   /** Where the light falls on the sphere (fractions of its box). */
   light: { x: 0.34, y: 0.28 },
   /** The sphere's shading from the highlight out to the rim: [offset, colour]. */
@@ -282,10 +305,10 @@ const ui = (
   letterSpacing = 0,
 ): TypeStyle => ({
   fontFamily: fontFamily[w],
-  fontSize,
-  lineHeight,
+  fontSize: dp(fontSize) as typeof fontSize,
+  lineHeight: dp(lineHeight),
   fontWeight: fontWeight[w],
-  letterSpacing,
+  letterSpacing: tracking(letterSpacing),
   color: c,
 });
 
@@ -296,10 +319,10 @@ const figure = (
   w: 'semibold' | 'bold' = 'bold',
 ): TypeStyle => ({
   fontFamily: fontFamily[w],
-  fontSize,
-  lineHeight,
+  fontSize: dp(fontSize) as typeof fontSize,
+  lineHeight: dp(lineHeight),
   fontWeight: fontWeight[w],
-  letterSpacing: -Math.round(fontSize * 0.03 * 10) / 10,
+  letterSpacing: tracking(-Math.round(fontSize * 0.03 * 10) / 10),
   color: palette.text,
   fontVariant: TABULAR,
 });
@@ -312,10 +335,10 @@ const headline = (
   c: string = palette.text,
 ): TypeStyle => ({
   fontFamily: fontFamily[w],
-  fontSize,
-  lineHeight,
+  fontSize: dp(fontSize) as typeof fontSize,
+  lineHeight: dp(lineHeight),
   fontWeight: fontWeight[w],
-  letterSpacing: -Math.round(fontSize * (fontSize >= 32 ? 0.03 : 0.02) * 10) / 10,
+  letterSpacing: tracking(-Math.round(fontSize * (fontSize >= 32 ? 0.03 : 0.02) * 10) / 10),
   color: c,
 });
 
@@ -390,7 +413,7 @@ export type TypeToken = keyof typeof type;
 
 export const GRID = 4;
 
-export const space = {
+export const space = scaled({
   x1: 8,
   x2: 16,
   x3: 24,
@@ -406,43 +429,47 @@ export const space = {
   control: 56,
   /** A list row's minimum height (hairline-separated). */
   row: 56,
-} as const;
+} as const);
 
 /**
- * Wide screens (an iPad): the app is one phone-width column, centred (./column). A window whose
- * short side is under `tabletMinSide` (any phone, either way up; a narrow iPad split) is never
- * constrained.
+ * Wide screens (an iPad): content keeps one column, centred (./column). The column is 540 pt at
+ * a phone's scale, so on an iPad, where everything is drawn larger, it is about five sixths of
+ * the screen held upright. A window whose short side is under `tabletMinSide` (any phone, either
+ * way up; a narrow iPad split) is never constrained.
  */
 export const layout = {
-  maxContentWidth: 540,
+  maxContentWidth: dp(540),
   tabletMinSide: 600,
 } as const;
 
 /** Half-steps of the grid, for tight inner gaps (chip padding, label-to-field). */
-export const half = { x05: 4, x15: 12 } as const;
+export const half = scaled({ x05: 4, x15: 12 } as const);
 
 /**
  * Big and round, nothing sharp. sm: checkboxes; md: inputs, banners; lg: tiles and the camera
  * stage; xl: the bet slip, sheets and the other panels on the page margin; pill: buttons, chips.
  */
-export const radius = { sm: 8, md: 18, lg: 24, xl: 32, pill: 999 } as const;
+export const radius = {
+  ...scaled({ sm: 8, md: 18, lg: 24, xl: 32 } as const),
+  pill: 999,
+} as const;
 
 /** Bars and drawn marks are thick enough to read at a glance, with round ends. */
 export const stroke = {
   /** Progress, countdown and drain bars. */
-  bar: 4,
+  bar: dp(4),
   /** Ticks, crosses and chevrons drawn with borders. */
-  glyph: 2.5,
+  glyph: 2.5 * K,
 } as const;
 
 /** Hairline: use StyleSheet.hairlineWidth at the call site; this is the logical fallback. */
 export const border = { hairline: 0.5, focused: 2 } as const;
 
 /** One outline icon set (Lucide), used sparingly. */
-export const iconSize = { sm: 16, md: 20 } as const;
+export const iconSize = scaled({ sm: 16, md: 20 } as const);
 
 /** Avatar disc sizes in use. */
-export const avatarSize = {
+export const avatarSize = scaled({
   sm: 32,
   md: 40,
   lg: 48,
@@ -450,15 +477,15 @@ export const avatarSize = {
   xl: 72,
   moment: 88,
   hero: 112,
-} as const;
+} as const);
 
 /** The balance sparkline (Home): a 2 pt line, no axes, no grid. */
 export const sparkline = {
-  height: 72,
-  strokeWidth: 3,
-  endDot: 4,
+  height: dp(72),
+  strokeWidth: dp(3),
+  endDot: dp(4),
   /** The soft halo around the end dot: an r = 8 disc at 0.2 opacity. */
-  haloRadius: 8,
+  haloRadius: dp(8),
   haloOpacity: 0.2,
   /** The wash under the line: the line's colour at this opacity, fading to nothing at the floor. */
   areaOpacity: 0.26,
@@ -516,9 +543,9 @@ export const motion = {
 
 export const swipe = {
   /** Lift that arms the control: the pill follows the finger 1:1 up to here. */
-  travel: 72,
+  travel: dp(72),
   /** Rubber band past `travel`: at most this many extra points... */
-  maxOverdrag: 16,
+  maxOverdrag: dp(16),
   /** ...at this fraction of the finger's extra travel. */
   overdragFactor: 0.25,
   /** The pan activates after this much upward travel. */
@@ -534,17 +561,17 @@ export const swipe = {
   /** Selection ticks on the way up. */
   ticks: [0.25, 0.5, 0.75] as readonly number[],
   /** A tap does not commit: the pill lifts this far and settles, and the hint shows. */
-  nudgeLift: 14,
+  nudgeLift: dp(14),
   nudgeMs: 180,
   hintMs: 1200,
   /** Idle: the chevron bobs up `bobRise` pt (`bobMs` up, `bobMs` down) every `bobEveryMs`. */
-  bobRise: 3,
+  bobRise: dp(3),
   bobMs: 300,
   bobEveryMs: 2400,
   /** The tick stays this long after a commit. */
   successHoldMs: 400,
   /** The chevron / tick glyph box, in points. */
-  chevron: 10,
+  chevron: dp(10),
   /** The chevron -> tick crossfade when the control arms. */
   armMs: 120,
   /** Press feedback on touch down (a lighter press than a button: the finger is about to move). */
@@ -585,7 +612,7 @@ export const scrub = {
 // ---------------------------------------------------------------------------------------
 
 /** Rows pulse together in opacity (no gradient shimmer: gradients are banned). */
-export const skeleton = { pulseMs: 1100, low: 0.45, bar: 14 } as const;
+export const skeleton = { pulseMs: 1100, low: 0.45, bar: dp(14) } as const;
 
 // ---------------------------------------------------------------------------------------
 // Hold to confirm (TASKS D1-M5)

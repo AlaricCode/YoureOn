@@ -95,6 +95,9 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   private let wantsRunning = Locked(false)
   private let maxFps = Locked(DancePoseEngine.defaultMaxFps)
   private let visionBusy = Locked(false)
+  /// The `facing` prop: the front (selfie) camera instead of the back one. Read once, when the
+  /// session is first configured.
+  private let wantsFront = Locked(false)
 
   // sessionQueue only.
   private var configured = false
@@ -148,6 +151,11 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   func setMaxFps(_ value: Double) {
     let fps = value.isFinite ? value : DancePoseEngine.defaultMaxFps
     maxFps.set(min(60, max(1, fps)))
+  }
+
+  /// Which camera the session opens (before it is first configured; later changes are ignored).
+  func setFacing(front: Bool) {
+    wantsFront.set(front)
   }
 
   /// Arms a round. The next captured frame becomes t0: its PTS starts the recording and every
@@ -328,22 +336,30 @@ final class DancePoseEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     }
   }
 
-  /// Back wide-angle camera, 1280x720, a video data output whose connection is rotated to
-  /// portrait so every buffer arrives upright (720x1280) and Vision runs with orientation .up.
+  /// The wide-angle camera (back, or front with `facing: "front"`), 1280x720, a video data
+  /// output whose connection is rotated to portrait so every buffer arrives upright (720x1280)
+  /// and Vision runs with orientation .up.
+  ///
+  /// The data output is NEVER mirrored, whichever camera: the poses, the recording and the
+  /// stills are the scene as the camera sees it, so scoring and who-stands-where are the same for
+  /// both. Only the PREVIEW of the front camera is a mirror image (AVCaptureVideoPreviewLayer
+  /// mirrors it by itself); the app flips what it draws over it to match.
   private func configureIfNeeded() -> Bool {
     if configured {
       return true
     }
     if configurationFailed {
-      emitStatus("no_camera", "No back camera")
+      emitStatus("no_camera", "No camera")
       return false
     }
+    let wanted: AVCaptureDevice.Position = wantsFront.get() ? .front : .back
     guard
-      let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+      let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: wanted)
+        ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     else {
       // The simulator has no camera.
       configurationFailed = true
-      emitStatus("no_camera", "No back camera")
+      emitStatus("no_camera", "No camera")
       return false
     }
     let input: AVCaptureDeviceInput

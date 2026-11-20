@@ -119,6 +119,8 @@ export const COPY = {
     yourTurn: ['Your turn', 'label'],
     pot: ['Pot', 'label'],
     start: ['Start', 'label'],
+    // The filmer frames the shot first; the recording is theirs to start (JudgeCamScreen).
+    openCamera: ['Open camera', 'label'],
     noJudgeCam: ['No judge cam', 'error'],
   },
   judgeCam: {
@@ -130,6 +132,9 @@ export const COPY = {
     sending: ['Sending', 'label'],
     sent: ['Sent', 'label'],
     start: ['Start', 'label'],
+    record: ['Start recording', 'label'],
+    // The camera never came up for the attempt, or the clip came back empty.
+    empty: ['Nothing recorded', 'error'],
     noCamera: ['No camera', 'error'],
   },
   ruling: {

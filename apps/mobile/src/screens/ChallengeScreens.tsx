@@ -82,6 +82,7 @@ import {
   avatarSize,
   border,
   color,
+  dp,
   half,
   material,
   palette,
@@ -1088,9 +1089,9 @@ function ClaimField({
 // Limelight: content sits on black at the 20 pt margin; facts are hairline-divided rows, and
 // only the things you could hold (the draft slip, a match) are soft panels. The judge is the orb.
 /** The judge's sphere on the terms screen (its rings and halo scale with it). */
-const JUDGE_ORB = 104;
+const JUDGE_ORB = dp(104);
 /** The same once an offer or the draft is on the table. */
-const JUDGE_ORB_SMALL = 44;
+const JUDGE_ORB_SMALL = dp(44);
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },

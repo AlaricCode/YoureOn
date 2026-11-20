@@ -23,6 +23,7 @@ export interface NativeDancePoseProps {
   style?: StyleProp<ViewStyle>;
   active: boolean;
   maxFps: number;
+  facing: 'back' | 'front';
   onPoses?(e: { nativeEvent: PoseFrameEvent }): void;
   onStatus?(e: { nativeEvent: StatusEvent }): void;
 }

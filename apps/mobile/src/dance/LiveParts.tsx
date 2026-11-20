@@ -49,11 +49,21 @@ function FaceMark({ color }: { color: string }) {
 
 const TAG_INK = { A: color.onAccent, B: palette.black } as const;
 
-function NameTag({ tag, player }: { tag: PlacedTag; player: 'A' | 'B' }) {
+function NameTag({
+  tag,
+  player,
+  flipped = false,
+}: {
+  tag: PlacedTag;
+  player: 'A' | 'B';
+  /** Inside a mirrored layer (Stage): flip back, so the name reads the right way round. */
+  flipped?: boolean;
+}) {
   return (
     <View
       style={[
         styles.tag,
+        flipped && styles.unflip,
         {
           left: tag.x,
           top: tag.y,
@@ -90,10 +100,13 @@ export function NameTags({
   store,
   size,
   names,
+  flipped = false,
 }: {
   store: LiveStore;
   size: Size;
   names: { a: string; b: string };
+  /** The layer these sit in is mirrored (the selfie camera): each tag flips itself back. */
+  flipped?: boolean;
 }) {
   const view = useLive(store, (v) => v);
   const smoother = useRef<TagSmoother | null>(null);
@@ -113,8 +126,8 @@ export function NameTags({
   });
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none" accessible={false}>
-      {tags.B ? <NameTag tag={tags.B} player="B" /> : null}
-      {tags.A ? <NameTag tag={tags.A} player="A" /> : null}
+      {tags.B ? <NameTag tag={tags.B} player="B" flipped={flipped} /> : null}
+      {tags.A ? <NameTag tag={tags.A} player="A" flipped={flipped} /> : null}
     </View>
   );
 }
@@ -127,11 +140,14 @@ function PopupBadge({
   popup,
   at,
   width,
+  flipped = false,
 }: {
   popup: Popup;
   at: { x: number; y: number };
   /** Half the camera panel: a popup stays over its player's side. */
   width: number;
+  /** Inside a mirrored layer: flip back, so the words read the right way round. */
+  flipped?: boolean;
 }) {
   const reduced = useReduceMotion();
   const k = useRef(new Animated.Value(0)).current;
@@ -167,7 +183,13 @@ function PopupBadge({
       pointerEvents="none"
       style={[
         styles.popup,
-        { left: at.x - width / 2, top: at.y, width, opacity: k, transform: [{ translateY }] },
+        {
+          left: at.x - width / 2,
+          top: at.y,
+          width,
+          opacity: k,
+          transform: flipped ? [{ translateY }, { scaleX: -1 }] : [{ translateY }],
+        },
       ]}
     >
       <Text
@@ -186,7 +208,16 @@ function PopupBadge({
 }
 
 /** The newest popup per player, over their half of the camera panel (wherever A stands). */
-export function PopupLayer({ store, size }: { store: LiveStore; size: Size }) {
+export function PopupLayer({
+  store,
+  size,
+  flipped = false,
+}: {
+  store: LiveStore;
+  size: Size;
+  /** The layer these sit in is mirrored (the selfie camera): each popup flips itself back. */
+  flipped?: boolean;
+}) {
   const popups = useLive(store, (v) => v.popups);
   const side = useLive(store, (v) => aRightOfB(v.a, v.b));
   // Hold the last known sides through a frame where one player is not seen.
@@ -205,6 +236,7 @@ export function PopupLayer({ store, size }: { store: LiveStore; size: Size }) {
           popup={p}
           at={popupAnchor(size, p.player, aOnRight.current)}
           width={Math.max(60, size.width / 2 - 8)}
+          flipped={flipped}
         />
       ))}
     </View>
@@ -311,6 +343,8 @@ export function DebugReadout({ store, syncOffsetMs }: { store: LiveStore; syncOf
 }
 
 const styles = StyleSheet.create({
+  /** Text inside a mirrored layer flips itself back (Stage: the selfie camera). */
+  unflip: { transform: [{ scaleX: -1 }] },
   tag: {
     position: 'absolute',
     height: NAME_TAG.HEIGHT,

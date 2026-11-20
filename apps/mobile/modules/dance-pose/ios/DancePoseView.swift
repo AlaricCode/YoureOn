@@ -2,7 +2,7 @@ import AVFoundation
 import ExpoModulesCore
 import UIKit
 
-/// The Dance Off judge-cam view (DANCE-OFF.md §6.1): a live back-camera preview (aspect fit, so
+/// The Dance Off judge-cam view (DANCE-OFF.md §6.1): a live camera preview (aspect fit, so
 /// the overlay coordinates map 1:1 onto the letterboxed image) plus the pose + recording engine.
 /// All methods run on the main thread (props, view functions and UIKit callbacks).
 public final class DancePoseView: ExpoView {
@@ -63,6 +63,11 @@ public final class DancePoseView: ExpoView {
 
   func setMaxFps(_ value: Double) {
     engine.setMaxFps(value)
+  }
+
+  /// "front": the selfie camera (its preview is a mirror image). Anything else: the back camera.
+  func setFacing(_ value: String?) {
+    engine.setFacing(front: value == "front")
   }
 
   // MARK: - View functions

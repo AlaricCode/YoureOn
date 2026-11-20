@@ -24,6 +24,10 @@ public final class DancePoseModule: Module {
         view.setMaxFps(maxFps ?? DancePoseEngine.defaultMaxFps)
       }
 
+      Prop("facing") { (view: DancePoseView, facing: String?) in
+        view.setFacing(facing)
+      }
+
       AsyncFunction("startRound") { (view: DancePoseView, options: StartRoundOptions, promise: Promise) in
         view.startRound(options, promise: promise)
       }

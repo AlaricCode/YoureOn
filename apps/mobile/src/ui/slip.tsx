@@ -6,7 +6,7 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-na
 import Svg, { Line } from 'react-native-svg';
 
 import { BackdropProvider } from './kit';
-import { half, material, palette, radius, space, type } from './tokens';
+import { dp, half, material, palette, radius, space, type } from './tokens';
 
 /** The ticket: a soft panel, radius 32. It clips, so a Perforation's notches bite its edge. */
 export function Slip({
@@ -100,8 +100,8 @@ export function Criteria({ items, tone }: { items: readonly string[]; tone: 'yes
   );
 }
 
-const NOTCH = 20;
-const MARK = 20;
+const NOTCH = dp(20);
+const MARK = dp(20);
 
 const styles = StyleSheet.create({
   slip: {
@@ -153,8 +153,8 @@ const styles = StyleSheet.create({
   markNo: { backgroundColor: 'rgba(255, 79, 69, 0.16)' },
   // A tick: a box's left and bottom edges, rotated.
   tick: {
-    width: 8.5,
-    height: 5,
+    width: dp(8.5),
+    height: dp(5),
     borderLeftWidth: 2.25,
     borderBottomWidth: 2.25,
     borderColor: palette.accent,
@@ -162,7 +162,7 @@ const styles = StyleSheet.create({
   },
   crossBar: {
     position: 'absolute',
-    width: 9.5,
+    width: dp(9.5),
     height: 2.25,
     borderRadius: 1.25,
     backgroundColor: palette.danger,

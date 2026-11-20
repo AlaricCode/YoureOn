@@ -33,6 +33,7 @@ import { isDisplay, typographic } from './typography';
 import {
   border,
   color,
+  dp,
   half,
   material,
   palette,
@@ -309,8 +310,8 @@ export function ChevronLeft({ tint = palette.text }: { tint?: string } = {}) {
   return (
     <View
       style={{
-        width: 12,
-        height: 12,
+        width: dp(12),
+        height: dp(12),
         borderLeftWidth: glyph.glyph,
         borderBottomWidth: glyph.glyph,
         borderColor: tint,
@@ -450,7 +451,7 @@ export function CheckRow({
       style={styles.checkRow}
     >
       <View style={[styles.box, checked ? styles.boxOn : styles.boxOff]}>
-        {checked ? <Tick size={12} tint={color.onPrimary} /> : null}
+        {checked ? <Tick size={dp(12)} tint={color.onPrimary} /> : null}
       </View>
       <Label variant="labelMedium">{label}</Label>
     </Pressable>
@@ -558,7 +559,7 @@ export function SavedRow({ label, value }: { label: string; value: string }) {
       <Label variant="labelMedium">{label}</Label>
       <View style={styles.rowRight}>
         <Text style={type.value}>{value}</Text>
-        <Tick size={12} tint={palette.accent} />
+        <Tick size={dp(12)} tint={palette.accent} />
       </View>
     </View>
   );
@@ -739,7 +740,7 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   primary: { backgroundColor: color.primaryAction, boxShadow: material.bloomPrimary },
   secondary: { backgroundColor: palette.fill },
-  text: { backgroundColor: 'transparent', height: 44, paddingHorizontal: half.x15 },
+  text: { backgroundColor: 'transparent', height: dp(44), paddingHorizontal: half.x15 },
   small: { height: space.x4 + half.x05, paddingHorizontal: space.x2 },
   dense: { height: space.x4 },
   dangerFilled: { backgroundColor: color.destructive },
@@ -754,8 +755,8 @@ const styles = StyleSheet.create({
     gap: space.x2,
   },
   back: {
-    width: 24,
-    height: 44,
+    width: dp(24),
+    height: dp(44),
     justifyContent: 'center',
     alignItems: 'flex-start',
   },

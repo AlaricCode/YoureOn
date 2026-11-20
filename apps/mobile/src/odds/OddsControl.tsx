@@ -13,7 +13,7 @@ import {
 import { COPY, t } from '../screens/copy';
 import { Label } from '../ui/kit';
 import { DataText } from '../ui/parts';
-import { color, palette, radius, space, TABULAR, type } from '../ui/tokens';
+import { color, dp, palette, radius, space, TABULAR, type } from '../ui/tokens';
 import { SuggestButton, type SuggestPanel } from './SuggestButton';
 
 export interface OddsControlPanel {
@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
   // Limelight chips (ui/parts ChoiceChip): glass pills, the selected one white with black ink.
   seg: {
     flex: 1,
-    height: 44,
+    height: dp(44),
     borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
