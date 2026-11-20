@@ -91,6 +91,11 @@ export type TypedEvent =
   /** Back to the judge (only offered while voice is available). */
   | { type: 'voice' }
   | { type: 'claim'; text: string }
+  /**
+   * The card this form sent came back with the claim the server wrote from the sentence
+   * (terms/structure): the form shows that, not what was said. Only for the card it sent.
+   */
+  | { type: 'written'; terms_hash: string; claim: string }
   | { type: 'stake'; usd: number }
   /** The odds picker changed (a preset, the direction, or the judge's suggestion). */
   | { type: 'odds'; control: OddsControl }
@@ -156,6 +161,9 @@ export function typedReducer(s: TypedState, e: TypedEvent): TypedState {
     case 'claim':
       if (busy(s) || s.phase === 'confirmed') return s;
       return { ...s, claim: e.text.slice(0, MAX_CLAIM), phase: 'editing', note: null };
+    case 'written':
+      if (s.proposedHash !== e.terms_hash || s.claim === e.claim) return s;
+      return { ...s, claim: e.claim.slice(0, MAX_CLAIM) };
     case 'stake': {
       if (busy(s) || s.phase === 'confirmed') return s;
       // A chip after custom stakes (the judge's 3:2) starts over at Even from that base.

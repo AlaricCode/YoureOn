@@ -432,6 +432,15 @@ function DanceOffRound(props: DanceOffScreenProps & { routine: RoutineData }) {
     );
   }
 
+  // Both dancers in position and held there: the round starts by itself. They are standing in
+  // front of the camera, not at the phone. Start is still there, and a failed start (no attempt
+  // could be opened) is not retried until the framing is lost and found again.
+  const framedAndHeld = state.phase === 'ready';
+  const engineStart = engine.start;
+  useEffect(() => {
+    if (framedAndHeld) engineStart();
+  }, [framedAndHeld, engineStart]);
+
   const Pose = pose.status === 'ready' && !sim ? pose.mod.DancePoseView : null;
   // The selfie camera's preview is a mirror image; the sample round has no camera to mirror.
   const mirrored = Pose !== null && previewMirrored(DANCE_CAMERA);

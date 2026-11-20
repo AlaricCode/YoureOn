@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createWakeDetector,
   DEFAULT_WAKE_TIMING,
+  SPOKEN_BET_TIMING,
   type TranscriptInput,
   type UtteranceReason,
   type WakeEvent,
@@ -343,6 +344,38 @@ describe('wake detector', () => {
       d.tick(5000);
       expect(d.phase).toBe('done');
       expect(d.arm(6000)).toEqual([]);
+    });
+  });
+
+  // What the app listens with. On real phones the short-command timing cut a bet off at the
+  // first breath: the server got "let's do a challenge where".
+  describe('a spoken bet (SPOKEN_BET_TIMING)', () => {
+    it('survives a pause to think, and a recognizer final in the middle of it', () => {
+      const d = createWakeDetector(SPOKEN_BET_TIMING);
+      d.feed(T("Jarvis let's do a challenge where"), 0);
+      // a final 0.6 s into the pause used to end it here
+      expect(d.feed(T("Jarvis let's do a challenge where", 0, true), 600)).toEqual([]);
+      expect(d.tick(2000)).toEqual([]);
+      expect(d.feed(T('I have to throw a paper ball into the trash can', 1), 2100)).toEqual([]);
+      expect(d.tick(4200)).toEqual([]);
+      expect(d.tick(4400)).toEqual(
+        utterance(
+          "let's do a challenge where I have to throw a paper ball into the trash can",
+          'silence',
+        ),
+      );
+    });
+
+    it('gives the first few words longer still', () => {
+      const d = createWakeDetector(SPOKEN_BET_TIMING);
+      d.feed(T('Jarvis I bet Eva'), 0);
+      expect(d.tick(3100)).toEqual([]);
+      expect(d.tick(3300)).toEqual(utterance('I bet Eva', 'silence'));
+    });
+
+    it('lets a long sentence run, up to twenty seconds', () => {
+      expect(SPOKEN_BET_TIMING.maxUtteranceMs).toBe(20_000);
+      expect(SPOKEN_BET_TIMING.endSilenceMs).toBeGreaterThan(DEFAULT_WAKE_TIMING.endSilenceMs);
     });
   });
 });
