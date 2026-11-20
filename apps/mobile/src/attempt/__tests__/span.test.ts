@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { frameTimesMs } from '../frames';
-import { recordedSpan } from '../span';
+import { measuredSpan, recordedSpan } from '../span';
 
 const MAX = 6000;
 
@@ -60,5 +60,22 @@ describe('recordedSpan: the real recording span, not the wall clock around recor
 
   it('at least 1 ms', () => {
     expect(recordedSpan({ ...marks, stopAtMs: 100 }).durationMs).toBe(1);
+  });
+});
+
+describe('measuredSpan', () => {
+  const estimate = { durationMs: 1143, endedAtMs: 9000 };
+
+  it("uses the file's own length over the estimate (seen on an iPad: 1.1 s for a 3 s clip)", () => {
+    expect(measuredSpan(estimate, 3266.7, 6000)).toEqual({ durationMs: 3267, endedAtMs: 9000 });
+  });
+
+  it('never exceeds the recording limit', () => {
+    expect(measuredSpan(estimate, 6034, 6000).durationMs).toBe(6000);
+  });
+
+  it('keeps the estimate when the file could not be measured', () => {
+    for (const none of [null, undefined, Number.NaN, 0, -1])
+      expect(measuredSpan(estimate, none, 6000)).toEqual(estimate);
   });
 });

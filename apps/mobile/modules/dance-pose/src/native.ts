@@ -49,6 +49,22 @@ export function isDancePoseAvailable(): boolean {
   return available;
 }
 
+/**
+ * The real length of a recorded media file (ms), read from the file by the native module; null
+ * when the module is missing, older than this function, or cannot read the file. Never throws.
+ */
+export async function mediaDurationMs(uri: string): Promise<number | null> {
+  try {
+    const mod = requireOptionalNativeModule<{
+      mediaDurationMs?: (uri: string) => Promise<number>;
+    }>(DANCE_POSE_MODULE);
+    const ms = await mod?.mediaDurationMs?.(uri);
+    return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The native view component, created on first use; null when the module is missing. */
 export function getNativeDancePoseView(): NativeDancePoseComponent | null {
   if (!isDancePoseAvailable()) return null;

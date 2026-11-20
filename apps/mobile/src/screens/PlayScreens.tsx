@@ -18,7 +18,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { judgeCamGuard, type CallOffGuard } from '../app/callOff';
 import { RECORDING_CAMERA } from '../attempt/recorder';
 import { camRetryAction } from '../attempt/retry';
-import { recordedSpan } from '../attempt/span';
+import { importSafely } from '../app/importSafely';
+import { measuredSpan, recordedSpan } from '../attempt/span';
 import { hasCameraLens } from '../device/camera';
 import { feel } from '../device/feedback';
 import {
@@ -194,6 +195,16 @@ function failureNote(e: unknown): string {
   return [...new Set(parts)].join(' · ').slice(0, 160) || 'unknown error';
 }
 
+/** The recorded file's real length (ms) from the native module, or null (never throws). */
+async function clipFileMs(uri: string): Promise<number | null> {
+  try {
+    const pose = await importSafely(() => import('../../modules/dance-pose/src/native'));
+    return await pose.mediaDurationMs(uri);
+  } catch {
+    return null;
+  }
+}
+
 /** How long Stop waits for the camera to finalize the file before it counts as no clip. */
 const FINALIZE_WAIT_MS = 8000;
 
@@ -319,17 +330,20 @@ export function JudgeCamScreen({
         } catch (e) {
           recordNote = `record: ${failureNote(e)}`;
         }
-        if (out?.uri)
+        if (out?.uri) {
+          const estimate = recordedSpan({
+            requestedAtMs: startedAt.current,
+            firstProgress: firstProgress.current,
+            stopAtMs,
+            finishedAtMs: finishedAt.current,
+            maxMs: MAX_RECORD_MS,
+          });
+          // The file's own length when it can be read: the estimate is only the fallback.
           clip = {
             uri: out.uri,
-            ...recordedSpan({
-              requestedAtMs: startedAt.current,
-              firstProgress: firstProgress.current,
-              stopAtMs,
-              finishedAtMs: finishedAt.current,
-              maxMs: MAX_RECORD_MS,
-            }),
+            ...measuredSpan(estimate, await clipFileMs(out.uri), MAX_RECORD_MS),
           };
+        }
       }
       recording.current = null;
       lastClip.current = clip;
