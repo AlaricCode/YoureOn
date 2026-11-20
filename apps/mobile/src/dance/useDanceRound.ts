@@ -184,6 +184,7 @@ export function useDanceRound(opts: {
   const identitySize = useRef({ w: 0, h: 0 });
   /** Face attempts this run: one in flight, a few tries, spaced. */
   const faceTry = useRef({ inFlight: false, tries: 0, lastTryAt: null as number | null });
+  const framingLogAt = useRef(0);
   // The face model loads while the dancers walk into place, not inside the first attempt.
   useEffect(() => {
     const t0 = Date.now();
@@ -439,6 +440,14 @@ export function useDanceRound(opts: {
         const who = id.observe({ ts: f.ts ?? f.t, people });
         const byFace = id.identified();
         const ft = faceTry.current;
+        // Once a second while framing: what the camera sees and where the face attempt stands.
+        if (nowMs() - framingLogAt.current >= 1000) {
+          framingLogAt.current = nowMs();
+          debugLog(
+            `framing phase=${s.phase} people=${people.length} ok=${fr.ok} reason=${fr.reason} ` +
+              `size=${f.w}x${f.h} byFace=${byFace} tries=${ft.tries} inFlight=${ft.inFlight}`,
+          );
+        }
         if (
           s.phase !== 'starting' &&
           mayTryFaces({
