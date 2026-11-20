@@ -35,6 +35,7 @@ import {
 } from 'react-native';
 import { Camera, useCameraPermission, usePhotoOutput } from 'react-native-vision-camera';
 
+import { judgeHead } from '../app/judgeHead';
 import {
   cameraActive,
   initialScan,
@@ -513,6 +514,8 @@ export function NegotiateScreen({
   onDecline,
   tag,
   voice = true,
+  judgeLive = true,
+  judgeOn,
 }: {
   view: Pick<BetView, 'myName' | 'theirName' | 'me'>;
   captions: readonly Caption[];
@@ -544,8 +547,23 @@ export function NegotiateScreen({
    * this phone waits for the typed terms, then for the other party to lock them in.
    */
   voice?: boolean;
+  /** This phone's judge session is connected (A's phone; ../app/judgeHead). */
+  judgeLive?: boolean;
+  /**
+   * Only on B's phone: the judge session runs on A's phone, whose on-screen name this is
+   * ("Judge on Sim's phone"). B's disc never breathes as if it listened.
+   */
+  judgeOn?: string | undefined;
 }) {
   const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const head = judgeHead({
+    voice,
+    hostsJudge: judgeOn === undefined,
+    live: judgeLive,
+    micMuted,
+    speaking,
+    wakeWaiting: wake !== undefined,
+  });
   const nameOf = (who: Caption['who']) =>
     who === 'judge'
       ? t(COPY.ruling.judge)
@@ -675,26 +693,34 @@ export function NegotiateScreen({
           {/* With a card on the table the orb steps back, so the terms have the room. */}
           <JudgeOrb
             size={compact ? JUDGE_ORB_SMALL : JUDGE_ORB}
-            speaking={speaking}
-            listening={voice && !speaking}
+            speaking={head.speaking}
+            listening={head.listening || head.line === 'wake'}
             label={t(COPY.ruling.judge)}
           />
           <View style={compact ? styles.judgeStatusCompact : styles.judgeStatus}>
-            {!voice ? (
+            {head.line === 'off' ? (
               <DotsLabel
                 text={draft ? fill.waitingFor(view.theirName) : t(COPY.negotiate.waitingTerms)}
                 variant="value"
               />
-            ) : speaking ? (
+            ) : head.line === 'speaking' ? (
               <DotsLabel text={t(COPY.negotiate.speaking)} variant="value" />
-            ) : wake ? (
-              <Label testID="wake-line" variant="value">
-                {wake.line ?? wt(WAKE_COPY.hint)}
+            ) : head.line === 'elsewhere' ? (
+              <Label testID="judge-elsewhere" variant="value">
+                {fill.judgeOn(judgeOn ?? '')}
               </Label>
+            ) : head.line === 'wake' ? (
+              <Label testID="wake-line" variant="value">
+                {wake?.line ?? wt(WAKE_COPY.hint)}
+              </Label>
+            ) : head.line === 'connecting' ? (
+              <DotsLabel text={t(COPY.negotiate.connecting)} variant="value" />
+            ) : head.line === 'muted' ? (
+              <Label variant="value">{t(COPY.negotiate.micMuted)}</Label>
             ) : (
               <DotsLabel text={t(COPY.negotiate.listening)} variant="value" />
             )}
-            {hasMic && !wake ? (
+            {hasMic && !wake && head.line !== 'muted' ? (
               <Chip
                 label={micMuted ? t(COPY.negotiate.micMuted) : t(COPY.negotiate.micOn)}
                 tone={micMuted ? 'muted' : 'accent'}

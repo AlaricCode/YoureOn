@@ -66,6 +66,7 @@ import {
   appealVerdict,
   betView,
   myResult,
+  rulingEnds,
   screenResult,
   type BetView,
 } from '../bets/view';
@@ -152,6 +153,7 @@ import {
 } from './danceTerms';
 import { canRematch, chipAtMost, startRematch, withRematch } from './rematch';
 import {
+  appealReturns,
   appReducer,
   initialApp,
   isOver,
@@ -176,8 +178,9 @@ import {
   waitingForAcceptMarket,
   type MarketStakeUsd,
 } from './marketTerms';
-import { balanceSeries, HISTORY_LIMIT, historyFrom, netCents } from './history';
+import { balanceSeries, HISTORY_LIMIT, historyFrom, netCents, settledOnce } from './history';
 import { HOME_NOTE_MS, homeErrorLabel } from './homeErrors';
+import { judgeHostLabel } from './judgeHead';
 import { demoLinkLives, parseDeepLink } from './deepLink';
 import {
   attemptStartAlert,
@@ -488,6 +491,39 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     rt.api.balance().then(setBalance, () => undefined);
   }, [rt]);
 
+  /** The settled history (Home's change label and sparkline, the History screen). */
+  const historySeq = useRef(0);
+  /** Resolves false when this request failed (a newer one that took over counts as landed). */
+  const loadHistory = useCallback((): Promise<boolean> => {
+    // Only the newest request lands: a settle refresh and History opening never race.
+    const seq = ++historySeq.current;
+    setHistory((h) => ({ status: 'loading', items: h.items }));
+    return rt.api.myBets('settled', HISTORY_LIMIT).then(
+      (r) => {
+        if (seq === historySeq.current)
+          setHistory({ status: 'ready', items: historyFrom(r.items) });
+        return true;
+      },
+      () => {
+        if (seq !== historySeq.current) return true;
+        setHistory((h) => ({ status: 'failed', items: h.items }));
+        return false;
+      },
+    );
+  }, [rt]);
+  /** Once per bet that settles (./history settledOnce): Home's change and chart follow it. */
+  const historySettled = useRef(new Set<string>());
+  const historyAfterSettle = useCallback(
+    (betId: string, state: BetModel['state']) => {
+      if (!settledOnce(historySettled.current, betId, state)) return;
+      // A failed refresh does not use up the bet's one request: Back home tries again.
+      void loadHistory().then((ok) => {
+        if (!ok) historySettled.current.delete(betId);
+      });
+    },
+    [loadHistory],
+  );
+
   const refreshFace = useCallback(() => {
     faceApi.getStatus().then(setFaceStatus, () => undefined);
   }, [faceApi]);
@@ -768,8 +804,24 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           wonBet(after)
         )
           feel('payout');
-        if (e.type === 'bet.state' && (e.payload.state === 'PAID' || e.payload.state === 'VOIDED'))
-          refreshBalance();
+      }
+      // A bet this phone left (Back home on a VOID ruling) that the other side appeals: back on
+      // screen for the panel and its payout (a live bet on screen keeps its place).
+      if (
+        e?.type === 'bet.state' &&
+        !a.judgeCam &&
+        appealReturns(before?.state, after, a.activeBetId)
+      )
+        dispatch({ type: 'bet_opened', bet_id: after.bet_id });
+      // Any of my bets settling, the one on screen or one this phone already left (a VOID ruling
+      // offers Back home before its refund lands): the balance and Home's history catch up.
+      if (
+        e?.type === 'bet.state' &&
+        after.my_party &&
+        (e.payload.state === 'PAID' || e.payload.state === 'VOIDED')
+      ) {
+        refreshBalance();
+        historyAfterSettle(after.bet_id, e.payload.state);
       }
       rerender();
     });
@@ -777,7 +829,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       clearInterval(gap);
       off();
     };
-  }, [rt, refreshBalance]);
+  }, [rt, refreshBalance, historyAfterSettle]);
 
   // ---- judge cam: follow A's active bets (the cam is a second device of A) --------------
   useEffect(() => {
@@ -1162,16 +1214,9 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
     };
   }, [rt, needDeadline, betId]);
 
-  const loadHistory = useCallback(() => {
-    setHistory((h) => ({ status: 'loading', items: h.items }));
-    rt.api.myBets('settled', HISTORY_LIMIT).then(
-      (r) => setHistory({ status: 'ready', items: historyFrom(r.items) }),
-      () => setHistory((h) => ({ status: 'failed', items: h.items })),
-    );
-  }, [rt]);
   const historyOpen = app.overlay === 'history';
   useEffect(() => {
-    if (historyOpen) loadHistory();
+    if (historyOpen) void loadHistory();
   }, [historyOpen, loadHistory]);
 
   useEffect(() => {
@@ -1750,6 +1795,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
 
   const dismiss = () => {
     setAlert(null);
+    // Home after a payout: its history catches up if the settle event did not (deduped).
+    if (bet) historyAfterSettle(bet.bet_id, bet.state);
     dispatch({ type: 'bet_dismissed' });
     refreshBalance();
   };
@@ -1981,8 +2028,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const result = screenResult(outcome, bet?.state ?? null, me);
   const balanceCents = balance ? Number(BigInt(balance.usdc) / 10_000n) : 0;
   // Home's sparkline and delta come from the settled history the app already holds (loaded when
-  // History opens); no extra request. Hidden until there is history. No caption: the list is
-  // capped at HISTORY_LIMIT, so "all time" would not be true.
+  // History opens, and once per bet that settles). Hidden until there is history. No caption: the
+  // list is capped at HISTORY_LIMIT, so "all time" would not be true.
   const homeSeries = balance ? balanceSeries(balanceCents, history.items) : null;
   const homeChange = balance && history.items.length ? { cents: netCents(history.items) } : null;
   const waiting = <Loading failed={false} onRetry={() => undefined} />;
@@ -2172,7 +2219,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
           <HistoryScreen
             items={history.items}
             status={history.status}
-            onRetry={loadHistory}
+            onRetry={() => void loadHistory()}
             onBack={() => dispatch({ type: 'overlay', overlay: 'none' })}
           />
         );
@@ -2218,6 +2265,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             hasMic={me === 'A' && VOICE_ENABLED && !typedForced}
             micMuted={!voiceLive || micMutedFor(state)}
             voice={VOICE_ENABLED || (SAY_MODE && me === 'A')}
+            // The judge session runs on A's phone only (hostsVoice): B's says where it is, and A's
+            // listens only once that session is live (./judgeHead). With no voice judge
+            // (SAY_MODE) there is no session to wait for.
+            judgeLive={VOICE_ENABLED ? voiceLive : true}
+            judgeOn={me === 'B' && bet ? judgeHostLabel(bet) : undefined}
             draft={view}
             typed={
               negotiating && typed.bet_id === bet?.bet_id
@@ -2627,7 +2679,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         const breakdown = scored ? (
           <PanelErrorBoundary name={t(COPY.dance.panel)} onError={() => undefined}>
             <Suspense fallback={null}>
-              <DanceResultBreakdown scored={scored} names={partyNames(view)} omitLine={reason} />
+              {/* No roll from 0.0: the result screen before this one already showed the scores. */}
+              <DanceResultBreakdown
+                scored={scored}
+                names={partyNames(view)}
+                omitLine={reason}
+                roll={false}
+              />
             </Suspense>
           </PanelErrorBoundary>
         ) : null;
@@ -2663,10 +2721,12 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                 // No appeal on a dance off: its score is deterministic (DANCE-OFF §5).
                 onAppeal={result === 'lost' && !isDance ? () => void appealNow() : undefined}
                 onRematch={onRematch}
-                // Over (VOIDED: called off, too close to call, three REDOs): nothing moves this
-                // screen on any more, so it gets Back home like the payout screen.
-                onHome={isOver(bet.state) ? dismiss : undefined}
+                // Over, or a VOID ruling (called off, too close to call, three REDOs) from the
+                // moment it shows: Back home like the payout screen, with Double or nothing held
+                // in place (disabled) until the refund settles. No footer swap at 0:00.
+                onHome={rulingEnds(result, isOver(bet.state)) ? dismiss : undefined}
                 rematchBusy={rematchBusy}
+                rematchSoon={!app.judgeCam}
                 tag={tag}
               />
             )}

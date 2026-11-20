@@ -67,6 +67,9 @@ export const CONTRACT_COPY: readonly { readonly template: string; readonly sourc
   // The call-off corner and note name the other party as the Dance Off labels do ("Sim A").
   { template: 'Waiting for {name}', source: 'Call it off, the asker (screens/CallOff)' },
   { template: '{name} wants to keep playing', source: 'Call it off, declined (screens/CallOff)' },
+  // The judge session is on A's phone (on speaker); B's negotiate screen says where it is.
+  { template: "Judge on {name}'s phone", source: "B's negotiate screen (app/judgeHead)" },
+  { template: 'Judge on their phone', source: "B's negotiate screen, A's name unknown" },
   {
     template: 'Simulator: play a sample round',
     source: 'Simulator-only dance round (dance/model/simRound)',

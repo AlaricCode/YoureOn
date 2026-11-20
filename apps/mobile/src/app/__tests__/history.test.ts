@@ -5,8 +5,15 @@ import type { z } from 'zod/v4';
 
 import { createYoApi } from '../../net/api';
 import { createClock, type ApiClient } from '../../net/signedFetch';
-import { balanceSeries, HISTORY_LIMIT, historyFrom, historyItemOf, netCents } from '../history';
-import { ME_B, snapshot } from './fixtures';
+import {
+  balanceSeries,
+  HISTORY_LIMIT,
+  historyFrom,
+  historyItemOf,
+  netCents,
+  settledOnce,
+} from '../history';
+import { appealResult, ME_B, snapshot } from './fixtures';
 
 /** A GET /v1/me/bets item for party A, parsed like the app does. */
 function item(o: Partial<MeBetItem> = {}): MeBetItem {
@@ -173,5 +180,78 @@ describe('balance sparkline series (Home)', () => {
   it('is empty with no settled bets', () => {
     expect(balanceSeries(2_000, [])).toEqual([]);
     expect(netCents([])).toBe(0);
+  });
+});
+
+describe("Home's history after a settle (the change label and sparkline)", () => {
+  it('is fetched once per bet that settles: the state event, then Back home, is one request', () => {
+    const seen = new Set<string>();
+    const loads: string[] = [];
+    const settle = (id: string, state: string | null) => {
+      if (settledOnce(seen, id, state)) loads.push(id);
+    };
+    settle('bet-1', 'RULED'); // not settled yet
+    settle('bet-1', 'FINALIZED');
+    settle('bet-1', 'PAID'); // bet.state PAID: the refresh
+    settle('bet-1', 'PAID'); // a replayed event
+    settle('bet-1', 'PAID'); // Back home from the payout
+    settle('bet-2', 'VOIDED'); // a call-off refund
+    settle('bet-3', null);
+    expect(loads).toEqual(['bet-1', 'bet-2']);
+  });
+
+  it('the refreshed list moves the change and the chart to the new bet', () => {
+    const before = historyFrom([item({ bet_id: '00000000-0000-4000-8000-000000000001' })]);
+    const after = historyFrom([
+      item({ bet_id: '00000000-0000-4000-8000-000000000002', my_payout: '0' }),
+      item({ bet_id: '00000000-0000-4000-8000-000000000001' }),
+    ]);
+    expect(netCents(before)).toBe(500);
+    expect(netCents(after)).toBe(0);
+    expect(balanceSeries(1000, after)).toEqual([1000, 1500, 1000]);
+  });
+
+  it('a PAID row fetched before its payout columns land still reads as the win it is', () => {
+    // The bet.state PAID event can beat the chain fold that writes payout_a / payout_b, so the one
+    // settle refresh sees my_payout and payout both null. My share comes from outcome + stakes.
+    const id = '00000000-0000-4000-8000-000000000003';
+    const early = { bet_id: id, my_payout: null, payout: null, their_stake: '5000000' };
+    const won = historyFrom([item({ ...early, outcome: 'PartyA' })]);
+    expect(won[0]).toMatchObject({ net: '5000000', outcome: 'won' });
+    // As B of a bet A won; and at odds ($5 v $15) as B who won the $20 pot.
+    expect(historyItemOf(item({ ...early, my_party: 'B', outcome: 'PartyA' }))).toMatchObject({
+      net: '-5000000',
+      outcome: 'lost',
+    });
+    expect(
+      historyItemOf(item({ ...early, my_party: 'B', my_stake: '15000000', outcome: 'PartyB' })),
+    ).toMatchObject({ net: '5000000', outcome: 'won' });
+    // The same bet once the payout lands: the same row, so the one deduped load was enough.
+    const landed = historyFrom([item({ bet_id: id, my_payout: '10000000', outcome: 'PartyA' })]);
+    expect(landed).toEqual(won);
+    const seen = new Set<string>();
+    expect([settledOnce(seen, id, 'PAID'), settledOnce(seen, id, 'PAID')]).toEqual([true, false]);
+    expect(netCents(won)).toBe(500);
+    expect(balanceSeries(1500, won)).toEqual([1000, 1500]);
+  });
+
+  it('an appealed PAID row before its payout lands follows the panel, not the old outcome', () => {
+    // B appealed A's win and the panel flipped it: the row's outcome is still the ruling's
+    // (PartyA) until the chain fold writes AppealResolved, but the server paid B.
+    const early = {
+      my_payout: null,
+      payout: null,
+      their_stake: '5000000',
+      outcome: 'PartyA' as const,
+      appeal: appealResult(['B_WINS', 'B_WINS', 'B_WINS']),
+    };
+    expect(historyItemOf(item(early))).toMatchObject({ net: '-5000000', outcome: 'lost' });
+    expect(historyItemOf(item({ ...early, my_party: 'B' }))).toMatchObject({
+      net: '5000000',
+      outcome: 'won',
+    });
+    // Upheld: the same as the ruling.
+    const upheld = { ...early, appeal: appealResult(['A_WINS', 'A_WINS', 'B_WINS']) };
+    expect(historyItemOf(item(upheld))).toMatchObject({ net: '5000000', outcome: 'won' });
   });
 });
