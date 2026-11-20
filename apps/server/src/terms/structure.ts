@@ -104,6 +104,22 @@ export function needsStructuring(r: TypedTermsRequest): boolean {
   return criteria.length === 1 && norm(criteria[0] ?? '') === norm(r.claim);
 }
 
+/** A claim that states the attempt FAILING ("Eva misses a free throw"). */
+const NEGATED_CLAIM =
+  /\b(miss|misses|missed|fail|fails|failed|drop|drops|dropped|lose|loses|can't|cannot|won't|doesn't|not|never|without)\b/i;
+
+/**
+ * Who wins if the claim is TRUE. The model is asked for it and gets it wrong often enough to
+ * matter: for "I bet Eva can't throw it in" it wrote the right claim ("Eva throws it in") and
+ * then named the SPEAKER as the winner if she does, the opposite of the bet. In a skill bet the
+ * performer is on the side of their own success, so when the claim states the attempt succeeding
+ * the answer is the performer, whatever the model said. Only a claim that states it failing
+ * ("Eva misses") keeps the model's answer, where the other party is the one it favours.
+ */
+export function yesPartyFor(claim: string, performer: 'A' | 'B', model: 'A' | 'B'): 'A' | 'B' {
+  return NEGATED_CLAIM.test(claim) ? model : performer;
+}
+
 /** How many success lines, failure lines and edge cases a card shows from a structured sentence. */
 export const CARD_LINES = 2;
 
@@ -119,6 +135,7 @@ export function usableClaim(v: StructuredClaim): StructuredClaim | null {
   return {
     ...v,
     claim,
+    yes_party: yesPartyFor(claim, v.performer, v.yes_party),
     success_criteria: v.success_criteria.slice(0, CARD_LINES),
     failure_criteria: v.failure_criteria.slice(0, CARD_LINES),
     edge_cases: v.edge_cases.slice(0, CARD_LINES),
