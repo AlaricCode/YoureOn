@@ -291,6 +291,11 @@ const DANCE_ENABLED = process.env.EXPO_PUBLIC_DANCE !== 'off';
  */
 const WAKE_ENABLED = process.env.EXPO_PUBLIC_WAKE !== 'off';
 /**
+ * No voice judge, but "Jarvis" listens: A's challenge screen keeps its listening view (the orb
+ * and the wake line) and nothing is ever spoken back. What is said is sent as the bet.
+ */
+const SAY_MODE = !VOICE_ENABLED && WAKE_ENABLED;
+/**
  * The Dance Off screens (../dance) pull the pose camera's native view: loaded on first use and
  * through importSafely, like the voice SDK, so a build without it never fails at launch.
  */
@@ -841,9 +846,11 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   const opponentName = bet?.party_b?.display_name ?? '';
   // No judge to talk to: voice off, this phone never got the bet's voice variables (a restart
   // mid-bet), or the session failed.
-  const typedForced =
-    !VOICE_ENABLED ||
-    (bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id)));
+  // With the voice judge off the screen still LISTENS (SAY_MODE: the orb, 'Say "Jarvis"', then
+  // the sentence becomes the bet); the form is forced only when nothing can listen at all.
+  const typedForced = VOICE_ENABLED
+    ? bet !== null && (voiceFailedBet === bet.bet_id || !voiceVars.current.has(bet.bet_id))
+    : !SAY_MODE;
   /** Double or nothing (./rematch): every stake picker starts on the suggested stake. */
   const rematchStake = bet?.rematchOf ? bet.suggestedStakeUsd : null;
   useEffect(() => {
@@ -1806,14 +1813,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
         ? null
         : bet.bet_id
       : null;
-  // No voice judge: A's form, nothing sent yet and no panel over it, takes a spoken sentence.
+  // No voice judge: A's listening view, nothing sent yet and no panel over it, takes a sentence.
   const sayPendingBet =
     !VOICE_ENABLED &&
     negotiating &&
     bet !== null &&
     typed.bet_id === bet.bet_id &&
-    typed.mode === 'typed' &&
-    typed.phase === 'editing' &&
+    typed.mode === 'voice' &&
     !(market.bet_id === bet.bet_id && market.phase !== 'closed') &&
     !(dance.bet_id === bet.bet_id && danceOpen(dance))
       ? bet.bet_id
@@ -1909,6 +1915,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   useEffect(() => {
     if (judgeOn && voiceBet) setJudgeMountedBet(voiceBet.bet_id);
   }, [judgeOn, voiceBet?.bet_id]);
+  // SAY_MODE, on A's listening view: a capture that heard nothing listens again shortly.
+  const sayIdle = sayPendingBet !== null && wake.status === 'heard';
+  useEffect(() => {
+    if (!sayIdle) return;
+    const tm = setTimeout(wake.resume, HEARD_REARM_MS);
+    return () => clearTimeout(tm);
+  }, [sayIdle, wake.resume]);
+  // SAY_MODE in a binary that cannot listen (no wake module): the form, as with it off.
+  const cannotListen = SAY_MODE && wake.status === 'unavailable';
+  useEffect(() => {
+    if (cannotListen && negotiating) typedDispatch({ type: 'open' });
+  }, [cannotListen, negotiating, bet?.bet_id]);
   /** On A's negotiate screen: the judge waits for "Jarvis" or "Tap to talk". */
   const judgeWaiting = judgePendingBet !== null && judgeWaits && !judgeOn;
   const wakeStatusLine = STATUS_COPY[wake.status];
@@ -2186,7 +2204,7 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
             speaking={voiceLive ? judgeSpeaking : captions.at(-1)?.who === 'judge'}
             hasMic={me === 'A' && VOICE_ENABLED && !typedForced}
             micMuted={!voiceLive || micMutedFor(state)}
-            voice={VOICE_ENABLED}
+            voice={VOICE_ENABLED || (SAY_MODE && me === 'A')}
             draft={view}
             typed={
               negotiating && typed.bet_id === bet?.bet_id
@@ -2233,7 +2251,18 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
                     onOpenSettings:
                       wake.status === 'denied' ? () => void Linking.openSettings() : undefined,
                   }
-                : undefined
+                : sayPendingBet !== null
+                  ? {
+                      // No judge to start: the tap captures the sentence itself.
+                      line: wakeLine,
+                      onTapToTalk: () => {
+                        loopDispatch({ type: 'wake' });
+                        wake.capture();
+                      },
+                      onOpenSettings:
+                        wake.status === 'denied' ? () => void Linking.openSettings() : undefined,
+                    }
+                  : undefined
             }
             market={
               negotiating && MARKET_ENABLED && market.bet_id === bet?.bet_id

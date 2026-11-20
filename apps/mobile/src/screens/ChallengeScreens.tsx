@@ -464,7 +464,8 @@ export interface DanceTermsPanel {
  */
 export interface NegotiateWake {
   line: string | null;
-  onTapToTalk: () => void;
+  /** Starts the voice judge without the wake word. Absent when there is no judge to start. */
+  onTapToTalk?: (() => void) | undefined;
   /** Only while the mic or speech permission is off: opens the Settings app. */
   onOpenSettings?: (() => void) | undefined;
 }
@@ -736,7 +737,7 @@ export function NegotiateScreen({
           {draftCard}
         </ScrollView>
         <View style={styles.actions}>
-          {wake ? (
+          {wake?.onTapToTalk ? (
             <PrimaryButton
               testID="wake-tap"
               label={wt(WAKE_COPY.tapToTalk)}
