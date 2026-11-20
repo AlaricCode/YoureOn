@@ -8,13 +8,16 @@
 // all. Followed as a track, the ball is unmistakable: it is the small object that MOVES. Where
 // that track ends is the result:
 //
-//   out      the ball is still in the picture at the end of the clip, outside the target and
-//            below its rim (on the floor): it missed, or bounced out and stayed out.
+//   out      the ball came to rest outside the target, below its rim (on the floor): it missed,
+//            or bounced out and stayed out. Still there at the end of the clip, or lying there
+//            for several frames before someone picked it up: the throw had already missed.
 //   in       the ball moved, was last seen at the target's mouth (over the opening, at or above
 //            the rim), and is in none of the frames after that: it went in.
+//            Or it left the picture (off a side or the bottom): wherever it went, it is not in
+//            the target.
 //   unknown  anything else: no moving track, a track that ends in the air away from the target
-//            (the frames skipped the rest of the flight, or it left the picture), two tracks that
-//            disagree, or no target. The judge's own reading of the frames then stands.
+//            with the picture still around it (the frames skipped the rest of the flight), or
+//            no target. That is a retake: nobody guesses.
 //
 // Thresholds are in units of the target's own width and height, so they hold at any frame size
 // and camera distance.
@@ -38,6 +41,15 @@ export const THROW = {
   OUT_GAP: 0.12,
   /** …and its centre is below the rim by this many target heights (on the floor, not in a hand). */
   OUT_BELOW_RIM: 0.15,
+  /**
+   * Or it is this far below the rim, whatever the gap: a ball seen level with the target's body
+   * is outside it (nothing inside shows through the wall), even touching it in the picture.
+   */
+  OUT_BESIDE_BODY: 0.35,
+  /** out, mid-clip: it lay still for at least this many frames in a row… */
+  REST_FRAMES: 3,
+  /** …moving no more than this many target widths from one to the next. */
+  REST_STEP: 0.35,
   /** in: gone from at least this many frames at the end. */
   GONE_FRAMES: 2,
   /** in: last seen within this many target widths of the target's centre line… */
@@ -45,7 +57,7 @@ export const THROW = {
   /** …no higher above the rim than this many target heights… */
   MOUTH_ABOVE: 1.25,
   /** …and no lower below it than this many (a ball dropping past the rim into the opening). */
-  MOUTH_BELOW: 0.4,
+  MOUTH_BELOW: 0.3,
   /**
    * in, when it was lost in mid-flight: its line of travel reaches the rim within this many
    * frames' worth of the travel it had just made…
@@ -53,6 +65,8 @@ export const THROW = {
   HEADING_FRAMES: 2,
   /** …inside the opening, widened by this many target widths each side. */
   HEADING_X: 0.25,
+  /** out, off the picture: last seen within this share of the frame from a side or the bottom… */
+  EDGE: 0.04,
 } as const;
 
 export type ThrowCall = 'in' | 'out' | 'unknown';
@@ -121,6 +135,16 @@ function tracksOf(frames: PromptFrames): Point[][] {
   return [...byId.values()];
 }
 
+/** The frames' size, from any mask the reply carries (COCO RLE size is [h, w]). */
+function frameSize(frames: PromptFrames): { w: number; h: number } | null {
+  for (const f of frames) {
+    for (const o of f.objects) {
+      if (o.mask_rle) return { w: o.mask_rle.size[1], h: o.mask_rle.size[0] };
+    }
+  }
+  return null;
+}
+
 const extent = (pts: readonly Point[]): number => {
   const xs = pts.map((p) => p.cx);
   const ys = pts.map((p) => p.cy);
@@ -139,6 +163,9 @@ export function throwOutcome(i: {
   target: PromptFrames;
   object: PromptFrames;
   n: number;
+  /** The frames' size in px. Read from the masks when not given; without either, a ball that
+   *  left the picture cannot be told from one the frames skipped (unknown). */
+  size?: { w: number; h: number } | undefined;
 }): ThrowOutcome {
   const none = (why: string, last_seen: number | null = null): ThrowOutcome => ({
     call: 'unknown',
@@ -148,6 +175,7 @@ export function throwOutcome(i: {
   });
   const n = i.n;
   if (n < 3) return none('too_few_frames');
+  const size = i.size ?? frameSize(i.target) ?? frameSize(i.object);
   const bins = targetBoxes(i.target, n);
   if (!bins[n - 1]) return none('no_target');
   const tracks = tracksOf(i.object);
@@ -168,19 +196,63 @@ export function throwOutcome(i: {
     // Part of the room: there from the start and never moved (a roll of paper towel, a mug).
     if (!moved && !arrived) continue;
 
+    /** Outside the target and down on the floor (not in a hand, not at the opening). */
+    const outside = (p: Point): boolean => {
+      const b = bins[p.f] as Box;
+      const h = b[3] - b[1];
+      const w = b[2] - b[0];
+      if (p.cy < b[1] + THROW.OUT_BELOW_RIM * h) return false;
+      return gap(p.box, b) >= THROW.OUT_GAP * w || p.cy >= b[1] + THROW.OUT_BESIDE_BODY * h;
+    };
+
+    // It came to rest outside the target: a miss, whatever happens to it afterwards. Seen on
+    // two real throws: the ball landed beside the bin, lay there for four to six frames, and
+    // the thrower then walked over, picked it up and dropped it in. The track ends in a hand
+    // or at the mouth, but the throw had already missed. Only after the flight (its biggest
+    // step): a ball held low and still before the throw is not at rest on the floor.
+    if (moved && pts.length > THROW.REST_FRAMES) {
+      let flight = 1;
+      let far = 0;
+      for (let k = 1; k < pts.length; k++) {
+        const a = pts[k - 1] as Point;
+        const b = pts[k] as Point;
+        const d = Math.hypot(b.cx - a.cx, b.cy - a.cy);
+        if (d > far) {
+          far = d;
+          flight = k;
+        }
+      }
+      let run: Point[] = [];
+      let rest: Point[] = [];
+      for (let k = flight; k < pts.length; k++) {
+        const q = pts[k] as Point;
+        const prevPt = run.at(-1);
+        const still =
+          prevPt !== undefined &&
+          q.f === prevPt.f + 1 &&
+          Math.hypot(q.cx - prevPt.cx, q.cy - prevPt.cy) <= THROW.REST_STEP * bw;
+        if (!outside(q)) run = [];
+        else if (still) run.push(q);
+        else run = [q];
+        if (run.length > rest.length) rest = [...run];
+      }
+      if (rest.length >= THROW.REST_FRAMES) {
+        verdicts.push({
+          call: 'out',
+          why: 'came_to_rest_outside',
+          frames: rest.map((q) => q.f),
+          last_seen: (rest.at(-1) as Point).f,
+        });
+        continue;
+      }
+    }
+
     const end = pts.filter((p) => p.f >= n - 3);
     if (last.f === n - 1 && end.length >= THROW.END_SEEN) {
       // Only a track that MOVED can be the ball on the floor: something small and white that
       // came into the picture when the camera shifted (seen on a real throw: a bottle at the
       // edge of the counter, from frame 5) arrived too, and never went anywhere.
-      const onFloor =
-        moved &&
-        end.every((p) => {
-          const b = bins[p.f] as Box;
-          const h = b[3] - b[1];
-          const w = b[2] - b[0];
-          return gap(p.box, b) >= THROW.OUT_GAP * w && p.cy >= b[1] + THROW.OUT_BELOW_RIM * h;
-        });
+      const onFloor = moved && end.every(outside);
       if (onFloor) {
         verdicts.push({
           call: 'out',
@@ -235,6 +307,31 @@ export function throwOutcome(i: {
             call: 'in',
             why: 'heading_into_the_mouth',
             frames: pts.slice(-2).map((p) => p.f),
+            last_seen: last.f,
+          });
+          continue;
+        }
+      }
+      // It left the picture: wherever it went, it is not in the target. Last seen at a side or
+      // the bottom edge, or on a line that carries it out of the frame before the next one.
+      // (Out through the top is not counted: a lob comes back down.)
+      if (size && prev && prev.f < last.f) {
+        const df = last.f - prev.f;
+        const nx = last.cx + (last.cx - prev.cx) / df;
+        const ny = last.cy + (last.cy - prev.cy) / df;
+        const mx = THROW.EDGE * size.w;
+        const my = THROW.EDGE * size.h;
+        const atEdge = last.cx <= mx || last.cx >= size.w - mx || last.cy >= size.h - my;
+        const leaving = nx < 0 || nx > size.w || ny > size.h;
+        const outward =
+          (last.cx <= mx && nx < last.cx) ||
+          (last.cx >= size.w - mx && nx > last.cx) ||
+          (last.cy >= size.h - my && ny > last.cy);
+        if (leaving || (atEdge && outward)) {
+          verdicts.push({
+            call: 'out',
+            why: 'left_the_picture',
+            frames: pts.slice(-2).map((q) => q.f),
             last_seen: last.f,
           });
           continue;
