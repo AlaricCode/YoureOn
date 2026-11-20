@@ -97,7 +97,13 @@ import {
   warmForAttempt,
   type CheckRun,
 } from './camera-checks';
-import { buildRuling, judgeFrames, rulingCanonical, type Judged } from './ruling';
+import {
+  applyThrowOutcome,
+  buildRuling,
+  judgeFrames,
+  rulingCanonical,
+  type Judged,
+} from './ruling';
 import {
   DevicePatchRequest,
   StartAttemptRequest,
@@ -472,7 +478,20 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
       }));
     const checks = await checksP;
     let veto: Parameters<typeof storeAttemptChecks>[1]['veto'] = null;
-    if (checks) ({ judged, veto } = applyCameraVeto(judged, checks, job.terms.yes_party));
+    // A throw at a target: the object tracker decides whether it went in, and the vision judge
+    // is the cheat detector (ruling.ts applyThrowOutcome). When the track cannot say, the vision
+    // verdict stands. The frame-by-frame veto is not applied to a throw: it does not use the
+    // tracks, so it cannot tell the ball from anything else small and white in the room.
+    const thrown = checks?.thrown;
+    if (thrown && thrown.outcome.call !== 'unknown') {
+      judged = applyThrowOutcome(
+        judged,
+        { ...thrown.outcome, call: thrown.outcome.call },
+        thrown.labels,
+      );
+    } else if (checks && !thrown) {
+      ({ judged, veto } = applyCameraVeto(judged, checks, job.terms.yes_party));
+    }
     const now = deps.now();
     const ruling = buildRuling(
       {
@@ -497,6 +516,10 @@ export function createJudgeRoutes(opts: JudgeRoutesOptions = {}): JudgeRouteModu
         cue: rulingCue(ruling, names, deps.env.APPEAL_WINDOW_S ?? DEFAULT_GG_SECS),
         audit: {
           ...(judged.kind === 'failure' ? { llm_status: judged.status } : {}),
+          ...(judged.kind === 'verdict' && judged.thrown ? { throw_track: judged.thrown } : {}),
+          ...(judged.kind === 'verdict' && judged.rule?.broken
+            ? { rule_broken: judged.rule.note.slice(0, 200) }
+            : {}),
           ...(judged.kind === 'verdict' && judged.disagreement
             ? { checks_disagree: judged.disagreement }
             : {}),
