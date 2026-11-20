@@ -1,16 +1,16 @@
 # Reviewed false positives (gitleaks generic-api-key), 2026-11-14. None is a credential:
 # - Groth16 verifying key constants in the retired Verdict code (a VK is public by design).
-0fd103fa44c7c3c84f11e9ea34be21a472cedcb7:docs/CONTRACTS.md:generic-api-key:1202
-b9faad80807f43ccf36d02081765ad506c767e26:circuits/build/vk.rs:generic-api-key:9
-b9faad80807f43ccf36d02081765ad506c767e26:circuits/scripts/vk-to-rust.ts:generic-api-key:89
-b9faad80807f43ccf36d02081765ad506c767e26:programs/verdict/src/zk/vk.rs:generic-api-key:9
+22cc419548a90e31072972d70bee6b448807436f:docs/CONTRACTS.md:generic-api-key:1209
+22cc419548a90e31072972d70bee6b448807436f:circuits/build/vk.rs:generic-api-key:9
+22cc419548a90e31072972d70bee6b448807436f:circuits/scripts/vk-to-rust.ts:generic-api-key:89
+22cc419548a90e31072972d70bee6b448807436f:programs/verdict/src/zk/vk.rs:generic-api-key:9
 # - A SecureStore slot name ('youreon.diagnostics.probe.v1').
-11811c80e44d0cee5cc104db8fd6461057021816:apps/mobile/src/diagnostics/autoChecks.ts:generic-api-key:10
+7d8a530d88aefadcd9296943ebb847f4dd49830c:apps/mobile/src/diagnostics/autoChecks.ts:generic-api-key:10
 # - A public Solana address in a test fixture.
-11811c80e44d0cee5cc104db8fd6461057021816:packages/shared/test/realtime.test.ts:generic-api-key:292
+7d8a530d88aefadcd9296943ebb847f4dd49830c:packages/shared/test/realtime.test.ts:generic-api-key:292
 # - The two example party addresses from SCHEMAS §2.5 (deterministic example keys, not real
 #   accounts; public keys, not secrets) in the app preview data.
-07cdbd853efe6c1a2f6614e85b8a401c725b3d2f:apps/mobile/src/preview/data.ts:generic-api-key:69
-07cdbd853efe6c1a2f6614e85b8a401c725b3d2f:apps/mobile/src/preview/data.ts:generic-api-key:70
+d40618e82979ee76ff37d8391633b1f048706d1e:apps/mobile/src/preview/data.ts:generic-api-key:69
+d40618e82979ee76ff37d8391633b1f048706d1e:apps/mobile/src/preview/data.ts:generic-api-key:70
 # - A SecureStore slot name ('youreon.judgecam.v1'), 2026-11-18.
-58992aa249dc9e3dba147ada9d92271c90154960:apps/mobile/src/app/DemoApp.tsx:generic-api-key:96
+51d1d140408b05fea79eea6dd3c816853f07a2c2:apps/mobile/src/app/DemoApp.tsx:generic-api-key:96
