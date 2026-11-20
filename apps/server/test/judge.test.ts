@@ -237,6 +237,9 @@ describe('judge prompt labels (D10: the landing frames and the landing crop)', (
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/A broken rule loses on its own/);
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/Never answer UNCLEAR about something the frames do show/);
     expect(JUDGE_SYSTEM_PROMPT).toMatch(/a clip in which no attempt happens at all/);
+    // a win that broke a rule is ruled a loss, and the reason says both
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/the reason says BOTH things/);
+    expect(JUDGE_SYSTEM_PROMPT).toMatch(/Say a rule was broken only when one was/);
   });
 });
 
