@@ -13,6 +13,7 @@ import {
   StructuredClaim,
   structureClaim,
   usableClaim,
+  yesPartyFor,
 } from '../src/terms/structure';
 
 const SAID = "let's do a challenge where I have to throw a paper ball into a trash trashcan";
@@ -123,6 +124,25 @@ describe('usableClaim', () => {
     expect(long.success_criteria).toEqual(['one thing', 'two things']);
     expect(long.failure_criteria).toEqual(['first foul', 'second foul']);
     expect(long.edge_cases.map((e) => e.question)).toEqual(['First question?', 'Second question?']);
+  });
+
+  it('decides who wins in code: the performer, when the claim is the attempt succeeding', () => {
+    // seen on production: "I bet Eva can't ..." -> the right claim, the wrong winner
+    const wrong = usableClaim({
+      ...GOOD,
+      claim: 'Eva throws a paper ball into the trash can.',
+      performer: 'B',
+      yes_party: 'A',
+    })!;
+    expect(wrong.yes_party).toBe('B');
+    expect(yesPartyFor('Logan lands a bottle flip.', 'A', 'B')).toBe('A');
+    expect(yesPartyFor('Eva does ten push ups.', 'B', 'A')).toBe('B');
+  });
+
+  it("keeps the model's winner for a claim that states the attempt failing", () => {
+    expect(yesPartyFor('Eva misses a free throw.', 'B', 'A')).toBe('A');
+    expect(yesPartyFor('Eva drops the bottle.', 'B', 'A')).toBe('A');
+    expect(yesPartyFor("Eva can't touch her toes.", 'B', 'A')).toBe('A');
   });
 
   it('refuses a claim that is still the sentence', () => {
