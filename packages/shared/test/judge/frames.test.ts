@@ -85,9 +85,10 @@ describe('judgeFrameTimesMs (D10)', () => {
 });
 
 describe('sizes', () => {
-  it('frames fit 512 px, never upscaled', () => {
-    expect(fitSize(1280, 720)).toEqual({ width: FRAME_MAX_PX, height: 288 });
-    expect(fitSize(720, 1280)).toEqual({ width: 288, height: FRAME_MAX_PX });
+  it('frames fit 768 px, never upscaled', () => {
+    expect(FRAME_MAX_PX).toBe(768);
+    expect(fitSize(1280, 720)).toEqual({ width: FRAME_MAX_PX, height: 432 });
+    expect(fitSize(720, 1280)).toEqual({ width: 432, height: FRAME_MAX_PX });
     expect(fitSize(320, 240)).toEqual({ width: 320, height: 240 });
   });
 

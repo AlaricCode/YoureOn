@@ -3,7 +3,7 @@
 // server's limits and prompt labels (apps/server/src/judge) and the eval (scripts/judge-eval.ts),
 // so the three always look at the same instants of a clip.
 //
-//   12 frames, each ≤ 512 px: LEAD_IN_FRAMES (4) spread over the clip before the landing window
+//   12 frames, each ≤ 768 px: LEAD_IN_FRAMES (4) spread over the clip before the landing window
 //   (the release and the flight), then 8 packed into its last LANDING_WINDOW_MS (~1.2 s: the
 //   landing and where the bottle comes to rest), the last one FRAME_END_GUARD_MS before the end.
 //   + 1 landing crop: the last frame again, taken from the full-resolution still, cropped to its
@@ -31,8 +31,14 @@ export const LEAD_IN_FRAMES = 4;
 export const LANDING_WINDOW_MS = 1200;
 /** Never sample the very last ms: thumbnailers often fail at the exact end. */
 export const FRAME_END_GUARD_MS = 80;
-/** Longest side of a regular frame. */
-export const FRAME_MAX_PX = 512;
+/**
+ * Longest side of a regular frame. It was 512 (a 288 x 512 picture from a 720p clip), where a
+ * paper ball thrown from across a room is a dot four to eight pixels wide: the judge described
+ * real makes as "seems to drop toward the bin" and the object tracker never found the ball at
+ * all. 768 (432 x 768) gives it more than twice the pixels and still fits well under the
+ * 200 KB a frame may weigh.
+ */
+export const FRAME_MAX_PX = 768;
 /** Longest side of the landing crop. */
 export const LANDING_CROP_MAX_PX = 1024;
 /** The crop keeps the middle 80 % of the still in each direction. */

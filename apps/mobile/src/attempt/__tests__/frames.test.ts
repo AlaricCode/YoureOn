@@ -65,12 +65,12 @@ describe('capture plan: 12 stills + the landing crop of the last one', () => {
     expect(capturePlan(6000, 8)).toHaveLength(9);
   });
 
-  it('frames are scaled to 512 px; the crop is the middle 80 % at native pixels (720p)', () => {
+  it('frames are scaled to 768 px; the crop is the middle 80 % at native pixels (720p)', () => {
     expect(shotTransform('frame', 1280, 720)).toEqual({
       crop: null,
-      resize: { width: FRAME_MAX_PX, height: 288 },
+      resize: { width: FRAME_MAX_PX, height: 432 },
     });
-    expect(shotTransform('frame', 720, 1280).resize).toEqual({ width: 288, height: FRAME_MAX_PX });
+    expect(shotTransform('frame', 720, 1280).resize).toEqual({ width: 432, height: FRAME_MAX_PX });
     expect(shotTransform('landing_crop', 1280, 720)).toEqual({
       crop: { originX: 128, originY: 72, width: 1024, height: 576 },
       resize: null,
@@ -189,11 +189,11 @@ describe('the per-image cap: step down, else drop (never send what the server re
       '512x288@0.5',
       '512x288@0.35',
     ]);
-    // a frame steps down the same way, from 512 px
-    expect(encodeSteps({ width: FRAME_MAX_PX, height: 288 }).at(-1)).toEqual({
+    // a frame steps down the same way, from 768 px
+    expect(encodeSteps({ width: FRAME_MAX_PX, height: 432 }).at(-1)).toEqual({
       quality: 0.35,
-      width: 256,
-      height: 144,
+      width: 384,
+      height: 216,
     });
   });
 
