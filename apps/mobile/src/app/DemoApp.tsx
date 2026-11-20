@@ -113,6 +113,7 @@ import { half, palette, radius, space } from '../ui/tokens';
 import { micMutedFor, type SessionPhase } from '../voice/session';
 import { STATUS_COPY, WAKE_COPY, wt } from '../wake/copy';
 import { RainbowLoop } from '../wake/RainbowLoop';
+import { SPOKEN_BET_TIMING } from '../wake/detector';
 import { useWakeWord } from '../wake/useWakeWord';
 import { WalletError } from '../wallet/wallet';
 import type { DanceUploadBundle } from '../dance/index';
@@ -871,6 +872,13 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
       void sayBet(bet.bet_id, said.text);
     }
   }, [negotiating, bet?.bet_id, opponentName, typedForced, rematchStake]);
+  // The card this form sent, as the server wrote it: the form shows that claim, not the sentence.
+  const writtenHash = bet?.envelope?.terms_hash ?? null;
+  const writtenClaim = bet?.envelope?.terms.claim ?? null;
+  useEffect(() => {
+    if (writtenHash !== null && writtenClaim !== null)
+      typedDispatch({ type: 'written', terms_hash: writtenHash, claim: writtenClaim });
+  }, [writtenHash, writtenClaim, typed.proposedHash]);
   // ---- odds (both phones): offers, counters, the judge's suggestion (../odds/useOdds) --------
   const oddsTheirName =
     (me === 'A' ? bet?.party_b?.display_name : bet?.party_a?.display_name) ?? '';
@@ -1832,6 +1840,8 @@ function DemoAppInner({ rt, onOperator }: { rt: Runtime; onOperator: () => void 
   sayPendingRef.current = sayPendingBet;
 
   const wake = useWakeWord({
+    // A spoken bet, not a short command: it may pause to think (wake SPOKEN_BET_TIMING).
+    timing: SPOKEN_BET_TIMING,
     enabled: wakeListening({
       flag: WAKE_ENABLED,
       signedIn: app.auth === 'signedIn',

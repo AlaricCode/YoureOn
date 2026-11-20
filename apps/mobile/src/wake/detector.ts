@@ -46,6 +46,12 @@ export interface WakeTiming {
   readonly noTailTimeoutMs: number;
   /** A final result ends the capture if the text has been unchanged for at least this long. */
   readonly finalQuietMs: number;
+  /**
+   * A tail of fewer words than this has barely started ("I bet Eva"): it is not ended by a
+   * final result, and its silence is at least shortTailSilenceMs. 0: no such rule.
+   */
+  readonly shortTailWords: number;
+  readonly shortTailSilenceMs: number;
 }
 
 export const DEFAULT_WAKE_TIMING: WakeTiming = {
@@ -53,6 +59,24 @@ export const DEFAULT_WAKE_TIMING: WakeTiming = {
   maxUtteranceMs: 9000,
   noTailTimeoutMs: 4000,
   finalQuietMs: 500,
+  shortTailWords: 0,
+  shortTailSilenceMs: 0,
+};
+
+/**
+ * The timing for a spoken BET (what the app listens with). The defaults above suit a short
+ * command; on real phones they ended a bet at the first breath: a recognizer "final" half a
+ * second into a pause closed the capture mid-sentence, and what reached the server was "let's do
+ * a challenge where", which nothing can turn into terms. People pause to think while they make a
+ * bet up, most of all in its first few words.
+ */
+export const SPOKEN_BET_TIMING: WakeTiming = {
+  endSilenceMs: 2200,
+  maxUtteranceMs: 20_000,
+  noTailTimeoutMs: 6000,
+  finalQuietMs: 1600,
+  shortTailWords: 5,
+  shortTailSilenceMs: 3200,
 };
 
 /** One 'onTranscript' event of the native module. */
@@ -135,6 +159,15 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
 
   const combined = () => join(committed, current);
 
+  /** A few words in ("I bet Eva"): the sentence has barely started, so the pause may be thought. */
+  const shortTail = (tail: string) =>
+    t.shortTailWords > 0 &&
+    normalizeTranscript(tail)
+      .split(' ')
+      .filter((w) => w !== '').length < t.shortTailWords;
+  const silenceFor = (tail: string) =>
+    shortTail(tail) ? Math.max(t.endSilenceMs, t.shortTailSilenceMs) : t.endSilenceMs;
+
   const touch = (nowMs: number) => {
     const key = normalizeTranscript(combined());
     if (key !== lastKey) {
@@ -160,7 +193,7 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
     const quiet = nowMs - lastChangeAt;
     // Nothing yet, or only a stub: still waiting for the challenge, on the long timeout.
     if (isStubTail(combined())) return quiet >= t.noTailTimeoutMs ? finish('no_tail') : [];
-    return quiet >= t.endSilenceMs ? finish('silence') : [];
+    return quiet >= silenceFor(combined()) ? finish('silence') : [];
   };
 
   const startCapture = (segment: number, tail: string, nowMs: number) => {
@@ -244,7 +277,13 @@ export function createWakeDetector(timing: Partial<WakeTiming> = {}): WakeDetect
       }
 
       const quiet = nowMs - lastChangeAt;
-      if (isFinal && phase === 'capturing' && !isStubTail(combined()) && quiet >= t.finalQuietMs)
+      if (
+        isFinal &&
+        phase === 'capturing' &&
+        !isStubTail(combined()) &&
+        !shortTail(combined()) &&
+        quiet >= t.finalQuietMs
+      )
         return [...out, ...finish('final')];
       return [...out, ...evaluate(nowMs)];
     },
