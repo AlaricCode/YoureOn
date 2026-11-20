@@ -180,6 +180,20 @@ const APPEAL_WINDOW_MS = 10_000;
 /** Recording ceiling (TASKS D3-M1 maxDuration 6). */
 const MAX_RECORD_MS = 6000;
 
+/**
+ * An error as one short line for the failure screen: its code and HTTP status when the server
+ * answered, else its own message. Data, not copy: it is there to be read out to whoever fixes it.
+ */
+function failureNote(e: unknown): string {
+  const err = e as { code?: unknown; status?: unknown; message?: unknown } | null;
+  const parts = [
+    typeof err?.code === 'string' ? err.code : null,
+    typeof err?.status === 'number' && err.status > 0 ? String(err.status) : null,
+    typeof err?.message === 'string' ? err.message : err === null ? null : String(e),
+  ].filter((p): p is string => p !== null && p !== '');
+  return [...new Set(parts)].join(' · ').slice(0, 160) || 'unknown error';
+}
+
 /** How long a recording waits for a camera that is not up yet before it gives up. */
 const CAMERA_WAIT_MS = 10_000;
 
@@ -223,6 +237,8 @@ export function JudgeCamScreen({
   const [failed, setFailed] = useState(false);
   /** The failure was an empty attempt: the camera never came up, or the clip came back empty. */
   const [empty, setEmpty] = useState(false);
+  /** What went wrong, as the error itself said it: shown under "Try again" so it can be read out. */
+  const [failNote, setFailNote] = useState<string | null>(null);
   const cam = useRef<CameraView | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recording = useRef<Promise<{ uri: string } | undefined> | null>(null);
@@ -299,7 +315,8 @@ export function JudgeCamScreen({
       setEmpty(clip === null);
       await onSend(clip);
       setPhase('sent');
-    } catch {
+    } catch (e) {
+      setFailNote(failureNote(e));
       setFailed(true);
       setPhase('sent');
     }
@@ -310,6 +327,7 @@ export function JudgeCamScreen({
     const action = camRetryAction({ armed: !!arm, hasClip: lastClip.current !== null });
     setFailed(false);
     setEmpty(false);
+    setFailNote(null);
     if (action === 'standby') {
       setPhase('standby');
       return;
@@ -324,7 +342,8 @@ export function JudgeCamScreen({
     try {
       await onSend(lastClip.current);
       setPhase('sent');
-    } catch {
+    } catch (e) {
+      setFailNote(failureNote(e));
       setFailed(true);
       setPhase('sent');
     }
@@ -339,6 +358,7 @@ export function JudgeCamScreen({
     if (!camera || !ready) {
       const giveUp = setTimeout(() => {
         lastClip.current = null;
+        setFailNote(camera ? 'camera not ready' : 'no camera view');
         setEmpty(true);
         setFailed(true);
         setPhase('sent');
@@ -356,10 +376,17 @@ export function JudgeCamScreen({
           // the first event (~100 ms in) dates the start of the file
           progressUpdateInterval: 0.1,
         })
-        .then((out) => {
-          finishedAt.current ??= Date.now();
-          return out;
-        });
+        .then(
+          (out) => {
+            finishedAt.current ??= Date.now();
+            return out;
+          },
+          (e: unknown) => {
+            // The camera refused to record: say why, and end as an empty attempt.
+            setFailNote(`record: ${failureNote(e)}`);
+            return undefined;
+          },
+        );
     }
     const limit = Math.min(MAX_RECORD_MS, arm?.maxMs ?? MAX_RECORD_MS);
     stopTimer.current = setTimeout(() => void stop(), limit);
@@ -388,12 +415,19 @@ export function JudgeCamScreen({
             {phase === 'sending' ? (
               <DotsLabel text={t(COPY.judgeCam.sending)} variant="subtitle" />
             ) : (
-              <StatusHero
-                mark={failed ? 'cross' : 'check'}
-                title={t(
-                  failed ? (empty ? COPY.judgeCam.empty : COPY.ruling.retry) : COPY.judgeCam.sent,
-                )}
-              />
+              <>
+                <StatusHero
+                  mark={failed ? 'cross' : 'check'}
+                  title={t(
+                    failed ? (empty ? COPY.judgeCam.empty : COPY.ruling.retry) : COPY.judgeCam.sent,
+                  )}
+                />
+                {failed && failNote ? (
+                  <DataText variant="small" muted lines={4}>
+                    {failNote}
+                  </DataText>
+                ) : null}
+              </>
             )}
           </Stage>
         ) : permission?.granted ? (
